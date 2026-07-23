@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+node_modules/
+*.tsbuildinfo
+*.egg-info/
+
+# Test-run artifacts generated under the backend workspace.
+backend/.pytest-full-mapping-*/
+
+data/**
+!data/.gitkeep
+backend/data/**
+!backend/data/.gitkeep

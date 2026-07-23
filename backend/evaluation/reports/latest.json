@@ -1,0 +1,89 @@
+{
+  "reportVersion": "1.0",
+  "generatedAt": "2026-07-22T10:23:54.708769+00:00",
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "opencv": "4.12.0"
+  },
+  "configuration": {
+    "registration": {
+      "min_feature_matches": 30,
+      "min_inliers": 20,
+      "min_inlier_ratio": 0.4,
+      "max_reprojection_error_px": 5.0,
+      "min_ecc_score": 0.75,
+      "min_edge_overlap": 0.7,
+      "min_template_confidence": 0.75,
+      "static_ink_frequency_threshold": 0.6,
+      "min_consensus_images": 3,
+      "max_consensus_images": 20
+    },
+    "segmentation": {
+      "mode": "heuristic",
+      "model_path": null,
+      "model_version": null,
+      "threshold": 0.55,
+      "tile_size": 1024,
+      "tile_overlap": 128
+    }
+  },
+  "dataset": {
+    "path": "evaluation/annotations",
+    "manifestCount": 1,
+    "annotatedSampleCount": 0,
+    "realImageEvaluationExecuted": false
+  },
+  "synthetic": {
+    "caseCount": 1,
+    "registration": {
+      "edgeOverlap": 0.9340509137834179,
+      "eccScore": 0.9300197501625725,
+      "matchCount": 646,
+      "inlierCount": 359,
+      "inlierRatio": 0.5557275541795665,
+      "medianReprojectionErrorPx": 0.6086409687995911,
+      "accepted": true
+    },
+    "handwritingMask": {
+      "precision": 0.907338,
+      "recall": 0.497165,
+      "f1": 0.642358,
+      "falsePositiveRate": 0.000362
+    }
+  },
+  "ocrComparison": {
+    "mock": {
+      "externalCalls": 0,
+      "schemaFixtureValid": true
+    },
+    "disabled": {
+      "externalCalls": 0,
+      "producesBlankCandidate": true
+    },
+    "openai": {
+      "executed": false,
+      "reason": "External evaluation is opt-in and needs annotated real images"
+    }
+  },
+  "performance": {
+    "registrationMs": 1149.95,
+    "maskIsolationMs": 365.85,
+    "totalMs": 1621.7,
+    "pythonTrackedPeakMiB": 42.1,
+    "imageSize": {
+      "width": 620,
+      "height": 877
+    }
+  },
+  "comparison": {
+    "baselineLoaded": true,
+    "maskF1Delta": 0.0,
+    "edgeOverlapDelta": 0.0
+  },
+  "notes": [
+    "Synthetic figures validate regressions; they are not real-document accuracy.",
+    "Python tracked memory excludes some native OpenCV allocations.",
+    "Thresholds are configuration snapshots and were not tuned against final evaluation data."
+  ]
+}

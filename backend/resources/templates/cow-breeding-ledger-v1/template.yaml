@@ -1,0 +1,110 @@
+templateId: cow-breeding-ledger-v1
+templateVersion: 1
+name: 牛繁殖台帳
+canonicalWidth: 1240
+canonicalHeight: 1754
+
+registration:
+  preferredMethod: ORB_RANSAC_ECC
+  minFeatureMatches: 30
+  minInliers: 20
+  minInlierRatio: 0.40
+  maxReprojectionErrorPx: 5.0
+  minEccScore: 0.75
+
+regions:
+  - regionId: header_identity
+    x: 90
+    y: 190
+    width: 535
+    height: 440
+    padding: 8
+    fieldType: OBJECT
+    expectedFields: [cattleName, birthDate, registrationNumber, coatColor, breeder, owner]
+    validatorNames: [ear_tag_format, date_syntax]
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: false
+  - regionId: ear_tag
+    x: 735
+    y: 100
+    width: 390
+    height: 100
+    padding: 8
+    fieldType: OBJECT
+    expectedFields: [unifiedEarTag]
+    validatorNames: [ear_tag_format]
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: false
+  - regionId: sale_calves
+    x: 605
+    y: 200
+    width: 520
+    height: 430
+    padding: 8
+    fieldType: TABLE
+    expectedFields: [date, earTag, cattleName, sex, notes]
+    validatorNames: [date_syntax]
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: true
+  - regionId: pedigree
+    x: 95
+    y: 665
+    width: 1030
+    height: 345
+    padding: 8
+    fieldType: OBJECT
+    expectedFields: [sire, dam, maternalGrandsire]
+    validatorNames: []
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: false
+  - regionId: calvings_left
+    x: 95
+    y: 1045
+    width: 525
+    height: 585
+    padding: 8
+    fieldType: TABLE
+    expectedFields: [parity, calvingDate, sex, outcome, notes]
+    validatorNames: [parity_sequence, date_syntax]
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: true
+  - regionId: calvings_right
+    x: 610
+    y: 1045
+    width: 520
+    height: 585
+    padding: 8
+    fieldType: TABLE
+    expectedFields: [parity, calvingDate, sex, outcome, notes]
+    validatorNames: [parity_sequence, date_syntax]
+    modelDetail: high
+    enabled: true
+    fallbackEnabled: true
+    markDetectionEnabled: true
+
+marks:
+  - markId: calving_01_sex_female
+    regionId: calvings_left
+    optionGroup: calving_01_sex
+    optionValue: female
+    x: 225
+    y: 75
+    width: 45
+    height: 45
+    method: TEMPLATE_DIFFERENCE
+
+export:
+  csvColumns:
+    - document.unifiedEarTag.raw
+    - document.cattleName.raw
+    - document.birthDate.raw

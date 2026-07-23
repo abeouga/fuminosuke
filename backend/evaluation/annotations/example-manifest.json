@@ -1,0 +1,6 @@
+{
+  "manifestVersion": "1.0",
+  "split": "development",
+  "samples": [],
+  "notes": "匿名化済み画像と正解OCR JSON・正解マスクの相対パスを登録する"
+}

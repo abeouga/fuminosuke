@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cow-ledger-ocr-backend"
+version = "0.1.0"
+description = "Local FastAPI backend for the cow breeding ledger OCR prototype"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic==1.16.4",
+  "fastapi==0.116.1",
+  "numpy==2.2.6",
+  "openai==1.97.1",
+  "opencv-python-headless==4.12.0.88",
+  "pillow==11.3.0",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.10.1",
+  "python-multipart==0.0.20",
+  "pyyaml==6.0.3",
+  "sqlalchemy==2.0.41",
+  "uvicorn[standard]==0.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "mypy==1.17.0",
+  "pytest==8.4.1",
+  "pytest-cov==6.2.1",
+  "ruff==0.12.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --disable-warnings"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+exclude = ["alembic"]
+
+[[tool.mypy.overrides]]
+module = [
+  "app.extraction.*",
+  "app.image_processing.*",
+  "app.segmentation.*",
+  "app.template_recovery.*",
+]
+disable_error_code = [
+  "arg-type",
+  "assignment",
+  "attr-defined",
+  "call-overload",
+  "no-any-return",
+  "return-value",
+]
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true

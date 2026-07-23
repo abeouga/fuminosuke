@@ -1,0 +1,16 @@
+from pathlib import Path
+from typing import Protocol
+
+
+class StorageService(Protocol):
+    @property
+    def root(self) -> Path: ...
+
+    def initialize(self) -> None: ...
+
+    def write_bytes(self, relative_path: str | Path, content: bytes) -> str: ...
+
+    def read_bytes(self, relative_path: str | Path) -> bytes: ...
+
+    def exists(self, relative_path: str | Path) -> bool: ...
+

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CowLedgerOcrDocument",
+  "type": "object",
+  "required": ["schemaVersion", "templateId", "templateVersion", "document", "saleCalves", "pedigree", "calvings", "reviewItems", "processingMetadata"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "templateId": {"type": "string"},
+    "templateVersion": {"type": "string"},
+    "document": {"type": "object"},
+    "saleCalves": {"type": "array", "maxItems": 100},
+    "pedigree": {"type": "object"},
+    "calvings": {"type": "array", "maxItems": 100},
+    "reviewItems": {"type": "array", "maxItems": 200},
+    "processingMetadata": {"type": "object"}
+  },
+  "additionalProperties": false
+}
+

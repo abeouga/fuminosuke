@@ -1,0 +1,43 @@
+from enum import StrEnum
+
+
+class JobType(StrEnum):
+    PREPARE_TEMPLATE = "PREPARE_TEMPLATE"
+    EXTRACT_DOCUMENT = "EXTRACT_DOCUMENT"
+
+
+class JobStatus(StrEnum):
+    CREATED = "CREATED"
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    INTERRUPTED = "INTERRUPTED"
+
+
+class TemplateMode(StrEnum):
+    REFERENCE_TEMPLATE = "REFERENCE_TEMPLATE"
+    MULTI_SCAN_CONSENSUS = "MULTI_SCAN_CONSENSUS"
+    SINGLE_IMAGE_EXPERIMENTAL = "SINGLE_IMAGE_EXPERIMENTAL"
+
+
+class TemplateVersionStatus(StrEnum):
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+    ARCHIVED = "ARCHIVED"
+
+
+class EventLevel(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class RevisionSource(StrEnum):
+    OCR = "OCR"
+    USER_EDIT = "USER_EDIT"
+    REPROCESS = "REPROCESS"
+
