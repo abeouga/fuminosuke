@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -28,6 +29,25 @@ def utc_now() -> datetime:
 
 def uuid_string() -> str:
     return str(uuid4())
+
+
+class SireName(Base):
+    __tablename__ = "sire_names"
+    __table_args__ = (
+        UniqueConstraint(
+            "normalized_name",
+            name="uq_sire_names_normalized_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
 
 
 class Template(Base):
@@ -75,6 +95,7 @@ class TemplateVersion(Base):
     )
     config_relative_path: Mapped[str] = mapped_column(Text, nullable=False)
     quality_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    layout_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
@@ -94,7 +115,12 @@ class ProcessingJob(Base):
         String(36), ForeignKey("template_versions.id", ondelete="SET NULL"), nullable=True
     )
     mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+        unique=True,
+    )
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -243,6 +269,44 @@ class ConfirmedResult(Base):
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     export_relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ConfirmedRecordField(Base):
+    __tablename__ = "confirmed_record_fields"
+    __table_args__ = (
+        UniqueConstraint(
+            "confirmed_result_id",
+            "section_key",
+            "record_order",
+            "field_key",
+            name="uq_confirmed_record_field",
+        ),
+        Index(
+            "ix_confirmed_record_field_lookup",
+            "section_key",
+            "field_key",
+            "normalized_value",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    confirmed_result_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("confirmed_results.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    section_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    section_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    record_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    record_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    field_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    numeric_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
 
 
 class JobEvent(Base):

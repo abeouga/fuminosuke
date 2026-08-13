@@ -1,0 +1,385 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+import cv2
+import numpy as np
+from numpy.typing import NDArray
+
+from app.layout_analysis.models import LayoutCell, LayoutDefinition
+
+
+@dataclass(frozen=True, slots=True)
+class TextRegion:
+    points: tuple[tuple[float, float], ...]
+    text: str
+    confidence: float
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        xs = [point[0] for point in self.points]
+        ys = [point[1] for point in self.points]
+        return min(xs), min(ys), max(xs), max(ys)
+
+
+class TextDetector(Protocol):
+    @property
+    def available(self) -> bool: ...
+
+    def detect(self, image_rgb: NDArray[np.uint8]) -> list[TextRegion]: ...
+
+
+class PaddleTextDetector:
+    """Lazy PaddleOCR adapter.
+
+    PaddleOCR is deliberately imported on first detection. The application can
+    still start and the OpenCV rectangle editor remains usable on machines where
+    the optional Paddle runtime has not been installed yet.
+    """
+
+    def __init__(self) -> None:
+        self._engine: Any | None = None
+        self._import_failed = False
+
+    @property
+    def available(self) -> bool:
+        self._load()
+        return self._engine is not None
+
+    def _load(self) -> None:
+        if self._engine is not None or self._import_failed:
+            return
+        if os.getenv("PADDLEOCR_DISABLED") == "1":
+            self._import_failed = True
+            return
+        try:
+            from paddleocr import PaddleOCR
+
+            try:
+                self._engine = PaddleOCR(
+                    lang="japan",
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                    # PaddlePaddle 3.3 on Windows can fail in the oneDNN executor
+                    # for PP-OCRv6 array attributes. The plain CPU executor is
+                    # stable and fast enough for individual form cells.
+                    enable_mkldnn=False,
+                )
+            except TypeError:
+                # PaddleOCR 2.x compatibility.
+                try:
+                    self._engine = PaddleOCR(
+                        lang="japan",
+                        use_angle_cls=True,
+                        show_log=False,
+                        use_mkldnn=False,
+                    )
+                except TypeError:
+                    self._engine = PaddleOCR(
+                        lang="japan",
+                        use_angle_cls=True,
+                        show_log=False,
+                    )
+        except (ImportError, OSError):
+            self._import_failed = True
+
+    def detect(self, image_rgb: NDArray[np.uint8]) -> list[TextRegion]:
+        self._load()
+        if self._engine is None:
+            return []
+        bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+        try:
+            if hasattr(self._engine, "predict"):
+                raw = self._engine.predict(bgr)
+            else:
+                raw = self._engine.ocr(bgr, cls=True)
+        except (RuntimeError, ValueError, TypeError):
+            return []
+        return _parse_paddle_result(raw)
+
+
+def _parse_paddle_result(raw: Any) -> list[TextRegion]:
+    regions: list[TextRegion] = []
+
+    def add(points: Any, text: Any, confidence: Any) -> None:
+        if not isinstance(text, str) or not text.strip():
+            return
+        try:
+            normalized = tuple((float(point[0]), float(point[1])) for point in points)
+            score = float(confidence)
+        except (TypeError, ValueError, IndexError):
+            return
+        if len(normalized) >= 4:
+            regions.append(TextRegion(normalized, text.strip(), max(0.0, min(1.0, score))))
+
+    def visit(value: Any) -> None:
+        if value is None:
+            return
+        if hasattr(value, "to_dict"):
+            try:
+                visit(value.to_dict())
+                return
+            except (TypeError, ValueError):
+                pass
+        if hasattr(value, "json"):
+            try:
+                json_value = value.json
+                visit(json_value() if callable(json_value) else json_value)
+                return
+            except (TypeError, ValueError):
+                pass
+        if isinstance(value, dict):
+            polygons = value.get("rec_polys")
+            if polygons is None:
+                polygons = value.get("dt_polys")
+            texts = value.get("rec_texts")
+            scores = value.get("rec_scores")
+            if polygons is not None and texts is not None and scores is not None:
+                for points, text, score in zip(polygons, texts, scores, strict=False):
+                    add(points, text, score)
+                return
+            for child in value.values():
+                visit(child)
+            return
+        if isinstance(value, list | tuple):
+            # PaddleOCR 2.x: [box, (text, score)]
+            if (
+                len(value) == 2
+                and isinstance(value[0], list | tuple | np.ndarray)
+                and isinstance(value[1], list | tuple)
+                and len(value[1]) >= 2
+                and isinstance(value[1][0], str)
+            ):
+                add(value[0], value[1][0], value[1][1])
+                return
+            for child in value:
+                visit(child)
+
+    visit(raw)
+    return regions
+
+
+@dataclass(frozen=True, slots=True)
+class _Rect:
+    x: int
+    y: int
+    width: int
+    height: int
+    confidence: float
+
+    @property
+    def area(self) -> int:
+        return self.width * self.height
+
+
+class LayoutDetector:
+    def __init__(self, text_detector: TextDetector | None = None) -> None:
+        self._text_detector = text_detector or PaddleTextDetector()
+
+    def detect(self, image_rgb: NDArray[np.uint8]) -> LayoutDefinition:
+        layout, _ = self.detect_with_text_regions(image_rgb)
+        return layout
+
+    def detect_with_text_regions(
+        self,
+        image_rgb: NDArray[np.uint8],
+    ) -> tuple[LayoutDefinition, list[TextRegion]]:
+        if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+            raise ValueError("LayoutDetector requires an RGB image")
+        height, width = image_rgb.shape[:2]
+        gray = np.asarray(cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY), dtype=np.uint8)
+        line_mask = self._line_mask(gray)
+        rectangles = self._rectangles(line_mask, width, height)
+        text_regions = self._text_detector.detect(image_rgb)
+        ocr_available = self._text_detector.available
+        cells = [
+            self._cell(index, rectangle, gray, line_mask, text_regions)
+            for index, rectangle in enumerate(rectangles, start=1)
+        ]
+        warnings: list[str] = []
+        if not ocr_available:
+            warnings.append(
+                "PADDLEOCR_NOT_AVAILABLE: ラベル候補はOpenCV文字密度で仮判定しています。"
+            )
+        if not cells:
+            warnings.append("NO_RULED_CELLS_DETECTED")
+        return (
+            LayoutDefinition(
+                canonical_width=width,
+                canonical_height=height,
+                detector="opencv+paddleocr" if ocr_available else "opencv",
+                ocr_available=ocr_available,
+                cells=cells,
+                warnings=warnings,
+            ),
+            text_regions,
+        )
+
+    @staticmethod
+    def _line_mask(gray: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        height, width = gray.shape
+        binary = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            31,
+            9,
+        )
+        horizontal = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (max(18, width // 45), 1)),
+        )
+        vertical = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(18, height // 65))),
+        )
+        return np.asarray(cv2.bitwise_or(horizontal, vertical), dtype=np.uint8)
+
+    @classmethod
+    def _rectangles(
+        cls, line_mask: NDArray[np.uint8], image_width: int, image_height: int
+    ) -> list[_Rect]:
+        contours, _ = cv2.findContours(line_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        image_area = image_width * image_height
+        minimum_area = max(450, int(image_area * 0.00005))
+        candidates: list[_Rect] = []
+        for contour in contours:
+            x, y, width, height = cv2.boundingRect(contour)
+            area = width * height
+            if area < minimum_area or width < 22 or height < 16:
+                continue
+            if area > image_area * 0.82:
+                continue
+            aspect = width / height
+            if aspect > 35 or aspect < 0.04:
+                continue
+            border = line_mask[y : y + height, x : x + width]
+            if border.size == 0:
+                continue
+            edge = max(2, min(5, width // 5, height // 5))
+            supports = (
+                float(np.mean(border[:edge, :] > 0)),
+                float(np.mean(border[-edge:, :] > 0)),
+                float(np.mean(border[:, :edge] > 0)),
+                float(np.mean(border[:, -edge:] > 0)),
+            )
+            confidence = float(np.mean(supports))
+            if min(supports) < 0.09 or confidence < 0.2:
+                continue
+            candidates.append(_Rect(x, y, width, height, min(0.99, confidence)))
+
+        deduplicated: list[_Rect] = []
+        for candidate in sorted(candidates, key=lambda rect: rect.area):
+            if any(cls._iou(candidate, existing) > 0.88 for existing in deduplicated):
+                continue
+            deduplicated.append(candidate)
+
+        # A large contour enclosing two or more real cells is the table/container,
+        # not an input box. This is the explicit V2 false-positive rule.
+        cells = [
+            candidate
+            for candidate in deduplicated
+            if sum(
+                cls._strictly_contains(candidate, other)
+                for other in deduplicated
+                if other != candidate
+            )
+            < 2
+        ]
+        return sorted(cells, key=lambda rect: (rect.y, rect.x))
+
+    @staticmethod
+    def _cell(
+        index: int,
+        rect: _Rect,
+        gray: NDArray[np.uint8],
+        line_mask: NDArray[np.uint8],
+        text_regions: Iterable[TextRegion],
+    ) -> LayoutCell:
+        matched = [
+            region
+            for region in text_regions
+            if LayoutDetector._text_is_in_cell(region, rect)
+        ]
+        text = " ".join(region.text for region in sorted(matched, key=lambda item: item.bounds[0]))
+        text_confidence = (
+            float(np.mean([region.confidence for region in matched])) if matched else None
+        )
+        has_ink = LayoutDetector._has_printed_ink(gray, line_mask, rect)
+        role = "label" if matched or has_ink else "input"
+        return LayoutCell(
+            id=f"cell_{index:04d}",
+            role=role,
+            x=rect.x,
+            y=rect.y,
+            width=rect.width,
+            height=rect.height,
+            confidence=round(rect.confidence, 3),
+            text=text,
+            text_confidence=round(text_confidence, 3) if text_confidence is not None else None,
+            source="detected",
+        )
+
+    @staticmethod
+    def _has_printed_ink(
+        gray: NDArray[np.uint8], line_mask: NDArray[np.uint8], rect: _Rect
+    ) -> bool:
+        inset_x = max(2, min(6, rect.width // 10))
+        inset_y = max(2, min(6, rect.height // 10))
+        left, right = rect.x + inset_x, rect.x + rect.width - inset_x
+        top, bottom = rect.y + inset_y, rect.y + rect.height - inset_y
+        if right <= left or bottom <= top:
+            return False
+        ink = gray[top:bottom, left:right] < 190
+        lines = cv2.dilate(
+            line_mask[top:bottom, left:right],
+            np.ones((3, 3), np.uint8),
+        ) > 0
+        printable = ink & ~lines
+        component_count, _, stats, _ = cv2.connectedComponentsWithStats(
+            printable.astype(np.uint8), connectivity=8
+        )
+        meaningful = sum(
+            2 <= stats[item, cv2.CC_STAT_WIDTH] <= max(40, rect.width * 0.5)
+            and 3 <= stats[item, cv2.CC_STAT_HEIGHT] <= max(50, rect.height * 0.8)
+            and stats[item, cv2.CC_STAT_AREA] >= 5
+            for item in range(1, component_count)
+        )
+        return meaningful >= 1 and float(printable.mean()) >= 0.0025
+
+    @staticmethod
+    def _text_is_in_cell(region: TextRegion, cell: _Rect) -> bool:
+        left, top, right, bottom = region.bounds
+        center_x = (left + right) / 2
+        center_y = (top + bottom) / 2
+        return (
+            cell.x <= center_x <= cell.x + cell.width
+            and cell.y <= center_y <= cell.y + cell.height
+        )
+
+    @staticmethod
+    def _iou(a: _Rect, b: _Rect) -> float:
+        left, top = max(a.x, b.x), max(a.y, b.y)
+        right = min(a.x + a.width, b.x + b.width)
+        bottom = min(a.y + a.height, b.y + b.height)
+        overlap = max(0, right - left) * max(0, bottom - top)
+        if overlap == 0:
+            return 0.0
+        return overlap / (a.area + b.area - overlap)
+
+    @staticmethod
+    def _strictly_contains(outer: _Rect, inner: _Rect) -> bool:
+        return (
+            outer.x <= inner.x
+            and outer.y <= inner.y
+            and outer.x + outer.width >= inner.x + inner.width
+            and outer.y + outer.height >= inner.y + inner.height
+            and outer.area > inner.area * 1.2
+        )

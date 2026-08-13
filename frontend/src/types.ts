@@ -5,6 +5,18 @@ export type Health = {
   ocrProvider: "mock" | "openai" | "disabled";
 };
 
+export type SireName = {
+  id: string;
+  name: string;
+  createdAt: string;
+};
+
+export type SireNamePool = {
+  items: SireName[];
+  count: number;
+  allowedSuffixes: string[];
+};
+
 export type TemplateVersion = {
   id: string;
   versionNumber: number;
@@ -14,6 +26,7 @@ export type TemplateVersion = {
   canonicalWidth: number;
   canonicalHeight: number;
   quality: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type Template = {
@@ -51,6 +64,7 @@ export type FieldMapping = {
   padding: number;
   enabled: boolean;
   modelDetail: string;
+  printedLabelText?: string;
 };
 
 export type FieldMappingTarget = { path: string; label: string; section: string };
@@ -60,6 +74,86 @@ export type FieldMappingsResponse = {
   canonicalHeight: number;
   mappings: FieldMapping[];
   targets: FieldMappingTarget[];
+  validForOcr: boolean;
+  warnings: string[];
+};
+
+export type LayoutCell = {
+  id: string;
+  role: "label" | "input" | "ignored";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  text: string;
+  printedLabelText?: string;
+  textConfidence: number | null;
+  source: "detected" | "manual";
+};
+
+export type LayoutRelation = {
+  id: string;
+  inputCellId: string;
+  labelCellIds: string[];
+  axis: "horizontal" | "vertical";
+  order: number;
+  targetPath: string;
+};
+
+export type LayoutRecordSection = {
+  id: string;
+  title: string;
+  collectionPath: "saleCalves" | "calvings";
+  recordType: "saleCalf" | "calving";
+  parentLabelCellId: string | null;
+  source: "manual" | "inferred";
+};
+
+export type LayoutRecordGroup = {
+  id: string;
+  sectionId: string;
+  order: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  inputCellIds: string[];
+  recordKeyField: string;
+  recordKeyValue: string | null;
+  source: "manual" | "inferred";
+};
+
+export type RecordFieldBinding = {
+  mappingId: string;
+  recordGroupId: string;
+  fieldKey: string;
+  targetPath: string;
+};
+
+export type RecordStructure = {
+  layoutSchemaVersion: number;
+  verified: boolean;
+  canonicalWidth: number;
+  canonicalHeight: number;
+  sections: LayoutRecordSection[];
+  groups: LayoutRecordGroup[];
+  fieldBindings: RecordFieldBinding[];
+};
+
+export type LayoutDefinition = {
+  layoutSchemaVersion?: number;
+  canonicalWidth: number;
+  canonicalHeight: number;
+  detector: string;
+  ocrAvailable: boolean;
+  cells: LayoutCell[];
+  relations: LayoutRelation[];
+  recordSections?: LayoutRecordSection[];
+  recordGroups?: LayoutRecordGroup[];
+  recordStructureVerified?: boolean;
+  allowCrossAxisLabels: boolean;
+  warnings: string[];
 };
 
 export type ReadingStatus = "readable" | "uncertain" | "blank";
@@ -89,8 +183,18 @@ export type OcrDocument = {
   saleCalves: Array<Record<string, FieldReading>>;
   pedigree: Record<string, FieldReading>;
   calvings: Array<Record<string, FieldReading>>;
+  customFields: Record<string, FieldReading>;
   reviewItems: ReviewItem[];
   processingMetadata: Record<string, unknown>;
+};
+
+export type OcrFieldPreview = {
+  targetPath: string;
+  mappingId: string;
+  artifactUrl: string;
+  boundingBox: { x: number; y: number; width: number; height: number } | null;
+  recordGroupId?: string | null;
+  fieldKey?: string | null;
 };
 
 export type OcrResult = {
@@ -107,6 +211,8 @@ export type OcrResult = {
   estimatedCost: number | null;
   confirmed: boolean;
   individualId: string | null;
+  fieldPreviews: OcrFieldPreview[];
+  recordStructure?: RecordStructure;
 };
 
 export type IndividualRecord = {
@@ -116,6 +222,8 @@ export type IndividualRecord = {
   ocrResultRevision: number;
   confirmedAt: string;
   data: OcrDocument;
+  needsReview: boolean;
+  reviewWarnings: string[];
 };
 
 export type IndividualRecordSearch = {
@@ -123,6 +231,41 @@ export type IndividualRecordSearch = {
   individualId: string;
   count: number;
   records: IndividualRecord[];
+};
+
+export type IndividualRecordSummary = {
+  individualId: string;
+  cattleName: string | null;
+  recordCount: number;
+  lastConfirmedAt: string;
+  needsReview: boolean;
+};
+
+export type IndividualRecordCatalog = {
+  count: number;
+  items: IndividualRecordSummary[];
+};
+
+export type SaleCalfRecordMatch = {
+  recordFieldId: string;
+  confirmedResultId: string;
+  individualId: string | null;
+  sourceJobId: string;
+  confirmedAt: string;
+  sectionKey: string;
+  sectionTitle: string;
+  recordOrder: number;
+  recordKey: string | null;
+  matchedValue: string | null;
+  data: Record<string, FieldReading>;
+  reviewWarnings: string[];
+};
+
+export type SaleCalfSireSearch = {
+  query: string;
+  normalizedQuery: string;
+  count: number;
+  matches: SaleCalfRecordMatch[];
 };
 
 export type Problem = { code?: string; detail?: string; message?: string };

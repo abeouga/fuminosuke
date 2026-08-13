@@ -12,10 +12,18 @@ from app.api.v1.routes.uploads import read_upload
 from app.core.errors import ApiModel, AppError
 from app.db.models import TemplateVersion
 from app.domain.enums import TemplateMode
-from app.domain.field_targets import field_targets
+from app.domain.field_targets import (
+    FieldTarget,
+    custom_field_key,
+    field_targets,
+    is_supported_field_path,
+)
 from app.domain.template_config import FieldMappingConfig
+from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.job_service import UploadPayload
+from app.services.layout_service import LayoutService
 from app.services.template_management_service import TemplateManagementService
 
 router = APIRouter(tags=["templates"])
@@ -53,6 +61,7 @@ class FieldMappingView(ApiModel):
     padding: int = 4
     enabled: bool = True
     model_detail: str = "high"
+    printed_label_text: str = ""
 
 
 class FieldMappingTargetView(ApiModel):
@@ -66,10 +75,50 @@ class FieldMappingsResponse(ApiModel):
     canonical_height: int
     mappings: list[FieldMappingView]
     targets: list[FieldMappingTargetView]
+    valid_for_ocr: bool
+    warnings: list[str]
 
 
 class FieldMappingsUpdate(ApiModel):
     mappings: list[FieldMappingView] = Field(max_length=300)
+
+
+def _mapping_targets(mappings: list[FieldMappingConfig]) -> list[FieldTarget]:
+    targets = field_targets()
+    known_paths = {target.path for target in targets}
+    for mapping in mappings:
+        key = custom_field_key(mapping.target_path)
+        if key is None or mapping.target_path in known_paths:
+            continue
+        targets.append(
+            FieldTarget(
+                path=mapping.target_path,
+                label=mapping.label,
+                section="追加項目",
+            )
+        )
+        known_paths.add(mapping.target_path)
+    return targets
+
+
+def _mapping_validation(
+    mappings: list[FieldMappingConfig],
+) -> tuple[bool, list[str]]:
+    enabled = [mapping for mapping in mappings if mapping.enabled]
+    invalid = [
+        mapping for mapping in enabled
+        if not is_supported_field_path(mapping.target_path)
+    ]
+    warnings = [
+        (
+            f"{mapping.label}: {mapping.target_path} は帳票の行数上限を超えています。"
+            "意味づけを修正して再検出してください。"
+        )
+        for mapping in invalid
+    ]
+    if not enabled:
+        warnings.append("読み取りに使用できる意味づけ済みセルがありません。")
+    return bool(enabled) and not invalid, warnings
 
 
 def _version_view(version: TemplateVersion) -> TemplateVersionView:
@@ -138,9 +187,29 @@ async def create_template_job(
     files: Annotated[list[UploadFile], File()],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
+    job_service = get_job_service(request)
+    try:
+        job_service.validate_template_input_count(mode, len(files))
+    except AppError:
+        for item in files:
+            await item.close()
+        raise
+
     max_bytes = request.app.state.settings.storage.max_upload_bytes
-    uploads = [await read_upload(item, max_bytes) for item in files]
-    job = await get_job_service(request).create_template_job(
+    uploads: list[UploadPayload] = []
+    total_bytes = 0
+    for index, item in enumerate(files):
+        try:
+            upload = await read_upload(item, max_bytes)
+            total_bytes += len(upload.content)
+            job_service.validate_template_batch_bytes(total_bytes)
+        except Exception:
+            for remaining in files[index + 1 :]:
+                await remaining.close()
+            raise
+        uploads.append(upload)
+
+    job = await job_service.create_template_job(
         name=name,
         mode=mode,
         uploads=uploads,
@@ -155,6 +224,18 @@ async def create_template_job(
     response_model_by_alias=True,
 )
 def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
+    _, _, mappings = TemplateManagementService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).get_field_mappings(version_id)
+    valid_for_ocr, warnings = _mapping_validation(mappings)
+    if not valid_for_ocr:
+        raise AppError(
+            status=409,
+            code="TEMPLATE_FIELD_MAPPING_OUT_OF_RANGE",
+            title="Template field mappings must be repaired",
+            detail=warnings[0],
+        )
     with request.app.state.database.session() as session:
         return _version_view(TemplateRepository(session).approve(version_id))
 
@@ -175,11 +256,13 @@ async def update_handwriting_mask(
     version_id: str,
     file: Annotated[UploadFile, File()],
 ) -> dict[str, str]:
-    content = await file.read(request.app.state.settings.storage.max_upload_bytes + 1)
-    await file.close()
+    upload = await read_upload(
+        file,
+        request.app.state.settings.storage.max_upload_bytes,
+    )
     name = TemplateManagementService(
         request.app.state.database, request.app.state.storage
-    ).save_edited_mask(version_id, content)
+    ).save_edited_mask(version_id, upload.content)
     return {"artifactName": name}
 
 
@@ -192,14 +275,17 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
     width, height, mappings = TemplateManagementService(
         request.app.state.database, request.app.state.storage
     ).get_field_mappings(version_id)
+    valid_for_ocr, warnings = _mapping_validation(mappings)
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
         mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
-            for item in field_targets()
+            for item in _mapping_targets(mappings)
         ],
+        valid_for_ocr=valid_for_ocr,
+        warnings=warnings,
     )
 
 
@@ -217,15 +303,68 @@ def update_field_mappings(
         [FieldMappingConfig.model_validate(item.model_dump()) for item in body.mappings],
     )
     width, height, _ = service.get_field_mappings(version_id)
+    valid_for_ocr, warnings = _mapping_validation(mappings)
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
         mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
-            for item in field_targets()
+            for item in _mapping_targets(mappings)
         ],
+        valid_for_ocr=valid_for_ocr,
+        warnings=warnings,
     )
+
+
+@router.get(
+    "/template-versions/{version_id}/layout",
+    response_model=LayoutDefinition,
+    response_model_by_alias=True,
+)
+def get_template_layout(request: Request, version_id: str) -> LayoutDefinition:
+    return LayoutService(request.app.state.database, request.app.state.storage).get(version_id)
+
+
+@router.post(
+    "/template-versions/{version_id}/layout/detect",
+    response_model=LayoutDefinition,
+    response_model_by_alias=True,
+)
+def detect_template_layout(request: Request, version_id: str) -> LayoutDefinition:
+    return LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+        handwriting_threshold=request.app.state.settings.segmentation.threshold,
+    ).detect(version_id)
+
+
+@router.put(
+    "/template-versions/{version_id}/layout",
+    response_model=LayoutDefinition,
+    response_model_by_alias=True,
+)
+def save_template_layout(
+    request: Request, version_id: str, body: LayoutDefinition
+) -> LayoutDefinition:
+    return LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+        handwriting_threshold=request.app.state.settings.segmentation.threshold,
+    ).save(version_id, body)
+
+
+@router.post(
+    "/template-versions/{version_id}/layout/verify",
+    response_model=LayoutDefinition,
+    response_model_by_alias=True,
+)
+def verify_template_layout(request: Request, version_id: str) -> LayoutDefinition:
+    return LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+        handwriting_threshold=request.app.state.settings.segmentation.threshold,
+    ).verify(version_id)
 
 
 @router.post(

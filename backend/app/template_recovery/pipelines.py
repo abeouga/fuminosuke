@@ -16,7 +16,6 @@ from app.image_processing.document_boundary import DocumentNormalizer
 from app.image_processing.line_detection import LineDetector
 from app.image_processing.registration import TemplateAligner
 from app.segmentation.candidate_regions import handwriting_candidate_regions
-from app.segmentation.heuristic import HeuristicHandwritingSegmenter
 
 
 @dataclass(slots=True)
@@ -190,50 +189,32 @@ class TemplateRecoveryPipelines:
             raise ValueError("SINGLE_IMAGE_EXPERIMENTAL requires one image")
         started = time.perf_counter()
         normalized = self._normalizer.normalize(images[0])
-        probability = HeuristicHandwritingSegmenter().predict(normalized.image_rgb)
-        mask = (probability >= self._settings.segmentation.threshold).astype(np.uint8) * 255
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-        mask = cv2.dilate(mask, np.ones((3, 3), np.uint8))
-        gray = cv2.cvtColor(normalized.image_rgb, cv2.COLOR_RGB2GRAY)
-        line_mask = self._line_detector.detect(gray)
-        line_protection = cv2.dilate(line_mask, np.ones((2, 2), np.uint8))
-        mask[line_protection > 0] = 0
-        handwriting_only = np.full_like(normalized.image_rgb, 255)
-        handwriting_only[mask > 0] = normalized.image_rgb[mask > 0]
-        clean_preview = cv2.inpaint(normalized.image_rgb, mask, 4, cv2.INPAINT_TELEA)
-        clean_preview[line_mask > 0] = normalized.image_rgb[line_mask > 0]
-        debug = normalized.image_rgb.copy()
-        red = np.zeros_like(debug)
-        red[:, :] = (235, 55, 55)
-        selected = mask > 0
-        debug[selected] = cv2.addWeighted(debug, 0.35, red, 0.65, 0)[selected]
         quality = {
             "mode": TemplateMode.SINGLE_IMAGE_EXPERIMENTAL.value,
             **normalized.quality.to_dict(),
-            "segmentationMethod": "heuristic-adaptive-components",
-            "handwritingCoverageRatio": float((mask > 0).mean()),
+            "processingOrder": [
+                "PERSPECTIVE_CORRECTION",
+                "LAYOUT_CLASSIFICATION",
+                "HANDWRITING_EXTRACTION",
+            ],
             "templateConfidence": 0.35,
             "warnings": [
                 *normalized.quality.warnings,
                 "SINGLE_IMAGE_REQUIRES_HUMAN_REVIEW",
-                "BLACK_PRINT_AND_HANDWRITING_NOT_FULLY_SEPARABLE",
+                "LAYOUT_CLASSIFICATION_REQUIRED_BEFORE_HANDWRITING_EXTRACTION",
             ],
             "durationMs": round((time.perf_counter() - started) * 1000, 2),
         }
         return PreparedTemplate(
-            clean_template_rgb=clean_preview,
-            preview_rgb=clean_preview,
+            clean_template_rgb=normalized.image_rgb,
+            preview_rgb=normalized.image_rgb.copy(),
             images={
                 "normalized": ("normalized.png", normalized.image_rgb, True),
-                "handwritingProbability": (
-                    "handwriting_probability.png",
-                    np.clip(probability * 255, 0, 255).astype(np.uint8),
-                    False,
+                "registrationDebug": (
+                    "registration_debug.png",
+                    normalized.debug_rgb,
+                    True,
                 ),
-                "handwritingOnly": ("handwriting_only.png", handwriting_only, True),
-                "debugOverlay": ("debug_overlay.png", debug, True),
             },
             quality=quality,
-            handwriting_mask=mask,
-            handwriting_candidates=handwriting_candidate_regions(mask, probability),
         )

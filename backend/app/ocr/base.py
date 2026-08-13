@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
@@ -13,8 +14,14 @@ class OcrRegionInput:
     image_png: bytes
     handwriting_png: bytes | None = None
     target_path: str | None = None
-    label: str | None = None
+    source_region_id: str | None = None
     bounding_box: tuple[int, int, int, int] | None = None
+    candidates: tuple[str, ...] = ()
+    allowed_suffixes: tuple[str, ...] = ()
+    candidate_type: str | None = None
+    transcription_format: str | None = None
+    printed_label_excluded: bool = False
+    printed_label_text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +29,7 @@ class OcrProviderRequest:
     regions: list[OcrRegionInput]
     template_id: str = "cow-breeding-ledger-v1"
     template_version: str = "1"
+    should_cancel: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)

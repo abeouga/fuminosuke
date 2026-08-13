@@ -126,7 +126,7 @@ def _synthetic_case() -> tuple[NDArray[np.uint8], NDArray[np.uint8], NDArray[np.
     strokes = [((125, 125), (205, 142)), ((245, 255), (345, 265)), ((405, 590), (520, 570))]
     for start, end in strokes:
         cv2.line(filled, start, end, (25, 65, 210), 4, cv2.LINE_AA)
-        cv2.line(expected, start, end, 255, 7, cv2.LINE_AA)
+        cv2.line(expected, start, end, (255,), 7, cv2.LINE_AA)
     matrix = cv2.getRotationMatrix2D((width / 2, height / 2), 0.45, 1.0)
     matrix[0, 2] += 1.5
     matrix[1, 2] -= 1.0

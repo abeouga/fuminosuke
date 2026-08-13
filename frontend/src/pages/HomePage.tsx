@@ -14,6 +14,8 @@ export function HomePage({
   onOpenJob: (job: Job) => void;
 }) {
   const active = templates.flatMap((template) => template.versions).filter((version) => version.status === "ACTIVE");
+  const attention = jobs.filter((job) => NEEDS_ATTENTION.has(job.status));
+  const recent = jobs.filter((job) => !NEEDS_ATTENTION.has(job.status));
   return (
     <div className="page-stack">
       <section className="hero">
@@ -47,24 +49,60 @@ export function HomePage({
         <aside className="notice danger"><strong>バックエンド未起動</strong><span>backendで開発サーバーを起動してください。自動的に再確認します。</span></aside>
       )}
 
+      {attention.length > 0 && (
+        <section>
+          <div className="section-title"><div><span className="eyebrow">ACTION REQUIRED</span><h2>対応が必要な処理</h2></div></div>
+          <p className="section-lead">確認待ち・中断・失敗した処理は、ここから内容確認や再試行へ進めます。</p>
+          <div className="job-list">
+            {attention.map((job) => (
+              <JobRow job={job} key={job.id} onOpenJob={onOpenJob} />
+            ))}
+          </div>
+        </section>
+      )}
+
       <section>
         <div className="section-title"><div><span className="eyebrow">RECENT</span><h2>最近の処理</h2></div></div>
-        {jobs.length === 0 ? (
+        {recent.length === 0 ? (
           <div className="empty-state">まだ処理履歴はありません。</div>
         ) : (
           <div className="job-list">
-            {jobs.map((job) => (
-              <button className="job-row" key={job.id} onClick={() => onOpenJob(job)}>
-                <span className="job-icon">{job.jobType === "EXTRACT_DOCUMENT" ? "読" : "型"}</span>
-                <span><strong>{job.jobType === "EXTRACT_DOCUMENT" ? "帳票読み取り" : "テンプレート準備"}</strong><small>{new Date(job.createdAt).toLocaleString("ja-JP")}</small></span>
-                <span className={`status-pill status-${job.status.toLowerCase()}`}>{job.status}</span>
-                <span className="row-arrow">→</span>
-              </button>
+            {recent.map((job) => (
+              <JobRow job={job} key={job.id} onOpenJob={onOpenJob} />
             ))}
           </div>
         )}
       </section>
     </div>
+  );
+}
+
+const NEEDS_ATTENTION = new Set([
+  "CREATED",
+  "QUEUED",
+  "PROCESSING",
+  "REVIEW_REQUIRED",
+  "FAILED",
+  "INTERRUPTED",
+]);
+
+function JobRow({
+  job,
+  onOpenJob,
+}: {
+  job: Job;
+  onOpenJob: (job: Job) => void;
+}) {
+  return (
+    <button className="job-row" onClick={() => onOpenJob(job)}>
+      <span className="job-icon">{job.jobType === "EXTRACT_DOCUMENT" ? "読" : "型"}</span>
+      <span>
+        <strong>{job.jobType === "EXTRACT_DOCUMENT" ? "帳票読み取り" : "テンプレート準備"}</strong>
+        <small>{new Date(job.createdAt).toLocaleString("ja-JP")}</small>
+      </span>
+      <span className={`status-pill status-${job.status.toLowerCase()}`}>{statusLabel(job.status)}</span>
+      <span className="row-arrow">→</span>
+    </button>
   );
 }
 
@@ -77,4 +115,17 @@ function providerLabel(provider?: Health["ocrProvider"]) {
   if (provider === "openai") return "外部OCR";
   if (provider === "disabled") return "画像処理のみ";
   return "確認中";
+}
+
+function statusLabel(status: string) {
+  return ({
+    CREATED: "準備中",
+    QUEUED: "待機中",
+    PROCESSING: "処理中",
+    REVIEW_REQUIRED: "確認待ち",
+    CONFIRMED: "確定済み",
+    FAILED: "失敗",
+    CANCELLED: "中止",
+    INTERRUPTED: "再開可能",
+  } as Record<string, string>)[status] ?? status;
 }

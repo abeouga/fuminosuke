@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -9,10 +11,12 @@ from numpy.typing import NDArray
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.db.models import JobArtifact, TemplateVersion
 from app.db.session import Database
-from app.domain.enums import TemplateVersionStatus
-from app.domain.template_config import TemplateConfig, load_template_config, parse_template_config
+from app.domain.template_config import (
+    FieldMappingConfig,
+    TemplateConfig,
+    load_template_config,
+)
 from app.extraction.handwriting_isolator import HandwritingIsolator
 from app.extraction.image_variants import create_variants
 from app.extraction.mark_detector import MarkDetector
@@ -22,7 +26,7 @@ from app.image_processing.document_boundary import DocumentNormalizer
 from app.image_processing.image_loader import ImageLoader
 from app.image_processing.registration import TemplateAligner
 from app.repositories.job_repository import JobRepository
-from app.storage.local_storage import LocalStorageService
+from app.storage.local_storage import LocalStorageService, StoragePathError
 
 
 @dataclass(slots=True)
@@ -37,6 +41,18 @@ class ExtractionOutput:
     quality: dict[str, Any]
     unknown_overlap_regions: list[dict[str, object]]
     artifacts: dict[str, str]
+    config: TemplateConfig
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateProcessingSnapshot:
+    template_version_id: str
+    template_id: str
+    template_version_number: int
+    source_artifact_id: str
+    clean_template_sha256: str
+    config_sha256: str
+    template_rgb: NDArray[np.uint8]
     config: TemplateConfig
 
 
@@ -62,45 +78,61 @@ class ImageExtractionService:
         with self._database.session() as session:
             repository = JobRepository(session)
             job = repository.get(job_id)
-            if job is None or not job.template_version_id:
-                raise ValueError("OCR job or template version is missing")
-            version = session.get(TemplateVersion, job.template_version_id)
-            if version is None or version.status != TemplateVersionStatus.ACTIVE.value:
-                raise AppError(
-                    status=409,
-                    code="INVALID_STATE_TRANSITION",
-                    title="Template version is not active",
-                    detail="ACTIVEテンプレート版が必要です。",
-                )
-            clean_artifact = session.get(JobArtifact, version.clean_template_artifact_id)
-            if clean_artifact is None:
-                raise AppError(
-                    status=500,
-                    code="ARTIFACT_NOT_FOUND",
-                    title="Template artifact not found",
-                    detail="テンプレート画像が見つかりません。",
-                )
+            if job is None:
+                raise ValueError("OCR job is missing")
             inputs = repository.list_inputs(job_id)
             if len(inputs) != 1:
                 raise ValueError("EXTRACT_DOCUMENT requires exactly one input")
             attempt = job.attempt_number
-            template_version_id = version.id
+            job_snapshot = dict(job.config_snapshot_json)
+            linked_template_version_id = job.template_version_id
             source_input = inputs[0]
-            template_path = clean_artifact.relative_path
-            config_path = version.config_relative_path
-        config = parse_template_config(self._storage.read_bytes(config_path).decode("utf-8"))
+        template_snapshot = self._load_template_snapshot(
+            job_id=job_id,
+            job_snapshot=job_snapshot,
+            linked_template_version_id=linked_template_version_id,
+        )
+        config = template_snapshot.config
+        raw_mappings = job_snapshot.get("fieldMappings")
+        if isinstance(raw_mappings, list):
+            snapshot_mappings = [
+                FieldMappingConfig.model_validate(item) for item in raw_mappings
+            ]
+            config = config.model_copy(
+                update={"field_mappings": snapshot_mappings},
+                deep=True,
+            )
+        strict_mapped_ocr = (
+            bool(job_snapshot.get("ocrEnabled", True))
+            and job_snapshot.get("ocrProvider") == "openai"
+        )
+        if strict_mapped_ocr and not config.mapped_ocr_regions():
+            raise AppError(
+                status=409,
+                code="TEMPLATE_FIELD_MAPPING_REQUIRED",
+                title="Template field mappings are required",
+                detail=(
+                    "OpenAI読み取りには意味づけ済みの手書きセルが必要です。"
+                    "テンプレート画面で記入欄とJSON項目を設定してください。"
+                ),
+            )
         normalizer = DocumentNormalizer(
             canonical_width=config.canonical_width,
             canonical_height=config.canonical_height,
         )
-        cropper = RegionCropper(config)
+        cropper = RegionCropper(
+            config,
+            (
+                config.mapped_ocr_regions()
+                if strict_mapped_ocr
+                else config.ocr_regions()
+            ),
+        )
         mark_detector = MarkDetector(config)
         source = self._loader.load(
             self._storage.read_bytes(source_input.relative_path), source_input.media_type
         ).rgb
-        template = self._loader.load(
-            self._storage.read_bytes(template_path), clean_artifact.media_type
-        ).rgb
+        template = template_snapshot.template_rgb
         self._progress(job_id, "NORMALIZING_DOCUMENT", 12)
         normalized = normalizer.normalize(source)
         self._progress(job_id, "REGISTERING_TEMPLATE", 28)
@@ -127,6 +159,16 @@ class ImageExtractionService:
                 *registered.quality.warnings,
             ],
             "durationMsBeforeOcr": round((time.perf_counter() - started) * 1000, 2),
+            "fieldMappingCount": len(config.mapped_ocr_regions()),
+            "fieldMappingHash": job_snapshot.get("fieldMappingHash"),
+            "templateSnapshotSha256": template_snapshot.clean_template_sha256,
+            "templateConfigSnapshotSha256": template_snapshot.config_sha256,
+            "templateSourceArtifactId": template_snapshot.source_artifact_id,
+            "ocrCropSource": (
+                "TEMPLATE_FIELD_MAPPINGS_SNAPSHOT"
+                if strict_mapped_ocr
+                else "CONFIGURED_REGIONS"
+            ),
         }
         unknown: list[dict[str, object]] = [
             dict(item.to_dict()) for item in handwriting.unknown_overlap_regions
@@ -150,7 +192,7 @@ class ImageExtractionService:
         return ExtractionOutput(
             job_id=job_id,
             attempt_number=attempt,
-            template_version_id=template_version_id,
+            template_version_id=template_snapshot.template_version_id,
             aligned_rgb=registered.aligned_rgb,
             template_rgb=template,
             crops=crops,
@@ -159,6 +201,110 @@ class ImageExtractionService:
             unknown_overlap_regions=unknown,
             artifacts=artifacts,
             config=config,
+        )
+
+    def _load_template_snapshot(
+        self,
+        *,
+        job_id: str,
+        job_snapshot: dict[str, Any],
+        linked_template_version_id: str | None,
+    ) -> TemplateProcessingSnapshot:
+        raw_snapshot = job_snapshot.get("templateSnapshot")
+        if not isinstance(raw_snapshot, dict):
+            raise self._invalid_template_snapshot()
+        template_id = raw_snapshot.get("templateId")
+        template_version_id = raw_snapshot.get("templateVersionId")
+        template_version_number = raw_snapshot.get("templateVersionNumber")
+        source_artifact_id = raw_snapshot.get("sourceArtifactId")
+        source_artifact_sha256 = raw_snapshot.get("sourceArtifactSha256")
+        clean_template_sha256 = raw_snapshot.get("cleanTemplateSha256")
+        clean_template_path = raw_snapshot.get("cleanTemplatePath")
+        clean_template_media_type = raw_snapshot.get("cleanTemplateMediaType")
+        raw_config = raw_snapshot.get("config")
+        config_sha256 = raw_snapshot.get("configSha256")
+        if (
+            raw_snapshot.get("schemaVersion") != 1
+            or not isinstance(template_id, str)
+            or not template_id
+            or not isinstance(template_version_id, str)
+            or not template_version_id
+            or (
+                linked_template_version_id is not None
+                and linked_template_version_id != template_version_id
+            )
+            or job_snapshot.get("templateVersionId") != template_version_id
+            or not isinstance(template_version_number, int)
+            or template_version_number < 1
+            or not isinstance(source_artifact_id, str)
+            or not source_artifact_id
+            or not isinstance(source_artifact_sha256, str)
+            or not isinstance(clean_template_sha256, str)
+            or source_artifact_sha256 != clean_template_sha256
+            or not isinstance(clean_template_path, str)
+            or clean_template_media_type != "image/png"
+            or not isinstance(raw_config, dict)
+            or not isinstance(config_sha256, str)
+        ):
+            raise self._invalid_template_snapshot()
+        try:
+            snapshot_root = self._storage.resolve(
+                f"uploads/{job_id}/template_snapshot"
+            )
+            template_path = self._storage.resolve(clean_template_path)
+            template_path.relative_to(snapshot_root)
+            template_bytes = template_path.read_bytes()
+        except (OSError, StoragePathError, ValueError) as exc:
+            raise self._invalid_template_snapshot() from exc
+        if hashlib.sha256(template_bytes).hexdigest() != clean_template_sha256:
+            raise self._invalid_template_snapshot()
+        try:
+            config = TemplateConfig.model_validate(raw_config)
+        except ValueError as exc:
+            raise self._invalid_template_snapshot() from exc
+        canonical_config = json.dumps(
+            config.model_dump(mode="json", by_alias=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if hashlib.sha256(canonical_config).hexdigest() != config_sha256:
+            raise self._invalid_template_snapshot()
+        if (
+            config.template_id != template_id
+            or config.template_version != template_version_number
+        ):
+            raise self._invalid_template_snapshot()
+        template = self._loader.load(
+            template_bytes,
+            clean_template_media_type,
+        ).rgb
+        if template.shape[:2] != (
+            config.canonical_height,
+            config.canonical_width,
+        ):
+            raise self._invalid_template_snapshot()
+        return TemplateProcessingSnapshot(
+            template_version_id=template_version_id,
+            template_id=template_id,
+            template_version_number=template_version_number,
+            source_artifact_id=source_artifact_id,
+            clean_template_sha256=clean_template_sha256,
+            config_sha256=config_sha256,
+            template_rgb=template,
+            config=config,
+        )
+
+    @staticmethod
+    def _invalid_template_snapshot() -> AppError:
+        return AppError(
+            status=409,
+            code="OCR_TEMPLATE_SNAPSHOT_INVALID",
+            title="OCR template snapshot is invalid",
+            detail=(
+                "受付時のテンプレート固定データを確認できません。"
+                "この処理は再試行せず、読み取りを新しく開始してください。"
+            ),
         )
 
     def _write_artifacts(

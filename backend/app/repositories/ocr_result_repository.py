@@ -3,7 +3,12 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import ConfirmedResult, OcrResult, OcrResultRevision
+from app.db.models import (
+    ConfirmedRecordField,
+    ConfirmedResult,
+    OcrResult,
+    OcrResultRevision,
+)
 from app.domain.enums import RevisionSource
 from app.ocr.base import OcrProviderResponse
 from app.validation.business_validators import ValidationReport
@@ -31,6 +36,38 @@ class OcrResultRepository:
                 .order_by(ConfirmedResult.confirmed_at.desc())
             )
         )
+
+    def list_all_confirmed(self) -> list[ConfirmedResult]:
+        return list(
+            self._session.scalars(
+                select(ConfirmedResult).order_by(ConfirmedResult.confirmed_at.desc())
+            )
+        )
+
+    def list_record_field_matches(
+        self,
+        *,
+        section_key: str,
+        field_key: str,
+        normalized_value: str,
+    ) -> list[tuple[ConfirmedRecordField, ConfirmedResult]]:
+        statement = (
+            select(ConfirmedRecordField, ConfirmedResult)
+            .join(
+                ConfirmedResult,
+                ConfirmedResult.id == ConfirmedRecordField.confirmed_result_id,
+            )
+            .where(
+                ConfirmedRecordField.section_key == section_key,
+                ConfirmedRecordField.field_key == field_key,
+                ConfirmedRecordField.normalized_value.contains(normalized_value),
+            )
+            .order_by(
+                ConfirmedResult.confirmed_at.desc(),
+                ConfirmedRecordField.record_order,
+            )
+        )
+        return list(self._session.execute(statement).tuples())
 
     def save_provider_result(
         self,
@@ -95,6 +132,7 @@ class OcrResultRepository:
         base_revision: int,
         candidate: dict[str, object],
         report: ValidationReport,
+        commit: bool = True,
     ) -> OcrResult | None:
         next_revision = base_revision + 1
         validation = report.to_dict()
@@ -119,5 +157,9 @@ class OcrResultRepository:
                 validation_json=validation,
             )
         )
-        self._session.commit()
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
+            self._session.refresh(result)
         return self.get_by_job(result.job_id)

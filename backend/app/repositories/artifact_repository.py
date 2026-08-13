@@ -37,6 +37,43 @@ class ArtifactRepository:
         self._session.refresh(artifact)
         return artifact
 
+    def upsert(
+        self,
+        *,
+        job_id: str,
+        attempt_number: int,
+        artifact_name: str,
+        media_type: str,
+        relative_path: str,
+        sha256: str,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> JobArtifact:
+        artifact = self.get_by_name(
+            job_id=job_id,
+            attempt_number=attempt_number,
+            artifact_name=artifact_name,
+        )
+        if artifact is None:
+            return self.create(
+                job_id=job_id,
+                attempt_number=attempt_number,
+                artifact_name=artifact_name,
+                media_type=media_type,
+                relative_path=relative_path,
+                sha256=sha256,
+                width=width,
+                height=height,
+            )
+        artifact.media_type = media_type
+        artifact.relative_path = relative_path
+        artifact.sha256 = sha256
+        artifact.width = width
+        artifact.height = height
+        self._session.commit()
+        self._session.refresh(artifact)
+        return artifact
+
     def get_by_name(
         self, *, job_id: str, attempt_number: int, artifact_name: str
     ) -> JobArtifact | None:
@@ -60,4 +97,3 @@ class ArtifactRepository:
             self._session.delete(artifact)
         self._session.commit()
         return len(artifacts)
-

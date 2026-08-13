@@ -8,9 +8,21 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $backendDir = Join-Path $projectRoot 'backend'
 $frontendDir = Join-Path $projectRoot 'frontend'
 $python = Join-Path $backendDir '.venv\Scripts\python.exe'
+$alembic = Join-Path $backendDir '.venv\Scripts\alembic.exe'
 
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw 'backend/.venv is missing. Run scripts/setup.ps1 first.'
+}
+if (-not (Test-Path -LiteralPath $alembic -PathType Leaf)) {
+    throw 'Alembic is missing from backend/.venv. Run scripts/setup.ps1 first.'
+}
+$envFile = Join-Path $backendDir '.env'
+if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+    throw 'backend/.env is missing. Copy backend/.env.example to backend/.env, review OCR_PROVIDER, and configure OPENAI_API_KEY before starting.'
+}
+$venvVersion = & $python -c 'import sys; print(sys.version_info[:2])'
+if ($LASTEXITCODE -ne 0 -or ([string]$venvVersion).Trim() -ne '(3, 12)') {
+    throw 'backend/.venv must use Python 3.12. Run setup.bat after installing Python 3.12.'
 }
 
 function Test-LocalPortInUse([int]$Port) {
@@ -35,17 +47,27 @@ function Find-FreeLocalPort([int]$PreferredPort) {
 }
 
 function Stop-ProcessTree([int]$ProcessId) {
-    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue)
-    foreach ($child in $children) {
-        Stop-ProcessTree ([int]$child.ProcessId)
+    # taskkill stops child processes too and does not require WMI access.  Some
+    # managed Windows environments block Win32_Process queries, which must not
+    # prevent the development servers from starting or being cleaned up.
+    try {
+        & "$env:SystemRoot\System32\taskkill.exe" /PID $ProcessId /T /F 2>$null | Out-Null
     }
-    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    catch {
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Stop-StaleProjectServers {
     $backendMarker = $python.ToLowerInvariant()
     $frontendMarker = (Join-Path $frontendDir 'node_modules').ToLowerInvariant()
-    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    try {
+        $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    }
+    catch {
+        Write-Warning 'Could not inspect existing development servers; using available ports instead.'
+        return
+    }
     foreach ($process in $processes) {
         $commandLine = ([string]$process.CommandLine).ToLowerInvariant().Replace('/', '\')
         $isBackend = $commandLine.Contains($backendMarker) -and
@@ -106,7 +128,7 @@ Stop-StaleProjectServers
 
 Push-Location $backendDir
 try {
-    & $python -m alembic upgrade head
+    & $alembic upgrade head
     if ($LASTEXITCODE -ne 0) { throw 'Database migration failed.' }
 }
 finally {
@@ -131,7 +153,7 @@ try {
     $backend = Start-Process -FilePath $python -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port',([string]$backendPort) -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr -PassThru
     $health = Wait-ForBackend "$backendUrl/api/v1/health" $backend
 
-    $expectedProvider = Get-Content -LiteralPath (Join-Path $backendDir '.env') -ErrorAction SilentlyContinue |
+    $expectedProvider = Get-Content -LiteralPath $envFile |
         Where-Object { $_ -match '^OCR_PROVIDER=' } |
         Select-Object -Last 1 |
         ForEach-Object { ($_ -split '=', 2)[1].Trim().ToLowerInvariant() }

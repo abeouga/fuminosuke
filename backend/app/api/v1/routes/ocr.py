@@ -10,9 +10,12 @@ from app.api.dependencies import get_job_service, get_ocr_result_service
 from app.api.v1.routes.shared import JobAccepted, job_accepted
 from app.api.v1.routes.uploads import read_upload
 from app.core.errors import ApiModel
+from app.domain.field_targets import CALVING_ROW_COUNT, SALE_CALF_ROW_COUNT
 from app.domain.ocr_models import (
+    BoundingBox,
     Calving,
     DocumentIdentity,
+    FieldReading,
     OcrDocument,
     Pedigree,
     ReviewItem,
@@ -21,6 +24,15 @@ from app.domain.ocr_models import (
 from app.services.ocr_result_service import CorrectionValues
 
 router = APIRouter(tags=["ocr"])
+
+
+class OcrFieldPreview(ApiModel):
+    target_path: str
+    mapping_id: str
+    artifact_url: str
+    bounding_box: BoundingBox | None
+    record_group_id: str | None = None
+    field_key: str | None = None
 
 
 class OcrResultResponse(ApiModel):
@@ -37,15 +49,22 @@ class OcrResultResponse(ApiModel):
     estimated_cost: float | None
     confirmed: bool
     individual_id: str | None
+    field_previews: list[OcrFieldPreview]
+    record_structure: dict[str, Any]
 
 
 class OcrCorrectionRequest(ApiModel):
     base_revision: int = Field(ge=1)
     document: DocumentIdentity
-    sale_calves: list[SaleCalf]
+    sale_calves: list[SaleCalf] = Field(max_length=SALE_CALF_ROW_COUNT)
     pedigree: Pedigree
-    calvings: list[Calving]
+    calvings: list[Calving] = Field(max_length=CALVING_ROW_COUNT)
+    custom_fields: dict[str, FieldReading] = Field(default_factory=dict, max_length=300)
     review_items: list[ReviewItem]
+
+
+class OcrConfirmationRequest(ApiModel):
+    base_revision: int = Field(ge=1)
 
 
 @router.post(
@@ -57,6 +76,7 @@ class OcrCorrectionRequest(ApiModel):
 async def create_ocr_job(
     request: Request,
     template_version_id: Annotated[str, Form(alias="templateVersionId")],
+    mother_individual_id: Annotated[str, Form(alias="motherIndividualId")],
     file: Annotated[UploadFile, File()],
     ocr_enabled: Annotated[bool, Form(alias="ocrEnabled")] = True,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -64,6 +84,7 @@ async def create_ocr_job(
     upload = await read_upload(file, request.app.state.settings.storage.max_upload_bytes)
     job = await get_job_service(request).create_ocr_job(
         template_version_id=template_version_id,
+        mother_individual_id=mother_individual_id,
         upload=upload,
         ocr_enabled=ocr_enabled,
         idempotency_key=idempotency_key,
@@ -94,6 +115,7 @@ def save_ocr_corrections(
         sale_calves=body.sale_calves,
         pedigree=body.pedigree,
         calvings=body.calvings,
+        custom_fields=body.custom_fields,
         review_items=body.review_items,
     )
     return get_ocr_result_service(request).correct(job_id, values)
@@ -104,8 +126,15 @@ def save_ocr_corrections(
     response_model=OcrResultResponse,
     response_model_by_alias=True,
 )
-def confirm_ocr_result(request: Request, job_id: str) -> dict[str, Any]:
-    return get_ocr_result_service(request).confirm(job_id)
+def confirm_ocr_result(
+    request: Request,
+    job_id: str,
+    body: OcrConfirmationRequest,
+) -> dict[str, Any]:
+    return get_ocr_result_service(request).confirm(
+        job_id,
+        base_revision=body.base_revision,
+    )
 
 
 @router.get("/ocr-jobs/{job_id}/export", response_class=FileResponse)

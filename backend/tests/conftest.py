@@ -12,6 +12,13 @@ from app.db.session import Database
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def disable_paddle_model_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Unit/integration tests use stubs for Paddle behavior and must never load
+    # the large local OCR models implicitly.
+    monkeypatch.setenv("PADDLEOCR_DISABLED", "1")
+
+
 @pytest.fixture
 def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
     def factory(**overrides: object) -> Settings:

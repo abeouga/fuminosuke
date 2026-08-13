@@ -20,6 +20,8 @@ class TranscriptionItem(TranscriptionModel):
     status: ReadingStatus
     alternatives: list[str] = Field(default_factory=list, max_length=10)
     review_reason: str | None = Field(default=None, max_length=100)
+    matched_candidate: str | None = Field(default=None, max_length=120)
+    is_ditto: bool = False
 
     @model_validator(mode="after")
     def normalize_status(self) -> TranscriptionItem:

@@ -35,6 +35,7 @@ class ArtifactWriter:
         file_name: str,
         image: NDArray[np.uint8],
         rgb: bool = True,
+        replace: bool = False,
     ) -> JobArtifact:
         content = encode_png(image, rgb=rgb)
         return self.bytes(
@@ -46,6 +47,7 @@ class ArtifactWriter:
             content=content,
             width=image.shape[1],
             height=image.shape[0],
+            replace=replace,
         )
 
     def json(
@@ -56,6 +58,7 @@ class ArtifactWriter:
         name: str,
         file_name: str,
         value: object,
+        replace: bool = False,
     ) -> JobArtifact:
         content = json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
         return self.bytes(
@@ -65,6 +68,7 @@ class ArtifactWriter:
             file_name=file_name,
             media_type="application/json",
             content=content,
+            replace=replace,
         )
 
     def bytes(
@@ -78,11 +82,14 @@ class ArtifactWriter:
         content: bytes,
         width: int | None = None,
         height: int | None = None,
+        replace: bool = False,
     ) -> JobArtifact:
         relative = f"artifacts/{job_id}/attempts/{attempt_number}/{file_name}"
         stored = self._storage.write_bytes(relative, content)
         with self._database.session() as session:
-            artifact = ArtifactRepository(session).create(
+            repository = ArtifactRepository(session)
+            write = repository.upsert if replace else repository.create
+            artifact = write(
                 job_id=job_id,
                 attempt_number=attempt_number,
                 artifact_name=name,
@@ -104,4 +111,3 @@ def encode_png(image: NDArray[np.uint8], *, rgb: bool = True) -> bytes:
     if not success:
         raise RuntimeError("Failed to encode PNG artifact")
     return encoded.tobytes()
-

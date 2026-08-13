@@ -1,4 +1,26 @@
-# 牛繁殖台帳 OCR ローカルプロトタイプ
+# 帳票 OCR V2 ローカルワークベンチ
+
+## V2で追加した帳票レイアウト定義
+
+V2の帳票処理順は固定されています。
+
+1. 最初に帳票外周を検出し、OpenCVの透視変換で歪みを補正します。画像全体を安易に外周とする従来のフォールバックは、紙面領域の再検出を先に行うよう改善しています。
+2. 歪み補正済みの元画像からOpenCVで罫線セルを検出します。内部に2個以上の矩形を含む大枠は記入欄候補から自動除外します。
+3. OpenCVのセル候補をCanvas上で「ラベル」「手書き文字欄」「除外」へ分類します。PaddleOCRを任意導入している場合はラベル文字候補も補助します。ラベル文字の修正とJSON保存先の意味づけもこの時点で確定します。
+4. 分類と意味づけを保存した後に限り、指定された手書き文字欄の内側だけから手書きマスクを生成し、テンプレート画像から除去します。
+   固定ラベルと記入欄が同じ矩形にある場合は、その矩形へ保存先を直接割り当て、矩形内の印刷ラベル名を設定できます。OCR時は固定印刷を除いた手書き文字画像へ自動的に切り替えます。独立したラベルがない欄も保存先を直接割り当てられます。
+5. OCR実行時は、ジョブ開始時に意味づけ設定をスナップショットし、意味づけ済みの手書き文字欄を保存座標どおりに切り出してOpenAIへ送信します。ラベルセルや帳票全体は送信せず、PaddleOCRの文字有無判定で送信対象を増減させません。
+6. 記入欄からラベルを巻き込むようにドラッグすると、方向に応じて横積み・縦積みと行順を保存します。「縦横ラベルを重複定義」をオンにすると十字方向の二重定義ができます。
+7. 確定したセル、ラベル、関係はテンプレート版の `layout_json` としてSQLiteへ保存し、同時にOCR用の固定座標マッピングへ変換します。
+8. 読み取り画面はPNG等の画像入力に加え、ガイド枠・静止判定・自動シャッター付きカメラ入力を備えます。
+
+売却子牛は帳票の物理行数に合わせて10行、繁殖履歴は20行を上限とします。価格や体重の意味づけを縦方向へ一括設定するときは、ドラッグ終点側の同一列だけを採用し、隣接列を同時に取り込みません。
+
+配列項目は、セル意味づけに加えて `親セクション → 行レコード → 項目` の構造をテンプレートへ保存します。「レコード作成」で同じ産次の行を端から端まで線でつなぎ、「親ラベル接続」で「売却子牛一覧」などの親見出しへ結びます。OCR応答はmappingIdからこの構造へ確定的に戻され、確定時には種雄牛名・産次・価格を同じ行として検索索引へ保存します。
+
+テンプレートで入力した産次などの `recordKeyValue` はレコードの識別情報として扱います。OpenAIが産次セルを誤読しても、記入のある行ではテンプレートのレコードキーを優先し、空行には値を補いません。補正後も元の `mappingId` とcrop座標は維持されるため、結果確認画面から正しい記入矩形を開けます。
+
+PaddleOCRは必須ではなく、通常のセットアップでは導入しません。OpenCVの文字密度によるラベル候補の編集と、保存済みセルを使ったOpenAI読み取りだけで運用できます。ラベル文字候補の補助が必要な場合だけ、セットアップ前に `LLM_OCR_INSTALL_PADDLE=1` を設定してください。PaddleOCRの文字存在確認は監査用の補助情報で、OpenAI送信の可否判定には使いません。
 
 牛繁殖台帳の画像から、帳票位置合わせ、テンプレート復元、手書き分離、領域切り出し、OCR、目視修正、確定JSON保存、個体識別番号による検索、JSON/CSV出力までを行うローカル専用ワークベンチです。
 
@@ -35,7 +57,7 @@ PowerShellの実行ポリシーで`.ps1`を実行できない場合は、その�
 Set-ExecutionPolicy -Scope Process Bypass
 ```
 
-`setup.ps1`は固定済みの`backend/requirements.lock`と`frontend/package-lock.json`を使用し、`.env`作成とmigration適用も行います。
+`setup.ps1`は固定済みの`backend/requirements.lock`と`frontend/package-lock.json`を使用し、`.env`作成とmigration適用も行います。初回作成される`.env`は安全な`mock`設定です。外部OCRを使う場合は、起動前に`OCR_PROVIDER`とAPIキーを確認してください。準備済み環境で`.env`が失われた場合、`start.bat`は勝手に`mock`へ切り替えず、設定の復元を案内して停止します。
 
 ## 手動セットアップ
 
@@ -64,13 +86,19 @@ npm.cmd run dev -- --host 127.0.0.1
    - `MULTI_SCAN_CONSENSUS`: 同一書式の記入済み画像3枚以上
    - `SINGLE_IMAGE_EXPERIMENTAL`: 記入済み画像1枚。実験的
 2. DRAFTの比較画像、品質、マスクを確認し、必要ならCanvasでマスクを編集します。
-3. 承認してACTIVEにします。自動承認はしません。
-4. 「読み取り」でACTIVE版と台帳画像を選びます。OCRを切って画像処理だけ行うこともできます。
-5. `raw`、`normalized`、`status`、候補、確認理由、対応cropを見ながら修正します。
-6. 修正を保存し、確認ダイアログを経て確定します。確定後の候補は変更できません。
-7. 確定結果は10桁の個体識別番号に紐づくJSONとして保存されます。
-8. 「個体検索」で番号を入力し、紐づく確定JSON全体を画面またはAPIから取得します。
-9. 必要に応じてJSONまたはUTF-8 BOM付きCSVをファイル出力します。
+3. レイアウト編集でセルを「ラベル」「手書き文字欄」「除外」に分類し、各手書き文字欄をJSON項目へ意味づけします。一覧にない項目は追加項目として入力できます。
+4. 配列データは、同じ行の手書き文字欄を「レコード作成」で線接続し、「親ラベル接続」で「売却子牛一覧」などの親セクションへ結びます。産次などのレコードキーもここで確認します。
+5. レイアウトを検証してからテンプレートを承認し、ACTIVEにします。テンプレート名は重複できません。
+6. 「読み取り」でACTIVE版と台帳画像を選び、この台帳の母となる10桁の個体識別番号を入力します。OCRを切って画像処理だけ行うこともできます。
+7. ステップ進捗が完了したら、意味づけ済みセルだけが表形式で表示されます。緑は問題なし、黄色は要確認です。
+8. 表セルを1回クリックすると左側に対応cropを表示します。セルをダブルクリックすると表の中で直接編集でき、Enterまたはフォーカス移動で反映されます。左上の「プレビュー幅」スライダーでは、画像と表の表示比率を30〜55%で変更できます。
+9. 詳細編集欄では `raw`、`normalized`、`status`、候補、確認理由を確認・修正できます。「修正を保存」でrevision付きの修正版を保存します。
+   - 生年月日は数字3組を確認して平成・令和を選ぶと、`2014年9月27日` のような西暦表記へ変換されます。
+   - 売却子牛一覧の備考は、先頭を `♂` または `♀` の固定候補から選び、後続文字を保持します。
+10. 要確認項目を解消して確認ダイアログから確定します。確定後は変更できません。
+11. 確定結果は読み取り開始時に入力した個体識別番号に紐づくJSONとして保存されます。
+12. 「個体検索」で番号を入力すると、コードではなく項目表として確定JSONを確認できます。種雄牛名から売却子牛レコードを検索することもできます。
+13. 必要に応じてJSONまたはUTF-8 BOM付きCSVをファイル出力します。
 
 ## アーキテクチャ
 
@@ -89,6 +117,10 @@ ReactはAPIキーを持たず、FastAPIだけが画像検証と外部OCR設定�
 | POST | `/api/v1/template-versions/{versionId}/approve` | DRAFTをACTIVE化 |
 | POST | `/api/v1/template-versions/{versionId}/reject` | DRAFTを却下 |
 | PUT | `/api/v1/template-versions/{versionId}/handwriting-mask` | 編集マスク保存 |
+| GET/PUT | `/api/v1/template-versions/{versionId}/field-mappings` | 意味づけ済みセルとJSON保存先の取得・保存 |
+| GET/PUT | `/api/v1/template-versions/{versionId}/layout` | セル分類・関係・レコード構造の取得・保存 |
+| POST | `/api/v1/template-versions/{versionId}/layout/detect` | 実データからセルを再検出 |
+| POST | `/api/v1/template-versions/{versionId}/layout/verify` | レイアウトとレコード構造を検証 |
 | POST | `/api/v1/template-versions/{versionId}/reprocess` | 新attemptで再生成 |
 | POST | `/api/v1/ocr-jobs` | 台帳画像処理・OCR開始 |
 | GET | `/api/v1/ocr-jobs/{jobId}/result` | REVIEW_REQUIRED/CONFIRMED結果 |
@@ -96,6 +128,7 @@ ReactはAPIキーを持たず、FastAPIだけが画像検証と外部OCR設定�
 | POST | `/api/v1/ocr-jobs/{jobId}/confirm` | 最終検証・確定 |
 | GET | `/api/v1/ocr-jobs/{jobId}/export?format=json|csv` | 確定結果出力 |
 | GET | `/api/v1/individual-records?individualId={10桁番号}` | 個体識別番号に紐づく確定JSON一覧 |
+| GET | `/api/v1/sale-calf-records?sireName={種雄牛名}` | 種雄牛名に一致する売却子牛レコード検索 |
 | GET | `/api/v1/jobs/{jobId}` | 進捗と安全なエラー |
 | POST | `/api/v1/jobs/{jobId}/retry` | FAILED/INTERRUPTED/REVIEW_REQUIRED再試行 |
 | POST | `/api/v1/jobs/{jobId}/cancel` | 取消または取消要求 |
@@ -107,11 +140,15 @@ ReactはAPIキーを持たず、FastAPIだけが画像検証と外部OCR設定�
 
 ## SQLite migration
 
-`0001_initial_schema.py`が次の9テーブルを作成し、`0002_individual_record_index.py`が確定結果へ個体識別番号の検索用インデックスを追加します。
+`0001_initial_schema.py`が基礎テーブルを作成し、以降のmigrationで検索・レイアウト・レコード索引を追加します。
+
+- `0002_individual_record_index.py`: 確定結果へ個体識別番号の検索用インデックスを追加
+- `0003_template_layout_v2.py`: テンプレート版へセル分類・関係・レコード構造を保持する `layout_json` を追加
+- `0004_confirmed_record_fields.py`: 確定済み配列レコードを項目単位で検索する `confirmed_record_fields` を追加
 
 - `templates`, `template_versions`
 - `processing_jobs`, `job_inputs`, `job_artifacts`, `job_events`
-- `ocr_results`, `ocr_result_revisions`, `confirmed_results`
+- `ocr_results`, `ocr_result_revisions`, `confirmed_results`, `confirmed_record_fields`
 
 ```powershell
 cd backend
@@ -149,7 +186,11 @@ OPENAI_FALLBACK_MODEL=
 OPENAI_IMAGE_DETAIL=high
 ```
 
-OpenAI Responses APIへ送るのはBase64化した意味領域cropです。APIキー、画像Base64、生応答、牛名、所有者名などをログへ出しません。request ID、token数、処理時間、エラー種別だけを記録します。通常テストは外部APIを呼ばず、外部統合テストは`RUN_OPENAI_INTEGRATION_TESTS=true`の明示時だけ有効です。
+OpenAI Responses APIへ送るのはBase64化した意味づけ済み記入セルのcropと、不透明な `mappingId` です。混在矩形に「読み取りから除外する印刷ラベル」を設定した場合だけ、その固定文字も矩形内の除外指示として送ります。JSON保存先、テンプレート名、帳票全体、別矩形のラベル文字は送信しません。APIキー、画像Base64、生応答、牛名、所有者名などをログへ出さず、request ID、token数、処理時間、エラー種別だけを記録します。通常テストは外部APIを呼ばず、外部統合テストは`RUN_OPENAI_INTEGRATION_TESTS=true`の明示時だけ有効です。
+
+読み取り結果画面の項目数は固定Schemaの総項目数ではなく、ジョブ開始時にスナップショットした意味づけ済みJSONパスの件数です。意味づけていない基本情報や血統項目は、空欄判定として表示・要確認集計しません。
+
+結果とプレビューの対応は配列番号だけではなく、OCRへ送信したセルの `sourceRegionId`（テンプレート上の `mappingId`）を基準に解決します。レコード位置やJSONパスが変わった場合でも、クリックしたセル自身のcropを優先します。結果画面は画面全体へ追従する可変レイアウトで、デスクトップではプレビュー幅を調整でき、狭い画面では画像と表を縦に並べます。
 
 ## ローカルCLI
 

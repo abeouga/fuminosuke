@@ -21,12 +21,17 @@ class RegionCrops:
 
 
 class RegionCropper:
-    def __init__(self, config: TemplateConfig) -> None:
+    def __init__(
+        self,
+        config: TemplateConfig,
+        regions: list[RegionConfig] | None = None,
+    ) -> None:
         self._config = config
+        self._regions = regions if regions is not None else config.ocr_regions()
 
     def crop(self, variants: ImageVariants) -> dict[str, RegionCrops]:
         result: dict[str, RegionCrops] = {}
-        for region in self._config.ocr_regions():
+        for region in self._regions:
             x1 = region.x - region.padding
             y1 = region.y - region.padding
             x2 = region.x + region.width + region.padding

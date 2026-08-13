@@ -27,6 +27,44 @@ def test_document_normalizer_canonicalizes_full_scan() -> None:
     assert 0.5 <= result.quality.boundary_confidence <= 1.0
 
 
+def test_document_normalizer_corrects_perspective_before_layout_detection() -> None:
+    source = ledger_image()
+    source_height, source_width = source.shape[:2]
+    canvas = np.full((1100, 850, 3), 55, dtype=np.uint8)
+    source_corners = np.float32(
+        [
+            [0, 0],
+            [source_width - 1, 0],
+            [source_width - 1, source_height - 1],
+            [0, source_height - 1],
+        ]
+    )
+    photographed_corners = np.float32(
+        [[95, 65], [735, 25], [785, 1040], [40, 1015]]
+    )
+    transform = cv2.getPerspectiveTransform(source_corners, photographed_corners)
+    photographed = cv2.warpPerspective(
+        source,
+        transform,
+        (canvas.shape[1], canvas.shape[0]),
+        dst=canvas,
+        borderMode=cv2.BORDER_TRANSPARENT,
+    )
+
+    result = DocumentNormalizer(
+        canonical_width=source_width,
+        canonical_height=source_height,
+    ).normalize(photographed)
+
+    assert result.image_rgb.shape == source.shape
+    assert result.quality.fallback_used is False
+    assert result.quality.boundary_confidence > 0.45
+    assert not np.array_equal(
+        result.source_corners,
+        np.float32([[0, 0], [849, 0], [849, 1099], [0, 1099]]),
+    )
+
+
 def test_registration_and_handwriting_isolation(
     settings_factory: Callable[..., Settings],
 ) -> None:
@@ -66,7 +104,15 @@ def test_consensus_and_single_modes(settings_factory: Callable[..., Settings]) -
 
     assert consensus.clean_template_rgb.shape == (1754, 1240, 3)
     assert consensus.quality["acceptedImageCount"] >= 3
-    assert single.handwriting_mask is not None
+    assert single.handwriting_mask is None
+    assert single.quality["processingOrder"] == [
+        "PERSPECTIVE_CORRECTION",
+        "LAYOUT_CLASSIFICATION",
+        "HANDWRITING_EXTRACTION",
+    ]
+    assert "LAYOUT_CLASSIFICATION_REQUIRED_BEFORE_HANDWRITING_EXTRACTION" in (
+        single.quality["warnings"]
+    )
     assert "SINGLE_IMAGE_REQUIRES_HUMAN_REVIEW" in single.quality["warnings"]
 
 

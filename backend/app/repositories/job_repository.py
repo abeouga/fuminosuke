@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -63,6 +63,25 @@ class JobRepository:
 
     def list_by_status(self, status: JobStatus) -> list[ProcessingJob]:
         statement = select(ProcessingJob).where(ProcessingJob.status == status.value)
+        return list(self._session.scalars(statement))
+
+    def list_by_statuses(
+        self,
+        statuses: Collection[JobStatus],
+        *,
+        limit: int = 1000,
+    ) -> list[ProcessingJob]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("Invalid pagination")
+        values = [status.value for status in statuses]
+        if not values:
+            return []
+        statement: Select[tuple[ProcessingJob]] = (
+            select(ProcessingJob)
+            .where(ProcessingJob.status.in_(values))
+            .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.desc())
+            .limit(limit)
+        )
         return list(self._session.scalars(statement))
 
     def add_input(
@@ -142,6 +161,52 @@ class JobRepository:
             )
         self._session.commit()
         return len(jobs)
+
+    def recover_created(
+        self,
+        is_complete: Callable[[ProcessingJob, list[JobInput]], bool],
+    ) -> tuple[int, int]:
+        jobs = self.list_by_status(JobStatus.CREATED)
+        now = datetime.now(UTC)
+        queued = 0
+        failed = 0
+        for job in jobs:
+            inputs = self.list_inputs(job.id)
+            if is_complete(job, inputs):
+                job.status = JobStatus.QUEUED.value
+                job.progress_stage = None
+                job.progress_percent = 0
+                job.error_code = None
+                job.error_message_safe = None
+                job.completed_at = None
+                event_code = "CREATED_JOB_RECOVERED"
+                level = "INFO"
+                queued += 1
+            else:
+                job.status = JobStatus.FAILED.value
+                job.error_code = "INCOMPLETE_JOB_INPUTS"
+                job.error_message_safe = (
+                    "受付中にバックエンドが停止し、元画像の保存を完了できませんでした。"
+                    "同じ内容を新しいジョブとして登録してください。"
+                )
+                job.completed_at = now
+                event_code = "INCOMPLETE_JOB_INPUTS"
+                level = "ERROR"
+                failed += 1
+            self._session.add(
+                JobEvent(
+                    job_id=job.id,
+                    level=level,
+                    event_code=event_code,
+                    stage=job.progress_stage,
+                    metadata_json={
+                        "attemptNumber": job.attempt_number,
+                        "inputCount": len(inputs),
+                    },
+                )
+            )
+        self._session.commit()
+        return queued, failed
 
     def list(self, *, offset: int = 0, limit: int = 100) -> list[ProcessingJob]:
         if offset < 0 or not 1 <= limit <= 1000:

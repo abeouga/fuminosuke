@@ -35,6 +35,7 @@ class RegionConfig(TemplateConfigModel):
     enabled: bool
     fallback_enabled: bool
     mark_detection_enabled: bool
+    printed_label_text: str = Field(default="", max_length=300)
 
 
 class FieldMappingConfig(TemplateConfigModel):
@@ -48,6 +49,7 @@ class FieldMappingConfig(TemplateConfigModel):
     padding: int = Field(default=4, ge=0, le=50)
     enabled: bool = True
     model_detail: str = "high"
+    printed_label_text: str = Field(default="", max_length=300)
 
     def as_region(self) -> RegionConfig:
         return RegionConfig(
@@ -64,6 +66,7 @@ class FieldMappingConfig(TemplateConfigModel):
             enabled=self.enabled,
             fallback_enabled=False,
             mark_detection_enabled=False,
+            printed_label_text=self.printed_label_text,
         )
 
 
@@ -123,8 +126,11 @@ class TemplateConfig(TemplateConfigModel):
 
     def ocr_regions(self) -> list[RegionConfig]:
         if self.field_mappings:
-            return [mapping.as_region() for mapping in self.field_mappings if mapping.enabled]
+            return self.mapped_ocr_regions()
         return [region for region in self.regions if region.enabled]
+
+    def mapped_ocr_regions(self) -> list[RegionConfig]:
+        return [mapping.as_region() for mapping in self.field_mappings if mapping.enabled]
 
 
 def default_template_config_path() -> Path:

@@ -1,0 +1,5 @@
+# PaddleOCR is kept separate because its CPU runtime is large.
+# setup scripts install it by default, but the application has an OpenCV fallback
+# so an offline installation can still edit detected rectangles.
+paddleocr>=3.0,<4.0
+paddlepaddle>=3.0,<4.0

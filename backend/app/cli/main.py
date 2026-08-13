@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from app.core.config import Settings
+from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
 from app.domain.template_config import TemplateConfig, load_template_config
 from app.evaluation.runner import run_evaluation
 from app.extraction.handwriting_isolator import HandwritingIsolator
@@ -138,7 +139,16 @@ def _extract_document(
     variants = create_variants(
         registered.aligned_rgb, template, isolated.handwriting_only_rgb
     )
-    crops = RegionCropper(config).crop(variants)
+    regions = (
+        config.mapped_ocr_regions()
+        if provider_name == "openai"
+        else config.ocr_regions()
+    )
+    if provider_name == "openai" and not regions:
+        raise ValueError(
+            "OpenAI OCR requires template fieldMappings; legacy region inference is disabled"
+        )
+    crops = RegionCropper(config, regions).crop(variants)
     output.mkdir(parents=True, exist_ok=True)
     _write_image(output / "aligned_source.png", registered.aligned_rgb)
     _write_image(output / "handwriting_mask.png", isolated.mask, rgb=False)
@@ -147,8 +157,57 @@ def _extract_document(
         _write_image(output / "field_crops" / region_id / "aligned_color.png", region.aligned_color)
     request = OcrProviderRequest(
         regions=[
-            OcrRegionInput(region_id=region_id, image_png=encode_png(region.aligned_color))
-            for region_id, region in crops.items()
+            OcrRegionInput(
+                region_id=(
+                    f"cell_{index:04d}"
+                    if provider_name == "openai"
+                    else region_id
+                ),
+                image_png=encode_png(
+                    region.handwriting_only
+                    if region.config.printed_label_text.strip()
+                    else region.aligned_color
+                ),
+                handwriting_png=(
+                    None
+                    if region.config.printed_label_text.strip()
+                    else encode_png(region.handwriting_only)
+                ),
+                target_path=(
+                    region.config.expected_fields[0]
+                    if len(region.config.expected_fields) == 1
+                    else None
+                ),
+                source_region_id=(
+                    region_id if provider_name == "openai" else None
+                ),
+                bounding_box=region.bbox,
+                candidates=(
+                    SALE_NOTE_SEX_SYMBOLS
+                    if len(region.config.expected_fields) == 1
+                    and region.config.expected_fields[0].startswith("saleCalves.")
+                    and region.config.expected_fields[0].endswith(".notes")
+                    else ()
+                ),
+                candidate_type=(
+                    "sale_calf_note_prefix"
+                    if len(region.config.expected_fields) == 1
+                    and region.config.expected_fields[0].startswith("saleCalves.")
+                    and region.config.expected_fields[0].endswith(".notes")
+                    else None
+                ),
+                transcription_format=(
+                    "japanese_era_date_numbers"
+                    if len(region.config.expected_fields) == 1
+                    and region.config.expected_fields[0] == "document.birthDate"
+                    else None
+                ),
+                printed_label_excluded=bool(
+                    region.config.printed_label_text.strip()
+                ),
+                printed_label_text=region.config.printed_label_text.strip(),
+            )
+            for index, (region_id, region) in enumerate(crops.items(), start=1)
         ]
     )
     provider = _provider(provider_name, settings)

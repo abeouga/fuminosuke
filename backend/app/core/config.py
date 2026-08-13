@@ -37,6 +37,7 @@ class AppSettings(BaseModel):
 class StorageSettings(BaseModel):
     data_dir: Path
     max_upload_bytes: int = Field(gt=0)
+    max_batch_upload_bytes: int = Field(gt=0)
 
 
 class DatabaseSettings(BaseModel):
@@ -51,6 +52,7 @@ class JobSettings(BaseModel):
 
 class ImageProcessingSettings(BaseModel):
     max_image_pixels: int = Field(gt=0)
+    max_batch_image_pixels: int = Field(gt=0)
     max_image_edge: int = Field(gt=0)
     opencv_num_threads: int = Field(ge=1)
 
@@ -121,7 +123,15 @@ class RawSettings(BaseSettings):
     )
     log_file: Path = Field(default=Path("./data/logs/app.log"), validation_alias="LOG_FILE")
     max_upload_bytes: int = Field(default=20_971_520, validation_alias="MAX_UPLOAD_BYTES")
+    max_batch_upload_bytes: int = Field(
+        default=104_857_600,
+        validation_alias="MAX_BATCH_UPLOAD_BYTES",
+    )
     max_image_pixels: int = Field(default=30_000_000, validation_alias="MAX_IMAGE_PIXELS")
+    max_batch_image_pixels: int = Field(
+        default=120_000_000,
+        validation_alias="MAX_BATCH_IMAGE_PIXELS",
+    )
     max_image_edge: int = Field(default=8000, validation_alias="MAX_IMAGE_EDGE")
     job_max_concurrency: int = Field(default=1, validation_alias="JOB_MAX_CONCURRENCY")
     job_thread_workers: int = Field(default=1, validation_alias="JOB_THREAD_WORKERS")
@@ -153,7 +163,7 @@ class RawSettings(BaseSettings):
     )
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
-        default="cow-ledger-v1", validation_alias="OPENAI_PROMPT_VERSION"
+        default="cow-ledger-v3", validation_alias="OPENAI_PROMPT_VERSION"
     )
     openai_schema_version: str = Field(default="1.0", validation_alias="OPENAI_SCHEMA_VERSION")
     handwriting_segmenter_mode: Literal["heuristic", "onnx", "combined"] = Field(
@@ -214,6 +224,10 @@ class Settings:
         log_file = raw.log_file.expanduser().resolve()
         _require_descendant(log_file, data_dir, "LOG_FILE")
         database_url = _normalize_database_url(raw.database_url, data_dir)
+        if raw.max_batch_upload_bytes < raw.max_upload_bytes:
+            raise ValueError("MAX_BATCH_UPLOAD_BYTES must be at least MAX_UPLOAD_BYTES")
+        if raw.max_batch_image_pixels < raw.max_image_pixels:
+            raise ValueError("MAX_BATCH_IMAGE_PIXELS must be at least MAX_IMAGE_PIXELS")
         origins = tuple(item.strip() for item in raw.frontend_origins.split(",") if item.strip())
         model_path = raw.handwriting_model_path
         if model_path is not None:
@@ -229,6 +243,7 @@ class Settings:
             storage=StorageSettings(
                 data_dir=data_dir,
                 max_upload_bytes=raw.max_upload_bytes,
+                max_batch_upload_bytes=raw.max_batch_upload_bytes,
             ),
             database=DatabaseSettings(url=database_url),
             jobs=JobSettings(
@@ -238,6 +253,7 @@ class Settings:
             ),
             image_processing=ImageProcessingSettings(
                 max_image_pixels=raw.max_image_pixels,
+                max_batch_image_pixels=raw.max_batch_image_pixels,
                 max_image_edge=raw.max_image_edge,
                 opencv_num_threads=raw.opencv_num_threads,
             ),

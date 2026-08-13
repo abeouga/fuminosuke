@@ -5,14 +5,18 @@ from typing import Any
 
 import cv2
 import numpy as np
+import yaml
+from sqlalchemy import select
 
 from app.core.config import Settings
-from app.db.models import JobArtifact, TemplateVersion
+from app.db.models import JobArtifact, Template, TemplateVersion
 from app.db.session import Database
-from app.domain.enums import TemplateMode
-from app.domain.template_config import default_template_config_path, load_template_config
+from app.domain.enums import TemplateMode, TemplateVersionStatus
+from app.domain.template_config import load_template_config
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.image_loader import ImageLoader
+from app.layout_analysis.detector import LayoutDetector
+from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.segmentation.candidate_regions import (
@@ -49,6 +53,8 @@ class TemplatePreparationService:
             mode = TemplateMode(job.mode or "")
             name = str(job.config_snapshot_json.get("name", self._config.name))
             attempt = job.attempt_number
+            if job.cancel_requested:
+                return ""
         images = [
             self._image_loader.load(
                 self._storage.read_bytes(item.relative_path), item.media_type
@@ -64,9 +70,20 @@ class TemplatePreparationService:
         else:
             self._progress(job_id, "RECOVERING_TEMPLATE", 35)
             prepared = self._pipelines.single_experimental(images)
+        if self._cancel_requested(job_id):
+            return ""
         prepared = self._apply_edited_mask(job_id, mode, prepared)
         self._progress(job_id, "WRITING_ARTIFACTS", 80)
-        return self._persist(job_id, attempt, name, mode, prepared)
+        try:
+            version_id = self._persist(job_id, attempt, name, mode, prepared)
+            if self._cancel_requested(job_id):
+                self._discard_cancelled_version(job_id, version_id)
+                return ""
+            return version_id
+        except Exception:
+            self._discard_job_version(job_id)
+            self._remove_empty_template(name)
+            raise
 
     def _persist(
         self,
@@ -87,6 +104,14 @@ class TemplatePreparationService:
                 repository.get_version(reprocess_version_id) if reprocess_version_id else None
             )
             if previous is None:
+                existing_version_id = session.scalar(
+                    select(TemplateVersion.id)
+                    .where(TemplateVersion.source_job_id == job_id)
+                    .order_by(TemplateVersion.created_at.desc())
+                    .limit(1)
+                )
+                if existing_version_id is not None:
+                    return existing_version_id
                 template = repository.create_template(
                     name=name, document_type="cow-breeding-ledger"
                 )
@@ -94,8 +119,37 @@ class TemplatePreparationService:
                 version_number = 1
             else:
                 template_id = previous.template_id
+                completed_reprocess_id = session.scalar(
+                    select(TemplateVersion.id)
+                    .where(
+                        TemplateVersion.source_job_id == job_id,
+                        TemplateVersion.template_id == template_id,
+                        TemplateVersion.version_number > previous.version_number,
+                    )
+                    .order_by(TemplateVersion.version_number.desc())
+                    .limit(1)
+                )
+                if completed_reprocess_id is not None:
+                    return completed_reprocess_id
                 versions = repository.list_versions(template_id)
                 version_number = max(item.version_number for item in versions) + 1
+        normalized_entry = prepared.images.get("normalized")
+        if previous is not None and previous.layout_json:
+            initial_layout = LayoutDefinition.model_validate(previous.layout_json)
+        elif normalized_entry is not None:
+            self._progress(job_id, "DETECTING_LAYOUT", 65)
+            initial_layout = LayoutDetector().detect(normalized_entry[1])
+        else:
+            initial_layout = LayoutDetector().detect(prepared.clean_template_rgb)
+        prepared.quality = {
+            **prepared.quality,
+            "layoutPreDetected": True,
+            "layoutCellCount": len(initial_layout.cells),
+            "layoutLabelCount": sum(cell.role == "label" for cell in initial_layout.cells),
+            "layoutInputCount": sum(cell.role == "input" for cell in initial_layout.cells),
+            "layoutDetector": initial_layout.detector,
+            "layoutOcrAvailable": initial_layout.ocr_available,
+        }
         artifacts: dict[str, str] = {}
         for artifact_name, (file_name, image, rgb) in prepared.images.items():
             artifact = self._artifact_writer.image(
@@ -170,8 +224,22 @@ class TemplatePreparationService:
                 f"{base_path}/handwriting_mask.png",
                 encode_png(prepared.handwriting_mask, rgb=False),
             )
-        config_text = default_template_config_path().read_text(encoding="utf-8")
-        config_relative_path = self._storage.write_text(f"{base_path}/template.yaml", config_text)
+        version_config = self._config.model_copy(
+            update={
+                "template_id": template_id,
+                "template_version": version_number,
+                "name": name,
+            },
+            deep=True,
+        )
+        config_text = yaml.safe_dump(
+            version_config.model_dump(mode="json", by_alias=True),
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        config_relative_path = self._storage.write_text(
+            f"{base_path}/template.yaml", config_text
+        )
         self._storage.write_text(
             f"{base_path}/quality.json",
             json.dumps(prepared.quality, ensure_ascii=False, indent=2),
@@ -190,6 +258,8 @@ class TemplatePreparationService:
             )
             if version.version_number != version_number:
                 raise RuntimeError("Template version number changed during persistence")
+            version.layout_json = initial_layout.model_dump(mode="json", by_alias=True)
+            session.commit()
             if reprocess_version_id:
                 previous = TemplateRepository(session).get_version(reprocess_version_id)
                 if previous is not None and previous.status == "DRAFT":
@@ -222,6 +292,113 @@ class TemplatePreparationService:
             value=result,
         )
         return version_id
+
+    def _remove_empty_template(self, name: str) -> None:
+        normalized_name = TemplateRepository.normalize_name(name)
+        removed_ids: list[str] = []
+        with self._database.session() as session:
+            templates = [
+                template
+                for template in session.scalars(select(Template))
+                if TemplateRepository.normalize_name(template.name) == normalized_name
+            ]
+            for template in templates:
+                version_id = session.scalar(
+                    select(TemplateVersion.id)
+                    .where(TemplateVersion.template_id == template.id)
+                    .limit(1)
+                )
+                if version_id is not None:
+                    continue
+                removed_ids.append(template.id)
+                session.delete(template)
+            if removed_ids:
+                session.commit()
+        for template_id in removed_ids:
+            relative_path = f"templates/{template_id}"
+            if self._storage.exists(relative_path):
+                self._storage.delete_tree(relative_path)
+
+    def _discard_cancelled_version(self, job_id: str, version_id: str) -> None:
+        template_id: str | None = None
+        version_number: int | None = None
+        delete_template = False
+        with self._database.session() as session:
+            version = session.get(TemplateVersion, version_id)
+            if version is None or version.source_job_id != job_id:
+                return
+            template_id = version.template_id
+            version_number = version.version_number
+            job = JobRepository(session).get(job_id)
+            previous_id = (
+                str(job.config_snapshot_json.get("reprocessTemplateVersionId"))
+                if job and job.config_snapshot_json.get("reprocessTemplateVersionId")
+                else None
+            )
+            previous = session.get(TemplateVersion, previous_id) if previous_id else None
+            session.delete(version)
+            session.flush()
+            remaining = session.scalar(
+                select(TemplateVersion.id)
+                .where(TemplateVersion.template_id == template_id)
+                .limit(1)
+            )
+            if remaining is None:
+                template = session.get(Template, template_id)
+                if template is not None:
+                    session.delete(template)
+                    delete_template = True
+            elif (
+                previous is not None
+                and previous.status == TemplateVersionStatus.ARCHIVED.value
+            ):
+                previous.status = TemplateVersionStatus.DRAFT.value
+            if job is not None:
+                snapshot = dict(job.config_snapshot_json)
+                snapshot.pop("templateId", None)
+                snapshot.pop("templateVersionId", None)
+                job.config_snapshot_json = snapshot
+            session.commit()
+        if template_id is None or version_number is None:
+            return
+        relative_path = (
+            f"templates/{template_id}"
+            if delete_template
+            else f"templates/{template_id}/versions/{version_number}"
+        )
+        if self._storage.exists(relative_path):
+            self._storage.delete_tree(relative_path)
+
+    def _discard_job_version(self, job_id: str) -> None:
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            reprocess_version_id = (
+                str(job.config_snapshot_json.get("reprocessTemplateVersionId"))
+                if job and job.config_snapshot_json.get("reprocessTemplateVersionId")
+                else None
+            )
+            statement = select(TemplateVersion.id).where(
+                TemplateVersion.source_job_id == job_id,
+                TemplateVersion.status == TemplateVersionStatus.DRAFT.value,
+            )
+            if reprocess_version_id:
+                previous = session.get(TemplateVersion, reprocess_version_id)
+                if previous is not None:
+                    statement = statement.where(
+                        TemplateVersion.template_id == previous.template_id,
+                        TemplateVersion.version_number > previous.version_number,
+                    )
+                else:
+                    statement = statement.where(
+                        TemplateVersion.id != reprocess_version_id
+                    )
+            version_id = session.scalar(
+                statement
+                .order_by(TemplateVersion.created_at.desc())
+                .limit(1)
+            )
+        if version_id is not None:
+            self._discard_cancelled_version(job_id, version_id)
 
     def _apply_edited_mask(
         self,
@@ -297,6 +474,11 @@ class TemplatePreparationService:
                 stage=stage,
                 metadata={"progressPercent": percent},
             )
+
+    def _cancel_requested(self, job_id: str) -> bool:
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            return job is None or job.cancel_requested
 
     def _result_json(
         self,

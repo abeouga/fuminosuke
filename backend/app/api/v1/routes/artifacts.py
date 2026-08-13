@@ -31,7 +31,10 @@ def list_artifacts(request: Request, job_id: str) -> ArtifactList:
                 ArtifactItem(
                     name=item.artifact_name,
                     media_type=item.media_type,
-                    url=f"/api/v1/jobs/{job_id}/artifacts/{item.artifact_name}",
+                    url=(
+                        f"/api/v1/jobs/{job_id}/artifacts/{item.artifact_name}"
+                        f"?v={item.sha256[:16]}"
+                    ),
                 )
                 for item in artifacts
             ]

@@ -1,3 +1,5 @@
+import pytest
+
 from app.domain.ocr_models import ReadingStatus
 from app.ocr.base import OcrProviderRequest, OcrRegionInput
 from app.ocr.deterministic_mapper import build_mapped_document
@@ -10,34 +12,34 @@ def test_transcriptions_are_assigned_only_to_gui_selected_paths() -> None:
         template_version="3",
         regions=[
             OcrRegionInput(
-                region_id="field_name",
+                region_id="cell_0001",
                 image_png=b"png",
                 target_path="document.cattleName",
-                label="名号",
+                source_region_id="field_name",
                 bounding_box=(100, 200, 300, 80),
             ),
             OcrRegionInput(
-                region_id="field_price",
+                region_id="cell_0002",
                 image_png=b"png",
                 target_path="saleCalves.0.priceYen",
-                label="売却子牛1 価格",
+                source_region_id="field_price",
                 bounding_box=(700, 350, 160, 60),
             ),
             OcrRegionInput(
-                region_id="field_note",
+                region_id="cell_0003",
                 image_png=b"png",
                 target_path="calvings.1.notes",
-                label="産歴2 備考",
+                source_region_id="field_note",
                 bounding_box=(850, 1200, 220, 70),
             ),
         ],
     )
     batch = TranscriptionBatch(
         items=[
-            TranscriptionItem(mapping_id="field_name", raw="こよみ", status=ReadingStatus.READABLE),
             TranscriptionItem(
-                mapping_id="field_price", raw="540,000", status=ReadingStatus.READABLE
+                mapping_id="cell_0002", raw="540,000", status=ReadingStatus.READABLE
             ),
+            TranscriptionItem(mapping_id="cell_0001", raw="こよみ", status=ReadingStatus.READABLE),
         ]
     )
 
@@ -57,4 +59,498 @@ def test_transcriptions_are_assigned_only_to_gui_selected_paths() -> None:
     assert result.processing_metadata.notes == [
         "RAW_TRANSCRIPTION_ONLY",
         "DETERMINISTIC_FIELD_MAPPING",
+        "LABEL_INFERENCE_DISABLED",
+        "TEMPLATE_INPUT_CELLS_ONLY",
     ]
+
+
+def test_japanese_dot_grouped_price_is_normalized_as_yen_not_a_decimal() -> None:
+    request = OcrProviderRequest(
+        template_id="gui-template",
+        template_version="1",
+        regions=[
+            OcrRegionInput(
+                region_id="price",
+                image_png=b"png",
+                target_path="saleCalves.0.priceYen",
+            )
+        ],
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="price",
+                raw="762.300",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.sale_calves[0].price_yen.raw == "762.300"
+    assert result.sale_calves[0].price_yen.normalized == "762300"
+
+
+def test_large_mapped_template_and_custom_json_fields_are_supported() -> None:
+    regions = [
+        OcrRegionInput(
+            region_id=f"field_{index}",
+            image_png=b"png",
+            target_path=f"customFields.extra{index}",
+        )
+        for index in range(53)
+    ]
+    request = OcrProviderRequest(
+        template_id="large-gui-template",
+        template_version="1",
+        regions=regions,
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id=region.region_id,
+                raw=f"値{index}",
+                status=ReadingStatus.READABLE,
+            )
+            for index, region in enumerate(regions)
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert len(result.processing_metadata.source_regions) == 53
+    assert result.custom_fields["extra0"].raw == "値0"
+    assert result.custom_fields["extra52"].raw == "値52"
+
+
+def test_duplicate_mapping_id_in_response_is_rejected() -> None:
+    request = OcrProviderRequest(
+        template_id="gui-template",
+        template_version="1",
+        regions=[
+            OcrRegionInput(
+                region_id="field_name",
+                image_png=b"cell",
+                target_path="document.cattleName",
+            )
+        ],
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="field_name",
+                raw="こよみ",
+                status=ReadingStatus.READABLE,
+            ),
+            TranscriptionItem(
+                mapping_id="field_name",
+                raw="こよみ",
+                status=ReadingStatus.READABLE,
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate mappingId"):
+        build_mapped_document(request, batch)
+
+
+def test_unknown_mapping_id_in_response_is_rejected() -> None:
+    request = OcrProviderRequest(
+        template_id="gui-template",
+        template_version="1",
+        regions=[
+            OcrRegionInput(
+                region_id="field_name",
+                image_png=b"cell",
+                target_path="document.cattleName",
+            )
+        ],
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="label_cell",
+                raw="名号",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unknown mappingId"):
+        build_mapped_document(request, batch)
+
+
+def test_sale_calf_mapping_beyond_ten_rows_is_rejected() -> None:
+    request = OcrProviderRequest(
+        template_id="gui-template",
+        template_version="1",
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0011",
+                image_png=b"cell",
+                target_path="saleCalves.10.priceYen",
+            )
+        ],
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0011",
+                raw="500000",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="row must be 1-10"):
+        build_mapped_document(request, batch)
+
+
+def test_sire_name_candidate_and_et_suffix_become_the_normalized_value() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"sire",
+                target_path="saleCalves.0.sireName",
+                candidates=("勝忠平", "光晴重"),
+                allowed_suffixes=("ET",),
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="勝忠平 ET",
+                matched_candidate="勝忠平ET",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.sale_calves[0].sire_name.raw == "勝忠平 ET"
+    assert result.sale_calves[0].sire_name.normalized == "勝忠平ET"
+    assert result.sale_calves[0].sire_name.status is ReadingStatus.READABLE
+    assert result.review_items == []
+
+
+def test_birth_date_is_numeric_only_and_requires_era_review() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="birth",
+                image_png=b"birth",
+                target_path="document.birthDate",
+                transcription_format="japanese_era_date_numbers",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="birth",
+                raw="26 9 27 生",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.document.birth_date.raw == "26 9 27"
+    assert result.document.birth_date.normalized is None
+    assert result.document.birth_date.status is ReadingStatus.UNCERTAIN
+    assert result.document.birth_date.review_reason == "BIRTH_DATE_ERA_REQUIRED"
+    assert result.review_items[0].code == "BIRTH_DATE_ERA_REQUIRED"
+
+
+def test_sale_note_uses_matched_sex_symbol_and_preserves_suffix() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="note",
+                image_png=b"note",
+                target_path="saleCalves.0.notes",
+                candidates=("♂", "♀"),
+                candidate_type="sale_calf_note_prefix",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="note",
+                raw="る双子",
+                matched_candidate="♂",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.sale_calves[0].notes.raw == "る双子"
+    assert result.sale_calves[0].notes.normalized == "♂双子"
+    assert result.sale_calves[0].notes.status is ReadingStatus.READABLE
+    assert result.review_items == []
+
+
+def test_sale_note_without_symbol_match_requires_review() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="note",
+                image_png=b"note",
+                target_path="saleCalves.0.notes",
+                candidates=("♂", "♀"),
+                candidate_type="sale_calf_note_prefix",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="note",
+                raw="チ",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.sale_calves[0].notes.normalized is None
+    assert result.sale_calves[0].notes.status is ReadingStatus.UNCERTAIN
+    assert result.review_items[0].code == "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
+
+
+def test_sire_name_outside_the_pool_requires_review() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"sire",
+                target_path="saleCalves.0.sireName",
+                candidates=("勝忠平", "光晴重"),
+                allowed_suffixes=("ET",),
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="未知号",
+                matched_candidate="候補外",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    reading = result.sale_calves[0].sire_name
+    assert reading.raw == "未知号"
+    assert reading.normalized is None
+    assert reading.status is ReadingStatus.UNCERTAIN
+    assert reading.review_reason == "SIRE_NAME_CANDIDATE_UNRESOLVED"
+    assert result.review_items[0].code == "SIRE_NAME_CANDIDATE_UNRESOLVED"
+
+
+def test_ditto_marks_copy_the_value_from_the_cell_directly_above() -> None:
+    candidates = ("勝忠平", "光晴重")
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"sire-1",
+                target_path="saleCalves.0.sireName",
+                candidates=candidates,
+                allowed_suffixes=("ET",),
+            ),
+            OcrRegionInput(
+                region_id="cell_0002",
+                image_png=b"sire-2",
+                target_path="saleCalves.1.sireName",
+                candidates=candidates,
+                allowed_suffixes=("ET",),
+            ),
+            OcrRegionInput(
+                region_id="cell_0003",
+                image_png=b"sire-3",
+                target_path="saleCalves.2.sireName",
+                candidates=candidates,
+                allowed_suffixes=("ET",),
+            ),
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="勝忠平ET",
+                matched_candidate="勝忠平ET",
+                status=ReadingStatus.READABLE,
+            ),
+            TranscriptionItem(
+                mapping_id="cell_0002",
+                raw="=",
+                is_ditto=True,
+                status=ReadingStatus.READABLE,
+            ),
+            TranscriptionItem(
+                mapping_id="cell_0003",
+                raw="こ",
+                status=ReadingStatus.READABLE,
+            ),
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    first, second, third = [
+        row.sire_name for row in result.sale_calves[:3]
+    ]
+    assert first.normalized == "勝忠平ET"
+    assert second.raw == "="
+    assert second.normalized == "勝忠平ET"
+    assert second.status is ReadingStatus.READABLE
+    assert third.raw == "こ"
+    assert third.normalized == "勝忠平ET"
+    assert third.status is ReadingStatus.READABLE
+    assert result.review_items == []
+    assert "DITTO_MARK_RESOLUTION" in result.processing_metadata.notes
+
+
+def test_ditto_without_a_readable_cell_above_requires_review() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"ditto",
+                target_path="saleCalves.0.sireName",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="〃",
+                is_ditto=True,
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    reading = result.sale_calves[0].sire_name
+    assert reading.raw == "〃"
+    assert reading.normalized is None
+    assert reading.status is ReadingStatus.UNCERTAIN
+    assert reading.review_reason == "DITTO_SOURCE_UNAVAILABLE"
+    assert result.review_items[0].code == "DITTO_SOURCE_UNAVAILABLE"
+
+
+def test_a_normal_word_containing_ko_is_not_treated_as_ditto() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"name",
+                target_path="document.cattleName",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="こよみ",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.document.cattle_name.raw == "こよみ"
+    assert result.document.cattle_name.normalized == "こよみ"
+    assert "DITTO_MARK_RESOLUTION" not in result.processing_metadata.notes
+
+
+@pytest.mark.parametrize("raw_mark", ["・", ".", "・・", ".."])
+def test_dot_like_marks_in_sire_cells_copy_the_value_above(raw_mark: str) -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"sire-1",
+                target_path="saleCalves.0.sireName",
+                candidates=("光晴重",),
+                allowed_suffixes=("ET",),
+            ),
+            OcrRegionInput(
+                region_id="cell_0002",
+                image_png=b"sire-2",
+                target_path="saleCalves.1.sireName",
+                candidates=("光晴重",),
+                allowed_suffixes=("ET",),
+            ),
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw="光晴重",
+                matched_candidate="光晴重",
+                status=ReadingStatus.READABLE,
+            ),
+            TranscriptionItem(
+                mapping_id="cell_0002",
+                raw=raw_mark,
+                status=ReadingStatus.UNCERTAIN,
+            ),
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    reading = result.sale_calves[1].sire_name
+    assert reading.raw == raw_mark
+    assert reading.normalized == "光晴重"
+    assert reading.status is ReadingStatus.READABLE
+    assert result.review_items == []
+
+
+def test_a_period_in_a_non_sire_cell_is_not_treated_as_ditto() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"price",
+                target_path="saleCalves.1.priceYen",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cell_0001",
+                raw=".",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.sale_calves[1].price_yen.raw == "."
+    assert result.sale_calves[1].price_yen.review_reason is None
+    assert "DITTO_MARK_RESOLUTION" not in result.processing_metadata.notes

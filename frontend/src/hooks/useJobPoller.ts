@@ -4,7 +4,11 @@ import type { Job } from "../types";
 
 const TERMINAL = new Set(["REVIEW_REQUIRED", "CONFIRMED", "FAILED", "CANCELLED", "INTERRUPTED"]);
 
-export function useJobPoller(jobId: string | null, onTerminal?: (job: Job) => void) {
+export function useJobPoller(
+  jobId: string | null,
+  onTerminal?: (job: Job) => void,
+  refreshToken = 0,
+) {
   const [job, setJob] = useState<Job | null>(null);
   const [connectionLost, setConnectionLost] = useState(false);
   const terminalCallback = useRef(onTerminal);
@@ -38,6 +42,6 @@ export function useJobPoller(jobId: string | null, onTerminal?: (job: Job) => vo
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [jobId]);
+  }, [jobId, refreshToken]);
   return { job, connectionLost };
 }

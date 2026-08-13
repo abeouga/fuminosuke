@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import time
 from decimal import Decimal
@@ -18,10 +19,9 @@ from pydantic import ValidationError
 
 from app.core.config import OcrSettings
 from app.core.errors import AppError
-from app.domain.ocr_models import OcrDocument
 from app.ocr.base import OcrProviderRequest, OcrProviderResponse
 from app.ocr.deterministic_mapper import build_mapped_document
-from app.ocr.prompt_loader import load_ocr_prompt, load_transcription_prompt
+from app.ocr.prompt_loader import load_transcription_prompt
 from app.ocr.transcription_models import TranscriptionBatch
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,9 @@ class OpenAIOcrProvider:
         self._client = AsyncOpenAI(
             api_key=key,
             timeout=float(settings.timeout_seconds),
-            max_retries=settings.max_retries,
+            # Retry attempts are counted and bounded below. SDK-internal
+            # retries would be invisible to apiCallCount and cancellation.
+            max_retries=0,
         )
 
     async def extract(self, request: OcrProviderRequest) -> OcrProviderResponse:
@@ -53,20 +55,27 @@ class OpenAIOcrProvider:
             and self._settings.fallback_model != self._settings.primary_model
         ):
             models.append(self._settings.fallback_model)
-        if len(models) > self._settings.max_calls_per_job:
-            models = models[: self._settings.max_calls_per_job]
         last_error: AppError | None = None
-        for call_count, model in enumerate(models, start=1):
-            try:
-                return await self._call(request, model, call_count)
-            except AppError as exc:
-                last_error = exc
-                if exc.code not in {
-                    "OCR_RATE_LIMITED",
-                    "OCR_TIMEOUT",
-                    "OCR_PROVIDER_ERROR",
-                }:
-                    raise
+        call_count = 0
+        retryable_codes = {
+            "OCR_RATE_LIMITED",
+            "OCR_TIMEOUT",
+            "OCR_PROVIDER_ERROR",
+        }
+        for model in models:
+            for _ in range(self._settings.max_retries + 1):
+                if call_count >= self._settings.max_calls_per_job:
+                    break
+                self._raise_if_cancelled(request)
+                call_count += 1
+                try:
+                    return await self._call(request, model, call_count)
+                except AppError as exc:
+                    last_error = exc
+                    if exc.code not in retryable_codes:
+                        raise
+            if call_count >= self._settings.max_calls_per_job:
+                break
         if last_error is not None:
             raise last_error
         raise AppError(
@@ -76,75 +85,32 @@ class OpenAIOcrProvider:
             detail="OCRモデルが設定されていません。",
         )
 
+    @staticmethod
+    def _raise_if_cancelled(request: OcrProviderRequest) -> None:
+        if request.should_cancel is None or not request.should_cancel():
+            return
+        raise AppError(
+            status=409,
+            code="JOB_CANCELLED",
+            title="OCR job was cancelled",
+            detail="読み取りは取り消されました。",
+        )
+
     async def _call(
         self, request: OcrProviderRequest, model: str, call_count: int
     ) -> OcrProviderResponse:
-        mapped_mode = bool(request.regions) and all(
-            region.target_path for region in request.regions
+        content = build_mapped_input_content(
+            request,
+            image_detail=self._settings.image_detail,
         )
-        content: list[dict[str, Any]] = [
-            {
-                "type": "input_text",
-                "text": (
-                    "以下はGUIで項目が確定済みの記入欄画像です。意味を推測せず、"
-                    "各mappingIdについて見える手書き文字だけを転記してください。"
-                    if mapped_mode
-                    else (
-                        "以下はregion単位の画像です。各画像の直前のregionIdを"
-                        "sourceRegionIdとして転記してください。"
-                    )
-                ),
-            }
-        ]
-        for region in request.regions:
-            descriptor = f"regionId: {region.region_id}"
-            if mapped_mode:
-                descriptor = (
-                    f"mappingId: {region.region_id}\n"
-                    f"targetPath: {region.target_path}\n"
-                    f"label: {region.label or region.target_path}"
-                )
-            content.append({"type": "input_text", "text": descriptor})
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": "view: original (帳票レイアウトと筆跡の確認用)",
-                }
-            )
-            encoded = base64.b64encode(region.image_png).decode("ascii")
-            content.append(
-                {
-                    "type": "input_image",
-                    "image_url": f"data:image/png;base64,{encoded}",
-                    "detail": self._settings.image_detail,
-                }
-            )
-            if region.handwriting_png is not None:
-                handwriting_encoded = base64.b64encode(region.handwriting_png).decode("ascii")
-                content.append(
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "view: handwriting_hint (印刷除去の補助画像。薄い筆跡が欠けることが"
-                            "あるため、最終判断はoriginalと照合する)"
-                        ),
-                    }
-                )
-                content.append(
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/png;base64,{handwriting_encoded}",
-                        "detail": self._settings.image_detail,
-                    }
-                )
         started = time.perf_counter()
         response_input = cast(ResponseInputParam, [{"role": "user", "content": content}])
         try:
             response = await self._client.responses.parse(
                 model=model,
-                instructions=(load_transcription_prompt() if mapped_mode else load_ocr_prompt()),
+                instructions=load_transcription_prompt(),
                 input=response_input,
-                text_format=TranscriptionBatch if mapped_mode else OcrDocument,
+                text_format=TranscriptionBatch,
                 max_output_tokens=self._settings.max_output_tokens,
                 reasoning={"effort": self._settings.reasoning_effort},
                 store=False,
@@ -203,18 +169,22 @@ class OpenAIOcrProvider:
                 else "OCR応答を構造化できません。"
             )
             raise self._provider_error(502, "OCR_SCHEMA_INVALID", detail)
-        if mapped_mode:
-            if not isinstance(parsed, TranscriptionBatch):
-                raise self._provider_error(
-                    502, "OCR_SCHEMA_INVALID", "OCR転記結果の形式が一致しません。"
-                )
+        if not isinstance(parsed, TranscriptionBatch):
+            raise self._provider_error(
+                502, "OCR_SCHEMA_INVALID", "OCR転記結果の形式が一致しません。"
+            )
+        try:
             document = build_mapped_document(request, parsed)
-        else:
-            if not isinstance(parsed, OcrDocument):
-                raise self._provider_error(
-                    502, "OCR_SCHEMA_INVALID", "OCR結果の形式が一致しません。"
-                )
-            document = parsed
+        except (ValidationError, ValueError) as exc:
+            logger.warning(
+                "OpenAI mapped OCR result could not be assembled: %s",
+                type(exc).__name__,
+            )
+            raise self._provider_error(
+                502,
+                "OCR_MAPPING_INVALID",
+                "OCR転記結果をテンプレートのJSON項目へ割り当てられませんでした。",
+            ) from exc
         usage = response.usage
         input_tokens = usage.input_tokens if usage else None
         output_tokens = usage.output_tokens if usage else None
@@ -234,6 +204,123 @@ class OpenAIOcrProvider:
     @staticmethod
     def _provider_error(status: int, code: str, detail: str) -> AppError:
         return AppError(status=status, code=code, title="OCR provider failed", detail=detail)
+
+
+def build_mapped_input_content(
+    request: OcrProviderRequest,
+    *,
+    image_detail: str,
+) -> list[dict[str, Any]]:
+    if not request.regions or any(not region.target_path for region in request.regions):
+        raise AppError(
+            status=409,
+            code="TEMPLATE_FIELD_MAPPING_REQUIRED",
+            title="Template field mappings are required",
+            detail=(
+                "OpenAI読み取りには意味づけ済みの手書きセルが必要です。"
+                "ラベルや帳票全体からの推測読み取りは行いません。"
+            ),
+        )
+    content: list[dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "各画像はテンプレートで確定済みの手書き記入セルです。"
+                "項目の意味を推測せず、mappingIdごとに画像内の文字だけを転記してください。"
+                "候補情報が付いたセルだけは、画像と十分に一致する候補を"
+                "matchedCandidateとして返せます。"
+            ),
+        }
+    ]
+    for region in request.regions:
+        content.append(
+            {
+                "type": "input_text",
+                "text": f"mappingId: {region.region_id}",
+            }
+        )
+        content.append(
+            {
+                "type": "input_text",
+                "text": "view: mapped_input_cell",
+            }
+        )
+        if region.printed_label_text:
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "fixedPrintedTextToIgnore: "
+                        f"{json.dumps(region.printed_label_text, ensure_ascii=False)}\n"
+                        "Ignore only that fixed printed label. "
+                        "Transcribe the handwritten entry in this image."
+                    ),
+                }
+            )
+        if region.candidate_type == "sale_calf_note_prefix":
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "candidateType: sale_calf_note_prefix\n"
+                        "allowedFirstSymbols: "
+                        f"{json.dumps(region.candidates, ensure_ascii=False)}\n"
+                        "The first transcribed character must be exactly one of "
+                        "allowedFirstSymbols. Return that symbol as matchedCandidate. "
+                        "Preserve any clearly visible handwritten suffix after it. "
+                        "Do not substitute kana or katakana for the sex symbol."
+                    ),
+                }
+            )
+        elif region.candidates:
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "candidateType: sire_name\n"
+                        f"candidateSireNames: {json.dumps(region.candidates, ensure_ascii=False)}\n"
+                        "allowedSuffixes: "
+                        f"{json.dumps(region.allowed_suffixes, ensure_ascii=False)}"
+                    ),
+                }
+            )
+        if region.transcription_format == "japanese_era_date_numbers":
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "transcriptionFormat: japanese_era_date_numbers\n"
+                        "Return raw using ASCII digits only, as exactly three groups "
+                        "separated by one space: ERA_YEAR MONTH DAY. "
+                        "Do not include era names, 年/月/日, printed labels, "
+                        "or any other characters."
+                    ),
+                }
+            )
+        encoded = base64.b64encode(region.image_png).decode("ascii")
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{encoded}",
+                "detail": image_detail,
+            }
+        )
+        if region.handwriting_png is not None:
+            handwriting_encoded = base64.b64encode(region.handwriting_png).decode("ascii")
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": "view: mapped_input_cell_handwriting_hint",
+                }
+            )
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{handwriting_encoded}",
+                    "detail": image_detail,
+                }
+            )
+    return content
 
 
 def _estimate_cost(

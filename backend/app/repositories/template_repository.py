@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +17,8 @@ class TemplateRepository:
         self._session = session
 
     def create_template(self, *, name: str, document_type: str) -> Template:
+        if self.name_exists(name):
+            raise self._name_conflict()
         template = Template(name=name, document_type=document_type)
         self._session.add(template)
         self._session.commit()
@@ -54,12 +57,25 @@ class TemplateRepository:
             quality_json=quality,
         )
         self._session.add(version)
-        self._session.commit()
+        # The caller adds the detected layout before committing so a template
+        # version can never become visible in a half-initialized state.
+        self._session.flush()
         self._session.refresh(version)
         return version
 
     def list_templates(self) -> list[Template]:
         return list(self._session.scalars(select(Template).order_by(Template.created_at.desc())))
+
+    def name_exists(self, name: str) -> bool:
+        normalized = self.normalize_name(name)
+        return any(
+            self.normalize_name(template.name) == normalized
+            for template in self._session.scalars(select(Template))
+        )
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        return unicodedata.normalize("NFKC", name).strip().casefold()
 
     def get_template(self, template_id: str) -> Template | None:
         return self._session.get(Template, template_id)
@@ -86,6 +102,16 @@ class TemplateRepository:
             raise self._invalid_state("元ジョブがREVIEW_REQUIREDではありません。")
         if not version.clean_template_artifact_id or not version.quality_json:
             raise self._invalid_state("必須生成物または品質情報が不足しています。")
+        relations = version.layout_json.get("relations")
+        if (
+            not isinstance(relations, list)
+            or not relations
+            or version.quality_json.get("layoutFinalized") is not True
+            or version.quality_json.get("layoutVerified") is not True
+        ):
+            raise self._invalid_state(
+                "意味づけを保存し、OpenCVによる記入欄の再検出を完了してから承認してください。"
+            )
         template = self.get_template(version.template_id)
         if template is None:
             raise self._not_found()
@@ -137,3 +163,11 @@ class TemplateRepository:
             detail=detail,
         )
 
+    @staticmethod
+    def _name_conflict() -> AppError:
+        return AppError(
+            status=409,
+            code="TEMPLATE_NAME_CONFLICT",
+            title="Template name already exists",
+            detail="同じ名前のテンプレートが既にあります。区別できる名前を指定してください。",
+        )

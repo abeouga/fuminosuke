@@ -8,12 +8,16 @@
     "templateId": {"type": "string"},
     "templateVersion": {"type": "string"},
     "document": {"type": "object"},
-    "saleCalves": {"type": "array", "maxItems": 100},
+    "saleCalves": {"type": "array", "maxItems": 10},
     "pedigree": {"type": "object"},
-    "calvings": {"type": "array", "maxItems": 100},
+    "calvings": {"type": "array", "maxItems": 20},
+    "customFields": {
+      "type": "object",
+      "maxProperties": 300,
+      "additionalProperties": {"type": "object"}
+    },
     "reviewItems": {"type": "array", "maxItems": 200},
     "processingMetadata": {"type": "object"}
   },
   "additionalProperties": false
 }
-

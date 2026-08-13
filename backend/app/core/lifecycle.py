@@ -27,6 +27,8 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     database.check_connection()
     runner = JobRunner(
         database=database,
+        settings=settings,
+        storage=storage,
         handler=PipelineJobHandler(settings=settings, database=database, storage=storage),
         worker_count=settings.jobs.max_concurrency,
     )

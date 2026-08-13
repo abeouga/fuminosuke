@@ -10,9 +10,21 @@ type HandwritingCandidate = {
   height: number;
   pixelCount: number;
   confidence: number;
+  inputCellId?: string;
+  opencvCellDetected?: boolean;
+  paddleTextDetected?: boolean;
+  source?: string;
 };
 
-type CandidatePayload = { candidates: HandwritingCandidate[] };
+type CandidatePayload = {
+  candidates: HandwritingCandidate[];
+  detectors?: {
+    opencv: boolean;
+    paddleOcr: boolean;
+    heuristicSegmentation: boolean;
+  };
+  verifiedInputCellCount?: number;
+};
 type EditorSnapshot = { image: ImageData; included: string[] };
 
 type Props = {
@@ -20,6 +32,9 @@ type Props = {
   background: string;
   candidatesSource?: string;
   onSave: (blob: Blob) => Promise<void>;
+  disabled?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 const candidateBounds = (candidate: HandwritingCandidate, canvas: HTMLCanvasElement) => ({
@@ -29,18 +44,31 @@ const candidateBounds = (candidate: HandwritingCandidate, canvas: HTMLCanvasElem
   height: Math.ceil(candidate.height * canvas.height),
 });
 
-export function MaskEditor({ source, background, candidatesSource, onSave }: Props) {
+export function MaskEditor({
+  source,
+  background,
+  candidatesSource,
+  onSave,
+  disabled = false,
+  onDirtyChange,
+  onBusyChange,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const originalMask = useRef<ImageData | null>(null);
   const history = useRef<EditorSnapshot[]>([]);
   const future = useRef<EditorSnapshot[]>([]);
   const candidatesRef = useRef<HandwritingCandidate[]>([]);
+  const saveLockRef = useRef(false);
   const [candidates, setCandidates] = useState<HandwritingCandidate[]>([]);
   const [included, setIncluded] = useState<Set<string>>(new Set());
+  const [detectors, setDetectors] = useState<CandidatePayload["detectors"]>();
+  const [verifiedInputCellCount, setVerifiedInputCellCount] = useState(0);
   const [mode, setMode] = useState<Mode>("erase");
   const [brush, setBrush] = useState(28);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     const canvas = canvasRef.current;
@@ -78,21 +106,38 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
         included: allCandidates,
       }];
       future.current = [];
+      setDirty(false);
+      setSaveError(null);
     };
     image.src = source;
   }, [source]);
 
   useEffect(load, [load]);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    onBusyChange?.(saving);
+  }, [onBusyChange, saving]);
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+      onBusyChange?.(false);
+    },
+    [onBusyChange, onDirtyChange],
+  );
 
   useEffect(() => {
     if (!candidatesSource) {
       candidatesRef.current = [];
       setCandidates([]);
       setIncluded(new Set());
+      setDetectors(undefined);
+      setVerifiedInputCellCount(0);
       return;
     }
     let cancelled = false;
-    void fetch(candidatesSource)
+    void fetch(candidatesSource, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("候補矩形を読み込めませんでした。");
         return (await response.json()) as CandidatePayload;
@@ -101,6 +146,8 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
         if (cancelled) return;
         candidatesRef.current = payload.candidates;
         setCandidates(payload.candidates);
+        setDetectors(payload.detectors);
+        setVerifiedInputCellCount(payload.verifiedInputCellCount ?? 0);
         const allCandidates = payload.candidates.map((candidate) => candidate.candidateId);
         setIncluded(new Set(allCandidates));
         if (history.current.length === 1) history.current[0].included = allCandidates;
@@ -109,6 +156,8 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
         if (cancelled) return;
         candidatesRef.current = [];
         setCandidates([]);
+        setDetectors(undefined);
+        setVerifiedInputCellCount(0);
       });
     return () => { cancelled = true; };
   }, [candidatesSource]);
@@ -158,12 +207,14 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
       const previous = history.current.at(-1)!;
       context.putImageData(previous.image, 0, 0);
       setIncluded(new Set(previous.included));
+      setDirty(true);
     } else if (direction === "redo") {
       const next = future.current.pop();
       if (next) {
         history.current.push(next);
         context.putImageData(next.image, 0, 0);
         setIncluded(new Set(next.included));
+        setDirty(true);
       }
     }
   };
@@ -188,6 +239,8 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
     applyCandidateSelection(next);
     setIncluded(next);
     snapshot(next);
+    setDirty(true);
+    setSaveError(null);
   };
 
   const setAllCandidates = (active: boolean) => {
@@ -197,9 +250,12 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
     applyCandidateSelection(next);
     setIncluded(next);
     snapshot(next);
+    setDirty(true);
+    setSaveError(null);
   };
 
   const save = () => {
+    if (disabled || saveLockRef.current) return;
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d", { willReadFrequently: true });
     if (!canvas || !context) return;
@@ -218,18 +274,49 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
       binary.data[index + 3] = 255;
     }
     outputContext.putImageData(binary, 0, 0);
+    saveLockRef.current = true;
     setSaving(true);
+    setSaveError(null);
     output.toBlob((blob) => {
-      if (!blob) return setSaving(false);
-      void onSave(blob).finally(() => setSaving(false));
+      if (!blob) {
+        saveLockRef.current = false;
+        setSaving(false);
+        setSaveError("選別結果を画像へ変換できませんでした。もう一度お試しください。");
+        return;
+      }
+      void onSave(blob)
+        .then(() => setDirty(false))
+        .catch((error: unknown) => {
+          setSaveError(
+            error instanceof Error
+              ? error.message
+              : "選別結果を保存できませんでした。変更はこの画面に残っています。",
+          );
+        })
+        .finally(() => {
+          saveLockRef.current = false;
+          setSaving(false);
+        });
     }, "image/png");
   };
 
+  const resetToDetected = () => {
+    if (disabled) return;
+    if (
+      dirty
+      && !window.confirm(
+        "保存していない選別変更があります。自動検出の状態へ戻しますか？",
+      )
+    ) return;
+    load();
+  };
+
   return (
-    <div className="mask-editor">
+    <div className="mask-editor" aria-busy={saving}>
+      <fieldset className="mask-editor-fields" disabled={saving || disabled}>
       <div className="candidate-summary">
-        <div><strong>検出した文字候補を選別</strong><span>赤枠をクリックすると、その文字を「印刷文字」として除外できます。</span></div>
-        <strong>{included.size} / {candidates.length} 件を除去</strong>
+        <div><strong>再検出した文字候補を選別</strong><span>OpenCV確認済み記入欄 {verifiedInputCellCount} 件・PaddleOCR {detectors?.paddleOcr ? "実行済み" : "利用不可"}。赤枠をクリックすると候補から除外できます。</span></div>
+        <strong>{included.size} / {candidates.length} 件を保持</strong>
       </div>
       <div className="viewer-toolbar wrap">
         <div className="segmented">
@@ -241,21 +328,30 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
         <button type="button" className="ghost" onClick={() => setAllCandidates(true)}>すべて戻す</button>
         <button type="button" className="ghost" onClick={() => restore("undo")}>← 戻す</button>
         <button type="button" className="ghost" onClick={() => restore("redo")}>→ やり直す</button>
-        <button type="button" className="ghost" onClick={load}>自動検出へ戻す</button>
-        <button type="button" className="primary compact" disabled={saving} onClick={save}>{saving ? "保存中…" : "選別結果を保存"}</button>
+        <button type="button" className="ghost" disabled={saving} onClick={resetToDetected}>自動検出へ戻す</button>
+        <button type="button" className="primary compact" disabled={saving || !dirty} onClick={save}>{saving ? "保存中…" : dirty ? "選別結果を保存" : "選別結果は保存済み"}</button>
       </div>
+      {dirty && <p className="inline-warning">保存していない選別変更があります。</p>}
+      {saveError && <p className="error-box" role="alert">{saveError}</p>}
       <div className="mask-editor-stage">
         <img src={background} alt="文字候補を確認する帳票" draggable={false} />
         <canvas
           ref={canvasRef}
           aria-label="手書き候補マスク編集"
           onPointerDown={(event) => {
+            if (saving || disabled) return;
             event.currentTarget.setPointerCapture(event.pointerId);
             drawing.current = true;
             draw(event);
           }}
           onPointerMove={draw}
-          onPointerUp={() => { drawing.current = false; snapshot(); }}
+          onPointerUp={() => {
+            if (!drawing.current) return;
+            drawing.current = false;
+            snapshot();
+            setDirty(true);
+            setSaveError(null);
+          }}
           onPointerCancel={() => { drawing.current = false; }}
         />
         <div className="candidate-layer" aria-label="検出文字候補">
@@ -269,7 +365,8 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
                 style={{ left: `${candidate.x * 100}%`, top: `${candidate.y * 100}%`, width: `${candidate.width * 100}%`, height: `${candidate.height * 100}%` }}
                 aria-pressed={!active}
                 aria-label={`候補${index + 1}: ${active ? "除去対象" : "印刷文字として除外済み"}`}
-                title={active ? "クリックして印刷文字として除外" : "クリックして除去対象へ戻す"}
+                disabled={saving}
+                title={`${candidate.inputCellId || "記入欄不明"} / OpenCV ${candidate.opencvCellDetected ? "検出" : "未検出"} / PaddleOCR ${candidate.paddleTextDetected ? "文字あり" : "文字なし"} / ${active ? "クリックして除外" : "クリックして候補へ戻す"}`}
                 onClick={() => toggleCandidate(candidate)}
               ><span>{index + 1}</span></button>
             );
@@ -277,6 +374,7 @@ export function MaskEditor({ source, background, candidatesSource, onSave }: Pro
         </div>
       </div>
       <div className="candidate-legend"><span><i className="remove" />除去される候補</span><span><i className="keep" />保持する印刷文字</span></div>
+      </fieldset>
     </div>
   );
 }

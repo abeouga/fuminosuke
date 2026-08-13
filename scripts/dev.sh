@@ -11,6 +11,10 @@ if [ ! -x "$PYTHON" ]; then
   echo 'backend/.venv がありません。README の初回セットアップを実行してください。' >&2
   exit 1
 fi
+if [ ! -f "$BACKEND_DIR/.env" ]; then
+  echo 'backend/.env がありません。.env.example をコピーし、OCR_PROVIDER と必要なAPIキーを確認してから起動してください。' >&2
+  exit 1
+fi
 
 mkdir -p "$BACKEND_DIR/data/logs"
 cd "$BACKEND_DIR"

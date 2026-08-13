@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import combinations
 
 import cv2
 import numpy as np
@@ -40,31 +41,37 @@ class DocumentNormalizer:
             edges, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         )
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        paper_mask = self._paper_mask(small)
+        paper_contours, _ = cv2.findContours(
+            paper_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         image_area = float(small.shape[0] * small.shape[1])
         target_ratio = self._width / self._height
         best: tuple[float, NDArray[np.float32]] | None = None
-        for contour in contours:
+        for contour in [*contours, *paper_contours]:
             area = cv2.contourArea(contour)
-            if area < image_area * 0.25:
+            if area < image_area * 0.2:
                 continue
             perimeter = cv2.arcLength(contour, True)
-            approximate = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
-            if len(approximate) != 4 or not cv2.isContourConvex(approximate):
-                continue
-            corners = order_quad(approximate.astype(np.float32))
-            top = np.linalg.norm(corners[1] - corners[0])
-            bottom = np.linalg.norm(corners[2] - corners[3])
-            left = np.linalg.norm(corners[3] - corners[0])
-            right = np.linalg.norm(corners[2] - corners[1])
-            ratio = max(float(top), float(bottom)) / max(
-                1.0, max(float(left), float(right))
-            )
-            ratio_error = abs(ratio - target_ratio) / target_ratio
-            if ratio_error > 0.45:
-                continue
-            score = area / image_area - ratio_error * 0.15
-            if best is None or score > best[0]:
-                best = score, corners / scale
+            for corners in self._quadrilateral_candidates(contour, perimeter):
+                quad_area = abs(float(cv2.contourArea(corners)))
+                if quad_area < image_area * 0.2:
+                    continue
+                top = np.linalg.norm(corners[1] - corners[0])
+                bottom = np.linalg.norm(corners[2] - corners[3])
+                left = np.linalg.norm(corners[3] - corners[0])
+                right = np.linalg.norm(corners[2] - corners[1])
+                ratio = max(float(top), float(bottom)) / max(
+                    1.0, max(float(left), float(right))
+                )
+                ratio_error = abs(ratio - target_ratio) / target_ratio
+                if ratio_error > 0.45:
+                    continue
+                # The document aspect ratio is known. Weighting it strongly avoids
+                # selecting a strip of desk or binder that happens to touch the page.
+                score = quad_area / image_area - ratio_error * 1.25
+                if best is None or score > best[0]:
+                    best = score, corners / scale
 
         warnings: list[str] = []
         if best is None:
@@ -112,3 +119,59 @@ class DocumentNormalizer:
                 warnings=warnings,
             ),
         )
+
+    @staticmethod
+    def _paper_mask(image_rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
+        mask = ((hsv[:, :, 1] < 72) & (hsv[:, :, 2] > 100)).astype(np.uint8) * 255
+        close_size = max(9, round(max(image_rgb.shape[:2]) * 0.019))
+        if close_size % 2 == 0:
+            close_size += 1
+        open_size = max(3, close_size // 3)
+        if open_size % 2 == 0:
+            open_size += 1
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (close_size, close_size)),
+        )
+        return np.asarray(
+            cv2.morphologyEx(
+                mask,
+                cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (open_size, open_size)),
+            ),
+            dtype=np.uint8,
+        )
+
+    @staticmethod
+    def _quadrilateral_candidates(
+        contour: NDArray[np.int32], perimeter: float
+    ) -> list[NDArray[np.float32]]:
+        candidates: list[NDArray[np.float32]] = []
+        seen: set[tuple[int, ...]] = set()
+        for epsilon in (0.005, 0.01, 0.015, 0.02, 0.03, 0.04):
+            approximate = cv2.approxPolyDP(contour, epsilon * perimeter, True)
+            points = approximate.reshape(-1, 2)
+            selections: list[NDArray[np.int32]] = []
+            if len(points) == 4:
+                selections.append(points)
+            elif 5 <= len(points) <= 8:
+                selections.extend(
+                    np.asarray(items, dtype=np.int32)
+                    for items in combinations(points.tolist(), 4)
+                )
+            for selection in selections:
+                hull = cv2.convexHull(selection.reshape(-1, 1, 2))
+                if len(hull) != 4:
+                    continue
+                corners = order_quad(hull.astype(np.float32))
+                key = tuple(np.rint(corners).astype(np.int32).ravel().tolist())
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(corners)
+        if not candidates:
+            box = cv2.boxPoints(cv2.minAreaRect(contour))
+            candidates.append(order_quad(box.astype(np.float32)))
+        return candidates

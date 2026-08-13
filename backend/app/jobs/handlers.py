@@ -53,9 +53,15 @@ class PipelineJobHandler:
             job = JobRepository(session).get(job_id)
             if job is None:
                 raise ValueError("Job not found")
+            if job.cancel_requested:
+                return
             job_type = JobType(job.job_type)
         if job_type is JobType.PREPARE_TEMPLATE:
             self._template_service.process(job_id)
             return
         output = self._extraction_service.process(job_id)
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            if job is None or job.cancel_requested:
+                return
         self._ocr_workflow.process(output)

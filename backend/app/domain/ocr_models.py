@@ -6,6 +6,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.errors import to_camel
+from app.domain.field_targets import CALVING_ROW_COUNT, SALE_CALF_ROW_COUNT
 
 
 class OcrModel(BaseModel):
@@ -116,7 +117,7 @@ class ReviewItem(OcrModel):
 class ProcessingMetadata(OcrModel):
     model_id: str | None = Field(default=None, max_length=200)
     prompt_version: str | None = Field(default=None, max_length=100)
-    source_regions: list[str] = Field(default_factory=list, max_length=20)
+    source_regions: list[str] = Field(default_factory=list, max_length=300)
     notes: list[str] = Field(default_factory=list, max_length=50)
 
 
@@ -125,8 +126,15 @@ class OcrDocument(OcrModel):
     template_id: str = Field(max_length=100)
     template_version: str = Field(max_length=50)
     document: DocumentIdentity
-    sale_calves: list[SaleCalf] = Field(default_factory=list, max_length=100)
+    sale_calves: list[SaleCalf] = Field(
+        default_factory=list,
+        max_length=SALE_CALF_ROW_COUNT,
+    )
     pedigree: Pedigree
-    calvings: list[Calving] = Field(default_factory=list, max_length=100)
+    calvings: list[Calving] = Field(
+        default_factory=list,
+        max_length=CALVING_ROW_COUNT,
+    )
+    custom_fields: dict[str, FieldReading] = Field(default_factory=dict, max_length=300)
     review_items: list[ReviewItem] = Field(default_factory=list, max_length=200)
     processing_metadata: ProcessingMetadata

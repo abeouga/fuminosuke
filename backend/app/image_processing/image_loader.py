@@ -6,7 +6,6 @@ import warnings
 from dataclasses import dataclass
 from typing import Literal
 
-import cv2
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -32,6 +31,25 @@ class LoadedImage:
     metadata: ImageMetadata
 
 
+def verified_image_size(content: bytes) -> tuple[int, int]:
+    """Read and verify image metadata without expanding the pixel buffer."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as image:
+                width, height = image.size
+                image.verify()
+    except (
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
+        raise ValueError("Image metadata could not be verified") from exc
+    return width, height
+
+
 class ImageLoader:
     def __init__(
         self,
@@ -43,30 +61,12 @@ class ImageLoader:
         self._max_edge = image_settings.max_image_edge
 
     def load(self, content: bytes, declared_media_type: str | None = None) -> LoadedImage:
-        if not content:
-            raise self._error("EMPTY_IMAGE", "画像ファイルが空です。")
-        if len(content) > self._max_bytes:
-            raise self._error("IMAGE_TOO_LARGE", "画像ファイルサイズが上限を超えています。")
-        detected = self._detect_type(content)
-        if declared_media_type and declared_media_type not in {
-            detected[0],
-            "application/octet-stream",
-        }:
-            raise self._error(
-                "UNSUPPORTED_IMAGE_FORMAT", "申告されたMIME形式と画像内容が一致しません。"
-            )
+        detected, _, _ = self._validated_header(content, declared_media_type)
 
         try:
-            decoded = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-            if decoded is None:
-                raise self._error("CORRUPTED_IMAGE", "OpenCVで画像を読み込めません。")
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
                 with Image.open(io.BytesIO(content)) as image:
-                    image.verify()
-                with Image.open(io.BytesIO(content)) as image:
-                    width, height = image.size
-                    self._validate_dimensions(width, height)
                     oriented = ImageOps.exif_transpose(image)
                     if "A" in oriented.getbands() or "transparency" in oriented.info:
                         rgba = oriented.convert("RGBA")
@@ -92,6 +92,47 @@ class ImageLoader:
             sha256=hashlib.sha256(content).hexdigest(),
         )
         return LoadedImage(rgb=rgb, metadata=metadata)
+
+    def inspect_dimensions(
+        self,
+        content: bytes,
+        declared_media_type: str | None = None,
+    ) -> tuple[int, int]:
+        _, width, height = self._validated_header(content, declared_media_type)
+        return width, height
+
+    def _validated_header(
+        self,
+        content: bytes,
+        declared_media_type: str | None,
+    ) -> tuple[
+        tuple[
+            Literal["image/jpeg", "image/png"],
+            Literal["jpeg", "png"],
+            Literal["jpg", "png"],
+        ],
+        int,
+        int,
+    ]:
+        if not content:
+            raise self._error("EMPTY_IMAGE", "画像ファイルが空です。")
+        if len(content) > self._max_bytes:
+            raise self._error("IMAGE_TOO_LARGE", "画像ファイルサイズが上限を超えています。")
+        detected = self._detect_type(content)
+        if declared_media_type and declared_media_type not in {
+            detected[0],
+            "application/octet-stream",
+        }:
+            raise self._error(
+                "UNSUPPORTED_IMAGE_FORMAT", "申告されたMIME形式と画像内容が一致しません。"
+            )
+
+        try:
+            width, height = verified_image_size(content)
+        except ValueError as exc:
+            raise self._error("CORRUPTED_IMAGE", "画像を正常に読み込めません。") from exc
+        self._validate_dimensions(width, height)
+        return detected, width, height
 
     def _detect_type(
         self, content: bytes

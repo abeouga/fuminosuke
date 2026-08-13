@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime
 
 import anyio
 
+from app.core.config import Settings
 from app.core.errors import AppError
+from app.db.models import JobInput, ProcessingJob
 from app.db.session import Database
-from app.domain.enums import JobStatus
+from app.domain.enums import JobStatus, JobType, TemplateMode
+from app.domain.job_inputs import job_input_bounds
+from app.domain.template_config import TemplateConfig
 from app.jobs.handlers import JobHandler
 from app.jobs.queue import JobQueue
 from app.repositories.job_repository import JobRepository
+from app.storage.local_storage import LocalStorageService, StoragePathError
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +28,15 @@ class JobRunner:
         self,
         *,
         database: Database,
+        settings: Settings,
+        storage: LocalStorageService,
         handler: JobHandler,
         worker_count: int,
         queue_size: int = 100,
     ) -> None:
         self._database = database
+        self._settings = settings
+        self._storage = storage
         self._handler = handler
         self._worker_count = worker_count
         self._queue = JobQueue(max_size=queue_size)
@@ -33,12 +44,21 @@ class JobRunner:
 
     async def start(self) -> int:
         with self._database.session() as session:
-            recovered = JobRepository(session).recover_interrupted()
+            repository = JobRepository(session)
+            recovered_created, failed_created = repository.recover_created(
+                self._created_job_is_complete
+            )
+            recovered_interrupted = repository.recover_interrupted()
+            queued_job_ids = [
+                job.id for job in repository.list_by_status(JobStatus.QUEUED)
+            ]
         self._tasks = [
             asyncio.create_task(self._worker(index), name=f"ocr-job-worker-{index}")
             for index in range(self._worker_count)
         ]
-        return recovered
+        for job_id in queued_job_ids:
+            await self._queue.put(job_id)
+        return recovered_created + failed_created + recovered_interrupted
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -142,6 +162,22 @@ class JobRunner:
             job = repository.get(job_id)
             if job is None:
                 return
+            if job.cancel_requested or code == "JOB_CANCELLED":
+                repository.update(
+                    job_id,
+                    status=JobStatus.CANCELLED,
+                    error_code=None,
+                    error_message_safe=None,
+                    completed_at=datetime.now(UTC),
+                )
+                repository.add_event(
+                    job_id=job_id,
+                    level="INFO",
+                    event_code="JOB_CANCELLED",
+                    stage=job.progress_stage,
+                    metadata={"attemptNumber": job.attempt_number},
+                )
+                return
             repository.update(
                 job_id,
                 status=JobStatus.FAILED,
@@ -156,3 +192,108 @@ class JobRunner:
                 stage=job.progress_stage,
                 metadata={"attemptNumber": job.attempt_number},
             )
+
+    def _created_job_is_complete(
+        self,
+        job: ProcessingJob,
+        inputs: list[JobInput],
+    ) -> bool:
+        try:
+            job_type = JobType(job.job_type)
+            mode = (
+                TemplateMode(job.mode or "")
+                if job_type is JobType.PREPARE_TEMPLATE
+                else None
+            )
+            minimum, maximum = job_input_bounds(
+                job_type,
+                mode,
+                min_consensus_images=self._settings.registration.min_consensus_images,
+                max_consensus_images=self._settings.registration.max_consensus_images,
+            )
+        except ValueError:
+            return False
+
+        if not minimum <= len(inputs) <= maximum:
+            return False
+        ordered = sorted(inputs, key=lambda item: item.input_index)
+        if [item.input_index for item in ordered] != list(range(len(ordered))):
+            return False
+
+        total_bytes = sum(item.file_bytes for item in ordered)
+        total_pixels = sum(item.width * item.height for item in ordered)
+        if (
+            total_bytes > self._settings.storage.max_batch_upload_bytes
+            or total_pixels > self._settings.image_processing.max_batch_image_pixels
+        ):
+            return False
+
+        upload_root = self._storage.resolve(f"uploads/{job.id}")
+        for item in ordered:
+            if (
+                item.file_bytes <= 0
+                or item.width <= 0
+                or item.height <= 0
+                or item.width > self._settings.image_processing.max_image_edge
+                or item.height > self._settings.image_processing.max_image_edge
+                or item.width * item.height
+                > self._settings.image_processing.max_image_pixels
+                or item.media_type not in {"image/jpeg", "image/png"}
+                or item.format not in {"jpeg", "png"}
+            ):
+                return False
+            try:
+                path = self._storage.resolve(item.relative_path)
+                path.relative_to(upload_root)
+                if not path.is_file() or path.stat().st_size != item.file_bytes:
+                    return False
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            except (OSError, StoragePathError, ValueError):
+                return False
+            if digest != item.sha256:
+                return False
+        return (
+            job_type is not JobType.EXTRACT_DOCUMENT
+            or self._ocr_template_snapshot_is_complete(job)
+        )
+
+    def _ocr_template_snapshot_is_complete(self, job: ProcessingJob) -> bool:
+        raw_snapshot = job.config_snapshot_json.get("templateSnapshot")
+        if not isinstance(raw_snapshot, dict):
+            return False
+        relative_path = raw_snapshot.get("cleanTemplatePath")
+        expected_sha256 = raw_snapshot.get("cleanTemplateSha256")
+        source_sha256 = raw_snapshot.get("sourceArtifactSha256")
+        raw_config = raw_snapshot.get("config")
+        expected_config_sha256 = raw_snapshot.get("configSha256")
+        if (
+            not isinstance(relative_path, str)
+            or not isinstance(expected_sha256, str)
+            or source_sha256 != expected_sha256
+            or not isinstance(raw_config, dict)
+            or not isinstance(expected_config_sha256, str)
+        ):
+            return False
+        try:
+            snapshot_root = self._storage.resolve(
+                f"uploads/{job.id}/template_snapshot"
+            )
+            path = self._storage.resolve(relative_path)
+            path.relative_to(snapshot_root)
+            if not path.is_file():
+                return False
+            with path.open("rb") as stream:
+                actual_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+            if actual_sha256 != expected_sha256:
+                return False
+            config = TemplateConfig.model_validate(raw_config)
+            canonical = json.dumps(
+                config.model_dump(mode="json", by_alias=True),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (OSError, StoragePathError, ValueError):
+            return False
+        return hashlib.sha256(canonical).hexdigest() == expected_config_sha256

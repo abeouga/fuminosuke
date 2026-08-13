@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -8,6 +9,23 @@ class FieldTarget:
     path: str
     label: str
     section: str
+
+
+CUSTOM_FIELD_PREFIX = "customFields."
+CUSTOM_FIELD_KEY_PATTERN = re.compile(r"^[^\s.\[\]]{1,100}$")
+SALE_CALF_ROW_COUNT = 10
+CALVING_ROW_COUNT = 20
+
+
+def custom_field_key(path: str) -> str | None:
+    if not path.startswith(CUSTOM_FIELD_PREFIX):
+        return None
+    key = path.removeprefix(CUSTOM_FIELD_PREFIX)
+    return key if CUSTOM_FIELD_KEY_PATTERN.fullmatch(key) else None
+
+
+def is_supported_field_path(path: str) -> bool:
+    return path in FIELD_TARGET_BY_PATH or custom_field_key(path) is not None
 
 
 DOCUMENT_FIELDS = {
@@ -56,7 +74,7 @@ def field_targets() -> list[FieldTarget]:
     targets.extend(
         FieldTarget(f"pedigree.{name}", label, "血統") for name, label in PEDIGREE_FIELDS.items()
     )
-    for index in range(20):
+    for index in range(SALE_CALF_ROW_COUNT):
         targets.extend(
             FieldTarget(
                 f"saleCalves.{index}.{name}",
@@ -65,6 +83,7 @@ def field_targets() -> list[FieldTarget]:
             )
             for name, label in SALE_CALF_FIELDS.items()
         )
+    for index in range(CALVING_ROW_COUNT):
         targets.extend(
             FieldTarget(
                 f"calvings.{index}.{name}",

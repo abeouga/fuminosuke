@@ -12,6 +12,9 @@ node_modules/
 *.tsbuildinfo
 *.egg-info/
 
+# Local runtime configuration can contain API keys and must never be committed.
+backend/.env
+
 # Test-run artifacts generated under the backend workspace.
 backend/.pytest-full-mapping-*/
 

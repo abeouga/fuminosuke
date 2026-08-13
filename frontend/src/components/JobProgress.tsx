@@ -3,6 +3,7 @@ import type { Job } from "../types";
 const STAGE_LABELS: Record<string, string> = {
   VALIDATING_INPUT: "画像を確認中",
   NORMALIZING_DOCUMENT: "帳票の向きを調整中",
+  DETECTING_LAYOUT: "帳票の枠とラベルを検出中",
   REGISTERING_TEMPLATE: "帳票位置を合わせています",
   ISOLATING_HANDWRITING: "手書き部分を分離中",
   DETECTING_MARKS: "選択マークを確認中",

@@ -2,7 +2,9 @@ from app.core.errors import AppError
 from app.domain.enums import JobStatus
 
 ALLOWED_TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
-    JobStatus.CREATED: frozenset({JobStatus.QUEUED, JobStatus.CANCELLED}),
+    JobStatus.CREATED: frozenset(
+        {JobStatus.QUEUED, JobStatus.FAILED, JobStatus.CANCELLED}
+    ),
     JobStatus.QUEUED: frozenset({JobStatus.PROCESSING, JobStatus.CANCELLED}),
     JobStatus.PROCESSING: frozenset(
         {
@@ -30,4 +32,3 @@ def require_transition(current: JobStatus, target: JobStatus) -> None:
             title="Invalid job state transition",
             detail=f"ジョブ状態を {current.value} から {target.value} へ変更できません。",
         )
-
