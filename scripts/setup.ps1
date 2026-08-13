@@ -64,6 +64,8 @@ else {
 }
 & $venvPython -m pip install --no-deps --editable $backendDir
 if ($LASTEXITCODE -ne 0) { throw 'Could not install the backend package.' }
+& $venvPython (Join-Path $projectRoot 'scripts\export_portable_templates.py') --validate-only
+if ($LASTEXITCODE -ne 0) { throw 'Portable template bootstrap validation failed.' }
 if (-not (Test-Path -LiteralPath (Join-Path $backendDir '.env'))) {
     Copy-Item -LiteralPath (Join-Path $backendDir '.env.example') -Destination (Join-Path $backendDir '.env')
     Write-Warning 'Created backend/.env with the safe mock OCR setting. Review OCR_PROVIDER and configure OPENAI_API_KEY before using external OCR.'

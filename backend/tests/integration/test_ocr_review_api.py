@@ -102,6 +102,42 @@ def _active_template(client: TestClient) -> str:
     return version_id
 
 
+def test_existing_active_boundary_fallback_template_cannot_start_ocr(
+    client: TestClient,
+) -> None:
+    version_id = _active_template(client)
+    with client.app.state.database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        assert version is not None
+        version.quality_json = {
+            **version.quality_json,
+            "fallbackUsed": True,
+            "warnings": [
+                *version.quality_json.get("warnings", []),
+                "FULL_IMAGE_BOUNDARY_FALLBACK",
+            ],
+        }
+        session.commit()
+
+    response = client.post(
+        "/api/v1/ocr-jobs",
+        data={
+            "templateVersionId": version_id,
+            "motherIndividualId": "1234567890",
+            "ocrEnabled": "true",
+        },
+        files=[
+            (
+                "file",
+                ("filled.png", encode_png(ledger_image(handwriting_seed=4)), "image/png"),
+            )
+        ],
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED"
+
+
 def test_review_correct_confirm_and_export(client: TestClient) -> None:
     version_id = _active_template(client)
     image = encode_png(ledger_image(handwriting_seed=5))

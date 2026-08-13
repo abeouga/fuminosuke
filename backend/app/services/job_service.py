@@ -22,6 +22,7 @@ from app.domain.job_state import require_transition
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
 from app.domain.sire_names import SIRE_NAME_ALLOWED_SUFFIXES
 from app.domain.template_config import TemplateConfig, parse_template_config
+from app.domain.template_quality import has_full_image_boundary_fallback
 from app.image_processing.image_loader import ImageLoader, LoadedImage
 from app.jobs.runner import JobRunner
 from app.layout_analysis.models import LayoutDefinition
@@ -128,6 +129,17 @@ class JobService:
                     code="INVALID_STATE_TRANSITION",
                     title="Template version is not active",
                     detail="OCRにはACTIVEテンプレート版を指定してください。",
+                )
+            if has_full_image_boundary_fallback(template_version.quality_json):
+                raise AppError(
+                    status=409,
+                    code="TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED",
+                    title="Template document boundary must be detected",
+                    detail=(
+                        "帳票外形の検出に失敗して画像全体を使用したテンプレートは"
+                        "OCRに利用できません。帳票全体が写る画像でテンプレートを"
+                        "作り直してください。"
+                    ),
                 )
             clean_artifact = session.get(
                 JobArtifact,

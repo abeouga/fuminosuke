@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.db.models import ProcessingJob, Template, TemplateVersion
 from app.domain.enums import JobStatus, TemplateMode, TemplateVersionStatus
+from app.domain.template_quality import has_full_image_boundary_fallback
 
 
 class TemplateRepository:
@@ -102,15 +103,7 @@ class TemplateRepository:
             raise self._invalid_state("元ジョブがREVIEW_REQUIREDではありません。")
         if not version.clean_template_artifact_id or not version.quality_json:
             raise self._invalid_state("必須生成物または品質情報が不足しています。")
-        quality_warnings = version.quality_json.get("warnings", [])
-        full_image_fallback = (
-            version.quality_json.get("fallbackUsed") is True
-            or (
-                isinstance(quality_warnings, list)
-                and "FULL_IMAGE_BOUNDARY_FALLBACK" in quality_warnings
-            )
-        )
-        if full_image_fallback:
+        if has_full_image_boundary_fallback(version.quality_json):
             raise AppError(
                 status=409,
                 code="TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED",

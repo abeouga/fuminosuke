@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.mark.skipif(os.name != "nt", reason="start.bat is Windows-only")
-def test_start_bat_stops_when_existing_install_has_no_env(
+def test_start_bat_runs_setup_when_existing_install_has_no_env(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "llm-ocr"
@@ -21,6 +21,7 @@ def test_start_bat_stops_when_existing_install_has_no_env(
 
     repository_root = Path(__file__).resolve().parents[3]
     shutil.copyfile(repository_root / "start.bat", project_root / "start.bat")
+    (project_root / "setup.bat").write_text("@exit /b 7\n", encoding="ascii")
 
     completed = subprocess.run(
         ["cmd.exe", "/d", "/c", str(project_root / "start.bat")],
@@ -31,6 +32,6 @@ def test_start_bat_stops_when_existing_install_has_no_env(
         check=False,
     )
 
-    assert completed.returncode == 1
-    assert "backend\\.env is missing" in completed.stdout
+    assert completed.returncode == 7
+    assert "Preparing the application for its first start" in completed.stdout
     assert not (project_root / "backend" / ".env").exists()
