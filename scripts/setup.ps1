@@ -68,6 +68,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $backendDir '.env'))) {
     Copy-Item -LiteralPath (Join-Path $backendDir '.env.example') -Destination (Join-Path $backendDir '.env')
     Write-Warning 'Created backend/.env with the safe mock OCR setting. Review OCR_PROVIDER and configure OPENAI_API_KEY before using external OCR.'
 }
+if (-not (Test-Path -LiteralPath (Join-Path $backendDir 'data\app.db'))) {
+    $bootstrapDir = Join-Path $backendDir 'bootstrap\templates'
+    $bootstrapDb = Join-Path $bootstrapDir 'app.db'
+    if (Test-Path -LiteralPath $bootstrapDb -PathType Leaf) {
+        Copy-Item -Path (Join-Path $bootstrapDir '*') -Destination (Join-Path $backendDir 'data') -Recurse
+        Write-Host 'Installed the versioned active-template bootstrap data.'
+    }
+}
 Push-Location $backendDir
 try {
     & $alembic upgrade head

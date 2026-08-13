@@ -22,3 +22,10 @@ data/**
 !data/.gitkeep
 backend/data/**
 !backend/data/.gitkeep
+
+# Sanitized active-template bootstrap data is intentionally versioned so a new
+# local runtime starts with the shared templates. It contains no API keys,
+# uploaded source images, OCR results, confirmed records, or logs.
+!backend/bootstrap/
+!backend/bootstrap/templates/
+!backend/bootstrap/templates/**

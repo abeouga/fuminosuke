@@ -21,6 +21,10 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
   cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
   echo 'backend/.env を安全なmock OCR設定で作成しました。外部OCRを使う前に OCR_PROVIDER と OPENAI_API_KEY を設定してください。'
 fi
+if [ ! -f "$BACKEND_DIR/data/app.db" ] && [ -f "$BACKEND_DIR/bootstrap/templates/app.db" ]; then
+  cp -R "$BACKEND_DIR/bootstrap/templates/." "$BACKEND_DIR/data/"
+  echo 'Installed the versioned active-template bootstrap data.'
+fi
 cd "$BACKEND_DIR"
 "$PYTHON" -m alembic upgrade head
 cd "$FRONTEND_DIR"
