@@ -9,8 +9,10 @@ artifacts, template YAML files, and the optional sire-name candidate pool.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sqlite3
+import unicodedata
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +43,31 @@ def copy_database(source: Path, destination: Path) -> None:
         input_connection.backup(output_connection)
 
 
+def normalized_template_name(name: str) -> str:
+    return unicodedata.normalize("NFKC", name).strip().casefold()
+
+
+def is_portable_active_template(
+    *, status: str, quality_json: str, layout_json: str
+) -> bool:
+    quality = json.loads(quality_json)
+    layout = json.loads(layout_json)
+    warnings = quality.get("warnings", [])
+    boundary_fallback = quality.get("fallbackUsed") is True or (
+        isinstance(warnings, list) and "FULL_IMAGE_BOUNDARY_FALLBACK" in warnings
+    )
+    return (
+        status == "ACTIVE"
+        and not boundary_fallback
+        and quality.get("layoutFinalized") is True
+        and quality.get("layoutVerified") is True
+        and isinstance(layout.get("cells"), list)
+        and bool(layout["cells"])
+        and isinstance(layout.get("relations"), list)
+        and bool(layout["relations"])
+    )
+
+
 def export(source_root: Path, destination_root: Path) -> None:
     source_root = source_root.resolve()
     destination_root = destination_root.resolve()
@@ -57,25 +84,42 @@ def export(source_root: Path, destination_root: Path) -> None:
     with sqlite3.connect(destination_db) as connection:
         connection.execute("PRAGMA journal_mode = DELETE")
         connection.execute("PRAGMA foreign_keys = OFF")
-        active_versions = connection.execute(
+        active_candidates = connection.execute(
             """
-            SELECT t.id, t.active_version_id, v.source_job_id,
-                   v.clean_template_artifact_id, v.mask_artifact_id
+            SELECT t.id, t.name, t.active_version_id, v.source_job_id,
+                   v.clean_template_artifact_id, v.mask_artifact_id,
+                   v.status, v.quality_json, v.layout_json
             FROM templates AS t
             JOIN template_versions AS v ON v.id = t.active_version_id
             WHERE t.active_version_id IS NOT NULL
             """
         ).fetchall()
+        active_versions = [
+            row
+            for row in active_candidates
+            if is_portable_active_template(
+                status=row[6], quality_json=row[7], layout_json=row[8]
+            )
+        ]
         if not active_versions:
-            raise RuntimeError("The source database has no active templates")
+            raise RuntimeError("The source database has no safe, verified active templates")
+
+        names: set[str] = set()
+        for row in active_versions:
+            normalized_name = normalized_template_name(row[1])
+            if normalized_name in names:
+                raise RuntimeError(
+                    f"Duplicate active template name cannot be exported: {row[1]}"
+                )
+            names.add(normalized_name)
 
         template_ids = {row[0] for row in active_versions}
-        version_ids = {row[1] for row in active_versions}
-        job_ids = {row[2] for row in active_versions if row[2]}
+        version_ids = {row[2] for row in active_versions}
+        job_ids = {row[3] for row in active_versions if row[3]}
         artifact_ids = {
             artifact_id
             for row in active_versions
-            for artifact_id in row[3:]
+            for artifact_id in row[4:6]
             if artifact_id
         }
         artifact_rows = connection.execute(

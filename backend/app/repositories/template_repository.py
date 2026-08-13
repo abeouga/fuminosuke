@@ -102,6 +102,24 @@ class TemplateRepository:
             raise self._invalid_state("元ジョブがREVIEW_REQUIREDではありません。")
         if not version.clean_template_artifact_id or not version.quality_json:
             raise self._invalid_state("必須生成物または品質情報が不足しています。")
+        quality_warnings = version.quality_json.get("warnings", [])
+        full_image_fallback = (
+            version.quality_json.get("fallbackUsed") is True
+            or (
+                isinstance(quality_warnings, list)
+                and "FULL_IMAGE_BOUNDARY_FALLBACK" in quality_warnings
+            )
+        )
+        if full_image_fallback:
+            raise AppError(
+                status=409,
+                code="TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED",
+                title="Template document boundary must be detected",
+                detail=(
+                    "帳票外形の検出に失敗して画像全体を使用したテンプレートは有効化できません。"
+                    "帳票全体が写る画像でテンプレートを作り直してください。"
+                ),
+            )
         relations = version.layout_json.get("relations")
         if (
             not isinstance(relations, list)
