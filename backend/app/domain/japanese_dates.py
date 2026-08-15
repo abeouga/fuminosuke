@@ -36,13 +36,24 @@ def format_japanese_era_date(
         converted = date(western_year, month, day)
     except ValueError:
         return None
-    if era == "heisei" and not (
-        date(1989, 1, 8) <= converted <= date(2019, 4, 30)
-    ):
+    if era == "heisei" and not (date(1989, 1, 8) <= converted <= date(2019, 4, 30)):
         return None
     if era == "reiwa" and converted < date(2019, 5, 1):
         return None
     return f"{converted.year}年{converted.month}月{converted.day}日"
+
+
+def infer_japanese_era(value: str | None) -> JapaneseEra | None:
+    if value is None:
+        return None
+    groups = re.findall(r"\d+", unicodedata.normalize("NFKC", value))
+    if len(groups) != 3:
+        return None
+    if len(groups[0]) == 1:
+        return "reiwa"
+    if len(groups[0]) == 2:
+        return "heisei"
+    return None
 
 
 def canonical_japanese_birth_date(
@@ -70,7 +81,17 @@ def canonical_japanese_birth_date(
         format_japanese_era_date(numeric, "reiwa"),
     }:
         return numeric, canonical_normalized, ""
-    return numeric, None, "BIRTH_DATE_ERA_REQUIRED"
+    inferred_era = infer_japanese_era(raw)
+    inferred_normalized = (
+        format_japanese_era_date(numeric, inferred_era) if inferred_era is not None else None
+    )
+    if inferred_normalized is not None:
+        return numeric, inferred_normalized, ""
+    return (
+        numeric,
+        None,
+        ("BIRTH_DATE_ERA_REQUIRED" if inferred_era is None else "BIRTH_DATE_NUMBERS_INVALID"),
+    )
 
 
 def canonical_western_date(value: str | None) -> str | None:

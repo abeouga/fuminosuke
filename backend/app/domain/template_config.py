@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.errors import to_camel
+from app.domain.text_encoding import repair_utf8_mojibake
 
 
 class TemplateConfigModel(BaseModel):
@@ -37,6 +39,26 @@ class RegionConfig(TemplateConfigModel):
     mark_detection_enabled: bool
     printed_label_text: str = Field(default="", max_length=300)
 
+    @field_validator("printed_label_text", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+
+class MarkOptionConfig(TemplateConfigModel):
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=20)
+    value: str = Field(min_length=1, max_length=100)
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+    @field_validator("label", "value", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
 
 class FieldMappingConfig(TemplateConfigModel):
     mapping_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
@@ -50,6 +72,14 @@ class FieldMappingConfig(TemplateConfigModel):
     enabled: bool = True
     model_detail: str = "high"
     printed_label_text: str = Field(default="", max_length=300)
+    mapping_type: Literal["text", "mark"] = "text"
+    mark_selection_mode: Literal["single", "multiple"] = "multiple"
+    mark_options: list[MarkOptionConfig] = Field(default_factory=list, max_length=20)
+
+    @field_validator("label", "printed_label_text", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
 
     def as_region(self) -> RegionConfig:
         return RegionConfig(
@@ -59,13 +89,13 @@ class FieldMappingConfig(TemplateConfigModel):
             width=self.width,
             height=self.height,
             padding=self.padding,
-            field_type="MAPPED_FIELD",
+            field_type="MAPPED_MARK" if self.mapping_type == "mark" else "MAPPED_FIELD",
             expected_fields=[self.target_path],
             validator_names=[],
             model_detail=self.model_detail,
             enabled=self.enabled,
             fallback_enabled=False,
-            mark_detection_enabled=False,
+            mark_detection_enabled=self.mapping_type == "mark",
             printed_label_text=self.printed_label_text,
         )
 
@@ -119,6 +149,13 @@ class TemplateConfig(TemplateConfigModel):
                 raise ValueError(f"Field mapping {mapping.mapping_id} exceeds canonical width")
             if mapping.y + mapping.height > self.canonical_height:
                 raise ValueError(f"Field mapping {mapping.mapping_id} exceeds canonical height")
+            if mapping.mapping_type == "mark" and not mapping.mark_options:
+                raise ValueError(f"Mark mapping {mapping.mapping_id} has no options")
+            for option in mapping.mark_options:
+                if option.x + option.width > mapping.width:
+                    raise ValueError(f"Mark option {option.id} exceeds mapping width")
+                if option.y + option.height > mapping.height:
+                    raise ValueError(f"Mark option {option.id} exceeds mapping height")
         for mark in self.marks:
             if mark.region_id not in region_ids:
                 raise ValueError(f"Mark {mark.mark_id} references an unknown region")

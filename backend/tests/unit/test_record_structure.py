@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.domain.ocr_factory import blank_reading
-from app.domain.ocr_models import OcrDocument, SaleCalf
+from app.domain.ocr_models import Calving, OcrDocument, SaleCalf
 from app.services.ocr_workflow_service import OcrWorkflowService
 
 
@@ -152,3 +152,46 @@ def test_fixed_record_key_does_not_turn_blank_mapped_row_into_a_record() -> None
     assert added == set()
     assert document.sale_calves[0].parity.raw is None
     assert document.sale_calves[0].parity.source_region_id == "parity_1"
+
+
+def test_fixed_calving_parity_is_materialized_when_ocr_returns_blank() -> None:
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "resources"
+        / "templates"
+        / "cow-breeding-ledger-v1"
+        / "mock-result.json"
+    )
+    document = OcrDocument.model_validate_json(fixture.read_text(encoding="utf-8"))
+    document.calvings = [
+        Calving(
+            parity=blank_reading("calving_parity_11"),
+            calving_date=blank_reading("calving_date_11"),
+            sex=blank_reading("calving_sex_11"),
+            outcome=blank_reading("calving_outcome_11"),
+            notes=blank_reading("calving_notes_11"),
+        )
+    ]
+    structure = {
+        "sections": [{"id": "calvings", "collectionPath": "calvings"}],
+        "groups": [
+            {
+                "id": "calving_row_11",
+                "sectionId": "calvings",
+                "order": 1,
+                "recordKeyField": "parity",
+                "recordKeyValue": "11",
+            }
+        ],
+    }
+
+    added = OcrWorkflowService._apply_record_keys(
+        document,
+        structure,
+        {"calvings.0.parity", "calvings.0.calvingDate"},
+    )
+
+    assert added == {"calvings.0.parity"}
+    assert document.calvings[0].parity.raw == "11"
+    assert document.calvings[0].parity.normalized == "11"
+    assert document.calvings[0].parity.source_region_id == "calving_parity_11"

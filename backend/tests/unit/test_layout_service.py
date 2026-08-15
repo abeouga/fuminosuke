@@ -7,11 +7,116 @@ from app.layout_analysis.detector import TextRegion
 from app.layout_analysis.models import (
     LayoutCell,
     LayoutDefinition,
+    LayoutMarkOption,
+    LayoutMarkSet,
     LayoutRecordGroup,
     LayoutRecordSection,
     LayoutRelation,
 )
 from app.services.layout_service import LayoutService
+
+
+def test_calving_mark_cell_becomes_two_choice_mappings() -> None:
+    label_cell = LayoutCell(
+        id="calving_label",
+        role="label",
+        x=10,
+        y=60,
+        width=25,
+        height=30,
+        confidence=1,
+        text="分娩状況",
+    )
+    mark_cell = LayoutCell(
+        id="calving_marks",
+        role="mark",
+        x=40,
+        y=60,
+        width=180,
+        height=30,
+        confidence=1,
+        mark_sets=[
+            LayoutMarkSet(
+                id="outcome",
+                target_path="calvings.0.outcome",
+                options=[
+                    LayoutMarkOption(
+                        id="twin", label="双", value="twin",
+                        x=0, y=0, width=30, height=30,
+                    ),
+                    LayoutMarkOption(
+                        id="early", label="早", value="premature",
+                        x=30, y=0, width=30, height=30,
+                    ),
+                ],
+            ),
+            LayoutMarkSet(
+                id="sex",
+                target_path="calvings.0.sex",
+                options=[
+                    LayoutMarkOption(
+                        id="male", label="♂", value="male",
+                        x=120, y=0, width=30, height=30,
+                    ),
+                    LayoutMarkOption(
+                        id="female", label="♀", value="female",
+                        x=150, y=0, width=30, height=30,
+                    ),
+                ],
+            ),
+        ],
+    )
+    layout = LayoutDefinition(
+        canonical_width=300,
+        canonical_height=140,
+        cells=[label_cell, mark_cell],
+        relations=[
+            LayoutRelation(
+                id="calving_mark_label",
+                input_cell_id=mark_cell.id,
+                label_cell_ids=[label_cell.id],
+                axis="horizontal",
+                order=1,
+                target_path="calvings.0.outcome",
+            )
+        ],
+        record_sections=[
+            LayoutRecordSection(
+                id="calvings",
+                title="繁殖履歴",
+                collection_path="calvings",
+                record_type="calving",
+                source="manual",
+            )
+        ],
+        record_groups=[
+            LayoutRecordGroup(
+                id="calving_1",
+                section_id="calvings",
+                order=1,
+                x=mark_cell.x,
+                y=mark_cell.y,
+                width=mark_cell.width,
+                height=mark_cell.height,
+                input_cell_ids=[mark_cell.id],
+                record_key_field="parity",
+                record_key_value="1",
+                source="manual",
+            )
+        ],
+        record_structure_verified=True,
+    )
+
+    mappings = LayoutService._as_field_mappings(layout)
+
+    assert [mapping.target_path for mapping in mappings] == [
+        "calvings.0.outcome",
+        "calvings.0.sex",
+    ]
+    assert all(mapping.mapping_type == "mark" for mapping in mappings)
+    assert all(mapping.label == "分娩状況" for mapping in mappings)
+    assert [option.label for option in mappings[0].mark_options] == ["双", "早"]
+    assert [option.label for option in mappings[1].mark_options] == ["♂", "♀"]
 
 
 def test_repeated_table_label_creates_multiple_mappings_and_keeps_secondary_labels() -> None:

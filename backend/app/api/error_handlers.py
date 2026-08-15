@@ -48,6 +48,14 @@ def register_error_handlers(app: FastAPI) -> None:
             )
             for error in exc.errors()
         ]
+        logger.warning(
+            "Request validation failed",
+            extra={
+                "validationErrors": [
+                    error.model_dump(mode="json", by_alias=True) for error in errors
+                ]
+            },
+        )
         return _response(
             ProblemDetails(
                 title="Request validation failed",

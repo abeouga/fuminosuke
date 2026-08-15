@@ -10,6 +10,8 @@ import { TemplatePage } from "./pages/TemplatePage";
 import type { Health, Job, Template } from "./types";
 
 type Page = "home" | "templates" | "ocr" | "review" | "job" | "records" | "sireNames";
+type NavigationGuard = "review" | "ocr" | "template";
+type PendingNavigation = { page: Page; guard: NavigationGuard };
 const RECENT_KEY = "ledger-ocr-recent-jobs";
 const ATTENTION_STATUSES = new Set([
   "CREATED",
@@ -30,9 +32,10 @@ export default function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [reviewJobId, setReviewJobId] = useState<string | null>(initialReviewJobId);
   const [monitoredJobId, setMonitoredJobId] = useState<string | null>(null);
-  const [navigationGuard, setNavigationGuard] = useState<"review" | "ocr" | "template" | null>(
+  const [navigationGuard, setNavigationGuard] = useState<NavigationGuard | null>(
     initialReviewJobId ? "review" : null,
   );
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const templateRefreshRef = useRef<Promise<void> | null>(null);
   const templateAutoRetryAttemptedRef = useRef(false);
   const updateReviewGuard = useCallback((shouldWarn: boolean) => {
@@ -115,20 +118,8 @@ export default function App() {
     setMonitoredJobId(job.id);
     setPage("job");
   };
-  const navigateTo = (nextPage: Page) => {
-    if (nextPage === page) return true;
-    if (
-      navigationGuard
-      && !window.confirm(
-        navigationGuard === "review"
-          ? "この読み取り結果はまだ確定保存されていません。画面を移動しますか？"
-          : navigationGuard === "ocr"
-          ? "読み取りの入力途中です。入力内容を破棄して画面を移動しますか？"
-          : "テンプレートの変更が未保存、または処理中です。画面を移動しますか？",
-      )
-    ) {
-      return false;
-    }
+  const applyNavigation = (nextPage: Page) => {
+    if (nextPage === page) return;
     if (nextPage !== "review") {
       const url = new URL(window.location.href);
       url.searchParams.delete("job");
@@ -136,6 +127,14 @@ export default function App() {
     }
     setNavigationGuard(null);
     setPage(nextPage);
+  };
+  const navigateTo = (nextPage: Page) => {
+    if (nextPage === page) return true;
+    if (navigationGuard) {
+      setPendingNavigation({ page: nextPage, guard: navigationGuard });
+      return false;
+    }
+    applyNavigation(nextPage);
     return true;
   };
 
@@ -164,16 +163,6 @@ export default function App() {
     templateAutoRetryAttemptedRef.current = true;
     retryTemplates();
   }, [backendHealthy, retryTemplates, templateLoadFailed, templatesLoading]);
-  useEffect(() => {
-    if (!navigationGuard) return;
-    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warnBeforeUnload);
-    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [navigationGuard]);
-
   return (
     <div className="app-shell">
       <aside className="side-nav">
@@ -201,7 +190,7 @@ export default function App() {
         {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={navigateTo} onOpenJob={openJob} />}
         {page === "templates" && <TemplatePage templates={templates} refresh={refreshTemplates} rememberJob={rememberJob} onNavigationGuardChange={updateTemplateGuard} />}
         {page === "ocr" && <OcrPage templates={templates} rememberJob={rememberJob} openReview={openReview} openTemplates={() => navigateTo("templates")} onNavigationGuardChange={updateOcrGuard} />}
-        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} onNavigationGuardChange={updateReviewGuard} onClose={() => { if (navigateTo("home")) void refreshJobs(); }} />}
+        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} requireIdentityConfirmation onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
@@ -212,6 +201,68 @@ export default function App() {
         {page === "sireNames" && <SireNamesPage />}
         {page === "records" && <IndividualRecordsPage />}
       </main>
+      {pendingNavigation && (
+        <NavigationConfirmDialog
+          guard={pendingNavigation.guard}
+          onCancel={() => setPendingNavigation(null)}
+          onConfirm={() => {
+            const destination = pendingNavigation.page;
+            setPendingNavigation(null);
+            applyNavigation(destination);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NavigationConfirmDialog({
+  guard,
+  onCancel,
+  onConfirm,
+}: {
+  guard: NavigationGuard;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", cancelOnEscape);
+    return () => window.removeEventListener("keydown", cancelOnEscape);
+  }, [onCancel]);
+  const message = guard === "review"
+    ? "この読み取り結果はまだ確定保存されていません。"
+    : guard === "ocr"
+      ? "読み取りの入力途中です。入力内容は保存されていません。"
+      : "テンプレートの変更が未保存、または処理中です。";
+  return (
+    <div
+      className="navigation-confirm-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <section
+        className="navigation-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="navigation-confirm-title"
+        aria-describedby="navigation-confirm-description"
+      >
+        <span className="navigation-confirm-icon" aria-hidden="true">!</span>
+        <div>
+          <span className="eyebrow">UNSAVED CHANGES</span>
+          <h2 id="navigation-confirm-title">未保存の変更があります</h2>
+          <p id="navigation-confirm-description">{message}<br />変更を破棄して別の画面へ移動しますか？</p>
+        </div>
+        <div className="navigation-confirm-actions">
+          <button type="button" className="secondary" autoFocus onClick={onCancel}>この画面に残る</button>
+          <button type="button" className="danger-button" onClick={onConfirm}>変更を破棄して移動</button>
+        </div>
+      </section>
     </div>
   );
 }

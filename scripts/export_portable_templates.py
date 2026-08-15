@@ -172,7 +172,10 @@ def export(source_root: Path, destination_root: Path) -> dict[str, int]:
             SELECT id, relative_path
             FROM job_artifacts
             WHERE id IN ({placeholders(artifact_ids)})
-               OR (job_id IN ({placeholders(job_ids)}) AND artifact_name = 'normalized')
+               OR (
+                   job_id IN ({placeholders(job_ids)})
+                   AND artifact_name IN ('normalized', 'handwritingCandidates')
+               )
             """,
             (*artifact_ids, *job_ids),
         ).fetchall()
@@ -344,13 +347,19 @@ def validate_bundle(root: Path) -> dict[str, int]:
 
             artifacts = connection.execute(
                 """
-                SELECT id, artifact_name, relative_path, sha256, width, height
+                SELECT id, artifact_name, media_type, relative_path,
+                       sha256, width, height
                 FROM job_artifacts WHERE job_id = ?
                 """,
                 (template["source_job_id"],),
             ).fetchall()
             by_name = {artifact["artifact_name"]: artifact for artifact in artifacts}
-            if set(by_name) != {"cleanTemplate", "handwritingMask", "normalized"}:
+            if set(by_name) != {
+                "cleanTemplate",
+                "handwritingCandidates",
+                "handwritingMask",
+                "normalized",
+            }:
                 raise RuntimeError("Portable template has an incomplete artifact set")
             if by_name["cleanTemplate"]["id"] != template["clean_template_artifact_id"]:
                 raise RuntimeError("Portable clean-template reference is inconsistent")
@@ -365,11 +374,51 @@ def validate_bundle(root: Path) -> dict[str, int]:
                     raise RuntimeError(
                         f"Portable artifact hash mismatch: {artifact_path}"
                     )
-                if png_dimensions(content) != (artifact["width"], artifact["height"]):
+                if artifact["media_type"] == "image/png" and png_dimensions(
+                    content
+                ) != (artifact["width"], artifact["height"]):
                     raise RuntimeError(
                         f"Portable artifact dimensions mismatch: {artifact_path}"
                     )
                 referenced_files.add(artifact_path)
+
+            candidates_artifact = by_name["handwritingCandidates"]
+            if candidates_artifact["media_type"] != "application/json":
+                raise RuntimeError(
+                    "Portable handwriting candidates artifact is not JSON"
+                )
+            try:
+                candidates = json.loads(
+                    (root / candidates_artifact["relative_path"]).read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RuntimeError(
+                    "Portable handwriting candidates artifact is invalid JSON"
+                ) from error
+            input_cell_count = sum(
+                cell.get("role") == "input"
+                for cell in layout["cells"]
+                if isinstance(cell, dict)
+            )
+            quality = json.loads(template["quality_json"])
+            coordinate_system = candidates.get("coordinateSystem", {})
+            candidate_items = candidates.get("candidates")
+            if (
+                not isinstance(candidate_items, list)
+                or candidates.get("verifiedInputCellCount") != input_cell_count
+                or quality.get("layoutVerificationCandidateCount")
+                != len(candidate_items)
+                or coordinate_system.get("unit") != "normalized"
+                or coordinate_system.get("referenceWidth")
+                != template["canonical_width"]
+                or coordinate_system.get("referenceHeight")
+                != template["canonical_height"]
+            ):
+                raise RuntimeError(
+                    "Portable handwriting candidates do not match the template"
+                )
 
         sire_names = connection.execute(
             "SELECT name, normalized_name FROM sire_names ORDER BY created_at, id"

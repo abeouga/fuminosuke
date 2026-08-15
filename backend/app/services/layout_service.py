@@ -17,7 +17,7 @@ from app.domain.field_targets import (
     custom_field_key,
     is_supported_field_path,
 )
-from app.domain.template_config import FieldMappingConfig
+from app.domain.template_config import FieldMappingConfig, MarkOptionConfig
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.line_detection import LineDetector, adaptive_ink_mask
 from app.layout_analysis.detector import LayoutDetector, TextRegion
@@ -144,15 +144,35 @@ class LayoutService:
                     detail="レイアウト寸法がテンプレート画像と一致しません。",
                 )
 
-        mappings = self._as_field_mappings(layout)
-        if not mappings:
-            raise AppError(
-                status=422,
-                code="LAYOUT_MEANING_REQUIRED",
-                title="Layout meaning is required",
-                detail="手書き文字欄をラベルと保存先へ意味づけしてから保存してください。",
+        mapping_finalized = False
+        try:
+            mappings = self._as_field_mappings(layout)
+            mapped_cell_ids = {relation.input_cell_id for relation in layout.relations}
+            mapped_cell_ids.update(
+                cell.id
+                for cell in layout.cells
+                if cell.role == "mark" and cell.mark_sets
             )
-        self._require_verified_record_structure(layout)
+            has_unassigned_fields = any(
+                cell.role in {"input", "mark"} and cell.id not in mapped_cell_ids
+                for cell in layout.cells
+            )
+            if mappings and not has_unassigned_fields:
+                self._require_verified_record_structure(layout)
+                mapping_finalized = True
+            elif has_unassigned_fields:
+                mappings = []
+        except AppError as error:
+            # A draft layout must remain resumable even while a mark field or
+            # repeated-record binding is still being configured. Invalid
+            # targets and duplicate mappings remain hard errors.
+            if error.code not in {
+                "MARK_OPTIONS_REQUIRED",
+                "RECORD_STRUCTURE_REQUIRED",
+                "RECORD_KEY_REQUIRED",
+            }:
+                raise
+            mappings = []
         TemplateManagementService(self._database, self._storage).save_field_mappings(
             version_id, mappings
         )
@@ -170,9 +190,11 @@ class LayoutService:
                 "layoutCellCount": len(layout.cells),
                 "layoutLabelCount": sum(cell.role == "label" for cell in layout.cells),
                 "layoutInputCount": sum(cell.role == "input" for cell in layout.cells),
+                "layoutMarkCount": sum(cell.role == "mark" for cell in layout.cells),
                 "layoutRelationCount": len(layout.relations),
                 "layoutDetector": layout.detector,
-                "layoutFinalized": True,
+                "layoutFinalized": mapping_finalized,
+                "layoutDraftSaved": True,
                 "processingOrder": [
                     "PERSPECTIVE_CORRECTION",
                     "LAYOUT_CLASSIFICATION",
@@ -185,7 +207,9 @@ class LayoutService:
     def verify(self, version_id: str) -> LayoutDefinition:
         inputs = self._begin_verification(version_id)
         layout = inputs.layout
-        if not layout.relations:
+        if not layout.relations and not any(
+            cell.role == "mark" and cell.mark_sets for cell in layout.cells
+        ):
             raise AppError(
                 status=422,
                 code="LAYOUT_MEANING_REQUIRED",
@@ -477,7 +501,11 @@ class LayoutService:
         probability = HeuristicHandwritingSegmenter().predict(image_rgb)
         scope = np.zeros(image_rgb.shape[:2], dtype=np.uint8)
         cells = {cell.id: cell for cell in layout.cells}
-        input_ids = {relation.input_cell_id for relation in layout.relations}
+        input_ids = {
+            relation.input_cell_id
+            for relation in layout.relations
+            if cells[relation.input_cell_id].role == "input"
+        }
         for input_id in input_ids:
             cell = cells[input_id]
             inset = max(2, min(5, cell.width // 12, cell.height // 12))
@@ -828,6 +856,19 @@ class LayoutService:
         mappings: list[FieldMappingConfig] = []
         target_paths: set[str] = set()
         for input_id, untyped_relations in relations_by_input.items():
+            input_cell = cell_by_id[input_id]
+            # A mark relation records the visual label-to-cell association. The
+            # actual output bindings come from mark_sets below, so it must not
+            # create a duplicate text mapping for the same rectangle.
+            if input_cell.role == "mark":
+                continue
+            if input_cell.role != "input":
+                raise AppError(
+                    status=422,
+                    code="INVALID_INPUT_CELL",
+                    title="Invalid input cell",
+                    detail=f"{input_id} は記入欄として設定されていません。",
+                )
             relations = sorted(
                 untyped_relations,
                 key=lambda item: (item.axis, item.order),
@@ -849,14 +890,6 @@ class LayoutService:
                     detail=f"同じ保存先が複数の記入欄に割り当てられています: {target_path}",
                 )
             target_paths.add(target_path)
-            input_cell = cell_by_id[input_id]
-            if input_cell.role != "input":
-                raise AppError(
-                    status=422,
-                    code="INVALID_INPUT_CELL",
-                    title="Invalid input cell",
-                    detail=f"{input_id} は記入欄として設定されていません。",
-                )
             label_ids = [
                 label_id
                 for item in relations
@@ -888,6 +921,72 @@ class LayoutService:
                     printed_label_text=input_cell.printed_label_text.strip(),
                 )
             )
+        for cell in layout.cells:
+            if cell.role != "mark":
+                continue
+            mark_label_ids = [
+                label_id
+                for relation in relations_by_input.get(cell.id, [])
+                for label_id in relation.label_cell_ids
+            ]
+            mark_label_texts = [
+                cell_by_id[label_id].text.strip()
+                for label_id in dict.fromkeys(mark_label_ids)
+                if cell_by_id[label_id].text.strip()
+            ]
+            if not cell.mark_sets:
+                raise AppError(
+                    status=422,
+                    code="MARK_OPTIONS_REQUIRED",
+                    title="Mark options are required",
+                    detail=f"{cell.id} の選択肢を設定してください。",
+                )
+            for mark_set in cell.mark_sets:
+                target_path = mark_set.target_path
+                if not is_supported_field_path(target_path):
+                    raise AppError(
+                        status=422,
+                        code="INVALID_FIELD_MAPPING",
+                        title="Invalid field mapping",
+                        detail=f"未対応の保存先です: {target_path}",
+                    )
+                if target_path in target_paths:
+                    raise AppError(
+                        status=422,
+                        code="DUPLICATE_FIELD_TARGET",
+                        title="Duplicate field target",
+                        detail=f"同じ保存先が複数の矩形に割り当てられています: {target_path}",
+                    )
+                target_paths.add(target_path)
+                target = FIELD_TARGET_BY_PATH.get(target_path)
+                mapping_id = f"layout_{cell.id}_{mark_set.id}"
+                if len(mapping_id) > 100:
+                    mapping_id = mapping_id[:100]
+                mappings.append(
+                    FieldMappingConfig(
+                        mapping_id=mapping_id,
+                        target_path=target_path,
+                        label=(
+                            " / ".join(mark_label_texts)
+                            or (target.label if target else target_path)
+                        ),
+                        x=cell.x,
+                        y=cell.y,
+                        width=cell.width,
+                        height=cell.height,
+                        padding=0,
+                        enabled=True,
+                        model_detail="high",
+                        mapping_type="mark",
+                        mark_selection_mode=mark_set.selection_mode,
+                        mark_options=[
+                            MarkOptionConfig.model_validate(
+                                option.model_dump(mode="json", by_alias=True)
+                            )
+                            for option in mark_set.options
+                        ],
+                    )
+                )
         return mappings
 
     @staticmethod
@@ -897,7 +996,14 @@ class LayoutService:
             for relation in layout.relations
             if relation.target_path.startswith(("saleCalves.", "calvings."))
         ]
-        if not array_relations:
+        mark_bindings = [
+            (cell.id, mark_set.target_path)
+            for cell in layout.cells
+            if cell.role == "mark"
+            for mark_set in cell.mark_sets
+            if mark_set.target_path.startswith(("saleCalves.", "calvings."))
+        ]
+        if not array_relations and not mark_bindings:
             return
         grouped_inputs = {
             input_id
@@ -909,6 +1015,11 @@ class LayoutService:
                 relation.input_cell_id
                 for relation in array_relations
                 if relation.input_cell_id not in grouped_inputs
+            }
+            | {
+                cell_id
+                for cell_id, _ in mark_bindings
+                if cell_id not in grouped_inputs
             }
         )
         if (

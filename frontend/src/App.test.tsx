@@ -322,18 +322,18 @@ test("opens the sire-name pool from the side panel", async () => {
 
 test("warns before leaving an unconfirmed OCR review", async () => {
   window.history.pushState({}, "", "/?job=job-review");
-  const confirm = vi.spyOn(window, "confirm")
-    .mockReturnValueOnce(false)
-    .mockReturnValueOnce(true);
+  const confirm = vi.spyOn(window, "confirm");
   render(<App />);
 
-  expect(await screen.findByRole("heading", { name: "読み取り結果を確認" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "この個体で間違いありませんか？" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /個体検索/ }));
-  expect(confirm).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("heading", { name: "読み取り結果を確認" })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "未保存の変更があります" })).toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "この画面に残る" }));
+  expect(screen.getByRole("heading", { name: "この個体で間違いありませんか？" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "未保存の変更があります" })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /個体検索/ }));
-  expect(confirm).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button", { name: "変更を破棄して移動" }));
   expect(await screen.findByRole("heading", { name: "確定済みレコードを検索" })).toBeInTheDocument();
-
 });

@@ -6,21 +6,13 @@ import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
 import type { FieldMapping, Template } from "../types";
 
-type OcrStep = 1 | 2 | 3 | 4;
+type OcrStep = 1 | 2 | 3;
 
 const OCR_STEPS = [
-  { number: 1 as const, title: "母牛を指定", caption: "個体識別番号" },
-  { number: 2 as const, title: "型を選択", caption: "テンプレート" },
-  { number: 3 as const, title: "画像を準備", caption: "撮影・アップロード" },
-  { number: 4 as const, title: "確認・実行", caption: "読み取り開始" },
+  { number: 1 as const, title: "型を選択", caption: "テンプレート" },
+  { number: 2 as const, title: "画像を準備", caption: "撮影・アップロード" },
+  { number: 3 as const, title: "確認・実行", caption: "読み取り開始" },
 ];
-
-export function normalizeMotherIndividualId(value: string): string {
-  return value
-    .normalize("NFKC")
-    .replace(/\D/g, "")
-    .slice(0, 10);
-}
 
 export function OcrPage({
   templates,
@@ -49,8 +41,6 @@ export function OcrPage({
   );
   const [versionId, setVersionId] = useState(versions[0]?.version.id ?? "");
   const [step, setStep] = useState<OcrStep>(1);
-  const [motherIndividualId, setMotherIndividualId] = useState("");
-  const [motherTouched, setMotherTouched] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -66,8 +56,6 @@ export function OcrPage({
   const idempotencyKeyRef = useRef<string | null>(null);
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
-  const normalizedMotherId = normalizeMotherIndividualId(motherIndividualId);
-  const motherIdValid = /^\d{10}$/.test(normalizedMotherId);
   const mappedReadingReady = !enabled || (
     Boolean(mappingPreview?.length)
     && mappingValid
@@ -81,7 +69,7 @@ export function OcrPage({
   useEffect(() => {
     const shouldWarn = (
       !jobId
-      && (busy || step > 1 || motherIndividualId.length > 0 || file !== null)
+      && (busy || step > 1 || file !== null)
     );
     onNavigationGuardChange?.(shouldWarn);
     return () => onNavigationGuardChange?.(false);
@@ -89,7 +77,6 @@ export function OcrPage({
     busy,
     file,
     jobId,
-    motherIndividualId,
     onNavigationGuardChange,
     step,
   ]);
@@ -127,7 +114,7 @@ export function OcrPage({
       <header className="page-header">
         <span className="eyebrow">NEW READING</span>
         <h1>台帳を読み取る</h1>
-        <p>母牛、テンプレート、画像の順に確認してから読み取りを開始します。</p>
+        <p>テンプレートと画像を選ぶと、帳票の個体識別番号と牛名を自動で読み取ります。</p>
       </header>
       {versions.length === 0 ? (
         <div className="empty-state large">
@@ -184,60 +171,9 @@ export function OcrPage({
 
           <section className="form-card ocr-step-card">
             {step === 1 && (
-              <section className="ocr-step-panel" aria-labelledby="ocr-step-mother">
-                <div className="ocr-step-heading">
-                  <span>STEP 1</span>
-                  <h2 id="ocr-step-mother">この繁殖台帳の母牛を指定</h2>
-                  <p>読み取り対象を明確にするため、母牛の個体識別番号を手入力してください。</p>
-                </div>
-                <label className="field-label mother-id-field">
-                  母牛の個体識別番号
-                  <input
-                    aria-label="母牛の個体識別番号"
-                    value={motherIndividualId}
-                    inputMode="numeric"
-                    autoComplete="off"
-                    maxLength={10}
-                    pattern="[0-9]{10}"
-                    placeholder="例: 1234567890"
-                    aria-invalid={motherTouched && !motherIdValid}
-                    onBlur={() => setMotherTouched(true)}
-                    onChange={(event) => {
-                      idempotencyKeyRef.current = null;
-                      setMotherIndividualId(normalizeMotherIndividualId(event.target.value));
-                      setMessage(null);
-                    }}
-                  />
-                  <small>数字10桁で入力してください。11桁目以降は入力されません。</small>
-                </label>
-                {motherTouched && !motherIdValid && (
-                  <p className="error-box">個体識別番号を10桁の数字で入力してください。</p>
-                )}
-                <aside className="notice compact mother-id-notice">
-                  <strong>この番号を保存先の個体として使用します</strong>
-                  <span>帳票上の番号をOCRした場合も、ここで入力した番号を初期値として優先します。確認画面では修正できます。</span>
-                </aside>
-                <div className="ocr-step-actions">
-                  <span />
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={!motherIdValid}
-                    onClick={() => {
-                      setMotherTouched(true);
-                      if (motherIdValid) setStep(2);
-                    }}
-                  >
-                    テンプレート選択へ
-                  </button>
-                </div>
-              </section>
-            )}
-
-            {step === 2 && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-template">
                 <div className="ocr-step-heading">
-                  <span>STEP 2</span>
+                  <span>STEP 1</span>
                   <h2 id="ocr-step-template">使用するテンプレートを確認</h2>
                   <p>どの意味づけ済みテンプレートで読み取るかを選択します。</p>
                 </div>
@@ -309,12 +245,12 @@ export function OcrPage({
                   </div>
                 )}
                 <div className="ocr-step-actions">
-                  <button type="button" className="secondary" onClick={() => setStep(1)}>戻る</button>
+                  <span />
                   <button
                     type="button"
                     className="primary"
                     disabled={!versionId || mappingPreview === null || !mappedReadingReady}
-                    onClick={() => setStep(3)}
+                    onClick={() => setStep(2)}
                   >
                     画像の準備へ
                   </button>
@@ -322,10 +258,10 @@ export function OcrPage({
               </section>
             )}
 
-            {step === 3 && (
+            {step === 2 && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-image">
                 <div className="ocr-step-heading">
-                  <span>STEP 3</span>
+                  <span>STEP 2</span>
                   <h2 id="ocr-step-image">読み取る帳票画像を準備</h2>
                   <p>画像ファイルを選択するか、カメラで帳票を撮影してください。</p>
                 </div>
@@ -347,37 +283,36 @@ export function OcrPage({
                 </label>
                 {!enabled && <aside className="notice compact"><strong>画像処理のみ</strong><span>結果欄は空欄として作成され、手入力できます。</span></aside>}
                 <div className="ocr-step-actions">
-                  <button type="button" className="secondary" onClick={() => setStep(2)}>戻る</button>
-                  <button type="button" className="primary" disabled={!file} onClick={() => setStep(4)}>内容確認へ</button>
+                  <button type="button" className="secondary" onClick={() => setStep(1)}>戻る</button>
+                  <button type="button" className="primary" disabled={!file} onClick={() => setStep(3)}>内容確認へ</button>
                 </div>
               </section>
             )}
 
-            {step === 4 && (
+            {step === 3 && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-confirm">
                 <div className="ocr-step-heading">
-                  <span>STEP 4</span>
+                  <span>STEP 3</span>
                   <h2 id="ocr-step-confirm">読み取り内容を確認</h2>
-                  <p>対象の母牛と使用するテンプレートを確認してから開始してください。</p>
+                  <p>使用するテンプレートと帳票画像を確認してから開始してください。</p>
                 </div>
                 <dl className="ocr-reading-summary">
-                  <div><dt>母牛の個体識別番号</dt><dd>{normalizedMotherId}</dd></div>
                   <div><dt>テンプレート</dt><dd>{activeSelection ? `${activeSelection.template.name} · v${activeSelection.version.versionNumber}` : "未選択"}</dd></div>
                   <div><dt>帳票画像</dt><dd>{file?.name ?? "未選択"}</dd></div>
                   <div><dt>処理内容</dt><dd>{enabled ? "手書き文字を読み取る" : "画像処理のみ"}</dd></div>
                 </dl>
                 <aside className="notice compact">
-                  <strong>{normalizedMotherId} の繁殖台帳として処理します</strong>
-                  <span>読み取り後の確認・確定を経て、この個体識別番号に紐づけてDBへ保存します。</span>
+                  <strong>帳票上の個体識別番号と牛名も読み取ります</strong>
+                  <span>処理後に専用の確認画面を表示します。間違っていた場合は、その場で修正してから結果表へ進めます。</span>
                 </aside>
                 {message && <p className="error-box">{message}</p>}
                 <div className="ocr-step-actions">
-                  <button type="button" className="secondary" disabled={busy || Boolean(jobId)} onClick={() => setStep(3)}>戻る</button>
+                  <button type="button" className="secondary" disabled={busy || Boolean(jobId)} onClick={() => setStep(2)}>戻る</button>
                   <button
                     className="primary"
-                    disabled={!file || !versionId || !motherIdValid || busy || !mappedReadingReady || Boolean(jobId)}
+                    disabled={!file || !versionId || busy || !mappedReadingReady || Boolean(jobId)}
                     onClick={async () => {
-                      if (!file || !motherIdValid || creatingRef.current || jobId) return;
+                      if (!file || creatingRef.current || jobId) return;
                       creatingRef.current = true;
                       const idempotencyKey = idempotencyKeyRef.current
                         ?? createIdempotencyKey("ocr");
@@ -387,7 +322,6 @@ export function OcrPage({
                       try {
                         const created = await api.createOcr(
                           versionId,
-                          normalizedMotherId,
                           file,
                           enabled,
                           idempotencyKey,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, Header, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -33,6 +33,8 @@ class OcrFieldPreview(ApiModel):
     bounding_box: BoundingBox | None
     record_group_id: str | None = None
     field_key: str | None = None
+    mapping_type: Literal["text", "mark"] = "text"
+    mark_options: list[dict[str, str]] = Field(default_factory=list)
 
 
 class OcrResultResponse(ApiModel):
@@ -76,8 +78,8 @@ class OcrConfirmationRequest(ApiModel):
 async def create_ocr_job(
     request: Request,
     template_version_id: Annotated[str, Form(alias="templateVersionId")],
-    mother_individual_id: Annotated[str, Form(alias="motherIndividualId")],
     file: Annotated[UploadFile, File()],
+    mother_individual_id: Annotated[str | None, Form(alias="motherIndividualId")] = None,
     ocr_enabled: Annotated[bool, Form(alias="ocrEnabled")] = True,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
@@ -145,3 +147,8 @@ def export_ocr_result(
         job_id, format
     )
     return FileResponse(path, media_type=media_type, filename=file_name)
+
+
+@router.get("/ocr-jobs/{job_id}/excel-table")
+def get_ocr_excel_table(request: Request, job_id: str) -> dict[str, object]:
+    return get_ocr_result_service(request).excel_table(job_id)

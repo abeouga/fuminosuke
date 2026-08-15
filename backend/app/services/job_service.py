@@ -100,20 +100,22 @@ class JobService:
         self,
         *,
         template_version_id: str,
-        mother_individual_id: str,
+        mother_individual_id: str | None,
         upload: UploadPayload,
         ocr_enabled: bool,
         idempotency_key: str | None,
     ) -> ProcessingJob:
-        try:
-            normalized_mother_id = normalize_individual_id(mother_individual_id)
-        except ValueError as exc:
-            raise AppError(
-                status=422,
-                code="INVALID_INDIVIDUAL_ID",
-                title="Invalid mother individual identification number",
-                detail="母牛の個体識別番号は10桁の数字で入力してください。",
-            ) from exc
+        normalized_mother_id: str | None = None
+        if mother_individual_id and mother_individual_id.strip():
+            try:
+                normalized_mother_id = normalize_individual_id(mother_individual_id)
+            except ValueError as exc:
+                raise AppError(
+                    status=422,
+                    code="INVALID_INDIVIDUAL_ID",
+                    title="Invalid mother individual identification number",
+                    detail="母牛の個体識別番号は10桁の数字で入力してください。",
+                ) from exc
         with self._database.session() as session:
             template_version = session.get(TemplateVersion, template_version_id)
             if template_version is None:
@@ -219,7 +221,6 @@ class JobService:
             "templateVersionId": template_version_id,
             "templateId": template_version.template_id,
             "templateVersionNumber": template_version.version_number,
-            "motherIndividualId": normalized_mother_id,
             "ocrEnabled": ocr_enabled,
             "ocrProvider": self._settings.ocr.provider if ocr_enabled else "disabled",
             "schemaVersion": self._settings.ocr.schema_version,
@@ -228,6 +229,11 @@ class JobService:
             **mapping_snapshot,
             **sire_name_snapshot,
             "saleNoteSexSymbolPool": list(SALE_NOTE_SEX_SYMBOLS),
+            **(
+                {"motherIndividualId": normalized_mother_id}
+                if normalized_mother_id is not None
+                else {}
+            ),
         }
         job, created = self._create_job_record(
             job_type=JobType.EXTRACT_DOCUMENT,

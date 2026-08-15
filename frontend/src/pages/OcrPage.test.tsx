@@ -39,13 +39,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function enterMotherAndContinue(value = "123-4567-890") {
-  fireEvent.change(screen.getByLabelText("母牛の個体識別番号"), {
-    target: { value },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "テンプレート選択へ" }));
-}
-
 test("guides the user to settings when every active template needs verification", () => {
   const openTemplates = vi.fn();
   const unverified = templates.map((template) => ({
@@ -112,7 +105,6 @@ test("shows unverified active templates but does not allow selecting them", asyn
   );
   fireEvent.click(screen.getByRole("button", { name: "テンプレート設定を開く" }));
   expect(openTemplates).toHaveBeenCalledOnce();
-  enterMotherAndContinue("1234567890");
   expect(await screen.findByRole("option", {
     name: /v4 · 記入欄の再検出が必要/,
   })).toBeDisabled();
@@ -138,42 +130,28 @@ test("blocks progress when the active template has no mapped cells", async () =>
   );
 
   expect(screen.getByLabelText("読み取り手順")).toBeInTheDocument();
-  enterMotherAndContinue();
   expect(await screen.findByText("このテンプレートには読み取りセルの意味づけがありません。")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
-});
-
-test("keeps only the first ten digits of the individual id", () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-    canonicalWidth: 1400,
-    canonicalHeight: 990,
-    mappings: [],
-    targets: [],
-    validForOcr: false,
-    warnings: [],
-  }), { status: 200 })));
-  render(
-    <OcrPage
-      templates={templates}
-      rememberJob={() => undefined}
-      openReview={() => undefined}
-      openTemplates={() => undefined}
-    />,
-  );
-
-  const input = screen.getByLabelText("母牛の個体識別番号");
-  fireEvent.change(input, { target: { value: "１２３a４５６７８９０１２" } });
-  expect(input).toHaveValue("1234567890");
-  expect(input).toHaveAttribute("maxLength", "10");
 });
 
 test("protects an in-progress reading wizard from accidental navigation", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
     canonicalWidth: 1400,
     canonicalHeight: 990,
-    mappings: [],
+    mappings: [{
+      mappingId: "field_cattle_name",
+      targetPath: "document.cattleName",
+      label: "牛名",
+      x: 120,
+      y: 20,
+      width: 240,
+      height: 80,
+      padding: 4,
+      enabled: true,
+      modelDetail: "high",
+    }],
     targets: [],
-    validForOcr: false,
+    validForOcr: true,
     warnings: [],
   }), { status: 200 })));
   const guard = vi.fn();
@@ -187,9 +165,8 @@ test("protects an in-progress reading wizard from accidental navigation", async 
     />,
   );
 
-  fireEvent.change(screen.getByLabelText("母牛の個体識別番号"), {
-    target: { value: "1234567890" },
-  });
+  await screen.findByText("document.cattleName · field_cattle_name");
+  fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
 
   await waitFor(() => expect(guard).toHaveBeenLastCalledWith(true));
 });
@@ -208,7 +185,6 @@ test("shows a retry action when template mappings cannot be loaded", async () =>
     />,
   );
 
-  enterMotherAndContinue("1234567890");
   expect(await screen.findByText("意味づけの取得に失敗しました。")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "もう一度読み込む" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
@@ -245,7 +221,6 @@ test("previews the exact mapped cells before enabling reading", async () => {
     />,
   );
 
-  enterMotherAndContinue("1234567890");
   expect(await screen.findByText("document.cattleName · field_cattle_name")).toBeInTheDocument();
   expect(screen.getByText(/ラベルセルと帳票全体は送信しません/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
@@ -255,11 +230,11 @@ test("previews the exact mapped cells before enabling reading", async () => {
   });
 
   fireEvent.click(screen.getByRole("button", { name: "内容確認へ" }));
-  expect(screen.getByText("1234567890")).toBeInTheDocument();
+  expect(screen.getByText("帳票上の個体識別番号と牛名も読み取ります")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "読み取りを開始" })).toBeEnabled();
 });
 
-test("sends the manually entered mother id with the OCR job", async () => {
+test("starts OCR without sending a manually entered individual id", async () => {
   const submitted: FormData[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") {
@@ -312,7 +287,6 @@ test("sends the manually entered mother id with the OCR job", async () => {
     />,
   );
 
-  enterMotherAndContinue("123-4567-890");
   await screen.findByText("document.cattleName · field_cattle_name");
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -323,7 +297,7 @@ test("sends the manually entered mother id with the OCR job", async () => {
   fireEvent.click(screen.getByRole("button", { name: "読み取りを開始" }));
 
   expect(await screen.findByRole("button", { name: "読み取りを開始しました" })).toBeDisabled();
-  expect(submitted[0]?.get("motherIndividualId")).toBe("1234567890");
+  expect(submitted[0]?.has("motherIndividualId")).toBe(false);
   expect(rememberJob).toHaveBeenCalledWith("job-1");
 });
 
@@ -381,7 +355,6 @@ test("reuses the OCR idempotency key for a communication retry and rotates it af
     />,
   );
 
-  enterMotherAndContinue("1234567890");
   await screen.findByText("document.cattleName · field_cattle_name");
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {

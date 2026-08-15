@@ -138,6 +138,7 @@ def test_price_grouping_is_canonicalized_and_ambiguous_decimals_are_blocked() ->
     normalized = normalize_document_numbers(document)
 
     assert normalize_yen("762.300") == "762300"
+    assert normalize_yen("826-100") == "826100"
     assert normalized.sale_calves[0].price_yen.normalized == "762300"
     assert not any(
         issue.path == "saleCalves.0.priceYen"

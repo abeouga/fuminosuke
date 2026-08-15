@@ -30,6 +30,7 @@ from app.domain.ocr_models import (
 from app.domain.template_config import load_template_config
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
+from app.services.excel_export_service import ExcelExportService
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -50,6 +51,7 @@ class OcrResultService:
         self._database = database
         self._storage = storage
         self._validator = DeterministicValidator()
+        self._excel = ExcelExportService()
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self._database.session() as session:
@@ -212,6 +214,16 @@ class OcrResultService:
                 f"exports/{job_id}/confirmed_result.csv", self._to_csv(serialized)
             )
             confirmed_at = datetime.now(UTC)
+            excel_table = self._excel.build_table(
+                serialized,
+                config_snapshot=job.config_snapshot_json,
+                individual_id=individual_id,
+                confirmed_at=confirmed_at,
+            )
+            self._storage.write_bytes(
+                f"exports/{job_id}/confirmed_result.xlsx",
+                self._excel.render_xlsx(excel_table),
+            )
             confirmed_result = ConfirmedResult(
                 job_id=job_id,
                 ocr_result_revision=stored.revision,
@@ -249,13 +261,14 @@ class OcrResultService:
             session.execute(text("BEGIN IMMEDIATE"))
 
     def export_path(self, job_id: str, format_name: str) -> tuple[str, str, str]:
-        if format_name not in {"json", "csv"}:
+        if format_name not in {"json", "csv", "xlsx"}:
             raise AppError(
                 status=422,
                 code="VALIDATION_FAILED",
                 title="Unsupported export format",
-                detail="formatはjsonまたはcsvを指定してください。",
+                detail="formatはjson、csv、xlsxのいずれかを指定してください。",
             )
+        file_name = f"confirmed_result.{format_name}"
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
             confirmed = OcrResultRepository(session).get_confirmed(job_id)
@@ -266,11 +279,44 @@ class OcrResultService:
                     title="Export is not available",
                     detail="確定済みのOCR結果だけをエクスポートできます。",
                 )
+            if format_name == "xlsx":
+                table = self._excel.build_table(
+                    confirmed.confirmed_json,
+                    config_snapshot=job.config_snapshot_json,
+                    individual_id=confirmed.individual_id,
+                    confirmed_at=confirmed.confirmed_at,
+                )
+                file_name = table.file_name
+                relative = f"exports/{job_id}/confirmed_result.xlsx"
+                self._storage.write_bytes(relative, self._excel.render_xlsx(table))
         relative = f"exports/{job_id}/confirmed_result.{format_name}"
         if not self._storage.exists(relative):
             raise self._not_found()
-        media_type = "application/json" if format_name == "json" else "text/csv"
-        return str(self._storage.resolve(relative)), media_type, f"confirmed_result.{format_name}"
+        media_type = {
+            "json": "application/json",
+            "csv": "text/csv",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }[format_name]
+        return str(self._storage.resolve(relative)), media_type, file_name
+
+    def excel_table(self, job_id: str) -> dict[str, object]:
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            confirmed = OcrResultRepository(session).get_confirmed(job_id)
+            if job is None or job.status != JobStatus.CONFIRMED.value or confirmed is None:
+                raise AppError(
+                    status=409,
+                    code="INVALID_STATE_TRANSITION",
+                    title="Excel export is not available",
+                    detail="確定済みのOCR結果だけをExcelへコピーできます。",
+                )
+            table = self._excel.build_table(
+                confirmed.confirmed_json,
+                config_snapshot=job.config_snapshot_json,
+                individual_id=confirmed.individual_id,
+                confirmed_at=confirmed.confirmed_at,
+            )
+            return table.payload()
 
     def _response(
         self,
@@ -392,6 +438,17 @@ class OcrResultService:
                         },
                         "recordGroupId": binding.get("recordGroupId"),
                         "fieldKey": binding.get("fieldKey"),
+                        "mappingType": raw.get("mappingType", "text"),
+                        "markOptions": [
+                            {
+                                "label": option.get("label"),
+                                "value": option.get("value"),
+                            }
+                            for option in raw.get("markOptions", [])
+                            if isinstance(option, dict)
+                            and isinstance(option.get("label"), str)
+                            and isinstance(option.get("value"), str)
+                        ],
                     }
                 )
             if previews:

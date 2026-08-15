@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, api } from "../api";
+import { ExcelExportActions } from "../components/ExcelExportActions";
 import type {
   FieldReading,
   IndividualRecordCatalog,
@@ -272,6 +273,10 @@ function RecordCard({
         <div><strong>{saleCalves.length}</strong><span>売却子牛</span></div>
         <div><strong>{calvings.length}</strong><span>繁殖履歴</span></div>
         <div><strong>{customFields.length}</strong><span>追加項目</span></div>
+      </div>
+      <div className="record-export-bar">
+        <span>この帳票の確定結果</span>
+        <ExcelExportActions jobId={record.sourceJobId} compact />
       </div>
 
       <details className="record-gui-details" open={defaultOpen}>

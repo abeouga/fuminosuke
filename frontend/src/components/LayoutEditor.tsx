@@ -3,6 +3,7 @@ import type {
   FieldMappingTarget,
   LayoutCell,
   LayoutDefinition,
+  LayoutMarkSet,
   LayoutRecordGroup,
   LayoutRecordSection,
   LayoutRelation,
@@ -15,6 +16,7 @@ type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent";
 const ROLE_COLOR = {
   label: "#b36b00",
   input: "#00777d",
+  mark: "#7c3aed",
   ignored: "#6b7280",
 } as const;
 
@@ -42,6 +44,7 @@ export function LayoutEditor({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const dragStart = useRef<Point | null>(null);
+  const additiveSelection = useRef(false);
   const linkLabelId = useRef<string | null>(null);
   const relationHistory = useRef<LayoutRelation[][]>([]);
   const operationLockRef = useRef(false);
@@ -134,12 +137,16 @@ export function LayoutEditor({
   }, [undoMeaning]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
   useEffect(() => {
+    if (mode === "link") {
+      setSelectedPath("");
+      return;
+    }
     if (!selected || selected.role !== "input") return;
     const relation = layout.relations.find(
       (item) => item.inputCellId === selected.id,
     );
     setSelectedPath(relation?.targetPath ?? "");
-  }, [selectedId, selected?.role, layout.relations]);
+  }, [mode, selectedId, selected?.role, layout.relations]);
   const selectedCells = layout.cells.filter((cell) => selectedIds.has(cell.id));
   const recordSections = layout.recordSections ?? [];
   const recordGroups = layout.recordGroups ?? [];
@@ -211,12 +218,17 @@ export function LayoutEditor({
     operationLockRef.current = true;
     setBusy(true);
     try {
-      const saved = normalizeLayout(await onSave(layout));
+      const prepared = repairDuplicateCalvingMarkRows(layout);
+      const saved = normalizeLayout(await onSave(prepared.layout));
       setLayout(saved);
       setBaselineSignature(layoutSignature(saved));
       relationHistory.current = [];
       setHistoryDepth(0);
-      setMessage(`テンプレートへ${saved.relations.length}件の意味づけを保存しました。`);
+      setMessage(
+        prepared.repairedCellCount > 0
+          ? `重複していた${prepared.repairedCellCount}個の選択マーク欄を繁殖履歴の行へ振り分け、テンプレートを保存しました。`
+          : `テンプレートへ${saved.cells.length}個の矩形を保存しました。`,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "レイアウトを保存できませんでした。");
     } finally {
@@ -307,6 +319,21 @@ export function LayoutEditor({
       context.fillRect(cell.x, cell.y, cell.width, cell.height);
       context.strokeRect(cell.x, cell.y, cell.width, cell.height);
       context.setLineDash([]);
+      if (cell.role === "mark") {
+        context.setLineDash([5, 4]);
+        context.lineWidth = 2;
+        for (const markSet of cell.markSets ?? []) {
+          for (const option of markSet.options) {
+            context.strokeRect(
+              cell.x + option.x,
+              cell.y + option.y,
+              option.width,
+              option.height,
+            );
+          }
+        }
+        context.setLineDash([]);
+      }
       if (cell.role === "label" && cell.text) {
         const fontSize = Math.max(14, layout.canonicalWidth / 85);
         context.font = `700 ${fontSize}px sans-serif`;
@@ -353,7 +380,7 @@ export function LayoutEditor({
       const highlighted = linkLaneCells(
         start,
         linkPoint,
-        layout.cells.filter((cell) => cell.role === "input"),
+        layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
       );
       context.save();
       context.strokeStyle = "#2468a2";
@@ -385,7 +412,7 @@ export function LayoutEditor({
           : linkLaneCells(
             start,
             linkPoint,
-            layout.cells.filter((cell) => cell.role === "input"),
+            layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
           );
         highlightedCells.forEach((cell) => {
           context.save();
@@ -464,12 +491,28 @@ export function LayoutEditor({
     ...current,
     cells: current.cells.map((cell) => cell.id === id ? { ...cell, ...patch } : cell),
   }));
+  const patchMarkCells = (updates: ReadonlyMap<string, LayoutMarkSet[]>) => {
+    if (updates.size === 0) return;
+    setLayout((current) => ({
+      ...current,
+      cells: current.cells.map((cell) => {
+        const markSets = updates.get(cell.id);
+        return markSets ? { ...cell, markSets } : cell;
+      }),
+    }));
+  };
   const setRoles = (ids: Iterable<string>, role: LayoutCell["role"]) => {
     const idSet = new Set(ids);
     if (idSet.size === 0) return;
     setLayout((current) => {
+      const markRowIndexes = role === "mark"
+        ? inferCalvingMarkRowIndexes(
+          current,
+          current.cells.filter((cell) => idSet.has(cell.id)),
+        )
+        : new Map<string, number>();
       let relations = current.relations;
-      if (role !== "input") {
+      if (role !== "input" && role !== "mark") {
         relations = relations.filter((relation) => !idSet.has(relation.inputCellId));
       }
       if (role !== "label") {
@@ -478,7 +521,7 @@ export function LayoutEditor({
           labelCellIds: relation.labelCellIds.filter((labelId) => !idSet.has(labelId)),
         }));
       }
-      const recordGroups = role === "input"
+      const recordGroups = role === "input" || role === "mark"
         ? current.recordGroups
         : (current.recordGroups ?? [])
           .map((group) => ({
@@ -488,7 +531,33 @@ export function LayoutEditor({
           .filter((group) => group.inputCellIds.length > 0);
       return {
         ...current,
-        cells: current.cells.map((cell) => idSet.has(cell.id) ? { ...cell, role } : cell),
+        cells: current.cells.map((cell) => {
+          if (!idSet.has(cell.id)) return cell;
+          if (role !== "mark" || (cell.markSets?.length ?? 0) > 0) {
+            return { ...cell, role };
+          }
+          const relatedPath = current.relations.find(
+            (relation) => relation.inputCellId === cell.id
+              && relation.targetPath.startsWith("calvings."),
+          )?.targetPath;
+          const relatedIndex = relatedPath ? Number(relatedPath.split(".")[1]) : NaN;
+          const group = (current.recordGroups ?? []).find(
+            (candidate) => candidate.inputCellIds.includes(cell.id),
+          );
+          const section = (current.recordSections ?? []).find(
+            (candidate) => candidate.id === group?.sectionId,
+          );
+          const rowIndex = Number.isInteger(relatedIndex)
+            ? relatedIndex
+            : section?.collectionPath === "calvings" && group
+              ? group.order - 1
+              : markRowIndexes.get(cell.id) ?? 0;
+          return {
+            ...cell,
+            role,
+            markSets: calvingMarkPreset(cell, rowIndex),
+          };
+        }),
         relations,
         recordGroups,
       };
@@ -557,8 +626,15 @@ export function LayoutEditor({
   const addAccessibleRelation = () => {
     const label = cellById.get(accessibleLabelId);
     const input = cellById.get(accessibleInputId);
-    if (!label || label.role !== "label" || !input || input.role !== "input") return;
-    const targetPath = selectedPath
+    if (
+      !label
+      || label.role !== "label"
+      || !input
+      || (input.role !== "input" && input.role !== "mark")
+    ) return;
+    const targetPath = input.role === "mark"
+      ? input.markSets?.[0]?.targetPath
+      : selectedPath
       || inferTargetPath(label.text, 1, availableTargets, assignedPaths);
     if (!targetPath || !targetByPath.has(targetPath)) {
       setMessage("先に「JSON項目」で保存先を選択してください。");
@@ -594,7 +670,8 @@ export function LayoutEditor({
   const addAccessibleRecordGroup = () => {
     const section = recordSectionById.get(selectedRecordSectionId);
     const inputs = layout.cells.filter(
-      (cell) => cell.role === "input" && accessibleRecordInputIds.has(cell.id),
+      (cell) => (cell.role === "input" || cell.role === "mark")
+        && accessibleRecordInputIds.has(cell.id),
     );
     if (!section || inputs.length === 0) return;
     const order = Math.max(
@@ -650,7 +727,7 @@ export function LayoutEditor({
     if (!label) return;
     const start = { x: label.x + label.width / 2, y: label.y + label.height / 2 };
     const endCell = cellAt(end);
-    const resolvedEnd = endCell?.role === "input"
+    const resolvedEnd = endCell?.role === "input" || endCell?.role === "mark"
       ? {
         x: endCell.x + endCell.width / 2,
         y: endCell.y + endCell.height / 2,
@@ -662,14 +739,21 @@ export function LayoutEditor({
     const inputs = linkLaneCells(
       start,
       resolvedEnd,
-      layout.cells.filter((cell) => cell.role === "input"),
+      layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
     );
     if (inputs.length === 0) {
       setMessage("スライド経路に手書き文字欄がありません。記入欄を通過するようにドラッグしてください。");
       return;
     }
     const existingTargetPaths = targetPathsForInputs(inputs, layout.relations);
-    const targetPath = selectedPath
+    const markTargetPaths = inputs.every((input) => input.role === "mark")
+      ? inputs.map((input) => input.markSets?.[0]?.targetPath ?? "")
+      : null;
+    const completeMarkTargetPaths = markTargetPaths?.every(Boolean)
+      ? markTargetPaths
+      : null;
+    const targetPath = completeMarkTargetPaths?.[0]
+      || selectedPath
       || inferTargetPath(label.text, inputs.length, availableTargets, assignedPaths)
       || inferRecordTargetPath(
         inputs,
@@ -693,12 +777,13 @@ export function LayoutEditor({
         availableTargets,
       )
       : null;
-    const targetPaths = selectedPath
+    const targetPaths = completeMarkTargetPaths
+      ?? (selectedPath
       ? groupedTargetPaths
         ?? expandTargetPaths(selectedPath, inputs.length, availableTargets)
       : existingTargetPaths
         ?? groupedTargetPaths
-        ?? (targetPath ? expandTargetPaths(targetPath, inputs.length, availableTargets) : null);
+        ?? (targetPath ? expandTargetPaths(targetPath, inputs.length, availableTargets) : null));
     if (!targetPaths) {
       const capacity = targetPath
         ? sequentialTargetCapacity(targetPath, availableTargets)
@@ -740,7 +825,7 @@ export function LayoutEditor({
     const inputs = linkLaneCells(
       start,
       end,
-      layout.cells.filter((cell) => cell.role === "input"),
+      layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
     );
     if (inputs.length === 0) {
       setMessage("線が通過した手書き文字欄がありません。1行目のセルから最終セルまで線を引いてください。");
@@ -869,13 +954,18 @@ export function LayoutEditor({
   const roleCounts = {
     label: layout.cells.filter((cell) => cell.role === "label").length,
     input: layout.cells.filter((cell) => cell.role === "input").length,
+    mark: layout.cells.filter((cell) => cell.role === "mark").length,
     ignored: layout.cells.filter((cell) => cell.role === "ignored").length,
   };
-  const arrayInputIds = new Set(
-    layout.relations
+  const arrayInputIds = new Set([
+    ...layout.relations
       .filter((relation) => /^(saleCalves|calvings)\.\d+\./.test(relation.targetPath))
       .map((relation) => relation.inputCellId),
-  );
+    ...layout.cells
+      .filter((cell) => cell.role === "mark"
+        && (cell.markSets ?? []).some((markSet) => /^(saleCalves|calvings)\.\d+\./.test(markSet.targetPath)))
+      .map((cell) => cell.id),
+  ]);
   const groupedInputIds = new Set(
     recordGroups.flatMap((group) => group.inputCellIds),
   );
@@ -883,6 +973,22 @@ export function LayoutEditor({
     layout.recordStructureVerified === true
     && [...arrayInputIds].every((inputId) => groupedInputIds.has(inputId))
   );
+  const hasMeaningAssignments = layout.relations.length > 0 || layout.cells.some(
+    (cell) => cell.role === "mark" && (cell.markSets?.length ?? 0) > 0,
+  );
+  const meaningAssignedCellIds = new Set([
+    ...layout.relations.map((relation) => relation.inputCellId),
+    ...layout.cells
+      .filter((cell) => cell.role === "mark" && (cell.markSets?.length ?? 0) > 0)
+      .map((cell) => cell.id),
+  ]);
+  const hasUnassignedFields = layout.cells.some(
+    (cell) => (cell.role === "input" || cell.role === "mark")
+      && !meaningAssignedCellIds.has(cell.id),
+  );
+  const layoutReadyForOcr = hasMeaningAssignments
+    && recordStructureReady
+    && !hasUnassignedFields;
 
   return (
     <div className="layout-editor" aria-busy={busy}>
@@ -910,8 +1016,8 @@ export function LayoutEditor({
       </div>
 
       <div className="layout-instructions">
-        {mode === "select" && "クリックで1セル、ドラッグで矩形範囲の複数セルを選び、右側で区分を一括変更できます。"}
-        {mode === "classify" && "クリックで「ラベル → 手書き文字欄 → 除外」を切替。ドラッグではセルの中心が範囲内にある矩形をまとめて選択し、右側で一括指定できます。"}
+        {mode === "select" && "クリックで1セル、Ctrl（MacはCmd）+クリックで複数セルを追加・解除できます。ドラッグで矩形範囲をまとめて選択することもできます。"}
+        {mode === "classify" && "クリックで「ラベル → 手書き文字欄 → 選択マーク欄 → 除外」を切替。Ctrl（MacはCmd）+クリック、またはドラッグで複数セルを選び、右側で一括指定できます。"}
         {mode === "draw" && "検出されなかった手書き文字欄をドラッグして追加します。"}
         {mode === "link" && "ラベルセルから手書き文字欄を通過するようにドラッグします。経路上の全記入欄へ、選択した保存先から行番号を進めて一括設定します。"}
         {mode === "record" && "同じ行の端にある記入欄から反対端まで線を引きます。線が通過した価格・種雄牛名などが同じ産次として固定されます。"}
@@ -948,12 +1054,13 @@ export function LayoutEditor({
               if (mode === "select" || mode === "classify") {
                 event.currentTarget.setPointerCapture?.(event.pointerId);
                 dragStart.current = location;
+                additiveSelection.current = event.ctrlKey || event.metaKey;
                 setDraft({ ...location, width: 0, height: 0 });
                 return;
               }
               if (mode === "record") {
-                if (!hit || hit.role !== "input") {
-                  setMessage("レコード作成は、行の端にある手書き文字欄から線を引き始めてください。");
+                if (!hit || (hit.role !== "input" && hit.role !== "mark")) {
+                  setMessage("レコード作成は、行の端にある手書き文字欄または選択マーク欄から線を引き始めてください。");
                   return;
                 }
                 event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1016,7 +1123,7 @@ export function LayoutEditor({
               if (mode === "record" && dragStart.current) {
                 const start = dragStart.current;
                 const endCell = cellAt(location);
-                const end = endCell?.role === "input"
+                const end = endCell?.role === "input" || endCell?.role === "mark"
                   ? {
                     x: endCell.x + endCell.width / 2,
                     y: endCell.y + endCell.height / 2,
@@ -1031,33 +1138,55 @@ export function LayoutEditor({
               }
               if ((mode === "select" || mode === "classify") && dragStart.current) {
                 const start = dragStart.current;
+                const additive = additiveSelection.current;
                 dragStart.current = null;
+                additiveSelection.current = false;
                 setDraft(null);
                 const next = rectFrom(start, location);
                 if (Math.hypot(next.width, next.height) < 8) {
                   const hit = cellAt(location);
                   if (!hit) {
-                    setSelectedId(null);
-                    setSelectedIds(new Set());
+                    if (!additive) {
+                      setSelectedId(null);
+                      setSelectedIds(new Set());
+                    }
                     return;
                   }
-                  if (mode === "classify") {
+                  if (mode === "classify" && !additive) {
                     const role = hit.role === "label"
                       ? "input"
                       : hit.role === "input"
-                      ? "ignored"
-                      : "label";
+                        ? "mark"
+                        : hit.role === "mark"
+                          ? "ignored"
+                          : "label";
                     setRole(hit.id, role);
                   }
-                  setSelectedId(hit.id);
-                  setSelectedIds(new Set([hit.id]));
+                  if (additive) {
+                    const ids = new Set(selectedIds);
+                    if (ids.has(hit.id)) ids.delete(hit.id);
+                    else ids.add(hit.id);
+                    setSelectedIds(ids);
+                    setSelectedId(ids.has(hit.id) ? hit.id : ids.values().next().value ?? null);
+                    setMessage(ids.size > 1
+                      ? `${ids.size} 個のセルを複数選択しました。右側で区分を一括変更できます。`
+                      : ids.size === 1
+                        ? "1 個のセルを選択しています。Ctrlを押しながら別のセルを追加できます。"
+                        : "セルの選択を解除しました。");
+                  } else {
+                    setSelectedId(hit.id);
+                    setSelectedIds(new Set([hit.id]));
+                  }
                   return;
                 }
                 const ids = cellsSelectedByRect(layout.cells, next).map((cell) => cell.id);
-                setSelectedId(ids[0] ?? null);
-                setSelectedIds(new Set(ids));
-                setMessage(ids.length > 0
-                  ? `${ids.length} 個のセルをまとめて選択しました。右側で区分を一括変更できます。`
+                const nextIds = additive
+                  ? new Set([...selectedIds, ...ids])
+                  : new Set(ids);
+                setSelectedId(ids[0] ?? (additive ? selectedId : null));
+                setSelectedIds(nextIds);
+                setMessage(nextIds.size > 0
+                  ? `${nextIds.size} 個のセルをまとめて選択しました。右側で区分を一括変更できます。`
                   : "選択範囲にセルはありません。変更したいセルを囲むようにドラッグしてください。");
                 return;
               }
@@ -1085,6 +1214,7 @@ export function LayoutEditor({
             }}
             onPointerCancel={() => {
               dragStart.current = null;
+              additiveSelection.current = false;
               linkLabelId.current = null;
               setDraft(null);
               setLinkPoint(null);
@@ -1107,6 +1237,7 @@ export function LayoutEditor({
           <div className="cell-counts">
             <span className="count-label">ラベル {roleCounts.label}</span>
             <span className="count-input">手書き文字欄 {roleCounts.input}</span>
+            <span className="count-mark">選択マーク欄 {roleCounts.mark}</span>
             <span>除外 {roleCounts.ignored}</span>
           </div>
           <label className="accessible-cell-select">
@@ -1122,7 +1253,13 @@ export function LayoutEditor({
               <option value="">セルを選択</option>
               {layout.cells.map((cell, index) => (
                 <option key={cell.id} value={cell.id}>
-                  {index + 1}. {cell.role === "label" ? "ラベル" : cell.role === "input" ? "記入欄" : "除外"} · {cell.text || cell.id}
+                  {index + 1}. {cell.role === "label"
+                    ? "ラベル"
+                    : cell.role === "input"
+                      ? "記入欄"
+                      : cell.role === "mark"
+                        ? "選択マーク欄"
+                        : "除外"} · {cell.text || cell.id}
                 </option>
               ))}
             </select>
@@ -1135,6 +1272,7 @@ export function LayoutEditor({
               <div className="role-buttons">
                 <button type="button" className="label-role" onClick={() => setRoles(selectedIds, "label")}>ラベルにする</button>
                 <button type="button" className="input-role" onClick={() => setRoles(selectedIds, "input")}>記入欄にする</button>
+                <button type="button" className="mark-role" onClick={() => setRoles(selectedIds, "mark")}>選択マーク欄にする</button>
                 <button type="button" onClick={() => setRoles(selectedIds, "ignored")}>無視する</button>
               </div>
               <button
@@ -1157,6 +1295,7 @@ export function LayoutEditor({
                 <div className="role-buttons">
                   <button className={selected.role === "label" ? "active label-role" : ""} onClick={() => setRole(selected.id, "label")}>ラベル</button>
                   <button className={selected.role === "input" ? "active input-role" : ""} onClick={() => setRole(selected.id, "input")}>手書き文字欄</button>
+                  <button className={selected.role === "mark" ? "active mark-role" : ""} onClick={() => setRole(selected.id, "mark")}>選択マーク欄</button>
                   <button className={selected.role === "ignored" ? "active" : ""} onClick={() => setRole(selected.id, "ignored")}>除外</button>
                 </div>
               </fieldset>
@@ -1183,6 +1322,28 @@ export function LayoutEditor({
                     入力すると、OCRには固定印刷を除いた手書き文字画像だけを送ります。
                   </small>
                 </label>
+              )}
+              {selected.role === "mark" && (
+                <MarkCellEditor
+                  cell={selected}
+                  batchCells={selectedCells.filter((cell) => cell.role === "mark")}
+                  batchRowIndexes={inferCalvingMarkRowIndexes(
+                    layout,
+                    selectedCells.filter((cell) => cell.role === "mark"),
+                  )}
+                  source={source}
+                  canonicalWidth={layout.canonicalWidth}
+                  canonicalHeight={layout.canonicalHeight}
+                  rowCount={Math.max(
+                    1,
+                    ...availableTargets
+                      .map((target) => /^calvings\.(\d+)\./.exec(target.path))
+                      .filter((match): match is RegExpExecArray => Boolean(match))
+                      .map((match) => Number(match[1]) + 1),
+                  )}
+                  onChange={(markSets) => patchCell(selected.id, { markSets })}
+                  onBatchChange={patchMarkCells}
+                />
               )}
               <fieldset className="geometry-editor">
                 <legend>位置と大きさ</legend>
@@ -1280,7 +1441,7 @@ export function LayoutEditor({
               onChange={(event) => {
                 const path = event.target.value;
                 setSelectedPath(path);
-                if (selected?.role === "input" && path) {
+                if (selected?.role === "input" && mode !== "link" && path) {
                   assignSelectedInputDirectly(path);
                 }
               }}
@@ -1328,11 +1489,13 @@ export function LayoutEditor({
               </select>
             </label>
             <label>
-              手書き文字欄
+              接続先セル
               <select value={accessibleInputId} onChange={(event) => setAccessibleInputId(event.target.value)}>
                 <option value="">選択してください</option>
-                {layout.cells.filter((cell) => cell.role === "input").map((cell) => (
-                  <option key={cell.id} value={cell.id}>{cell.id}</option>
+                {layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").map((cell) => (
+                  <option key={cell.id} value={cell.id}>
+                    {cell.id}{cell.role === "mark" ? "（選択マーク欄）" : ""}
+                  </option>
                 ))}
               </select>
             </label>
@@ -1574,13 +1737,13 @@ export function LayoutEditor({
                   このレコードに含める記入欄
                   <select
                     multiple
-                    size={Math.min(8, Math.max(3, layout.cells.filter((cell) => cell.role === "input").length))}
+                    size={Math.min(8, Math.max(3, layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").length))}
                     value={[...accessibleRecordInputIds]}
                     onChange={(event) => setAccessibleRecordInputIds(new Set(
                       [...event.currentTarget.selectedOptions].map((option) => option.value),
                     ))}
                   >
-                    {layout.cells.filter((cell) => cell.role === "input").map((cell) => (
+                    {layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").map((cell) => (
                       <option key={cell.id} value={cell.id}>{cell.id}</option>
                     ))}
                   </select>
@@ -1713,8 +1876,18 @@ export function LayoutEditor({
 
       {layout.warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
       {!recordStructureReady && (
-        <p className="error-box">
-          配列項目の記入欄をすべて行レコードへまとめ、レコード構造を確認してください。
+        <p className="inline-warning">
+          途中保存できます。OCRへ進むには、配列項目の記入欄をすべて行レコードへまとめ、レコード構造を確認してください。
+        </p>
+      )}
+      {!hasMeaningAssignments && (
+        <p className="inline-warning">
+          途中保存できます。OCRへ進むには、手書き文字欄または選択マーク欄を保存先へ意味づけしてください。
+        </p>
+      )}
+      {hasMeaningAssignments && hasUnassignedFields && (
+        <p className="inline-warning">
+          途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。
         </p>
       )}
       <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
@@ -1730,8 +1903,6 @@ export function LayoutEditor({
         className="primary layout-save"
         disabled={
           busy
-          || layout.relations.length === 0
-          || !recordStructureReady
           || (!dirty && !allowUnchangedSave)
         }
         onClick={() => void save()}
@@ -1739,7 +1910,9 @@ export function LayoutEditor({
         {busy
           ? "処理中…"
           : dirty || allowUnchangedSave
-          ? "レイアウトと意味づけをDBへ保存"
+          ? layoutReadyForOcr
+            ? "レイアウトと意味づけをDBへ保存"
+            : "レイアウトを途中保存"
           : "レイアウトは保存済み"}
       </button>
       </fieldset>
@@ -1789,6 +1962,707 @@ export function cellsSelectedByRect(
   });
 }
 
+function MarkCellEditor({
+  cell,
+  batchCells,
+  batchRowIndexes,
+  source,
+  canonicalWidth,
+  canonicalHeight,
+  rowCount,
+  onChange,
+  onBatchChange,
+}: {
+  cell: LayoutCell;
+  batchCells: LayoutCell[];
+  batchRowIndexes: ReadonlyMap<string, number>;
+  source: string;
+  canonicalWidth: number;
+  canonicalHeight: number;
+  rowCount: number;
+  onChange: (sets: LayoutMarkSet[]) => void;
+  onBatchChange: (updates: ReadonlyMap<string, LayoutMarkSet[]>) => void;
+}) {
+  const sets = cell.markSets ?? [];
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragRef = useRef<{
+    setId: string;
+    optionId: string;
+    mode: "move" | "resize";
+    pointerId: number;
+    start: Point;
+    original: Rect;
+  } | null>(null);
+  const [activeOptionId, setActiveOptionId] = useState(
+    () => sets[0]?.options[0]?.id ?? "",
+  );
+  const [autoDetecting, setAutoDetecting] = useState(false);
+  const [autoDetectionMessage, setAutoDetectionMessage] = useState<string | null>(null);
+  const match = sets[0] ? /^calvings\.(\d+)\./.exec(sets[0].targetPath) : null;
+  const rowIndex = match ? Number(match[1]) : 0;
+  const autoDetectionCells = batchCells.length > 0 ? batchCells : [cell];
+  const patchOption = (
+    setId: string,
+    optionId: string,
+    patch: Partial<Rect>,
+  ) => {
+    onChange(sets.map((markSet) => markSet.id !== setId
+      ? markSet
+      : {
+        ...markSet,
+        options: markSet.options.map((option) => option.id === optionId
+          ? { ...option, ...patch }
+          : option),
+      }));
+  };
+  const updateOption = (
+    setId: string,
+    optionId: string,
+    key: "x" | "y" | "width" | "height",
+    requested: number,
+  ) => {
+    const markSet = sets.find((candidate) => candidate.id === setId);
+    const option = markSet?.options.find((candidate) => candidate.id === optionId);
+    if (!option) return;
+    const maximum = key === "x"
+      ? cell.width - option.width
+      : key === "y"
+        ? cell.height - option.height
+        : key === "width"
+          ? cell.width - option.x
+          : cell.height - option.y;
+    const minimum = key === "width" || key === "height" ? 1 : 0;
+    patchOption(setId, optionId, {
+      [key]: Math.round(Math.max(minimum, Math.min(requested, maximum))),
+    });
+  };
+  const pointerPosition = (event: React.PointerEvent<SVGSVGElement>): Point => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: (event.clientX - bounds.left) * cell.width / Math.max(1, bounds.width),
+      y: (event.clientY - bounds.top) * cell.height / Math.max(1, bounds.height),
+    };
+  };
+  const startDrag = (
+    event: React.PointerEvent<SVGElement>,
+    setId: string,
+    optionId: string,
+    mode: "move" | "resize",
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const svg = svgRef.current;
+    const markSet = sets.find((candidate) => candidate.id === setId);
+    const option = markSet?.options.find((candidate) => candidate.id === optionId);
+    if (!svg || !option) return;
+    const bounds = svg.getBoundingClientRect();
+    dragRef.current = {
+      setId,
+      optionId,
+      mode,
+      pointerId: event.pointerId,
+      start: {
+        x: (event.clientX - bounds.left) * cell.width / Math.max(1, bounds.width),
+        y: (event.clientY - bounds.top) * cell.height / Math.max(1, bounds.height),
+      },
+      original: {
+        x: option.x,
+        y: option.y,
+        width: option.width,
+        height: option.height,
+      },
+    };
+    setActiveOptionId(optionId);
+    svg.setPointerCapture?.(event.pointerId);
+  };
+  const moveDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+    const dragging = dragRef.current;
+    if (!dragging || dragging.pointerId !== event.pointerId) return;
+    const position = pointerPosition(event);
+    const deltaX = position.x - dragging.start.x;
+    const deltaY = position.y - dragging.start.y;
+    if (dragging.mode === "move") {
+      patchOption(dragging.setId, dragging.optionId, {
+        x: Math.round(Math.max(0, Math.min(
+          dragging.original.x + deltaX,
+          cell.width - dragging.original.width,
+        ))),
+        y: Math.round(Math.max(0, Math.min(
+          dragging.original.y + deltaY,
+          cell.height - dragging.original.height,
+        ))),
+      });
+      return;
+    }
+    patchOption(dragging.setId, dragging.optionId, {
+      width: Math.round(Math.max(1, Math.min(
+        dragging.original.width + deltaX,
+        cell.width - dragging.original.x,
+      ))),
+      height: Math.round(Math.max(1, Math.min(
+        dragging.original.height + deltaY,
+        cell.height - dragging.original.y,
+      ))),
+    });
+  };
+  const stopDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+  return (
+    <fieldset className="mark-cell-editor">
+      <legend>分娩状況の選択マーク</legend>
+      <label>
+        繁殖履歴の行
+        <select
+          value={rowIndex}
+          onChange={(event) => {
+            const nextRow = Number(event.target.value);
+            onChange(sets.map((markSet) => ({
+              ...markSet,
+              targetPath: `calvings.${nextRow}.${markSet.id}`,
+            })));
+          }}
+        >
+          {Array.from({ length: rowCount }, (_, index) => (
+            <option key={index} value={index}>{index + 1}行目</option>
+          ))}
+        </select>
+      </label>
+      <p>帳票画像の色付き枠をドラッグして移動できます。右下の白い四角をドラッグすると大きさを変更できます。</p>
+      <svg
+        ref={svgRef}
+        className="mark-option-canvas"
+        viewBox={`0 0 ${cell.width} ${cell.height}`}
+        preserveAspectRatio="none"
+        aria-label="選択マークの判定範囲を画像上で調整"
+        onPointerMove={moveDrag}
+        onPointerUp={stopDrag}
+        onPointerCancel={stopDrag}
+      >
+        <image
+          href={source}
+          x={-cell.x}
+          y={-cell.y}
+          width={canonicalWidth}
+          height={canonicalHeight}
+          preserveAspectRatio="none"
+        />
+        {sets.flatMap((markSet) => markSet.options.map((option) => (
+          <g key={`${markSet.id}:${option.id}`}>
+            <rect
+              className={`mark-option-region ${activeOptionId === option.id ? "active" : ""}`}
+              x={option.x}
+              y={option.y}
+              width={option.width}
+              height={option.height}
+              onPointerDown={(event) => startDrag(
+                event,
+                markSet.id,
+                option.id,
+                "move",
+              )}
+            />
+            <text
+              className="mark-option-canvas-label"
+              x={option.x + option.width / 2}
+              y={option.y + option.height / 2}
+            >
+              {option.label}
+            </text>
+            <rect
+              className="mark-option-resize-handle"
+              x={Math.max(option.x, option.x + option.width - 7)}
+              y={Math.max(option.y, option.y + option.height - 7)}
+              width={7}
+              height={7}
+              onPointerDown={(event) => startDrag(
+                event,
+                markSet.id,
+                option.id,
+                "resize",
+              )}
+            />
+          </g>
+        )))}
+      </svg>
+      <div className="mark-auto-actions">
+        <button
+          type="button"
+          className="primary compact mark-auto-layout"
+          disabled={autoDetecting}
+          onClick={async () => {
+            setAutoDetecting(true);
+            setAutoDetectionMessage(null);
+            try {
+              const result = await detectCalvingMarkCells(
+                source,
+                autoDetectionCells,
+                canonicalWidth,
+                canonicalHeight,
+                undefined,
+                batchRowIndexes,
+              );
+              onBatchChange(result.updates);
+              if (result.total === 1) {
+                setAutoDetectionMessage(
+                  result.detectedCount === 1
+                    ? "印刷された選択肢を検出し、2行×3列で配置しました。"
+                    : "印刷領域を確定できなかったため、2行×3列の標準配置にしました。",
+                );
+              } else {
+                setAutoDetectionMessage(
+                  `${result.total}個の選択マーク欄をまとめて処理しました。`
+                  + ` 自動検出 ${result.detectedCount}件、標準配置 ${result.fallbackCount}件。`,
+                );
+              }
+            } finally {
+              setAutoDetecting(false);
+            }
+          }}
+        >
+          {autoDetecting ? "画像を解析中…" : "画像から2行×3列の枠を自動検出"}
+        </button>
+        <button
+          type="button"
+          className="secondary compact"
+          onClick={() => {
+            onChange(calvingMarkPreset(cell, rowIndex));
+            setAutoDetectionMessage("2行×3列の標準配置に戻しました。");
+          }}
+        >
+          2行×3列の標準配置
+        </button>
+      </div>
+      {autoDetectionMessage && <p className="mark-auto-message">{autoDetectionMessage}</p>}
+      <details className="mark-numeric-editor">
+        <summary>数値で微調整する</summary>
+        {sets.map((markSet) => (
+          <section key={markSet.id} className="mark-option-set">
+            <strong>{markSet.id === "outcome" ? "分娩状況" : "性別"}</strong>
+            <small>{markSet.targetPath}</small>
+            {markSet.options.map((option) => (
+              <div key={option.id} className="mark-option-row">
+                <b>{option.label}</b>
+                {(["x", "y", "width", "height"] as const).map((key) => (
+                  <label key={key}>
+                    {{ x: "X", y: "Y", width: "幅", height: "高さ" }[key]}
+                    <input
+                      type="number"
+                      min={key === "width" || key === "height" ? 1 : 0}
+                      value={option[key]}
+                      onChange={(event) => updateOption(
+                        markSet.id,
+                        option.id,
+                        key,
+                        Number(event.target.value) || 0,
+                      )}
+                    />
+                  </label>
+                ))}
+              </div>
+            ))}
+          </section>
+        ))}
+      </details>
+    </fieldset>
+  );
+}
+
+function calvingMarkPreset(
+  cell: LayoutCell,
+  rowIndex: number,
+  detectedArea?: Rect,
+): LayoutMarkSet[] {
+  const definitions = [
+    { id: "male", label: "♂", value: "male", target: "sex", column: 0, row: 0 },
+    { id: "twin", label: "双", value: "twin", target: "outcome", column: 1, row: 0 },
+    { id: "premature", label: "早", value: "premature", target: "outcome", column: 2, row: 0 },
+    { id: "female", label: "♀", value: "female", target: "sex", column: 0, row: 1 },
+    { id: "miscarriage", label: "流", value: "miscarriage", target: "outcome", column: 1, row: 1 },
+    { id: "stillbirth", label: "死", value: "stillbirth", target: "outcome", column: 2, row: 1 },
+  ] as const;
+  const area = detectedArea ?? {
+    x: 0,
+    y: 0,
+    width: Math.max(3, Math.round(cell.width * 0.42)),
+    height: cell.height,
+  };
+  const option = (definition: (typeof definitions)[number]) => {
+    const left = Math.round(area.x + area.width * definition.column / 3);
+    const right = Math.round(area.x + area.width * (definition.column + 1) / 3);
+    const top = Math.round(area.y + area.height * definition.row / 2);
+    const bottom = Math.round(area.y + area.height * (definition.row + 1) / 2);
+    return {
+      id: definition.id,
+      label: definition.label,
+      value: definition.value,
+      x: left,
+      y: top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
+    };
+  };
+  return (["outcome", "sex"] as const).map((target) => ({
+    id: target,
+    targetPath: `calvings.${rowIndex}.${target}`,
+    selectionMode: "multiple",
+    options: definitions
+      .map((definition) => ({ definition }))
+      .filter(({ definition }) => definition.target === target)
+      .map(({ definition }) => option(definition)),
+  }));
+}
+
+type CalvingMarkDetection = {
+  sets: LayoutMarkSet[];
+  usedImageDetection: boolean;
+};
+
+type CalvingMarkDetector = (
+  source: string,
+  cell: LayoutCell,
+  canonicalWidth: number,
+  canonicalHeight: number,
+  rowIndex: number,
+) => Promise<CalvingMarkDetection>;
+
+export async function detectCalvingMarkCells(
+  source: string,
+  cells: LayoutCell[],
+  canonicalWidth: number,
+  canonicalHeight: number,
+  detector: CalvingMarkDetector = detectCalvingMarkPresetFromImage,
+  rowIndexes?: ReadonlyMap<string, number>,
+): Promise<{
+  updates: ReadonlyMap<string, LayoutMarkSet[]>;
+  total: number;
+  detectedCount: number;
+  fallbackCount: number;
+}> {
+  const markCells = cells.filter((cell) => cell.role === "mark");
+  const results = await Promise.all(markCells.map(async (cell) => {
+    const rowIndex = rowIndexes?.get(cell.id) ?? calvingMarkRowIndex(cell);
+    try {
+      const detected = await detector(
+        source,
+        cell,
+        canonicalWidth,
+        canonicalHeight,
+        rowIndex,
+      );
+      return {
+        cell,
+        sets: detected.sets,
+        usedImageDetection: detected.usedImageDetection,
+      };
+    } catch {
+      return {
+        cell,
+        sets: calvingMarkPreset(cell, rowIndex),
+        usedImageDetection: false,
+      };
+    }
+  }));
+  const updates = new Map(results.map((result) => [result.cell.id, result.sets]));
+  const detectedCount = results.filter((result) => result.usedImageDetection).length;
+  return {
+    updates,
+    total: results.length,
+    detectedCount,
+    fallbackCount: results.length - detectedCount,
+  };
+}
+
+function calvingMarkRowIndex(cell: LayoutCell): number {
+  const targetPath = cell.markSets?.find((markSet) => (
+    /^calvings\.\d+\./.test(markSet.targetPath)
+  ))?.targetPath;
+  const match = targetPath ? /^calvings\.(\d+)\./.exec(targetPath) : null;
+  return match ? Number(match[1]) : 0;
+}
+
+export function inferCalvingMarkRowIndexes(
+  layout: LayoutDefinition,
+  requestedCells: LayoutCell[],
+): ReadonlyMap<string, number> {
+  const cells = [...new Map(requestedCells.map((cell) => [cell.id, cell])).values()];
+  if (cells.length === 0) return new Map();
+  if (cells.length === 1) {
+    return new Map([[cells[0].id, calvingMarkRowIndex(cells[0])]]);
+  }
+  const cellById = new Map(layout.cells.map((cell) => [cell.id, cell]));
+  const anchors = layout.relations.flatMap((relation) => {
+    const match = /^calvings\.(\d+)\./.exec(relation.targetPath);
+    const anchor = cellById.get(relation.inputCellId);
+    return match && anchor
+      ? [{ cell: anchor, rowIndex: Number(match[1]) }]
+      : [];
+  });
+  const requestedIds = new Set(cells.map((cell) => cell.id));
+  const requestedRowCounts = new Map<number, number>();
+  anchors.forEach((anchor) => {
+    if (!requestedIds.has(anchor.cell.id)) return;
+    requestedRowCounts.set(
+      anchor.rowIndex,
+      (requestedRowCounts.get(anchor.rowIndex) ?? 0) + 1,
+    );
+  });
+  const reliableAnchors = anchors.filter((anchor) => (
+    !requestedIds.has(anchor.cell.id)
+    || requestedRowCounts.get(anchor.rowIndex) === 1
+  ));
+  const candidates = cells.flatMap((cell) => {
+    const centerX = cell.x + cell.width / 2;
+    const centerY = cell.y + cell.height / 2;
+    const ownRelation = reliableAnchors.find((anchor) => anchor.cell.id === cell.id);
+    if (ownRelation) {
+      return [{ cell, rowIndex: ownRelation.rowIndex, score: -1 }];
+    }
+    const nearest = reliableAnchors
+      .map((anchor) => {
+        const anchorCenterX = anchor.cell.x + anchor.cell.width / 2;
+        const anchorCenterY = anchor.cell.y + anchor.cell.height / 2;
+        const deltaY = Math.abs(anchorCenterY - centerY);
+        return {
+          rowIndex: anchor.rowIndex,
+          deltaY,
+          score: deltaY * 10 + Math.abs(anchorCenterX - centerX),
+        };
+      })
+      .filter((candidate) => (
+        candidate.deltaY <= Math.max(cell.height, 20) * 0.8
+      ))
+      .sort((first, second) => first.score - second.score)[0];
+    return nearest
+      ? [{ cell, rowIndex: nearest.rowIndex, score: nearest.score }]
+      : [];
+  }).sort((first, second) => first.score - second.score);
+
+  const result = new Map<string, number>();
+  const usedRows = new Set<number>();
+  candidates.forEach((candidate) => {
+    if (result.has(candidate.cell.id) || usedRows.has(candidate.rowIndex)) return;
+    result.set(candidate.cell.id, candidate.rowIndex);
+    usedRows.add(candidate.rowIndex);
+  });
+
+  const typicalWidth = [...cells]
+    .map((cell) => cell.width)
+    .sort((first, second) => first - second)[Math.floor(cells.length / 2)] ?? 1;
+  const columnThreshold = Math.max(20, typicalWidth * 1.25);
+  const columns: Array<{ centerX: number; cells: LayoutCell[] }> = [];
+  [...cells]
+    .sort((first, second) => (
+      first.x + first.width / 2 - (second.x + second.width / 2)
+    ))
+    .forEach((cell) => {
+      const centerX = cell.x + cell.width / 2;
+      const column = columns.find((candidate) => (
+        Math.abs(candidate.centerX - centerX) <= columnThreshold
+      ));
+      if (!column) {
+        columns.push({ centerX, cells: [cell] });
+        return;
+      }
+      column.cells.push(cell);
+      column.centerX = column.cells.reduce(
+        (sum, candidate) => sum + candidate.x + candidate.width / 2,
+        0,
+      ) / column.cells.length;
+    });
+  const readingOrder = columns
+    .sort((first, second) => first.centerX - second.centerX)
+    .flatMap((column) => column.cells.sort(
+      (first, second) => first.y - second.y || first.x - second.x,
+    ));
+  readingOrder.forEach((cell, spatialIndex) => {
+    if (result.has(cell.id)) return;
+    let rowIndex = spatialIndex;
+    while (usedRows.has(rowIndex)) rowIndex += 1;
+    result.set(cell.id, rowIndex);
+    usedRows.add(rowIndex);
+  });
+  return result;
+}
+
+export function repairDuplicateCalvingMarkRows(layout: LayoutDefinition): {
+  layout: LayoutDefinition;
+  repairedCellCount: number;
+} {
+  const markCells = layout.cells.filter((cell) => (
+    cell.role === "mark"
+    && cell.markSets?.some((markSet) => /^calvings\.\d+\./.test(markSet.targetPath))
+  ));
+  const targetCounts = new Map<string, number>();
+  markCells.forEach((cell) => cell.markSets?.forEach((markSet) => {
+    targetCounts.set(markSet.targetPath, (targetCounts.get(markSet.targetPath) ?? 0) + 1);
+  }));
+  if (![...targetCounts.values()].some((count) => count > 1)) {
+    return { layout, repairedCellCount: 0 };
+  }
+  const rowIndexes = inferCalvingMarkRowIndexes(layout, markCells);
+  const repairedCellIds = new Set<string>();
+  const cells = layout.cells.map((cell) => {
+    const rowIndex = rowIndexes.get(cell.id);
+    if (rowIndex === undefined || cell.role !== "mark") return cell;
+    const markSets = (cell.markSets ?? []).map((markSet) => {
+      const match = /^calvings\.\d+\.(.+)$/.exec(markSet.targetPath);
+      if (!match) return markSet;
+      const targetPath = `calvings.${rowIndex}.${match[1]}`;
+      if (targetPath !== markSet.targetPath) repairedCellIds.add(cell.id);
+      return { ...markSet, targetPath };
+    });
+    return { ...cell, markSets };
+  });
+  const relations = layout.relations.map((relation) => {
+    const rowIndex = rowIndexes.get(relation.inputCellId);
+    const match = /^calvings\.\d+\.(outcome|sex)$/.exec(relation.targetPath);
+    if (rowIndex === undefined || !match) return relation;
+    const targetPath = `calvings.${rowIndex}.${match[1]}`;
+    return targetPath === relation.targetPath
+      ? relation
+      : { ...relation, targetPath, order: rowIndex + 1 };
+  });
+  return {
+    layout: { ...layout, cells, relations },
+    repairedCellCount: repairedCellIds.size,
+  };
+}
+
+async function detectCalvingMarkPresetFromImage(
+  source: string,
+  cell: LayoutCell,
+  canonicalWidth: number,
+  canonicalHeight: number,
+  rowIndex: number,
+): Promise<CalvingMarkDetection> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const candidate = new Image();
+    candidate.onload = () => resolve(candidate);
+    candidate.onerror = () => reject(new Error("MARK_SOURCE_IMAGE_UNAVAILABLE"));
+    candidate.src = source;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = canonicalWidth;
+  canvas.height = canonicalHeight;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("MARK_CANVAS_UNAVAILABLE");
+  context.drawImage(image, 0, 0, canonicalWidth, canonicalHeight);
+  const pixels = context.getImageData(cell.x, cell.y, cell.width, cell.height);
+  const detectedArea = detectCalvingChoiceArea(
+    pixels.data,
+    pixels.width,
+    pixels.height,
+  );
+  return {
+    sets: calvingMarkPreset(cell, rowIndex, detectedArea ?? undefined),
+    usedImageDetection: detectedArea !== null,
+  };
+}
+
+export function detectCalvingChoiceArea(
+  rgba: ArrayLike<number>,
+  width: number,
+  height: number,
+): Rect | null {
+  if (width < 12 || height < 8 || rgba.length < width * height * 4) return null;
+  const grayscale: number[] = [];
+  for (let index = 0; index < width * height; index += 1) {
+    const offset = index * 4;
+    grayscale.push(
+      rgba[offset] * 0.299 + rgba[offset + 1] * 0.587 + rgba[offset + 2] * 0.114,
+    );
+  }
+  const sampled = grayscale.filter((_, index) => index % 7 === 0).sort((a, b) => a - b);
+  const paper = sampled[Math.floor(sampled.length * 0.72)] ?? 220;
+  const threshold = Math.max(85, Math.min(190, paper - 38));
+  const ink = grayscale.map((value) => value < threshold);
+  const rowInk = Array.from({ length: height }, (_, y) => {
+    let count = 0;
+    for (let x = 0; x < width; x += 1) count += ink[y * width + x] ? 1 : 0;
+    return count;
+  });
+  const columnInk = Array.from({ length: width }, (_, x) => {
+    let count = 0;
+    for (let y = 0; y < height; y += 1) count += ink[y * width + x] ? 1 : 0;
+    return count;
+  });
+  const lineRows = new Set(rowInk
+    .map((count, index) => ({ count, index }))
+    .filter(({ count }) => count >= width * 0.55)
+    .map(({ index }) => index));
+  const lineColumns = new Set(columnInk
+    .map((count, index) => ({ count, index }))
+    .filter(({ count }) => count >= height * 0.72)
+    .map(({ index }) => index));
+  const cleanedColumnInk = Array.from({ length: width }, (_, x) => {
+    if (lineColumns.has(x)) return 0;
+    let count = 0;
+    for (let y = 0; y < height; y += 1) {
+      if (!lineRows.has(y) && ink[y * width + x]) count += 1;
+    }
+    return count;
+  });
+  const xMargin = Math.max(2, Math.round(width * 0.015));
+  const firstInk = cleanedColumnInk.findIndex(
+    (count, x) => x >= xMargin && count >= Math.max(2, height * 0.025),
+  );
+  if (firstInk < 0 || firstInk > width * 0.35) return null;
+  const minimumGap = Math.max(6, Math.round(width * 0.055));
+  const searchStart = Math.max(firstInk + Math.round(width * 0.18), xMargin);
+  const searchEnd = Math.min(width - xMargin, Math.round(width * 0.7));
+  let optionRight = -1;
+  let gapStart = -1;
+  for (let x = searchStart; x <= searchEnd; x += 1) {
+    const blank = cleanedColumnInk[x] <= 1;
+    if (blank && gapStart < 0) gapStart = x;
+    if ((!blank || x === searchEnd) && gapStart >= 0) {
+      const gapEnd = blank && x === searchEnd ? x + 1 : x;
+      if (gapEnd - gapStart >= minimumGap) {
+        optionRight = gapStart;
+        break;
+      }
+      gapStart = -1;
+    }
+  }
+  if (optionRight < 0) optionRight = Math.round(width * 0.42);
+  const areaLeft = Math.max(0, firstInk - Math.round(width * 0.018));
+  const areaRight = Math.min(width, optionRight + Math.round(width * 0.01));
+  if (areaRight - areaLeft < width * 0.18 || areaRight - areaLeft > width * 0.6) {
+    return null;
+  }
+  const cleanedRowInk = Array.from({ length: height }, (_, y) => {
+    if (lineRows.has(y)) return 0;
+    let count = 0;
+    for (let x = areaLeft; x < areaRight; x += 1) {
+      if (!lineColumns.has(x) && ink[y * width + x]) count += 1;
+    }
+    return count;
+  });
+  const yMargin = Math.max(1, Math.round(height * 0.025));
+  const activeRows = cleanedRowInk
+    .map((count, y) => ({ count, y }))
+    .filter(({ count, y }) => y >= yMargin
+      && y < height - yMargin
+      && count >= Math.max(2, (areaRight - areaLeft) * 0.025))
+    .map(({ y }) => y);
+  if (activeRows.length === 0) return null;
+  const top = Math.max(0, activeRows[0] - Math.round(height * 0.04));
+  const bottom = Math.min(
+    height,
+    activeRows[activeRows.length - 1] + 1 + Math.round(height * 0.04),
+  );
+  if (bottom - top < height * 0.45) return null;
+  return {
+    x: areaLeft,
+    y: top,
+    width: areaRight - areaLeft,
+    height: bottom - top,
+  };
+}
+
 function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
   return {
     ...layout,
@@ -1799,6 +2673,7 @@ function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
     cells: layout.cells.map((cell) => ({
       ...cell,
       printedLabelText: cell.printedLabelText ?? "",
+      markSets: cell.markSets ?? [],
     })),
   };
 }
@@ -2203,6 +3078,7 @@ function normalizeLabel(value: string) {
   return value
     .normalize("NFKC")
     .replace(/[壳殻]/g, "売")
+    .replace(/[歷暦]/g, "歴")
     .replace(/曰/g, "日")
     .replace(/令/g, "齢")
     .replace(/[\s:：・／/()（）［\]\-―ー]/g, "")

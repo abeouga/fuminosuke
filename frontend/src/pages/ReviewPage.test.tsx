@@ -1,6 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { ReviewPage } from "./ReviewPage";
+import type { OcrDocument, OcrFieldPreview } from "../types";
+import {
+  canShiftCollectionColumn,
+  hydrateMappedReadings,
+  reorderCollectionColumn,
+  ReviewPage,
+  shiftCollectionColumn,
+} from "./ReviewPage";
 
 const reading = {
   raw: "sample",
@@ -11,6 +18,143 @@ const reading = {
   sourceRegionId: "header_identity",
   boundingBox: null,
 };
+
+test("materializes configured collection fields omitted by the OCR provider", () => {
+  const document = {
+    schemaVersion: "1.0",
+    templateId: "template-1",
+    templateVersion: "1",
+    document: {},
+    saleCalves: [],
+    pedigree: {},
+    calvings: [],
+    customFields: {},
+    reviewItems: [],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+  const previews = Array.from({ length: 10 }, (_, index) => ({
+    targetPath: `saleCalves.${index}.priceYen`,
+    mappingId: `price-${index}`,
+    artifactUrl: `/price-${index}.png`,
+    boundingBox: { x: 10, y: index * 20, width: 50, height: 20 },
+  })) satisfies OcrFieldPreview[];
+
+  const hydrated = hydrateMappedReadings(document, previews);
+
+  expect(hydrated.saleCalves).toHaveLength(10);
+  expect(hydrated.saleCalves[9].priceYen).toMatchObject({
+    status: "blank",
+    sourceRegionId: "price-9",
+    boundingBox: { x: 10, y: 180, width: 50, height: 20 },
+  });
+  expect(hydrated.saleCalves[9].sireName).toMatchObject({
+    status: "blank",
+    sourceRegionId: "unmapped",
+  });
+  expect(document.saleCalves).toHaveLength(0);
+});
+
+test("shifts one collection column without changing adjacent columns or losing review paths", () => {
+  const readable = (value: string, sourceRegionId: string) => ({
+    ...reading,
+    raw: value,
+    normalized: value,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+  });
+  const blank = {
+    ...reading,
+    raw: null,
+    normalized: null,
+    status: "blank" as const,
+    reviewReason: null,
+    sourceRegionId: "sale-date-0",
+  };
+  const document = {
+    schemaVersion: "1.0",
+    templateId: "template-1",
+    templateVersion: "1",
+    document: {},
+    saleCalves: [
+      { saleDate: blank, priceYen: readable("100", "price-0") },
+      { saleDate: readable("2026/01/10", "sale-date-1"), priceYen: readable("200", "price-1") },
+      { saleDate: readable("2026/02/20", "sale-date-2"), priceYen: readable("300", "price-2") },
+    ],
+    pedigree: {},
+    calvings: [],
+    customFields: {},
+    reviewItems: [{
+      code: "CHECK_DATE",
+      path: "saleCalves.1.saleDate",
+      message: "確認",
+      severity: "warning" as const,
+      sourceRegionId: "sale-date-1",
+    }],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+
+  expect(canShiftCollectionColumn(document, "saleCalves", "saleDate", "up")).toBe(true);
+  const shifted = shiftCollectionColumn(document, "saleCalves", "saleDate", "up");
+
+  expect(shifted.saleCalves.map((row) => row.saleDate.raw)).toEqual([
+    "2026/01/10",
+    "2026/02/20",
+    null,
+  ]);
+  expect(shifted.saleCalves.map((row) => row.priceYen.raw)).toEqual(["100", "200", "300"]);
+  expect(shifted.saleCalves[0].saleDate.sourceRegionId).toBe("sale-date-0");
+  expect(shifted.reviewItems[0].path).toBe("saleCalves.0.saleDate");
+  expect(document.saleCalves[0].saleDate.raw).toBeNull();
+  expect(canShiftCollectionColumn(shifted, "saleCalves", "saleDate", "up")).toBe(false);
+  expect(canShiftCollectionColumn(shifted, "saleCalves", "saleDate", "down")).toBe(true);
+  expect(shiftCollectionColumn(shifted, "saleCalves", "saleDate", "down").saleCalves
+    .map((row) => row.saleDate.raw)).toEqual([null, "2026/01/10", "2026/02/20"]);
+});
+
+test("reorders only the dragged column and follows its review metadata", () => {
+  const readable = (value: string, sourceRegionId: string) => ({
+    ...reading,
+    raw: value,
+    normalized: value,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+  });
+  const document = {
+    schemaVersion: "1.0",
+    templateId: "template-1",
+    templateVersion: "1",
+    document: {},
+    saleCalves: [
+      { saleDate: readable("A", "date-0"), priceYen: readable("100", "price-0") },
+      { saleDate: readable("B", "date-1"), priceYen: readable("200", "price-1") },
+      { saleDate: readable("C", "date-2"), priceYen: readable("300", "price-2") },
+      { saleDate: readable("D", "date-3"), priceYen: readable("400", "price-3") },
+    ],
+    pedigree: {},
+    calvings: [],
+    customFields: {},
+    reviewItems: [{
+      code: "CHECK_DATE",
+      path: "saleCalves.1.saleDate",
+      message: "確認",
+      severity: "warning" as const,
+      sourceRegionId: "date-1",
+    }],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+
+  const reordered = reorderCollectionColumn(document, "saleCalves", "saleDate", 3, 1);
+
+  expect(reordered.saleCalves.map((row) => row.saleDate.raw)).toEqual(["A", "D", "B", "C"]);
+  expect(reordered.saleCalves.map((row) => row.priceYen.raw)).toEqual(["100", "200", "300", "400"]);
+  expect(reordered.saleCalves[1].saleDate.sourceRegionId).toBe("date-1");
+  expect(reordered.reviewItems[0].path).toBe("saleCalves.2.saleDate");
+  expect(reordered.reviewItems[0].sourceRegionId).toBe("date-2");
+  expect(document.saleCalves.map((row) => row.saleDate.raw)).toEqual(["A", "B", "C", "D"]);
+  expect(reorderCollectionColumn(document, "saleCalves", "saleDate", 1, 1)).toBe(document);
+});
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -85,6 +229,211 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+test("confirms OCR-detected identity before showing the full result table", async () => {
+  const makeReading = (value: string, sourceRegionId: string) => ({
+    ...reading,
+    raw: value,
+    normalized: value,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+  });
+  const document = {
+    schemaVersion: "1.0",
+    templateId: "template-4",
+    templateVersion: "4",
+    document: {
+      unifiedEarTag: makeReading("1234567890", "ear-tag-cell"),
+      cattleName: makeReading("はなこ", "cattle-name-cell"),
+    },
+    saleCalves: [],
+    pedigree: {},
+    calvings: [],
+    customFields: {},
+    reviewItems: [],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+  const previews = [
+    {
+      targetPath: "document.unifiedEarTag",
+      mappingId: "ear-tag-cell",
+      artifactUrl: "/ear-tag-crop.jpg",
+      boundingBox: { x: 10, y: 10, width: 200, height: 50 },
+    },
+    {
+      targetPath: "document.cattleName",
+      mappingId: "cattle-name-cell",
+      artifactUrl: "/cattle-name-crop.jpg",
+      boundingBox: { x: 10, y: 70, width: 200, height: 50 },
+    },
+  ] satisfies OcrFieldPreview[];
+  let correctionBody: Record<string, unknown> | null = null;
+  const resultBody = {
+    jobId: "job-identity",
+    revision: 1,
+    result: document,
+    validation: { valid: true, issues: [] },
+    provider: "openai",
+    modelId: "gpt-5-mini",
+    promptVersion: "test",
+    apiCallCount: 1,
+    inputTokens: 10,
+    outputTokens: 5,
+    estimatedCost: 0.001,
+    confirmed: false,
+    individualId: null,
+    fieldPreviews: previews,
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-identity/corrections") && init?.method === "PUT") {
+      correctionBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return jsonResponse({
+        ...resultBody,
+        revision: 2,
+        result: {
+          ...document,
+          document: correctionBody.document,
+        },
+      });
+    }
+    if (path.endsWith("/ocr-jobs/job-identity/result")) return jsonResponse(resultBody);
+    if (path.endsWith("/jobs/job-identity/artifacts")) {
+      return jsonResponse({ items: [{ name: "alignedSource", mediaType: "image/jpeg", url: "/full.jpg" }] });
+    }
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({});
+  }));
+
+  render(
+    <ReviewPage
+      jobId="job-identity"
+      requireIdentityConfirmation
+      onClose={() => undefined}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", { name: "この個体で間違いありませんか？" })).toBeInTheDocument();
+  expect(screen.getByAltText("個体識別番号の読み取り範囲")).toHaveAttribute("src", "/ear-tag-crop.jpg");
+  expect(screen.getByAltText("牛名の読み取り範囲")).toHaveAttribute("src", "/cattle-name-crop.jpg");
+  fireEvent.change(screen.getByLabelText("個体識別番号（統一耳標）"), {
+    target: { value: "９８７-６５４３-２１０" },
+  });
+  fireEvent.change(screen.getByLabelText("牛名"), { target: { value: "さくら" } });
+  fireEvent.click(screen.getByRole("button", { name: "この個体で結果表へ進む" }));
+
+  expect(await screen.findByRole("heading", { name: "読み取り結果を確認" })).toBeInTheDocument();
+  expect(correctionBody).toMatchObject({
+    document: {
+      unifiedEarTag: { raw: "9876543210", normalized: "9876543210" },
+      cattleName: { raw: "さくら", normalized: "さくら" },
+    },
+  });
+});
+
+test("moves an entire result column from its header controls", async () => {
+  const readableDate = (value: string, sourceRegionId: string) => ({
+    ...reading,
+    raw: value,
+    normalized: value,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+  });
+  const blankDate = {
+    ...reading,
+    raw: null,
+    normalized: null,
+    status: "blank" as const,
+    reviewReason: null,
+    sourceRegionId: "sale-date-0",
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-column-shift/result")) {
+      return jsonResponse({
+        jobId: "job-column-shift",
+        revision: 1,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-1",
+          templateVersion: "1",
+          document: {},
+          saleCalves: [
+            { saleDate: blankDate },
+            { saleDate: readableDate("2026/01/10", "sale-date-1") },
+            { saleDate: readableDate("2026/02/20", "sale-date-2") },
+          ],
+          pedigree: {},
+          calvings: [],
+          customFields: {},
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: true, issues: [] },
+        provider: "openai",
+        modelId: "gpt-5-mini",
+        promptVersion: "test",
+        apiCallCount: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        estimatedCost: 0.001,
+        confirmed: false,
+        individualId: null,
+        fieldPreviews: [0, 1, 2].map((index) => ({
+          targetPath: `saleCalves.${index}.saleDate`,
+          mappingId: `sale-date-${index}`,
+          artifactUrl: `/sale-date-${index}.png`,
+          boundingBox: { x: 10, y: index * 30, width: 80, height: 30 },
+        })),
+      });
+    }
+    if (path.endsWith("/jobs/job-column-shift/artifacts")) {
+      return jsonResponse({ items: [] });
+    }
+    return jsonResponse({});
+  }));
+
+  render(<ReviewPage jobId="job-column-shift" onClose={() => undefined} />);
+
+  const editMode = await screen.findByRole("button", { name: "結果編集モード" });
+  const reorderMode = screen.getByRole("button", { name: "ドラッグアンドドロップ移動モード" });
+  expect(editMode).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "売却日列を上へ1行移動" })).not.toBeInTheDocument();
+
+  fireEvent.click(reorderMode);
+
+  expect(reorderMode).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "売却日 saleCalves.1.saleDate を編集" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "売却日 saleCalves.1.saleDate を移動" })).toBeInTheDocument();
+  const moveUp = screen.getByRole("button", { name: "売却日列を上へ1行移動" });
+  const moveDown = screen.getByRole("button", { name: "売却日列を下へ1行移動" });
+  expect(moveUp).toBeEnabled();
+  expect(moveDown).toBeDisabled();
+
+  fireEvent.click(moveUp);
+
+  expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を移動" }))
+    .toHaveTextContent("2026/01/10");
+  expect(screen.getByRole("button", { name: "売却日 saleCalves.1.saleDate を移動" }))
+    .toHaveTextContent("2026/02/20");
+  expect(screen.getByRole("button", { name: "売却日 saleCalves.2.saleDate を移動" }))
+    .toHaveTextContent("空欄");
+  expect(screen.getByText("売却日列を上へ1行移動しました。")).toBeInTheDocument();
+  expect(moveUp).toBeDisabled();
+  expect(moveDown).toBeEnabled();
+
+  fireEvent.click(editMode);
+
+  expect(editMode).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "売却日列を下へ1行移動" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }))
+    .toHaveTextContent("2026/01/10");
+  fireEvent.click(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }));
+  expect(screen.getByAltText("saleCalves.0.saleDate の切り出し"))
+    .toHaveAttribute("src", "/sale-date-0.png");
+});
+
 test("selects the exact crop and opens the editor when a table cell is clicked", async () => {
   const { container } = render(<ReviewPage jobId="job-1" onClose={() => undefined} />);
 
@@ -120,6 +469,91 @@ test("selects the exact crop and opens the editor when a table cell is clicked",
 
   fireEvent.click(screen.getByRole("button", { name: "帳票全体" }));
   expect(screen.getByAltText("位置合わせ済み帳票")).toHaveAttribute("src", "/full.jpg");
+});
+
+test("opens a full-screen six-choice editor for a calving mark cell", async () => {
+  const blank = {
+    ...reading,
+    raw: null,
+    normalized: null,
+    status: "blank" as const,
+    reviewReason: null,
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-mark/result")) {
+      return jsonResponse({
+        jobId: "job-mark",
+        revision: 1,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-1",
+          templateVersion: "1",
+          document: {},
+          saleCalves: [],
+          pedigree: {},
+          calvings: [{ outcome: blank, sex: blank }],
+          customFields: {},
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: true, issues: [] },
+        provider: "local-mark-detector",
+        modelId: null,
+        promptVersion: null,
+        apiCallCount: 0,
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCost: null,
+        confirmed: false,
+        individualId: null,
+        fieldPreviews: [
+          {
+            targetPath: "calvings.0.outcome",
+            mappingId: "calving-mark-outcome",
+            mappingType: "mark",
+            markOptions: [
+              { label: "双", value: "twin" },
+              { label: "早", value: "premature" },
+              { label: "流", value: "miscarriage" },
+              { label: "死", value: "stillbirth" },
+            ],
+            artifactUrl: "/calving-mark.png",
+            boundingBox: { x: 10, y: 20, width: 300, height: 60 },
+          },
+          {
+            targetPath: "calvings.0.sex",
+            mappingId: "calving-mark-sex",
+            mappingType: "mark",
+            markOptions: [
+              { label: "♂", value: "male" },
+              { label: "♀", value: "female" },
+            ],
+            artifactUrl: "/calving-mark.png",
+            boundingBox: { x: 10, y: 20, width: 300, height: 60 },
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/jobs/job-mark/artifacts")) return jsonResponse({ items: [] });
+    return jsonResponse({});
+  }));
+
+  render(<ReviewPage jobId="job-mark" onClose={() => undefined} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "結果 calvings.0.outcome を編集" }));
+  const dialog = await screen.findByRole("dialog", { name: "1行目の分娩状況を修正" });
+  expect(dialog).toHaveClass("calving-mark-modal");
+  expect(screen.getByAltText("分娩状況の読み取り矩形")).toHaveAttribute("src", "/calving-mark.png");
+
+  fireEvent.click(screen.getByRole("button", { name: "双 双子" }));
+  fireEvent.click(screen.getByRole("button", { name: "♂ 雄" }));
+  expect(screen.getByRole("button", { name: "双 双子" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "♂ 雄" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "この選択を反映" }));
+
+  expect(screen.getByRole("button", { name: "結果 calvings.0.outcome を編集" })).toHaveTextContent("双");
+  expect(screen.getByRole("button", { name: "性別 calvings.0.sex を編集" })).toHaveTextContent("♂");
 });
 
 test("keeps the normalized value in sync when a readable raw value is corrected", async () => {
@@ -195,6 +629,18 @@ test("converts an era date and offers only male or female note prefixes", async 
     reviewReason: "SALE_NOTE_SEX_SYMBOL_UNRESOLVED",
     sourceRegionId: "sale_note_cell",
   };
+  const saleDate = {
+    ...reading,
+    raw: "6 11 7",
+    reviewReason: "BIRTH_DATE_ERA_REQUIRED",
+    sourceRegionId: "sale_date_cell",
+  };
+  const calvingDate = {
+    ...reading,
+    raw: "28 7 25",
+    reviewReason: "BIRTH_DATE_ERA_REQUIRED",
+    sourceRegionId: "calving_date_cell",
+  };
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
     if (path.endsWith("/ocr-jobs/job-era/result")) {
@@ -206,9 +652,9 @@ test("converts an era date and offers only male or female note prefixes", async 
           templateId: "template-1",
           templateVersion: "1",
           document: { birthDate },
-          saleCalves: [{ notes: saleNote }],
+          saleCalves: [{ saleDate, notes: saleNote }],
           pedigree: {},
-          calvings: [],
+          calvings: [{ calvingDate }],
           customFields: {},
           reviewItems: [],
           processingMetadata: {},
@@ -242,6 +688,34 @@ test("converts an era date and offers only male or female note prefixes", async 
   fireEvent.change(screen.getByLabelText("元号"), { target: { value: "heisei" } });
   expect(screen.getByLabelText("西暦表記")).toHaveValue("2014年9月27日");
   expect(birthCell).toHaveTextContent("2014年9月27日");
+
+  const calvingDateCell = screen.getByRole("button", {
+    name: "分娩日 calvings.0.calvingDate を編集",
+  });
+  fireEvent.click(calvingDateCell);
+  expect(screen.getByLabelText("元号年・月・日（数字のみ）")).toHaveValue("28 7 25");
+  expect(screen.getByLabelText("元号")).toHaveValue("heisei");
+  fireEvent.change(screen.getByLabelText("元号"), { target: { value: "heisei" } });
+  expect(screen.getByLabelText("西暦表記")).toHaveValue("2016年7月25日");
+  expect(calvingDateCell).toHaveTextContent("2016年7月25日");
+
+  fireEvent.change(screen.getByLabelText("元号年・月・日（数字のみ）"), {
+    target: { value: "7 7 25" },
+  });
+  expect(screen.getByLabelText("元号")).toHaveValue("reiwa");
+  expect(screen.getByLabelText("西暦表記")).toHaveValue("2025年7月25日");
+  expect(calvingDateCell).toHaveTextContent("2025年7月25日");
+
+  const saleDateCell = screen.getByRole("button", {
+    name: "売却日 saleCalves.0.saleDate を編集",
+  });
+  fireEvent.click(saleDateCell);
+  expect(screen.getByLabelText("元号年・月・日（数字のみ）")).toHaveValue("6 11 7");
+  expect(screen.getByLabelText("元号")).toHaveValue("reiwa");
+  expect(screen.getByLabelText("西暦表記")).toHaveValue("2024年11月7日");
+  fireEvent.change(screen.getByLabelText("元号"), { target: { value: "heisei" } });
+  expect(screen.getByLabelText("西暦表記")).toHaveValue("1994年11月7日");
+  expect(saleDateCell).toHaveTextContent("1994年11月7日");
 
   const noteCell = screen.getByRole("button", {
     name: "備考 saleCalves.0.notes を編集",

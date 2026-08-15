@@ -1,4 +1,4 @@
-import type { Artifact, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, SaleCalfSireSearch, SireName, SireNamePool, Template } from "./types";
+import type { Artifact, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, SaleCalfSireSearch, SireName, SireNamePool, Template } from "./types";
 
 const API = "/api/v1";
 
@@ -56,6 +56,7 @@ export const api = {
   job: (id: string) => request<Job>(`/jobs/${id}`),
   artifacts: (id: string) => request<{ items: Artifact[] }>(`/jobs/${id}/artifacts`),
   result: (id: string) => request<OcrResult>(`/ocr-jobs/${id}/result`),
+  excelTable: (id: string) => request<ExcelTable>(`/ocr-jobs/${id}/excel-table`),
   searchIndividualRecords: (individualId: string) =>
     request<IndividualRecordSearch>(
       `/individual-records?individualId=${encodeURIComponent(individualId)}`,
@@ -84,14 +85,12 @@ export const api = {
   },
   createOcr: async (
     templateVersionId: string,
-    motherIndividualId: string,
     file: File,
     enabled: boolean,
     idempotencyKey: string,
   ) => {
     const body = new FormData();
     body.set("templateVersionId", templateVersionId);
-    body.set("motherIndividualId", motherIndividualId);
     body.set("ocrEnabled", String(enabled));
     body.set("file", file);
     return request<{ jobId: string }>("/ocr-jobs", {
@@ -158,7 +157,7 @@ export const api = {
 };
 
 export const absoluteArtifactUrl = (path: string) => path;
-export const exportUrl = (jobId: string, format: "json" | "csv") =>
+export const exportUrl = (jobId: string, format: "json" | "csv" | "xlsx") =>
   `${API}/ocr-jobs/${jobId}/export?format=${format}`;
 export const individualRecordSearchUrl = (individualId: string) =>
   `${API}/individual-records?individualId=${encodeURIComponent(individualId)}`;

@@ -176,9 +176,26 @@ class OpenAIOcrProvider:
         try:
             document = build_mapped_document(request, parsed)
         except (ValidationError, ValueError) as exc:
+            failed_usage = response.usage
+            failed_input_tokens = (
+                failed_usage.input_tokens if failed_usage else None
+            )
+            failed_output_tokens = (
+                failed_usage.output_tokens if failed_usage else None
+            )
             logger.warning(
-                "OpenAI mapped OCR result could not be assembled: %s",
+                "OpenAI mapped OCR result could not be assembled: %s: %s",
                 type(exc).__name__,
+                str(exc),
+                extra={
+                    "requestedMappingIds": [region.region_id for region in request.regions],
+                    "returnedMappingIds": [item.mapping_id for item in parsed.items],
+                    "inputTokens": failed_input_tokens,
+                    "outputTokens": failed_output_tokens,
+                    "estimatedCost": str(
+                        _estimate_cost(model, failed_input_tokens, failed_output_tokens)
+                    ),
+                },
             )
             raise self._provider_error(
                 502,
@@ -269,6 +286,20 @@ def build_mapped_input_content(
                         "allowedFirstSymbols. Return that symbol as matchedCandidate. "
                         "Preserve any clearly visible handwritten suffix after it. "
                         "Do not substitute kana or katakana for the sex symbol."
+                    ),
+                }
+            )
+        elif region.candidate_type == "mark_choice":
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "candidateType: circled_mark_choice\n"
+                        f"allowedMarks: {json.dumps(region.candidates, ensure_ascii=False)}\n"
+                        "Inspect the printed choices and the pencil circles. Return raw using "
+                        "only the circled values from allowedMarks, in the same order, joined "
+                        "with the Japanese separator ・. If no choice is circled, return blank. "
+                        "Do not transcribe the fixed printed choices themselves."
                     ),
                 }
             )

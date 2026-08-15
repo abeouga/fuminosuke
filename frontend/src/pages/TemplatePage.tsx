@@ -299,7 +299,7 @@ function TemplateReview({
         </section>
         <aside className="quality-card"><span className="panel-kicker">品質メモ</span><h3>自動点検の結果</h3>{Object.entries(version.quality).slice(0, 8).map(([key, value]) => <div className="metric" key={key}><span>{key}</span><strong>{typeof value === "number" ? value.toFixed(3) : String(value)}</strong></div>)}<p>数値は正解確率ではありません。比較画像を優先して確認してください。</p></aside>
       </div>}
-      {mappingConfig && layoutConfig && before && <section className="form-card mapping-section"><div className="section-title"><div><span className="eyebrow">FORM LAYOUT V2</span><h2>帳票セルの検出と意味づけ</h2><p>橙はラベル、青緑は手書き文字欄です。歪み補正済みの元画像上で分類し、保存先までここで確定します。</p></div></div>{maskDirty && <p className="inline-warning">先に文字候補の選別結果を保存してください。</p>}<LayoutEditor source={before} initialLayout={layoutConfig} targets={mappingConfig.targets} allowUnchangedSave={!mappingConfig.validForOcr} disabled={maskDirty || maskBusy} onDirtyChange={setEditorDirty} onBusyChange={setEditorBusy} onDetect={async () => {
+      {mappingConfig && layoutConfig && after && <section className="form-card mapping-section"><div className="section-title"><div><span className="eyebrow">FORM LAYOUT V2</span><h2>帳票セルの検出と意味づけ</h2><p>橙はラベル、青緑は手書き文字欄です。歪み補正済みの元画像上で分類し、保存先までここで確定します。</p></div></div>{maskDirty && <p className="inline-warning">先に文字候補の選別結果を保存してください。</p>}<LayoutEditor source={after} initialLayout={layoutConfig} targets={mappingConfig.targets} allowUnchangedSave={!mappingConfig.validForOcr} disabled={maskDirty || maskBusy} onDirtyChange={setEditorDirty} onBusyChange={setEditorBusy} onDetect={async () => {
         return api.detectLayout(version.id);
       }} onSave={async (layout) => {
         const saved = await api.saveLayout(version.id, layout);
@@ -310,7 +310,12 @@ function TemplateReview({
           const mappings = await api.fieldMappings(version.id);
           setMappingConfig(mappings);
           setMappingFresh(true);
-          setFeedback({ kind: "success", text: `レイアウト${saved.cells.length}セル、意味づけ${saved.relations.length}件を保存しました。次に記入欄を再検出してください。` });
+          setFeedback({
+            kind: "success",
+            text: mappings.validForOcr
+              ? `レイアウト${saved.cells.length}セル、意味づけ${saved.relations.length}件を保存しました。次に記入欄を再検出してください。`
+              : `レイアウト${saved.cells.length}セルを途中保存しました。バックエンドの再起動後も、この続きから編集できます。`,
+          });
         } catch (error) {
           setFeedback({
             kind: "error",

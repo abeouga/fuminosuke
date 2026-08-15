@@ -150,7 +150,25 @@ if ($frontendPort -ne 5173) {
 $backend = $null
 $frontend = $null
 try {
-    $backend = Start-Process -FilePath $python -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port',([string]$backendPort) -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr -PassThru
+    $paddleOcrDisabled = Get-Content -LiteralPath $envFile |
+        Where-Object { $_ -match '^PADDLEOCR_DISABLED=' } |
+        Select-Object -Last 1 |
+        ForEach-Object { ($_ -split '=', 2)[1].Trim() }
+    $previousPaddleOcrDisabled = $env:PADDLEOCR_DISABLED
+    if ($null -ne $paddleOcrDisabled) {
+        $env:PADDLEOCR_DISABLED = $paddleOcrDisabled
+    }
+    try {
+        $backend = Start-Process -FilePath $python -ArgumentList '-m','uvicorn','app.main:app','--host','127.0.0.1','--port',([string]$backendPort) -WorkingDirectory $backendDir -WindowStyle Hidden -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr -PassThru
+    }
+    finally {
+        if ($null -eq $previousPaddleOcrDisabled) {
+            Remove-Item Env:PADDLEOCR_DISABLED -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:PADDLEOCR_DISABLED = $previousPaddleOcrDisabled
+        }
+    }
     $health = Wait-ForBackend "$backendUrl/api/v1/health" $backend
 
     $expectedProvider = Get-Content -LiteralPath $envFile |

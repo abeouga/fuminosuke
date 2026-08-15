@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, test, vi } from "vitest";
 import {
   cellsSelectedByRect,
+  detectCalvingChoiceArea,
+  detectCalvingMarkCells,
   expandTargetPaths,
+  inferCalvingMarkRowIndexes,
   inferRecordCollectionPath,
   inferRecordTargetPath,
   inferTableColumnTargetPath,
@@ -10,11 +13,12 @@ import {
   LayoutEditor,
   linkLaneCells,
   mergeLabelRelations,
+  repairDuplicateCalvingMarkRows,
   segmentIntersectsRect,
   targetPathsFromRecordGroups,
   targetPathsForInputs,
 } from "./LayoutEditor";
-import type { FieldMappingTarget, LayoutCell, LayoutDefinition, LayoutRecordGroup, LayoutRecordSection, LayoutRelation } from "../types";
+import type { FieldMappingTarget, LayoutCell, LayoutDefinition, LayoutMarkSet, LayoutRecordGroup, LayoutRecordSection, LayoutRelation } from "../types";
 
 const targets: FieldMappingTarget[] = Array.from({ length: 10 }, (_, index) => ({
   path: `saleCalves.${index}.priceYen`,
@@ -38,6 +42,146 @@ const allSaleTargets: FieldMappingTarget[] = Array.from(
     section: "売却子牛",
   })),
 ).flat();
+
+test("detects a compact two-row choice area before the handwriting space", () => {
+  const width = 300;
+  const height = 100;
+  const rgba = new Uint8ClampedArray(width * height * 4).fill(235);
+  for (let index = 3; index < rgba.length; index += 4) rgba[index] = 255;
+  const paint = (left: number, top: number, boxWidth: number, boxHeight: number) => {
+    for (let y = top; y < top + boxHeight; y += 1) {
+      for (let x = left; x < left + boxWidth; x += 1) {
+        const offset = (y * width + x) * 4;
+        rgba[offset] = 25;
+        rgba[offset + 1] = 25;
+        rgba[offset + 2] = 25;
+      }
+    }
+  };
+  for (const y of [14, 57]) {
+    for (const x of [12, 42, 72]) paint(x, y, 14, 24);
+  }
+  paint(160, 34, 24, 30);
+
+  const detected = detectCalvingChoiceArea(rgba, width, height);
+
+  expect(detected).not.toBeNull();
+  expect(detected?.x).toBeLessThanOrEqual(12);
+  expect(detected?.width).toBeLessThan(120);
+  expect(detected?.height).toBeGreaterThan(60);
+});
+
+test("batch-detects every selected mark cell and falls back per cell", async () => {
+  const sets = (rowIndex: number): LayoutMarkSet[] => [{
+    id: "outcome",
+    targetPath: `calvings.${rowIndex}.outcome`,
+    selectionMode: "multiple",
+    options: [{
+      id: "twin",
+      label: "双",
+      value: "twin",
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+    }],
+  }];
+  const cells: LayoutCell[] = [
+    {
+      id: "mark_1", role: "mark", x: 0, y: 0, width: 90, height: 50,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+      markSets: sets(0),
+    },
+    {
+      id: "ignored_input", role: "input", x: 100, y: 0, width: 90, height: 50,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+    },
+    {
+      id: "mark_2", role: "mark", x: 0, y: 60, width: 90, height: 50,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+      markSets: sets(1),
+    },
+  ];
+  const detector = vi.fn(async (
+    _source: string,
+    cell: LayoutCell,
+    _canonicalWidth: number,
+    _canonicalHeight: number,
+    rowIndex: number,
+  ) => {
+    if (cell.id === "mark_2") throw new Error("test failure");
+    return { sets: sets(rowIndex), usedImageDetection: true };
+  });
+
+  const result = await detectCalvingMarkCells("source", cells, 300, 200, detector);
+
+  expect(detector).toHaveBeenCalledTimes(2);
+  expect(detector.mock.calls.map((call) => [call[1].id, call[4]])).toEqual([
+    ["mark_1", 0],
+    ["mark_2", 1],
+  ]);
+  expect(result.total).toBe(2);
+  expect(result.detectedCount).toBe(1);
+  expect(result.fallbackCount).toBe(1);
+  expect([...result.updates.keys()]).toEqual(["mark_1", "mark_2"]);
+  expect(result.updates.get("mark_2")?.[0]?.targetPath).toBe("calvings.1.outcome");
+  expect(result.updates.get("mark_2")?.flatMap((set) => set.options)).toHaveLength(6);
+});
+
+test("repairs duplicate calving mark rows in two-column reading order", () => {
+  const markSets = (): LayoutMarkSet[] => ["outcome", "sex"].map((field) => ({
+    id: field,
+    targetPath: `calvings.0.${field}`,
+    selectionMode: "multiple",
+    options: [],
+  }));
+  const markCells: LayoutCell[] = [
+    { id: "right_top", role: "mark", x: 200, y: 10, width: 80, height: 40, confidence: 1, text: "", textConfidence: null, source: "manual", markSets: markSets() },
+    { id: "left_bottom", role: "mark", x: 10, y: 70, width: 80, height: 40, confidence: 1, text: "", textConfidence: null, source: "manual", markSets: markSets() },
+    { id: "right_bottom", role: "mark", x: 200, y: 70, width: 80, height: 40, confidence: 1, text: "", textConfidence: null, source: "manual", markSets: markSets() },
+    { id: "left_top", role: "mark", x: 10, y: 10, width: 80, height: 40, confidence: 1, text: "", textConfidence: null, source: "manual", markSets: markSets() },
+  ];
+  const duplicateRelations: LayoutRelation[] = markCells.map((cell, index) => ({
+    id: `relation_${index}`,
+    inputCellId: cell.id,
+    labelCellIds: [],
+    axis: "horizontal",
+    order: 1,
+    targetPath: "calvings.0.outcome",
+  }));
+  const duplicateLayout: LayoutDefinition = {
+    canonicalWidth: 300,
+    canonicalHeight: 120,
+    detector: "test",
+    ocrAvailable: false,
+    cells: markCells,
+    relations: duplicateRelations,
+    allowCrossAxisLabels: false,
+    warnings: [],
+  };
+
+  expect([...inferCalvingMarkRowIndexes(duplicateLayout, markCells).entries()])
+    .toEqual([
+      ["left_top", 0],
+      ["left_bottom", 1],
+      ["right_top", 2],
+      ["right_bottom", 3],
+    ]);
+
+  const repaired = repairDuplicateCalvingMarkRows(duplicateLayout);
+  const rowsByPosition = [...repaired.layout.cells]
+    .sort((first, second) => first.x - second.x || first.y - second.y)
+    .map((cell) => cell.markSets?.[0]?.targetPath);
+  expect(rowsByPosition).toEqual([
+    "calvings.0.outcome",
+    "calvings.1.outcome",
+    "calvings.2.outcome",
+    "calvings.3.outcome",
+  ]);
+  expect(new Set(repaired.layout.relations.map((relation) => relation.targetPath)).size)
+    .toBe(4);
+  expect(repaired.repairedCellCount).toBe(3);
+});
 
 describe("expandTargetPaths", () => {
   test("expands a repeated table field in drag order", () => {
@@ -66,6 +210,21 @@ describe("expandTargetPaths", () => {
   test("corrects common PaddleOCR glyph errors in the sale date label", () => {
     expect(inferTargetPath("壳却日", 1, allSaleTargets, new Set())).toBe(
       "saleCalves.0.saleDate",
+    );
+  });
+
+  test("recognizes the old-form glyph in the calving history label", () => {
+    const calvingTargets: FieldMappingTarget[] = Array.from(
+      { length: 20 },
+      (_, index) => ({
+        path: `calvings.${index}.parity`,
+        label: `繁殖履歴 ${index + 1}行目・産歴番号`,
+        section: "繁殖履歴",
+      }),
+    );
+
+    expect(inferTargetPath("産歷", 10, calvingTargets, new Set())).toBe(
+      "calvings.0.parity",
     );
   });
 
@@ -405,6 +564,85 @@ describe("range classification", () => {
     fireEvent.click(classifyAsLabel);
     expect(screen.getByText("ラベル 2")).toBeTruthy();
     expect(screen.getByText("手書き文字欄 0")).toBeTruthy();
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
+  test("adds and removes cells with Ctrl+click while classifying", () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const cells: LayoutCell[] = [10, 110, 210].map((x, index) => ({
+      id: `input_${index + 1}`,
+      role: "input",
+      x,
+      y: 10,
+      width: 80,
+      height: 30,
+      confidence: 1,
+      text: "",
+      textConfidence: null,
+      source: "manual",
+    }));
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          canonicalWidth: 300,
+          canonicalHeight: 100,
+          detector: "test",
+          ocrAvailable: false,
+          cells,
+          relations: [],
+          allowCrossAxisLabels: false,
+          warnings: [],
+        }}
+        targets={targets}
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const scope = within(view.container);
+    fireEvent.click(scope.getByRole("button", { name: "区分変更" }));
+    const canvas = scope.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 100,
+      width: 300,
+      height: 100,
+      toJSON: () => ({}),
+    });
+    const ctrlClick = (clientX: number) => {
+      fireEvent.pointerDown(canvas, { clientX, clientY: 25, pointerId: 1, ctrlKey: true });
+      fireEvent.pointerUp(canvas, { clientX, clientY: 25, pointerId: 1, ctrlKey: true });
+    };
+
+    ctrlClick(40);
+    ctrlClick(140);
+
+    expect(scope.getByText("範囲選択: 2 セル")).toBeTruthy();
+    expect(scope.getByText("ラベル 0")).toBeTruthy();
+    expect(scope.getByText("手書き文字欄 3")).toBeTruthy();
+    fireEvent.click(scope.getByRole("button", { name: "ラベルにする" }));
+    expect(scope.getByText("ラベル 2")).toBeTruthy();
+    expect(scope.getByText("手書き文字欄 1")).toBeTruthy();
+
+    ctrlClick(40);
+
+    expect(scope.queryByText("範囲選択: 2 セル")).toBeNull();
+    expect(scope.getByDisplayValue("input_2")).toBeTruthy();
+    view.unmount();
     Object.defineProperty(window, "PointerEvent", {
       configurable: true,
       writable: true,
@@ -890,6 +1128,64 @@ describe("editing safety regressions", () => {
     warnings: [],
   });
 
+  test("saves classified rectangles before they are linked to records", async () => {
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([inputCell], [])}
+        targets={[scalarTarget]}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+
+    fireEvent.change(editor.getByLabelText("セル一覧から選択"), {
+      target: { value: inputCell.id },
+    });
+    const properties = within(view.container.querySelector(".property-form")!);
+    fireEvent.click(properties.getByRole("button", { name: "ラベル" }));
+
+    expect(editor.getByText(
+      "途中保存できます。OCRへ進むには、手書き文字欄または選択マーク欄を保存先へ意味づけしてください。",
+    )).toBeInTheDocument();
+    fireEvent.click(editor.getByRole("button", { name: "レイアウトを途中保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]![0]).toEqual(expect.objectContaining({
+      relations: [],
+      cells: [expect.objectContaining({ id: inputCell.id, role: "label" })],
+    }));
+  });
+
+  test("treats newly classified fields as a draft beside completed mappings", async () => {
+    const extraInput: LayoutCell = {
+      ...inputCell,
+      id: "unassigned_history",
+      x: 220,
+    };
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([labelCell, inputCell, extraInput], [relation])}
+        targets={[scalarTarget]}
+        allowUnchangedSave
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+
+    expect(editor.getByText(
+      "途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。",
+    )).toBeInTheDocument();
+    fireEvent.click(editor.getByRole("button", { name: "レイアウトを途中保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  });
+
   test("keeps unsaved edits when redetection is cancelled", () => {
     const onDetect = vi.fn();
     const onDirtyChange = vi.fn();
@@ -996,7 +1292,7 @@ describe("editing safety regressions", () => {
     fireEvent.change(linkEditor.getByLabelText("ラベルセル"), {
       target: { value: labelCell.id },
     });
-    fireEvent.change(linkEditor.getByLabelText("手書き文字欄"), {
+    fireEvent.change(linkEditor.getByLabelText("接続先セル"), {
       target: { value: inputOption.value },
     });
     fireEvent.click(linkEditor.getByRole("button", { name: "選んだ2セルを意味づけ" }));
@@ -1006,6 +1302,388 @@ describe("editing safety regressions", () => {
     expect(relationTable.getByText(inputOption.value)).toBeInTheDocument();
     expect(relationTable.getByText("牛名")).toBeInTheDocument();
     expect(editor.getByText("保存していないレイアウト変更があります。")).toBeInTheDocument();
+  });
+
+  test("keeps the first meaning line when a second line is created", async () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const birthTarget: FieldMappingTarget = {
+      path: "document.birthDate",
+      label: "生年月日",
+      section: "基本情報",
+    };
+    const birthLabel: LayoutCell = {
+      ...labelCell,
+      id: "label_birth",
+      y: 60,
+      text: "生年月日",
+    };
+    const birthInput: LayoutCell = {
+      ...inputCell,
+      id: "input_birth",
+      y: 60,
+    };
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([labelCell, inputCell, birthLabel, birthInput], [])}
+        targets={[scalarTarget, birthTarget]}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+    const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 100,
+      width: 300,
+      height: 100,
+      toJSON: () => ({}),
+    });
+    const drag = (from: [number, number], to: [number, number]) => {
+      fireEvent.pointerDown(canvas, {
+        clientX: from[0], clientY: from[1], pointerId: 1,
+      });
+      fireEvent.pointerMove(canvas, {
+        clientX: to[0], clientY: to[1], pointerId: 1,
+      });
+      fireEvent.pointerUp(canvas, {
+        clientX: to[0], clientY: to[1], pointerId: 1,
+      });
+    };
+
+    fireEvent.click(editor.getByRole("button", { name: "意味づけ" }));
+    fireEvent.change(editor.getByLabelText("JSON項目"), {
+      target: { value: scalarTarget.path },
+    });
+    drag([45, 25], [150, 25]);
+    drag([45, 75], [150, 75]);
+    fireEvent.click(view.container.querySelector(".layout-save") as HTMLButtonElement);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved.relations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        inputCellId: inputCell.id,
+        labelCellIds: [labelCell.id],
+        targetPath: scalarTarget.path,
+      }),
+      expect.objectContaining({
+        inputCellId: birthInput.id,
+        labelCellIds: [birthLabel.id],
+        targetPath: birthTarget.path,
+      }),
+    ]));
+    expect(saved.relations).toHaveLength(2);
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
+  test("connects a label to a mark cell and saves the relation", async () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const calvingTargets: FieldMappingTarget[] = [
+      { path: "calvings.0.outcome", label: "繁殖履歴 1行目・分娩状況", section: "繁殖履歴" },
+      { path: "calvings.0.sex", label: "繁殖履歴 1行目・性別", section: "繁殖履歴" },
+    ];
+    const markCell: LayoutCell = {
+      ...inputCell,
+      id: "calving_mark",
+      role: "mark",
+      markSets: [
+        {
+          id: "outcome",
+          targetPath: "calvings.0.outcome",
+          selectionMode: "multiple",
+          options: [{
+            id: "twin", label: "双", value: "twin",
+            x: 0, y: 0, width: 50, height: 30,
+          }],
+        },
+        {
+          id: "sex",
+          targetPath: "calvings.0.sex",
+          selectionMode: "multiple",
+          options: [{
+            id: "male", label: "♂", value: "male",
+            x: 50, y: 0, width: 50, height: 30,
+          }],
+        },
+      ],
+    };
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const markLayout: LayoutDefinition = {
+      ...layout([labelCell, markCell], []),
+      recordSections: [{
+        id: "section_calvings",
+        title: "繁殖履歴",
+        collectionPath: "calvings",
+        recordType: "calving",
+        parentLabelCellId: null,
+        source: "manual",
+      }],
+      recordGroups: [{
+        id: "record_calving_1",
+        sectionId: "section_calvings",
+        order: 1,
+        x: markCell.x,
+        y: markCell.y,
+        width: markCell.width,
+        height: markCell.height,
+        inputCellIds: [markCell.id],
+        recordKeyField: "parity",
+        recordKeyValue: "1",
+        source: "manual",
+      }],
+      recordStructureVerified: true,
+    };
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={markLayout}
+        targets={calvingTargets}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+    const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 100,
+      width: 300,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(editor.getByRole("button", { name: "意味づけ" }));
+    fireEvent.pointerDown(canvas, { clientX: 45, clientY: 25, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 150, clientY: 25, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 150, clientY: 25, pointerId: 1 });
+    fireEvent.click(view.container.querySelector(".layout-save") as HTMLButtonElement);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved.relations).toEqual([
+      expect.objectContaining({
+        inputCellId: markCell.id,
+        labelCellIds: [labelCell.id],
+        targetPath: "calvings.0.outcome",
+      }),
+    ]);
+    expect(saved.cells.find((cell) => cell.id === markCell.id)?.markSets)
+      .toEqual(markCell.markSets);
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
+  test("turns a rectangle into a six-choice calving mark field", () => {
+    const calvingTargets: FieldMappingTarget[] = [
+      { path: "calvings.0.outcome", label: "繁殖履歴 1行目・結果", section: "繁殖履歴" },
+      { path: "calvings.0.sex", label: "繁殖履歴 1行目・性別", section: "繁殖履歴" },
+    ];
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([inputCell], [])}
+        targets={calvingTargets}
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    fireEvent.change(view.container.querySelector(".accessible-cell-select select")!, {
+      target: { value: inputCell.id },
+    });
+    const properties = within(view.container.querySelector(".property-form")!);
+
+    fireEvent.click(properties.getByRole("button", { name: "選択マーク欄" }));
+
+    expect(properties.getByText("分娩状況の選択マーク")).toBeInTheDocument();
+    for (const label of ["双", "早", "流", "死", "♂", "♀"]) {
+      expect(properties.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    expect(properties.getByText("calvings.0.outcome")).toBeInTheDocument();
+    expect(properties.getByText("calvings.0.sex")).toBeInTheDocument();
+    expect(properties.getByLabelText("選択マークの判定範囲を画像上で調整"))
+      .toBeInTheDocument();
+    expect(properties.getByRole("button", {
+      name: "画像から2行×3列の枠を自動検出",
+    })).toBeInTheDocument();
+    expect(properties.getByRole("button", { name: "2行×3列の標準配置" }))
+      .toBeInTheDocument();
+    expect(properties.getByText("数値で微調整する")).toBeInTheDocument();
+
+    const visualEditor = view.container.querySelector(".mark-option-canvas") as SVGSVGElement;
+    vi.spyOn(visualEditor, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 600,
+      bottom: 180,
+      width: 600,
+      height: 180,
+      toJSON: () => ({}),
+    });
+    const firstRegion = view.container.querySelector(".mark-option-region") as SVGRectElement;
+    const initialX = Number(firstRegion.getAttribute("x"));
+    const dispatchPointer = (
+      target: Element,
+      type: "pointerdown" | "pointermove" | "pointerup",
+      clientX: number,
+      clientY: number,
+    ) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX, clientY });
+      Object.defineProperty(event, "pointerId", { value: 1 });
+      fireEvent(target, event);
+    };
+    dispatchPointer(firstRegion, "pointerdown", 10, 20);
+    dispatchPointer(visualEditor, "pointermove", 70, 20);
+    dispatchPointer(visualEditor, "pointerup", 70, 20);
+    expect(view.container.querySelector(".mark-option-region"))
+      .toHaveAttribute("x", String(initialX + 10));
+  });
+
+  test("runs the existing auto-detection button for every selected mark cell", async () => {
+    const originalPointerEvent = window.PointerEvent;
+    const originalImage = globalThis.Image;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    class FailingImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onerror?.(new Event("error")));
+      }
+    }
+    Object.defineProperty(globalThis, "Image", {
+      configurable: true,
+      writable: true,
+      value: FailingImage,
+    });
+    const initialSets = (rowIndex: number): LayoutMarkSet[] => [{
+      id: "outcome",
+      targetPath: `calvings.${rowIndex}.outcome`,
+      selectionMode: "multiple",
+      options: [{
+        id: "twin", label: "双", value: "twin",
+        x: 1, y: 1, width: 2, height: 2,
+      }],
+    }];
+    const markCells: LayoutCell[] = [
+      {
+        ...inputCell,
+        id: "mark_row_1",
+        role: "mark",
+        x: 10,
+        y: 10,
+        width: 100,
+        height: 80,
+        markSets: initialSets(0),
+      },
+      {
+        ...inputCell,
+        id: "mark_row_2",
+        role: "mark",
+        x: 160,
+        y: 10,
+        width: 100,
+        height: 80,
+        markSets: initialSets(1),
+      },
+    ];
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+
+    try {
+      const view = render(
+        <LayoutEditor
+          source="data:image/png;base64,invalid"
+          initialLayout={layout(markCells, [])}
+          targets={[]}
+          onDetect={vi.fn()}
+          onSave={onSave}
+        />,
+      );
+      const editor = within(view.container);
+      const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
+      vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 100,
+        width: 300,
+        height: 100,
+        toJSON: () => ({}),
+      });
+      fireEvent.pointerDown(canvas, { clientX: 1, clientY: 1, pointerId: 1 });
+      fireEvent.pointerMove(canvas, { clientX: 299, clientY: 99, pointerId: 1 });
+      fireEvent.pointerUp(canvas, { clientX: 299, clientY: 99, pointerId: 1 });
+
+      expect(editor.getByText("範囲選択: 2 セル")).toBeInTheDocument();
+      const autoButtons = editor.getAllByRole("button", {
+        name: "画像から2行×3列の枠を自動検出",
+      });
+      expect(autoButtons).toHaveLength(1);
+      fireEvent.click(autoButtons[0]);
+
+      await waitFor(() => expect(editor.getByText(
+        "2個の選択マーク欄をまとめて処理しました。 自動検出 0件、標準配置 2件。",
+      )).toBeInTheDocument());
+      fireEvent.click(view.container.querySelector(".layout-save") as HTMLButtonElement);
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+
+      const saved = onSave.mock.calls[0]![0];
+      const savedMarks = saved.cells.filter((cell) => cell.role === "mark");
+      expect(savedMarks).toHaveLength(2);
+      expect(savedMarks.map((cell) => cell.markSets?.[0]?.targetPath)).toEqual([
+        "calvings.0.outcome",
+        "calvings.1.outcome",
+      ]);
+      savedMarks.forEach((cell) => {
+        expect(cell.markSets?.flatMap((set) => set.options)).toHaveLength(6);
+      });
+      view.unmount();
+    } finally {
+      Object.defineProperty(globalThis, "Image", {
+        configurable: true,
+        writable: true,
+        value: originalImage,
+      });
+      Object.defineProperty(window, "PointerEvent", {
+        configurable: true,
+        writable: true,
+        value: originalPointerEvent,
+      });
+    }
   });
 
   test("assigns meaning directly to a mixed input cell and stores its printed label", async () => {
@@ -1154,7 +1832,7 @@ describe("editing safety regressions", () => {
       await pendingSave;
     });
     await waitFor(() => {
-      expect(editor.getByText("テンプレートへ1件の意味づけを保存しました。")).toBeInTheDocument();
+      expect(editor.getByText("テンプレートへ2個の矩形を保存しました。")).toBeInTheDocument();
     });
   });
 });

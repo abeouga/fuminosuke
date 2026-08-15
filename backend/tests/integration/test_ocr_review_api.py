@@ -2,10 +2,12 @@ import hashlib
 import threading
 import time
 from collections.abc import Callable
+from io import BytesIO
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from app.core.config import Settings
 from app.db.base import Base
@@ -136,6 +138,40 @@ def test_existing_active_boundary_fallback_template_cannot_start_ocr(
 
     assert response.status_code == 409
     assert response.json()["code"] == "TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED"
+
+
+def test_ocr_can_start_without_manually_entered_individual_id(
+    client: TestClient,
+) -> None:
+    version_id = _active_template(client)
+    created = client.post(
+        "/api/v1/ocr-jobs",
+        data={
+            "templateVersionId": version_id,
+            "ocrEnabled": "true",
+        },
+        files=[
+            (
+                "file",
+                ("filled.png", encode_png(ledger_image(handwriting_seed=12)), "image/png"),
+            )
+        ],
+    )
+
+    assert created.status_code == 202
+    job_id = created.json()["jobId"]
+    _wait_for(client, job_id, "REVIEW_REQUIRED")
+    job = client.app.state.job_service.get(job_id)
+    assert "motherIndividualId" not in job.config_snapshot_json
+
+    result = client.get(f"/api/v1/ocr-jobs/{job_id}/result")
+    assert result.status_code == 200
+    body = result.json()
+    assert body["individualId"] is None
+    assert (
+        body["result"]["document"]["unifiedEarTag"]["sourceRegionId"]
+        != "manual_mother_individual_id"
+    )
 
 
 def test_review_correct_confirm_and_export(client: TestClient) -> None:
@@ -338,6 +374,33 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert "document.cattleName.normalized" in csv_response.text
     assert "修正花子" in csv_response.text
 
+    excel_table = client.get(f"/api/v1/ocr-jobs/{job_id}/excel-table")
+    assert excel_table.status_code == 200
+    table_body = excel_table.json()
+    assert table_body["sheetName"] == "読み取り結果"
+    assert table_body["fileName"].startswith("繁殖台帳_1234567890_修正花子_")
+    displays = [
+        cell["display"]
+        for row in table_body["rows"]
+        for cell in row["cells"]
+    ]
+    assert "売却子牛一覧" in displays
+    assert "福之姫" in displays
+    assert "なし" in displays
+
+    xlsx_response = client.get(f"/api/v1/ocr-jobs/{job_id}/export?format=xlsx")
+    assert xlsx_response.status_code == 200
+    assert xlsx_response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "filename*=utf-8''" in xlsx_response.headers["content-disposition"].lower()
+    workbook = load_workbook(BytesIO(xlsx_response.content), data_only=False)
+    sheet = workbook["読み取り結果"]
+    values = [cell.value for row in sheet.iter_rows() for cell in row]
+    assert "修正花子" in values
+    assert "福之姫" in values
+    assert 850000 in values
+
     duplicate = client.post(
         f"/api/v1/ocr-jobs/{job_id}/confirm",
         json={"baseRevision": confirmed.json()["revision"]},
@@ -413,10 +476,11 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
 
         request = captured["request"]
         assert len(request.regions) == 1
-        assert request.regions[0].region_id == "cell_0001"
+        assert request.regions[0].region_id == mapping_id
         assert request.regions[0].source_region_id == mapping_id
         assert request.regions[0].target_path == "document.cattleName"
         assert request.regions[0].bounding_box == (120, 20, 240, 80)
+        assert request.regions[0].handwriting_png is not None
 
         job = openai_client.app.state.job_service.get(job_id)
         snapshot = job.config_snapshot_json
@@ -435,12 +499,16 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         ).json()
         assert mapped_cells["mappedCellCount"] == 1
         assert mapped_cells["openAiCropCount"] == 1
+        assert mapped_cells["openAiImageCount"] == 2
+        assert mapped_cells["locallyResolvedCellCount"] == 0
+        assert mapped_cells["trailingBlankRowGatingEnabled"] is True
+        assert mapped_cells["trailingBlankRows"] == []
         assert mapped_cells["labelCellsSentToOpenAi"] is False
         assert mapped_cells["wholeDocumentSentToOpenAi"] is False
         assert mapped_cells["targetPathsSentToOpenAi"] is False
         assert mapped_cells["paddleGatingEnabled"] is False
         assert mapped_cells["cells"][0]["mappingId"] == mapping_id
-        assert mapped_cells["cells"][0]["openAiMappingId"] == "cell_0001"
+        assert mapped_cells["cells"][0]["openAiMappingId"] == mapping_id
         assert mapped_cells["cells"][0]["targetPath"] == "document.cattleName"
         assert mapped_cells["cells"][0]["response"]["raw"] == "こよみ"
 
@@ -461,6 +529,8 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
                     },
                     "recordGroupId": None,
                     "fieldKey": None,
+                    "mappingType": "text",
+                    "markOptions": [],
                 }
             ]
 

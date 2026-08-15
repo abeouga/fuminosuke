@@ -3,18 +3,41 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.errors import to_camel
+from app.domain.text_encoding import repair_utf8_mojibake
 
 
 class LayoutModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
 
+class LayoutMarkOption(LayoutModel):
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=20)
+    value: str = Field(min_length=1, max_length=100)
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+    @field_validator("label", "value", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+
+class LayoutMarkSet(LayoutModel):
+    id: str = Field(min_length=1, max_length=100)
+    target_path: str = Field(min_length=1, max_length=200)
+    selection_mode: Literal["single", "multiple"] = "multiple"
+    options: list[LayoutMarkOption] = Field(min_length=1, max_length=20)
+
+
 class LayoutCell(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
-    role: Literal["label", "input", "ignored"]
+    role: Literal["label", "input", "mark", "ignored"]
     x: int = Field(ge=0)
     y: int = Field(ge=0)
     width: int = Field(gt=0)
@@ -24,6 +47,12 @@ class LayoutCell(LayoutModel):
     printed_label_text: str = Field(default="", max_length=300)
     text_confidence: float | None = Field(default=None, ge=0, le=1)
     source: Literal["detected", "manual"] = "detected"
+    mark_sets: list[LayoutMarkSet] = Field(default_factory=list, max_length=10)
+
+    @field_validator("text", "printed_label_text", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
 
 
 class LayoutRelation(LayoutModel):
@@ -44,6 +73,11 @@ class LayoutRecordSection(LayoutModel):
     record_type: Literal["saleCalf", "calving"]
     parent_label_cell_id: str | None = Field(default=None, max_length=100)
     source: Literal["manual", "inferred"] = "manual"
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
 
 
 class LayoutRecordGroup(LayoutModel):
@@ -91,9 +125,7 @@ class LayoutDefinition(LayoutModel):
         if not isinstance(relations, list) or not isinstance(cells, list):
             return raw
         normalized_cells = [
-            item.model_dump(mode="json", by_alias=True)
-            if isinstance(item, LayoutCell)
-            else item
+            item.model_dump(mode="json", by_alias=True) if isinstance(item, LayoutCell) else item
             for item in cells
         ]
         cell_by_id = {
@@ -123,15 +155,12 @@ class LayoutDefinition(LayoutModel):
             key = (collection, int(index_text))
             if input_id not in grouped.setdefault(key, []):
                 grouped[key].append(input_id)
-            raw_label_ids = relation.get(
-                "labelCellIds", relation.get("label_cell_ids", [])
-            )
+            raw_label_ids = relation.get("labelCellIds", relation.get("label_cell_ids", []))
             if isinstance(raw_label_ids, list):
                 for label_id in raw_label_ids:
-                    if (
-                        isinstance(label_id, str)
-                        and label_id not in label_ids_by_collection.setdefault(collection, [])
-                    ):
+                    if isinstance(
+                        label_id, str
+                    ) and label_id not in label_ids_by_collection.setdefault(collection, []):
                         label_ids_by_collection[collection].append(label_id)
         if not grouped:
             return raw
@@ -176,12 +205,10 @@ class LayoutDefinition(LayoutModel):
                 x = min(int(cell.get("x", 0)) for cell in member_cells)
                 y = min(int(cell.get("y", 0)) for cell in member_cells)
                 right = max(
-                    int(cell.get("x", 0)) + int(cell.get("width", 1))
-                    for cell in member_cells
+                    int(cell.get("x", 0)) + int(cell.get("width", 1)) for cell in member_cells
                 )
                 bottom = max(
-                    int(cell.get("y", 0)) + int(cell.get("height", 1))
-                    for cell in member_cells
+                    int(cell.get("y", 0)) + int(cell.get("height", 1)) for cell in member_cells
                 )
                 group_rows.append(
                     {
@@ -242,21 +269,14 @@ class LayoutDefinition(LayoutModel):
             if (
                 section.parent_label_cell_id is not None
                 and next(
-                    cell for cell in self.cells
-                    if cell.id == section.parent_label_cell_id
+                    cell for cell in self.cells if cell.id == section.parent_label_cell_id
                 ).role
                 != "label"
             ):
-                raise ValueError(
-                    f"Record section {section.id} parent must be a label cell"
-                )
-            expected_type = (
-                "saleCalf" if section.collection_path == "saleCalves" else "calving"
-            )
+                raise ValueError(f"Record section {section.id} parent must be a label cell")
+            expected_type = "saleCalf" if section.collection_path == "saleCalves" else "calving"
             if section.record_type != expected_type:
-                raise ValueError(
-                    f"Record section {section.id} has an incompatible record type"
-                )
+                raise ValueError(f"Record section {section.id} has an incompatible record type")
         group_ids = [group.id for group in self.record_groups]
         if len(group_ids) != len(set(group_ids)):
             raise ValueError("Record group IDs must be unique")
@@ -268,9 +288,7 @@ class LayoutDefinition(LayoutModel):
         for group in self.record_groups:
             record_section = sections.get(group.section_id)
             if record_section is None:
-                raise ValueError(
-                    f"Record group {group.id} references an unknown section"
-                )
+                raise ValueError(f"Record group {group.id} references an unknown section")
             if group.x + group.width > self.canonical_width:
                 raise ValueError(f"Record group {group.id} exceeds canonical width")
             if group.y + group.height > self.canonical_height:
@@ -279,18 +297,14 @@ class LayoutDefinition(LayoutModel):
                 raise ValueError(f"Record group {group.id} contains duplicate input cells")
             for input_id in group.input_cell_ids:
                 if input_id not in known:
-                    raise ValueError(
-                        f"Record group {group.id} references an unknown input cell"
-                    )
+                    raise ValueError(f"Record group {group.id} references an unknown input cell")
                 input_cell = next(cell for cell in self.cells if cell.id == input_id)
-                if input_cell.role != "input":
+                if input_cell.role not in {"input", "mark"}:
                     raise ValueError(
-                        f"Record group {group.id} may contain only input cells"
+                        f"Record group {group.id} may contain only input or mark cells"
                     )
                 if input_id in claimed_inputs:
-                    raise ValueError(
-                        f"Input cell {input_id} belongs to more than one record group"
-                    )
+                    raise ValueError(f"Input cell {input_id} belongs to more than one record group")
                 claimed_inputs.add(input_id)
                 for relation in relations_by_input.get(input_id, []):
                     match = re.fullmatch(
@@ -307,13 +321,10 @@ class LayoutDefinition(LayoutModel):
                         or int(index_text) != group.order - 1
                     ):
                         raise ValueError(
-                            f"Record group {group.id} does not match "
-                            f"{relation.target_path}"
+                            f"Record group {group.id} does not match {relation.target_path}"
                         )
             orders = orders_by_section.setdefault(group.section_id, set())
             if group.order in orders:
-                raise ValueError(
-                    f"Record order {group.order} is duplicated in {group.section_id}"
-                )
+                raise ValueError(f"Record order {group.order} is duplicated in {group.section_id}")
             orders.add(group.order)
         return self

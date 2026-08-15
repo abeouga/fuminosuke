@@ -7,14 +7,18 @@ import logging
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.session import Database
+from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
+from app.domain.template_config import FieldMappingConfig
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.ocr.base import (
     OcrProvider,
     OcrProviderRequest,
+    OcrProviderResponse,
     OcrRegionInput,
 )
+from app.ocr.deterministic_mapper import assign_mapped_reading
 from app.ocr.disabled_provider import DisabledOcrProvider
 from app.ocr.mock_provider import MockOcrProvider
 from app.ocr.openai_provider import OpenAIOcrProvider
@@ -65,35 +69,69 @@ class OcrWorkflowService:
             for value in job_snapshot.get("sireNameAllowedSuffixes", [])
             if isinstance(value, str) and value
         )
-        sale_note_symbols = tuple(
-            value
-            for value in job_snapshot.get(
-                "saleNoteSexSymbolPool",
-                SALE_NOTE_SEX_SYMBOLS,
+        sale_note_symbols = (
+            tuple(
+                value
+                for value in job_snapshot.get(
+                    "saleNoteSexSymbolPool",
+                    SALE_NOTE_SEX_SYMBOLS,
+                )
+                if value in SALE_NOTE_SEX_SYMBOLS
             )
-            if value in SALE_NOTE_SEX_SYMBOLS
-        ) or SALE_NOTE_SEX_SYMBOLS
+            or SALE_NOTE_SEX_SYMBOLS
+        )
         region_configs = (
             extraction.config.mapped_ocr_regions()
             if provider_name == "openai"
             else extraction.config.ocr_regions()
         )
+        mapping_by_id = {
+            mapping.mapping_id: mapping
+            for mapping in extraction.config.field_mappings
+            if mapping.enabled
+        }
+        mark_mappings = [
+            mapping
+            for mapping in extraction.config.field_mappings
+            if mapping.enabled and mapping.mapping_type == "mark"
+        ]
+        mark_state_by_id = {
+            mapping.mapping_id: self._mark_state(mapping, extraction.marks)
+            for mapping in mark_mappings
+        }
+        fixed_calving_keys = (
+            self._fixed_calving_record_keys(job_snapshot.get("recordStructure"))
+            if provider_name == "openai"
+            else {}
+        )
+        trailing_blank_rows = (
+            self._trailing_blank_rows(extraction, mark_state_by_id)
+            if provider_name == "openai"
+            else set()
+        )
+        openai_mark_ids: set[str] = set()
         all_regions: list[OcrRegionInput] = []
-        for index, region in enumerate(region_configs, start=1):
+        preview_text_regions: list[OcrRegionInput] = []
+        fixed_record_regions: list[OcrRegionInput] = []
+        local_resolution_by_id: dict[str, str] = {}
+        for region in region_configs:
+            mapping_config = mapping_by_id.get(region.region_id)
+            if mapping_config is not None and mapping_config.mapping_type == "mark":
+                continue
             if region.region_id not in extraction.crops:
                 continue
-            openai_mapping_id = (
-                f"cell_{index:04d}"
-                if provider_name == "openai"
-                else region.region_id
-            )
-            target_path = (
-                region.expected_fields[0]
-                if len(region.expected_fields) == 1
-                else None
-            )
+            target_path = region.expected_fields[0] if len(region.expected_fields) == 1 else None
+            collection_row = self._collection_row(target_path)
+            fixed_record_key = bool(target_path and target_path in fixed_calving_keys)
+            trailing_blank = collection_row in trailing_blank_rows
+            sent_to_openai = provider_name != "openai" or not (fixed_record_key or trailing_blank)
+            # Preserve the stable template mapping ID. Renumbering the filtered
+            # subset as cell_0001..N lets a model-inserted extra list item shift
+            # every later transcription onto the wrong rectangle.
+            openai_mapping_id = region.region_id
             is_sire_name = bool(
-                target_path and target_path.startswith("saleCalves.")
+                target_path
+                and target_path.startswith("saleCalves.")
                 and target_path.endswith(".sireName")
             )
             is_sale_note = bool(
@@ -101,52 +139,68 @@ class OcrWorkflowService:
                 and target_path.startswith("saleCalves.")
                 and target_path.endswith(".notes")
             )
-            is_birth_date = target_path == "document.birthDate"
+            transcription_format = self._transcription_format(target_path)
             crop = extraction.crops[region.region_id]
             printed_label_excluded = bool(region.printed_label_text.strip())
-            all_regions.append(
-                OcrRegionInput(
-                    region_id=openai_mapping_id,
-                    image_png=encode_png(
-                        crop.handwriting_only
-                        if printed_label_excluded
-                        else crop.aligned_color
-                    ),
-                    handwriting_png=(
-                        None
-                        if printed_label_excluded
-                        else encode_png(crop.handwriting_only)
-                    ),
-                    target_path=target_path,
-                    source_region_id=(
-                        region.region_id if provider_name == "openai" else None
-                    ),
-                    bounding_box=extraction.crops[region.region_id].bbox,
-                    candidates=(
-                        sire_name_pool
-                        if is_sire_name
-                        else sale_note_symbols
-                        if is_sale_note
-                        else ()
-                    ),
-                    allowed_suffixes=sire_name_suffixes if is_sire_name else (),
-                    candidate_type=(
-                        "sire_name"
-                        if is_sire_name
-                        else "sale_calf_note_prefix"
-                        if is_sale_note
-                        else None
-                    ),
-                    transcription_format=(
-                        "japanese_era_date_numbers" if is_birth_date else None
-                    ),
-                    printed_label_excluded=printed_label_excluded,
-                    printed_label_text=region.printed_label_text.strip(),
-                )
+            ocr_region = OcrRegionInput(
+                region_id=openai_mapping_id,
+                image_png=encode_png(
+                    crop.handwriting_only if printed_label_excluded else crop.aligned_color
+                ),
+                handwriting_png=(
+                    None if printed_label_excluded else encode_png(crop.handwriting_only)
+                ),
+                target_path=target_path,
+                source_region_id=(region.region_id if provider_name == "openai" else None),
+                bounding_box=extraction.crops[region.region_id].bbox,
+                candidates=(
+                    sire_name_pool if is_sire_name else sale_note_symbols if is_sale_note else ()
+                ),
+                allowed_suffixes=sire_name_suffixes if is_sire_name else (),
+                candidate_type=(
+                    "sire_name"
+                    if is_sire_name
+                    else "sale_calf_note_prefix"
+                    if is_sale_note
+                    else None
+                ),
+                transcription_format=transcription_format,
+                printed_label_excluded=printed_label_excluded,
+                printed_label_text=region.printed_label_text.strip(),
             )
+            preview_text_regions.append(ocr_region)
+            if sent_to_openai:
+                all_regions.append(ocr_region)
+            elif fixed_record_key:
+                fixed_record_regions.append(ocr_region)
+                local_resolution_by_id[region.region_id] = "fixed_record_key"
+            else:
+                local_resolution_by_id[region.region_id] = "trailing_blank_row"
+        if provider_name == "openai":
+            for mapping in mark_mappings:
+                state = mark_state_by_id[mapping.mapping_id]
+                crop = extraction.crops.get(mapping.mapping_id)
+                if state[0] != ReadingStatus.UNCERTAIN or crop is None:
+                    local_resolution_by_id[mapping.mapping_id] = "mark_detector"
+                    continue
+                openai_mark_ids.add(mapping.mapping_id)
+                all_regions.append(
+                    OcrRegionInput(
+                        region_id=mapping.mapping_id,
+                        image_png=encode_png(crop.aligned_color),
+                        handwriting_png=encode_png(crop.handwriting_only),
+                        target_path=mapping.target_path,
+                        source_region_id=mapping.mapping_id,
+                        bounding_box=crop.bbox,
+                        candidates=tuple(option.label for option in mapping.mark_options),
+                        candidate_type="mark_choice",
+                    )
+                )
         mapped_cells_payload: dict[str, object] | None = None
         if provider_name == "openai":
-            if not all_regions or any(not region.target_path for region in all_regions):
+            if (not all_regions and not mark_mappings) or any(
+                not region.target_path for region in all_regions
+            ):
                 raise AppError(
                     status=409,
                     code="TEMPLATE_FIELD_MAPPING_REQUIRED",
@@ -175,22 +229,51 @@ class OcrWorkflowService:
                         "engine": "paddleocr",
                         "gatingEnabled": False,
                         "classifiedInputCount": len(all_regions),
-                        "detectedTextCount": sum(
-                            item.detected for item in presence_by_id.values()
-                        ),
+                        "detectedTextCount": sum(item.detected for item in presence_by_id.values()),
                         "openAiCropCount": len(all_regions),
                         "regions": [
-                            presence_by_id[region.region_id].to_dict(
-                                region_id=region.region_id
-                            )
+                            presence_by_id[region.region_id].to_dict(region_id=region.region_id)
                             for region in all_regions
                         ],
                     },
                 )
+            sent_mapping_ids = {
+                region.source_region_id or region.region_id for region in all_regions
+            }
+            preview_regions = list(preview_text_regions)
+            preview_mapping_ids = {
+                region.source_region_id or region.region_id for region in preview_regions
+            }
+            preview_regions.extend(
+                region
+                for region in all_regions
+                if (region.source_region_id or region.region_id) not in preview_mapping_ids
+            )
+            for mapping in mark_mappings:
+                if mapping.mapping_id in sent_mapping_ids:
+                    continue
+                crop = extraction.crops.get(mapping.mapping_id)
+                if crop is None:
+                    continue
+                preview_regions.append(
+                    OcrRegionInput(
+                        region_id=mapping.mapping_id,
+                        image_png=encode_png(crop.aligned_color),
+                        handwriting_png=encode_png(crop.handwriting_only),
+                        target_path=mapping.target_path,
+                        source_region_id=mapping.mapping_id,
+                        bounding_box=crop.bbox,
+                        candidates=tuple(option.label for option in mapping.mark_options),
+                        candidate_type="mark_choice",
+                    )
+                )
             mapped_cells_payload = self._mapped_cells_payload(
                 extraction,
-                all_regions,
+                preview_regions,
                 mapping_hash=job_snapshot.get("fieldMappingHash"),
+                sent_mapping_ids=sent_mapping_ids,
+                local_resolution_by_id=local_resolution_by_id,
+                trailing_blank_rows=trailing_blank_rows,
             )
             self._writer.json(
                 job_id=extraction.job_id,
@@ -208,9 +291,67 @@ class OcrWorkflowService:
         if self._cancel_requested(extraction.job_id):
             return
         self._progress(extraction.job_id, "CALLING_OCR", 78)
-        response = asyncio.run(provider.extract(request))
+        response = (
+            OcrProviderResponse(
+                document=blank_ocr_document(
+                    provider="local-mark-detector",
+                    source_regions=[mapping.mapping_id for mapping in mark_mappings],
+                ),
+                provider="local-mark-detector",
+                model_id=None,
+                prompt_version=None,
+                api_call_count=0,
+            )
+            if provider_name == "openai" and not all_regions
+            else asyncio.run(provider.extract(request))
+        )
         response.document.template_id = request.template_id
         response.document.template_version = request.template_version
+        for region in fixed_record_regions:
+            target_path = region.target_path
+            if target_path is None:
+                continue
+            value = fixed_calving_keys[target_path]
+            box = region.bounding_box
+            assign_mapped_reading(
+                response.document,
+                target_path,
+                FieldReading(
+                    raw=value,
+                    normalized=value,
+                    status=ReadingStatus.READABLE,
+                    alternatives=[],
+                    review_reason=None,
+                    source_region_id=region.source_region_id or region.region_id,
+                    bounding_box=(
+                        BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3])
+                        if box
+                        else None
+                    ),
+                ),
+            )
+        for mapping in mark_mappings:
+            if mapping.mapping_id in openai_mark_ids:
+                continue
+            status, raw, review_reason = mark_state_by_id[mapping.mapping_id]
+            assign_mapped_reading(
+                response.document,
+                mapping.target_path,
+                FieldReading(
+                    raw=raw,
+                    normalized=raw if status is ReadingStatus.READABLE else None,
+                    status=status,
+                    alternatives=[],
+                    review_reason=review_reason,
+                    source_region_id=mapping.mapping_id,
+                    bounding_box=BoundingBox(
+                        x=mapping.x,
+                        y=mapping.y,
+                        width=mapping.width,
+                        height=mapping.height,
+                    ),
+                ),
+            )
         mother_individual_id = job_snapshot.get("motherIndividualId")
         if isinstance(mother_individual_id, str):
             response.document.document.unified_ear_tag = FieldReading(
@@ -225,11 +366,9 @@ class OcrWorkflowService:
         response.document.processing_metadata.model_id = response.model_id
         response.document.processing_metadata.prompt_version = response.prompt_version
         self._progress(extraction.job_id, "VALIDATING_RESULT", 90)
-        configured_paths = {
-            region.target_path
-            for region in all_regions
-            if region.target_path
-        }
+        configured_paths = {region.target_path for region in all_regions if region.target_path}
+        configured_paths.update(fixed_calving_keys)
+        configured_paths.update(mapping.target_path for mapping in mark_mappings)
         configured_paths.update(
             self._apply_record_keys(
                 response.document,
@@ -319,6 +458,146 @@ class OcrWorkflowService:
             return OpenAIOcrProvider(self._settings.ocr)
         raise ValueError(f"Unsupported OCR provider: {provider_name}")
 
+    @staticmethod
+    def _fixed_calving_record_keys(raw_structure: object) -> dict[str, str]:
+        if not isinstance(raw_structure, dict):
+            return {}
+        raw_sections = raw_structure.get("sections")
+        raw_groups = raw_structure.get("groups")
+        if not isinstance(raw_sections, list) or not isinstance(raw_groups, list):
+            return {}
+        calving_sections = {
+            section.get("id")
+            for section in raw_sections
+            if isinstance(section, dict)
+            and isinstance(section.get("id"), str)
+            and section.get("collectionPath") == "calvings"
+        }
+        result: dict[str, str] = {}
+        for group in raw_groups:
+            if not isinstance(group, dict) or group.get("sectionId") not in calving_sections:
+                continue
+            order = group.get("order")
+            value = group.get("recordKeyValue")
+            if (
+                isinstance(order, int)
+                and order >= 1
+                and group.get("recordKeyField") == "parity"
+                and isinstance(value, str)
+                and value.strip()
+            ):
+                result[f"calvings.{order - 1}.parity"] = value.strip()
+        return result
+
+    @staticmethod
+    def _collection_row(target_path: str | None) -> tuple[str, int] | None:
+        if target_path is None:
+            return None
+        parts = target_path.split(".")
+        if len(parts) == 3 and parts[0] in {"saleCalves", "calvings"} and parts[1].isdigit():
+            return parts[0], int(parts[1])
+        return None
+
+    @staticmethod
+    def _transcription_format(target_path: str | None) -> str | None:
+        is_era_date = target_path == "document.birthDate" or bool(
+            target_path
+            and (
+                (
+                    target_path.startswith("calvings.")
+                    and target_path.endswith(".calvingDate")
+                )
+                or (
+                    target_path.startswith("saleCalves.")
+                    and target_path.endswith(".saleDate")
+                )
+            )
+        )
+        return "japanese_era_date_numbers" if is_era_date else None
+
+    @classmethod
+    def _trailing_blank_rows(
+        cls,
+        extraction: ExtractionOutput,
+        mark_state_by_id: dict[
+            str,
+            tuple[ReadingStatus, str | None, str | None],
+        ],
+    ) -> set[tuple[str, int]]:
+        """Skip only rows after the last row with conservative local evidence.
+
+        Individual empty-cell gating is intentionally avoided: faint ditto dots
+        and pencil writing can disappear from the handwriting-only derivative.
+        A row is considered active when any non-parity text crop contains at
+        least a few dark pixels, or a local mark result is non-blank. If a whole
+        collection has no active row, nothing is skipped.
+        """
+
+        rows_by_collection: dict[str, set[int]] = {}
+        active_by_collection: dict[str, set[int]] = {}
+        for mapping in extraction.config.field_mappings:
+            if not mapping.enabled:
+                continue
+            collection_row = cls._collection_row(mapping.target_path)
+            if collection_row is None:
+                continue
+            collection, row_index = collection_row
+            rows_by_collection.setdefault(collection, set()).add(row_index)
+            if mapping.mapping_type == "mark":
+                state = mark_state_by_id.get(mapping.mapping_id)
+                if state is not None and state[0] is not ReadingStatus.BLANK:
+                    active_by_collection.setdefault(collection, set()).add(row_index)
+                continue
+            if mapping.target_path.endswith(".parity"):
+                continue
+            crop = extraction.crops.get(mapping.mapping_id)
+            if crop is None or crop.handwriting_only.size == 0:
+                continue
+            dark_pixels = int((crop.handwriting_only.min(axis=2) < 235).sum())
+            if dark_pixels >= 4:
+                active_by_collection.setdefault(collection, set()).add(row_index)
+
+        trailing: set[tuple[str, int]] = set()
+        for collection, rows in rows_by_collection.items():
+            active_rows = active_by_collection.get(collection)
+            if not active_rows:
+                continue
+            last_active = max(active_rows)
+            trailing.update(
+                (collection, row_index) for row_index in rows if row_index > last_active
+            )
+        return trailing
+
+    @staticmethod
+    def _mark_state(
+        mapping: FieldMappingConfig,
+        results: list[dict[str, object]],
+    ) -> tuple[ReadingStatus, str | None, str | None]:
+        mapping_id = mapping.mapping_id
+        options = mapping.mark_options
+        selection_mode = mapping.mark_selection_mode
+        result_by_value = {
+            item.get("optionValue"): item
+            for item in results
+            if item.get("mappingId") == mapping_id and isinstance(item.get("optionValue"), str)
+        }
+        detected_labels: list[str] = []
+        uncertain = False
+        for option in options:
+            result = result_by_value.get(option.value)
+            if result is None or result.get("status") == "uncertain":
+                uncertain = True
+            elif result.get("status") == "detected":
+                detected_labels.append(option.label)
+        if selection_mode == "single" and len(detected_labels) > 1:
+            uncertain = True
+        if uncertain:
+            return ReadingStatus.UNCERTAIN, None, "MARK_CHOICE_UNRESOLVED"
+        if not detected_labels:
+            return ReadingStatus.BLANK, None, None
+        value = "・".join(detected_labels)
+        return ReadingStatus.READABLE, value, None
+
     def _progress(self, job_id: str, stage: str, percent: int) -> None:
         with self._database.session() as session:
             JobRepository(session).update(job_id, progress_stage=stage, progress_percent=percent)
@@ -368,11 +647,7 @@ class OcrWorkflowService:
             ):
                 continue
             target_path = f"{collection}.{order - 1}.parity"
-            records = (
-                document.sale_calves
-                if collection == "saleCalves"
-                else document.calvings
-            )
+            records = document.sale_calves if collection == "saleCalves" else document.calvings
             if order > len(records):
                 continue
             current = records[order - 1].parity
@@ -380,10 +655,13 @@ class OcrWorkflowService:
                 # A record key entered in the template is the identity of the
                 # record. OpenAI still transcribes the parity crop, but can
                 # mistake a sequence such as 2, 3, 4 for 1, 2, 3. Keep a
-                # genuinely blank row blank; otherwise make the template key
-                # authoritative while retaining the mapped cell as the source
-                # so review previews continue to point at the parity crop.
-                if current.raw is None and current.normalized is None:
+                # genuinely blank sale row blank; otherwise make the template
+                # key authoritative while retaining the mapped cell as the
+                # source so review previews continue to point at the parity
+                # crop. Calving-history parity is a printed, fixed row number
+                # in the ledger, so it must be materialized even when OCR
+                # returns the printed-number crop as blank.
+                if collection != "calvings" and current.raw is None and current.normalized is None:
                     continue
                 records[order - 1].parity = current.model_copy(
                     update={
@@ -397,10 +675,7 @@ class OcrWorkflowService:
                 added.add(target_path)
                 continue
             box = None
-            if all(
-                isinstance(raw_group.get(key), int)
-                for key in ("x", "y", "width", "height")
-            ):
+            if all(isinstance(raw_group.get(key), int) for key in ("x", "y", "width", "height")):
                 box = BoundingBox(
                     x=raw_group["x"],
                     y=raw_group["y"],
@@ -423,6 +698,9 @@ class OcrWorkflowService:
         regions: list[OcrRegionInput],
         *,
         mapping_hash: object,
+        sent_mapping_ids: set[str] | None = None,
+        local_resolution_by_id: dict[str, str] | None = None,
+        trailing_blank_rows: set[tuple[str, int]] | None = None,
     ) -> dict[str, object]:
         mapping_by_id = {
             mapping.mapping_id: mapping
@@ -440,6 +718,11 @@ class OcrWorkflowService:
                     "openAiMappingId": region.region_id,
                     "displayLabel": mapping.label,
                     "targetPath": region.target_path,
+                    "mappingType": mapping.mapping_type,
+                    "markOptions": [
+                        {"label": option.label, "value": option.value}
+                        for option in mapping.mark_options
+                    ],
                     "boundingBox": (
                         {
                             "x": box[0],
@@ -452,32 +735,47 @@ class OcrWorkflowService:
                     ),
                     "alignedCellArtifact": (
                         f"fieldCrop.{template_mapping_id}."
-                        + (
-                            "handwritingOnly"
-                            if region.printed_label_excluded
-                            else "alignedColor"
-                        )
+                        + ("handwritingOnly" if region.printed_label_excluded else "alignedColor")
                     ),
-                    "handwritingHintArtifact": (
-                        f"fieldCrop.{template_mapping_id}.handwritingOnly"
-                    ),
-                    "alignedCellSha256": hashlib.sha256(
-                        region.image_png
-                    ).hexdigest(),
+                    "handwritingHintArtifact": (f"fieldCrop.{template_mapping_id}.handwritingOnly"),
+                    "alignedCellSha256": hashlib.sha256(region.image_png).hexdigest(),
                     "handwritingHintSha256": (
                         hashlib.sha256(region.handwriting_png).hexdigest()
                         if region.handwriting_png
                         else None
                     ),
-                    "sentToOpenAi": True,
+                    "sentToOpenAi": (
+                        template_mapping_id in sent_mapping_ids
+                        if sent_mapping_ids is not None
+                        else True
+                    ),
+                    "localResolution": (
+                        local_resolution_by_id.get(template_mapping_id)
+                        if local_resolution_by_id is not None
+                        else None
+                    ),
                     "printedLabelExcludedLocally": region.printed_label_excluded,
                 }
             )
+        sent_ids = (
+            sent_mapping_ids
+            if sent_mapping_ids is not None
+            else {region.source_region_id or region.region_id for region in regions}
+        )
+        sent_regions = [
+            region
+            for region in regions
+            if (region.source_region_id or region.region_id) in sent_ids
+        ]
         return {
             "source": "TEMPLATE_VERSION_SNAPSHOT",
             "fieldMappingHash": mapping_hash,
             "mappedCellCount": len(cells),
-            "openAiCropCount": len(cells),
+            "openAiCropCount": len(sent_regions),
+            "openAiImageCount": sum(
+                1 + int(region.handwriting_png is not None) for region in sent_regions
+            ),
+            "locallyResolvedCellCount": len(cells) - len(sent_regions),
             "labelCellsSentToOpenAi": False,
             "printedLabelExclusionRuleCount": sum(
                 region.printed_label_excluded for region in regions
@@ -485,6 +783,11 @@ class OcrWorkflowService:
             "wholeDocumentSentToOpenAi": False,
             "targetPathsSentToOpenAi": False,
             "paddleGatingEnabled": False,
+            "trailingBlankRowGatingEnabled": True,
+            "trailingBlankRows": [
+                {"collection": collection, "rowIndex": row_index}
+                for collection, row_index in sorted(trailing_blank_rows or set())
+            ],
             "cells": cells,
         }
 

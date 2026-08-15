@@ -64,30 +64,31 @@ CALVING_ATTRIBUTES = {
 }
 
 DITTO_MARKS = {"=", "==", "〃", "″", "こ"}
-AMBIGUOUS_SIRE_DITTO_MARKS = {".", "..", "・", "・・", "·", "••", "∙"}
+CONTEXTUAL_DITTO_MARKS = {".", "..", "・", "・・", "·", "••", "∙", "ヽ"}
 
 
 def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch) -> OcrDocument:
     requested_ids = [region.region_id for region in request.regions]
     if len(requested_ids) != len(set(requested_ids)):
         raise ValueError("Requested mappingId values must be unique")
+    requested_id_set = set(requested_ids)
     returned_ids = [item.mapping_id for item in batch.items]
     if len(returned_ids) != len(set(returned_ids)):
         raise ValueError("OCR response contains duplicate mappingId values")
-    unknown_ids = set(returned_ids) - set(requested_ids)
-    if unknown_ids:
-        raise ValueError(
-            f"OCR response contains unknown mappingId: {sorted(unknown_ids)[0]}"
-        )
+    unknown_ids = set(returned_ids) - requested_id_set
     document = blank_ocr_document(
         provider="openai-mapped",
-        source_regions=[
-            region.source_region_id or region.region_id for region in request.regions
-        ],
+        source_regions=[region.source_region_id or region.region_id for region in request.regions],
     )
     document.template_id = request.template_id
     document.template_version = request.template_version
-    returned = {item.mapping_id: item for item in batch.items}
+    # Structured OCR can occasionally append a sequential mappingId that was
+    # never requested. It has no trusted target path, so ignore it rather than
+    # failing an otherwise complete job. Duplicate requested IDs remain a hard
+    # error because choosing between conflicting readings would be ambiguous.
+    returned = {
+        item.mapping_id: item for item in batch.items if item.mapping_id in requested_id_set
+    }
     ditto_paths: list[tuple[str, str]] = []
     for region in request.regions:
         if not region.target_path:
@@ -125,11 +126,12 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
                 "SALE_NOTE_SEX_SYMBOL_UNRESOLVED": (
                     "備考の先頭を♂または♀として確定できないため確認してください。"
                 ),
-                "BIRTH_DATE_ERA_REQUIRED": (
-                    "生年月日の元号(平成または令和)を選択してください。"
-                ),
+                "BIRTH_DATE_ERA_REQUIRED": ("日付の元号(平成または令和)を選択してください。"),
                 "BIRTH_DATE_NUMBERS_INVALID": (
-                    "生年月日を元号年・月・日の3つの数字として確認してください。"
+                    "日付を元号年・月・日の3つの数字として確認してください。"
+                ),
+                "MARK_CHOICE_UNRESOLVED": (
+                    "選択マークを確定できないため、丸の付いた項目を確認してください。"
                 ),
             }.get(issue_code, "読み取り結果を確認してください。")
             document.review_items.append(
@@ -150,6 +152,8 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
     ]
     if ditto_paths:
         document.processing_metadata.notes.append("DITTO_MARK_RESOLUTION")
+    if unknown_ids:
+        document.processing_metadata.notes.append("IGNORED_UNKNOWN_MAPPING_IDS")
     return document
 
 
@@ -188,20 +192,17 @@ def _reading(
     alternatives = item.alternatives
     issue_code: str | None = None
     normalized = _normalize(target_path, raw) if status is ReadingStatus.READABLE else None
-    if (
-        transcription_format == "japanese_era_date_numbers"
-        and status is not ReadingStatus.BLANK
-    ):
-        numeric_raw, _, reason = canonical_japanese_birth_date(raw, None)
+    if transcription_format == "japanese_era_date_numbers" and status is not ReadingStatus.BLANK:
+        numeric_raw, canonical_normalized, reason = canonical_japanese_birth_date(raw, None)
         raw = numeric_raw
-        normalized = None
-        status = ReadingStatus.UNCERTAIN
-        review_reason = reason
-        issue_code = reason
-    elif (
-        candidate_type == "sale_calf_note_prefix"
-        and status is not ReadingStatus.BLANK
-    ):
+        normalized = canonical_normalized
+        if reason:
+            status = ReadingStatus.UNCERTAIN
+            review_reason = reason
+            issue_code = reason
+        elif status is ReadingStatus.READABLE:
+            review_reason = None
+    elif candidate_type == "sale_calf_note_prefix" and status is not ReadingStatus.BLANK:
         matched = canonical_sale_note(raw, item.matched_candidate, candidates)
         alternatives = [
             candidate
@@ -222,6 +223,19 @@ def _reading(
             status = ReadingStatus.UNCERTAIN
             normalized = None
             review_reason = "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
+            issue_code = review_reason
+    elif candidate_type == "mark_choice" and status is not ReadingStatus.BLANK:
+        selected = [candidate for candidate in candidates if raw and candidate in raw]
+        canonical = "・".join(selected) if selected else None
+        if status is ReadingStatus.READABLE and canonical is not None:
+            raw = canonical
+            normalized = canonical
+            alternatives = []
+            review_reason = None
+        else:
+            status = ReadingStatus.UNCERTAIN
+            normalized = None
+            review_reason = "MARK_CHOICE_UNRESOLVED"
             issue_code = review_reason
     elif candidates and status is not ReadingStatus.BLANK:
         matched = canonical_sire_candidate(
@@ -271,10 +285,16 @@ def _looks_like_ditto(raw: str | None, target_path: str) -> bool:
     compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", raw))
     if compact in DITTO_MARKS:
         return True
+    supports_contextual_ditto = (
+        target_path.startswith("saleCalves.") and target_path.endswith(".sireName")
+    ) or (target_path.startswith("calvings.") and target_path.endswith(".notes"))
+    if supports_contextual_ditto and compact in CONTEXTUAL_DITTO_MARKS:
+        return True
+    # On the ledger's short double-stroke ditto mark, vision OCR can return the
+    # visually similar katakana ミ. Restrict this alias to calving notes so a
+    # legitimate character in another field is never copied accidentally.
     return (
-        target_path.startswith("saleCalves.")
-        and target_path.endswith(".sireName")
-        and compact in AMBIGUOUS_SIRE_DITTO_MARKS
+        target_path.startswith("calvings.") and target_path.endswith(".notes") and compact == "ミ"
     )
 
 
@@ -374,11 +394,7 @@ def _get_record_reading(
             FieldReading,
             getattr(document.sale_calves[index], SALE_CALF_ATTRIBUTES[parts[2]]),
         )
-    if (
-        parts[0] == "calvings"
-        and parts[2] in CALVING_ATTRIBUTES
-        and index < len(document.calvings)
-    ):
+    if parts[0] == "calvings" and parts[2] in CALVING_ATTRIBUTES and index < len(document.calvings):
         return cast(
             FieldReading,
             getattr(document.calvings[index], CALVING_ATTRIBUTES[parts[2]]),
@@ -386,9 +402,7 @@ def _get_record_reading(
     return None
 
 
-def _missing_mapped_reading(
-    mapping_id: str, box: tuple[int, int, int, int] | None
-) -> FieldReading:
+def _missing_mapped_reading(mapping_id: str, box: tuple[int, int, int, int] | None) -> FieldReading:
     return FieldReading(
         raw=None,
         normalized=None,
@@ -437,8 +451,7 @@ def _assign(document: OcrDocument, target_path: str, reading: FieldReading) -> N
     if parts[0] == "saleCalves" and parts[2] in SALE_CALF_ATTRIBUTES:
         if index >= SALE_CALF_ROW_COUNT:
             raise ValueError(
-                f"Sale calf field mapping row must be 1-{SALE_CALF_ROW_COUNT}: "
-                f"{target_path}"
+                f"Sale calf field mapping row must be 1-{SALE_CALF_ROW_COUNT}: {target_path}"
             )
         while len(document.sale_calves) <= index:
             document.sale_calves.append(_blank_sale_calf())
@@ -447,14 +460,22 @@ def _assign(document: OcrDocument, target_path: str, reading: FieldReading) -> N
     if parts[0] == "calvings" and parts[2] in CALVING_ATTRIBUTES:
         if index >= CALVING_ROW_COUNT:
             raise ValueError(
-                f"Calving field mapping row must be 1-{CALVING_ROW_COUNT}: "
-                f"{target_path}"
+                f"Calving field mapping row must be 1-{CALVING_ROW_COUNT}: {target_path}"
             )
         while len(document.calvings) <= index:
             document.calvings.append(_blank_calving())
         setattr(document.calvings[index], CALVING_ATTRIBUTES[parts[2]], reading)
         return
     raise ValueError(f"Unsupported field mapping target: {target_path}")
+
+
+def assign_mapped_reading(
+    document: OcrDocument,
+    target_path: str,
+    reading: FieldReading,
+) -> None:
+    """Assign a local detector result through the normal field-mapping rules."""
+    _assign(document, target_path, reading)
 
 
 def _blank_sale_calf() -> SaleCalf:

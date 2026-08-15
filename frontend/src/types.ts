@@ -80,7 +80,7 @@ export type FieldMappingsResponse = {
 
 export type LayoutCell = {
   id: string;
-  role: "label" | "input" | "ignored";
+  role: "label" | "input" | "mark" | "ignored";
   x: number;
   y: number;
   width: number;
@@ -90,6 +90,24 @@ export type LayoutCell = {
   printedLabelText?: string;
   textConfidence: number | null;
   source: "detected" | "manual";
+  markSets?: LayoutMarkSet[];
+};
+
+export type LayoutMarkOption = {
+  id: string;
+  label: string;
+  value: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type LayoutMarkSet = {
+  id: string;
+  targetPath: string;
+  selectionMode: "single" | "multiple";
+  options: LayoutMarkOption[];
 };
 
 export type LayoutRelation = {
@@ -195,6 +213,8 @@ export type OcrFieldPreview = {
   boundingBox: { x: number; y: number; width: number; height: number } | null;
   recordGroupId?: string | null;
   fieldKey?: string | null;
+  mappingType?: "text" | "mark";
+  markOptions?: Array<{ label: string; value: string }>;
 };
 
 export type OcrResult = {
@@ -269,3 +289,19 @@ export type SaleCalfSireSearch = {
 };
 
 export type Problem = { code?: string; detail?: string; message?: string };
+
+export type ExcelCellKind = "text" | "identifier" | "integer" | "decimal" | "currency" | "date";
+
+export type ExcelTable = {
+  fileName: string;
+  sheetName: string;
+  maxColumns: number;
+  rows: Array<{
+    kind: "title" | "section" | "header" | "data" | "blank";
+    cells: Array<{
+      value: string | number | null;
+      display: string;
+      kind: ExcelCellKind;
+    }>;
+  }>;
+};

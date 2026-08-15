@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from app.domain.text_encoding import repair_utf8_mojibake
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
 
 
@@ -108,6 +109,7 @@ def _parse_paddle_result(raw: Any) -> list[TextRegion]:
     def add(points: Any, text: Any, confidence: Any) -> None:
         if not isinstance(text, str) or not text.strip():
             return
+        text = repair_utf8_mojibake(text)
         try:
             normalized = tuple((float(point[0]), float(point[1])) for point in points)
             score = float(confidence)
@@ -304,9 +306,7 @@ class LayoutDetector:
         text_regions: Iterable[TextRegion],
     ) -> LayoutCell:
         matched = [
-            region
-            for region in text_regions
-            if LayoutDetector._text_is_in_cell(region, rect)
+            region for region in text_regions if LayoutDetector._text_is_in_cell(region, rect)
         ]
         text = " ".join(region.text for region in sorted(matched, key=lambda item: item.bounds[0]))
         text_confidence = (
@@ -338,10 +338,13 @@ class LayoutDetector:
         if right <= left or bottom <= top:
             return False
         ink = gray[top:bottom, left:right] < 190
-        lines = cv2.dilate(
-            line_mask[top:bottom, left:right],
-            np.ones((3, 3), np.uint8),
-        ) > 0
+        lines = (
+            cv2.dilate(
+                line_mask[top:bottom, left:right],
+                np.ones((3, 3), np.uint8),
+            )
+            > 0
+        )
         printable = ink & ~lines
         component_count, _, stats, _ = cv2.connectedComponentsWithStats(
             printable.astype(np.uint8), connectivity=8
@@ -360,8 +363,7 @@ class LayoutDetector:
         center_x = (left + right) / 2
         center_y = (top + bottom) / 2
         return (
-            cell.x <= center_x <= cell.x + cell.width
-            and cell.y <= center_y <= cell.y + cell.height
+            cell.x <= center_x <= cell.x + cell.width and cell.y <= center_y <= cell.y + cell.height
         )
 
     @staticmethod

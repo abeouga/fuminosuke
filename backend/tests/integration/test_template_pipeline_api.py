@@ -87,6 +87,131 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     assert detected_layout.json()["ocrAvailable"] is False
     original_width = detail["versions"][0]["canonicalWidth"]
     original_height = detail["versions"][0]["canonicalHeight"]
+    draft_layout = client.put(
+        f"/api/v1/template-versions/{version_id}/layout",
+        json={
+            "canonicalWidth": original_width,
+            "canonicalHeight": original_height,
+            "detector": "opencv+paddleocr",
+            "ocrAvailable": False,
+            "cells": [
+                {
+                    "id": "draft_label",
+                    "role": "label",
+                    "x": 20,
+                    "y": 20,
+                    "width": min(160, original_width - 20),
+                    "height": min(50, original_height - 20),
+                    "confidence": 0.9,
+                    "text": "名号",
+                    "textConfidence": 0.8,
+                    "source": "detected",
+                },
+                {
+                    "id": "draft_input",
+                    "role": "input",
+                    "x": min(200, original_width - 121),
+                    "y": 20,
+                    "width": 120,
+                    "height": min(50, original_height - 20),
+                    "confidence": 0.9,
+                    "text": "",
+                    "textConfidence": None,
+                    "source": "detected",
+                },
+            ],
+            "relations": [],
+            "allowCrossAxisLabels": False,
+            "warnings": [],
+        },
+    )
+    assert draft_layout.status_code == 200
+    assert draft_layout.json()["relations"] == []
+    persisted_draft = client.get(f"/api/v1/template-versions/{version_id}/layout")
+    assert persisted_draft.status_code == 200
+    assert [cell["role"] for cell in persisted_draft.json()["cells"]] == [
+        "label",
+        "input",
+    ]
+    draft_mappings = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
+    assert draft_mappings["mappings"] == []
+    assert draft_mappings["validForOcr"] is False
+
+    ungrouped_layout = {
+        **draft_layout.json(),
+        "relations": [
+            {
+                "id": "draft_sale_price",
+                "inputCellId": "draft_input",
+                "labelCellIds": ["draft_label"],
+                "axis": "horizontal",
+                "order": 1,
+                "targetPath": "saleCalves.0.priceYen",
+            }
+        ],
+        "recordSections": [],
+        "recordGroups": [],
+        "recordStructureVerified": False,
+    }
+    ungrouped_save = client.put(
+        f"/api/v1/template-versions/{version_id}/layout",
+        json=ungrouped_layout,
+    )
+    assert ungrouped_save.status_code == 200
+    assert ungrouped_save.json()["relations"][0]["targetPath"] == (
+        "saleCalves.0.priceYen"
+    )
+    ungrouped_mappings = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
+    assert ungrouped_mappings["mappings"] == []
+    assert ungrouped_mappings["validForOcr"] is False
+
+    completed_mapping_with_unassigned_cell = {
+        **draft_layout.json(),
+        "cells": [
+            *draft_layout.json()["cells"],
+            {
+                "id": "unassigned_history",
+                "role": "input",
+                "x": min(330, original_width - 81),
+                "y": 20,
+                "width": 80,
+                "height": min(50, original_height - 20),
+                "confidence": 0.9,
+                "text": "1",
+                "textConfidence": 0.8,
+                "source": "detected",
+            },
+        ],
+        "relations": [
+            {
+                "id": "draft_name",
+                "inputCellId": "draft_input",
+                "labelCellIds": ["draft_label"],
+                "axis": "horizontal",
+                "order": 1,
+                "targetPath": "document.cattleName",
+            }
+        ],
+    }
+    mixed_draft_save = client.put(
+        f"/api/v1/template-versions/{version_id}/layout",
+        json=completed_mapping_with_unassigned_cell,
+    )
+    assert mixed_draft_save.status_code == 200
+    mixed_draft_mappings = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
+    assert mixed_draft_mappings["mappings"] == []
+    assert mixed_draft_mappings["validForOcr"] is False
+
+    draft_template = client.get(f"/api/v1/templates/{templates[0]['id']}").json()
+    assert draft_template["versions"][0]["quality"]["layoutDraftSaved"] is True
+    assert draft_template["versions"][0]["quality"]["layoutFinalized"] is False
+
     saved_layout = client.put(
         f"/api/v1/template-versions/{version_id}/layout",
         json={
