@@ -80,7 +80,6 @@ class JobService:
             )
         self._ensure_template_name_available(cleaned_name, idempotency_key)
         self.validate_template_input_count(mode, len(uploads))
-        self._validate_template_batch_limits(uploads)
         loaded = [self._loader.load(item.content, item.declared_media_type) for item in uploads]
         config_snapshot = {"name": cleaned_name, "mode": mode.value}
         job, created = self._create_job_record(
@@ -881,82 +880,16 @@ class JobService:
         }
 
     def validate_template_input_count(self, mode: TemplateMode, count: int) -> None:
-        minimum, maximum = job_input_bounds(
-            JobType.PREPARE_TEMPLATE,
-            mode,
-            min_consensus_images=self._settings.registration.min_consensus_images,
-            max_consensus_images=self._settings.registration.max_consensus_images,
-        )
-        if minimum == maximum == 1:
-            if count == minimum:
-                return
-            raise AppError(
-                status=422,
-                code="INVALID_TEMPLATE_INPUT_COUNT",
-                title="Invalid template input count",
-                detail=f"{mode.value}には画像1枚が必要です。",
-            )
-
-        if count < minimum:
-            raise AppError(
-                status=422,
-                code="INSUFFICIENT_CONSENSUS_IMAGES",
-                title="Not enough consensus images",
-                detail=f"MULTI_SCAN_CONSENSUSには{minimum}枚以上の画像が必要です。",
-                metadata={"minimum": minimum, "received": count},
-            )
-        if count > maximum:
-            raise AppError(
-                status=422,
-                code="TOO_MANY_CONSENSUS_IMAGES",
-                title="Too many consensus images",
-                detail=(
-                    f"一度に処理できる画像は{maximum}枚までです。"
-                    "画像を減らして、もう一度お試しください。"
-                ),
-                metadata={"maximum": maximum, "received": count},
-            )
-
-    def validate_template_batch_bytes(self, total_bytes: int) -> None:
-        maximum = self._settings.storage.max_batch_upload_bytes
-        if total_bytes <= maximum:
+        minimum, maximum = job_input_bounds(JobType.PREPARE_TEMPLATE, mode)
+        if minimum <= count <= maximum:
             return
-        maximum_mib = maximum / (1024 * 1024)
         raise AppError(
             status=422,
-            code="TEMPLATE_BATCH_TOO_LARGE",
-            title="Template image batch is too large",
-            detail=(
-                f"画像の合計ファイルサイズは{maximum_mib:g} MiBまでです。"
-                "画像を減らすか、ファイルサイズを小さくしてください。"
-            ),
-            metadata={"maximumBytes": maximum, "receivedBytes": total_bytes},
+            code="INVALID_TEMPLATE_INPUT_COUNT",
+            title="Invalid template input count",
+            detail=f"{mode.value}には画像1枚が必要です。",
+            metadata={"expected": 1, "received": count},
         )
-
-    def _validate_template_batch_limits(self, uploads: list[UploadPayload]) -> None:
-        self.validate_template_batch_bytes(sum(len(item.content) for item in uploads))
-        maximum_pixels = self._settings.image_processing.max_batch_image_pixels
-        total_pixels = 0
-        for upload in uploads:
-            width, height = self._loader.inspect_dimensions(
-                upload.content,
-                upload.declared_media_type,
-            )
-            total_pixels += width * height
-            if total_pixels > maximum_pixels:
-                raise AppError(
-                    status=422,
-                    code="TEMPLATE_BATCH_PIXEL_LIMIT_EXCEEDED",
-                    title="Template image batch has too many pixels",
-                    detail=(
-                        "画像の合計画素数が上限を超えています。"
-                        "画像を減らすか、解像度を下げてください。"
-                    ),
-                    metadata={
-                        "maximumPixels": maximum_pixels,
-                        "receivedPixels": total_pixels,
-                    },
-                )
 
     @staticmethod
     def _request_hash(

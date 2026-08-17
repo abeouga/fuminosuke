@@ -67,9 +67,8 @@ C:\Users\t_abe\Desktop\llm-ocr\start.bat
 1. 左メニューの「テンプレート」を開きます。
 2. テンプレート名を入力します。
 3. 画像の種類を選びます。
-   - 未記入の帳票がある場合: `REFERENCE_TEMPLATE`
-   - 同じ様式の記入済み画像が3枚以上ある場合: `MULTI_SCAN_CONSENSUS`
-   - 記入済み画像が1枚だけの場合: `SINGLE_IMAGE_EXPERIMENTAL`
+   - 記入済み帳票1枚から作る場合: `SINGLE_IMAGE_EXPERIMENTAL`
+   - 白紙帳票1枚から作る場合: `REFERENCE_TEMPLATE`
 4. 画像を選び、「テンプレート準備を開始」を押します。
 5. 処理完了後、テンプレート確認画面で歪み補正済み画像とOpenCVの矩形候補を確認します。この時点では手書き除去はまだ実行されません。
 

@@ -4,6 +4,10 @@ import { CameraCapture } from "../components/CameraCapture";
 import { FilePicker } from "../components/FilePicker";
 import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
+import {
+  navigateToSpreadsheet,
+  type SpreadsheetNavigator,
+} from "../spreadsheetNavigation";
 import type { FieldMapping, Template } from "../types";
 
 type OcrStep = 1 | 2 | 3;
@@ -20,12 +24,14 @@ export function OcrPage({
   openReview,
   openTemplates,
   onNavigationGuardChange,
+  onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   templates: Template[];
   rememberJob: (id: string) => void;
   openReview: (id: string) => void;
   openTemplates: () => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
+  onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
   const activeVersions = useMemo(
     () => templates.flatMap((template) => template.versions.filter((version) => version.status === "ACTIVE").map((version) => ({ template, version }))),
@@ -107,7 +113,18 @@ export function OcrPage({
     };
   }, [mappingRetryToken, versionId]);
   const { job, connectionLost } = useJobPoller(jobId, (terminal) => {
-    if (terminal.status === "REVIEW_REQUIRED") openReview(terminal.id);
+    if (terminal.status !== "REVIEW_REQUIRED") return;
+    void api.result(terminal.id)
+      .then((result) => {
+        const sync = result.spreadsheetSync;
+        if (sync?.status === "synced" && sync.spreadsheetUrl) {
+          onNavigationGuardChange?.(false);
+          onSpreadsheetNavigate(sync.spreadsheetUrl);
+          return;
+        }
+        openReview(terminal.id);
+      })
+      .catch(() => openReview(terminal.id));
   });
   return (
     <div className="page-stack narrow">

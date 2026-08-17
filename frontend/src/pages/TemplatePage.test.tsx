@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 import { TemplatePage } from "./TemplatePage";
@@ -114,6 +114,22 @@ async function openDraftReview() {
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
   await waitFor(() => expect(screen.getByRole("button", { name: "承認して有効化" })).toBeEnabled());
 }
+
+test("shows only the filled-single and blank-template creation modes in that order", () => {
+  const { container } = render(
+    <TemplatePage templates={[]} refresh={vi.fn()} rememberJob={vi.fn()} />,
+  );
+
+  const modeGroup = screen.getByRole("group", { name: "準備方法" });
+  const modeButtons = within(modeGroup).getAllByRole("button");
+  expect(modeButtons).toHaveLength(2);
+  expect(modeButtons[0]).toHaveTextContent("記入済みの一枚から");
+  expect(modeButtons[1]).toHaveTextContent("白紙帳票から");
+  expect(screen.queryByText(/複数スキャン/)).not.toBeInTheDocument();
+
+  const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+  expect(fileInput).not.toHaveAttribute("multiple");
+});
 
 test("locks template creation after the first job has started", async () => {
   let createCalls = 0;

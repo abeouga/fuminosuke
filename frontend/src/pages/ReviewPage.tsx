@@ -14,7 +14,19 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { CSS, useCombinedRefs } from "@dnd-kit/utilities";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
-import { ExcelExportActions } from "../components/ExcelExportActions";
+import {
+  automaticJapaneseEraDatePatch,
+  formatJapaneseEraDate,
+  inferJapaneseEra,
+  japaneseEraDateParts,
+  normalizeJapaneseDateDisplay,
+  sanitizeJapaneseEraDateInput,
+} from "../japaneseDates";
+import type { JapaneseEra } from "../japaneseDates";
+import {
+  navigateToSpreadsheet,
+  type SpreadsheetNavigator,
+} from "../spreadsheetNavigation";
 import type { Artifact, FieldReading, OcrDocument, OcrFieldPreview, OcrResult } from "../types";
 
 type ReadingEntry = { path: string; label: string; value: FieldReading };
@@ -34,82 +46,7 @@ type RevisionConflictBackup = {
   baseRevision: number;
   latestLoaded: boolean;
 };
-type JapaneseEra = "" | "heisei" | "reiwa";
-
 const SALE_NOTE_SEX_SYMBOLS = ["♂", "♀"];
-
-function sanitizeJapaneseEraDateInput(value: string) {
-  return value
-    .normalize("NFKC")
-    .replace(/[^\d]+/g, " ")
-    .replace(/^\s+/, "")
-    .split(" ")
-    .slice(0, 3)
-    .join(" ");
-}
-
-function japaneseEraDateParts(value: string | null) {
-  if (!value) return null;
-  const groups = sanitizeJapaneseEraDateInput(value).trim().split(/\s+/);
-  if (groups.length !== 3 || groups.some((group) => !/^\d+$/.test(group))) return null;
-  const [year, month, day] = groups.map(Number);
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return [year, month, day] as const;
-}
-
-function formatJapaneseEraDate(value: string | null, era: Exclude<JapaneseEra, "">) {
-  const parts = japaneseEraDateParts(value);
-  if (!parts) return null;
-  const [eraYear, month, day] = parts;
-  const westernYear = eraYear + (era === "heisei" ? 1988 : 2018);
-  const converted = new Date(Date.UTC(westernYear, month - 1, day));
-  if (
-    converted.getUTCFullYear() !== westernYear
-    || converted.getUTCMonth() !== month - 1
-    || converted.getUTCDate() !== day
-  ) return null;
-  const stamp = westernYear * 10000 + month * 100 + day;
-  if (era === "heisei" && (stamp < 19890108 || stamp > 20190430)) return null;
-  if (era === "reiwa" && stamp < 20190501) return null;
-  return `${westernYear}年${month}月${day}日`;
-}
-
-function inferJapaneseEraFromDigits(raw: string | null): JapaneseEra {
-  if (!raw) return "";
-  const groups = sanitizeJapaneseEraDateInput(raw).trim().split(/\s+/);
-  if (groups.length !== 3) return "";
-  if (groups[0].length === 1) return "reiwa";
-  if (groups[0].length === 2) return "heisei";
-  return "";
-}
-
-function inferJapaneseEra(raw: string | null, normalized: string | null): JapaneseEra {
-  if (normalized) {
-    if (formatJapaneseEraDate(raw, "heisei") === normalized) return "heisei";
-    if (formatJapaneseEraDate(raw, "reiwa") === normalized) return "reiwa";
-  }
-  return inferJapaneseEraFromDigits(raw);
-}
-
-function automaticJapaneseEraDatePatch(raw: string): Partial<FieldReading> {
-  const era = inferJapaneseEraFromDigits(raw);
-  const normalized = era ? formatJapaneseEraDate(raw, era) : null;
-  return normalized
-    ? {
-      raw,
-      normalized,
-      status: "readable",
-      reviewReason: null,
-    }
-    : {
-      raw,
-      normalized: null,
-      status: "uncertain",
-      reviewReason: era || !japaneseEraDateParts(raw)
-        ? "BIRTH_DATE_NUMBERS_INVALID"
-        : "BIRTH_DATE_ERA_REQUIRED",
-    };
-}
 
 function saleNoteNeedsSymbol(entry: ReadingEntry) {
   if (
@@ -152,6 +89,30 @@ function isJapaneseEraDatePath(path: string) {
   return path === "document.birthDate"
     || /^calvings\.\d+\.calvingDate$/.test(path)
     || /^saleCalves\.\d+\.saleDate$/.test(path);
+}
+
+function normalizeReviewDateReadings(document: OcrDocument) {
+  let updated = document;
+  for (const entry of collectReadings(document, null)) {
+    if (
+      !isJapaneseEraDatePath(entry.path)
+      || entry.value.status === "blank"
+    ) continue;
+    const normalized = normalizeJapaneseDateDisplay(
+      entry.value.raw,
+      entry.value.normalized,
+    );
+    if (!normalized || entry.value.normalized === normalized) continue;
+    updated = updateReading(updated, entry.path, {
+      raw: sanitizeJapaneseEraDateInput(
+        entry.value.raw ?? entry.value.normalized ?? "",
+      ),
+      normalized,
+      status: "readable",
+      reviewReason: null,
+    });
+  }
+  return updated;
 }
 
 function PointerModeIcon() {
@@ -242,11 +203,15 @@ export function ReviewPage({
   onClose,
   onNavigationGuardChange,
   requireIdentityConfirmation = false,
+  initialSelectedPath = null,
+  onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   jobId: string;
   onClose: () => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
   requireIdentityConfirmation?: boolean;
+  initialSelectedPath?: string | null;
+  onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
   const [result, setResult] = useState<OcrResult | null>(null);
   const [draft, setDraft] = useState<OcrDocument | null>(null);
@@ -274,8 +239,22 @@ export function ReviewPage({
       api.artifacts(jobId).catch(() => null),
       api.sireNames().catch(() => null),
     ]);
+    const hydrated = normalizeReviewDateReadings(
+      hydrateMappedReadings(next.result, next.fieldPreviews),
+    );
     setResult(next);
-    setDraft(hydrateMappedReadings(next.result, next.fieldPreviews));
+    setDraft(hydrated);
+    const initialEntry = initialSelectedPath
+      ? collectReadings(hydrated, null).find((entry) => entry.path === initialSelectedPath)
+      : undefined;
+    if (initialEntry) {
+      const preview = next.fieldPreviews.find(
+        (item) => item.targetPath === initialEntry.path
+          || item.mappingId === initialEntry.value.sourceRegionId,
+      );
+      setSelectedPath(initialEntry.path);
+      setSelectedMappingId(preview?.mappingId ?? null);
+    }
     setArtifacts(artifactList?.items ?? []);
     if (!artifactList) {
       setPreviewWarning("画像プレビューを取得できませんでした。文字の修正と保存は続けられます。");
@@ -298,7 +277,18 @@ export function ReviewPage({
     void load().catch((reason) => {
       setLoadError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
     });
-  }, [jobId]);
+  }, [jobId, initialSelectedPath]);
+  useEffect(() => {
+    if (!selectedPath || (requireIdentityConfirmation && !identityStepComplete && !result?.confirmed)) {
+      return;
+    }
+    window.setTimeout(() => {
+      const cell = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-review-path]"),
+      ).find((element) => element.dataset.reviewPath === selectedPath);
+      cell?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }, 0);
+  }, [identityStepComplete, requireIdentityConfirmation, result?.confirmed, selectedPath]);
   useEffect(() => {
     if (!result && !revisionConflict) return;
     onNavigationGuardChange?.(Boolean((result && !result.confirmed) || revisionConflict));
@@ -677,6 +667,34 @@ export function ReviewPage({
       {mappedPaths && <aside className="notice compact"><strong>意味づけ済み項目のみ表示</strong><span>テンプレートで設定された {mappedPaths.size} 項目を表示しています。</span></aside>}
       {!identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
       {result.confirmed && result.individualId && <aside className="notice external compact"><strong>個体JSONへ保存済み</strong><span>個体識別番号 {result.individualId} で検索できます。</span></aside>}
+      {result.spreadsheetSync?.enabled && (
+        <aside className={`notice compact ${result.spreadsheetSync.status === "failed" ? "external" : ""}`}>
+          <strong>{result.spreadsheetSync.status === "failed" ? "スプレッドシート同期に失敗" : result.spreadsheetSync.status === "synced" ? "Googleスプレッドシートへ同期済み" : "Googleスプレッドシート連携設定済み"}</strong>
+          <span>{result.spreadsheetSync.lastError ?? (result.spreadsheetSync.status === "synced" ? "保存した修正は同じ明細行へ反映されます。" : "次回の保存・確定時に同じ明細行へ反映します。")}</span>
+          {result.spreadsheetSync.status === "failed" && (
+            <button type="button" className="secondary compact" disabled={busy} onClick={async () => {
+              setBusy(true);
+              try {
+                const synced = await api.syncSpreadsheet(jobId);
+                setResult(synced);
+                setMessage(synced.spreadsheetSync?.status === "synced" ? "スプレッドシートへ再同期しました。" : synced.spreadsheetSync?.lastError ?? "再同期できませんでした。");
+                if (
+                  synced.spreadsheetSync?.status === "synced"
+                  && synced.spreadsheetSync.spreadsheetUrl
+                ) {
+                  onNavigationGuardChange?.(false);
+                  onSpreadsheetNavigate(synced.spreadsheetSync.spreadsheetUrl);
+                }
+              } catch (reason) {
+                setError(reason instanceof Error ? reason.message : "再同期できませんでした。");
+              } finally {
+                setBusy(false);
+              }
+            }}>再同期</button>
+          )}
+          {result.spreadsheetSync.spreadsheetUrl && <a className="secondary compact" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>}
+        </aside>
+      )}
       {previewWarning && <aside className="notice compact"><strong>画像表示のみ利用できません</strong><span>{previewWarning}</span></aside>}
       <div
         className="ocr-review-layout"
@@ -912,7 +930,7 @@ export function ReviewPage({
         </section>
       )}
       {error && <p className="error-box">{error}</p>}{message && <p className="success-box">{message}</p>}
-      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? "Excelへコピー、または書類ごとのファイルとして保存できます。" : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存してから確定してください。"}</span></div>{result.confirmed ? <ExcelExportActions jobId={jobId} /> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage("修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。確定後は修正できません。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage("結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
+      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? "確定結果はGoogleスプレッドシートの同じ行へ反映されました。" : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? (result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null) : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。個体検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
       {markEditorRow !== null && (
         <CalvingMarkModal
           rowIndex={markEditorRow}

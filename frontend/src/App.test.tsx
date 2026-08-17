@@ -119,9 +119,44 @@ const recoveredTemplate = {
   }],
 };
 
+test("requires Google login before loading protected OCR data", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/health")) {
+      return jsonResponse({ status: "ok", database: "ok", jobWorker: "running", ocrProvider: "mock" });
+    }
+    if (path.endsWith("/auth/session")) {
+      return jsonResponse({ required: true, configured: true, authenticated: false, user: null });
+    }
+    return jsonResponse({});
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Googleアカウントで接続" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Googleでログイン" })).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/templates"))).toBe(false);
+});
+
+test("shows OAuth setup guidance when the backend is not configured", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/auth/session")) {
+      return jsonResponse({ required: true, configured: false, authenticated: false, user: null });
+    }
+    return jsonResponse({});
+  }));
+
+  render(<App />);
+
+  expect(await screen.findByText("管理者のOAuth設定が必要です")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Googleでログイン" })).not.toBeInTheDocument();
+});
+
 test("shows the local workbench home", async () => {
   render(<App />);
-  expect(screen.getByText("紙の台帳を、", { exact: false })).toBeInTheDocument();
+  expect(await screen.findByText("紙の台帳を、", { exact: false })).toBeInTheDocument();
   expect(await screen.findByText("試運転モード")).toBeInTheDocument();
 });
 
@@ -296,13 +331,14 @@ test("keeps the normal recent list when the action-required request fails", asyn
 
 test("searches and displays a confirmed individual record", async () => {
   render(<App />);
-  fireEvent.click(screen.getByRole("button", { name: /個体検索/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /個体検索/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /個体を検索.*個体識別番号・種雄牛名/ }));
   fireEvent.change(screen.getByLabelText("個体識別番号"), {
     target: { value: "123-4567-890" },
   });
   fireEvent.click(screen.getByRole("button", { name: "個体を検索" }));
 
-  expect((await screen.findAllByText("123-4567-890")).length).toBeGreaterThanOrEqual(2);
+  expect((await screen.findAllByText("123-4567-890")).length).toBeGreaterThanOrEqual(1);
   expect(screen.getAllByText("修正花子").length).toBeGreaterThan(0);
   expect(screen.getByText("1件の確定済み帳票が見つかりました。")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "基本情報" })).toBeInTheDocument();
@@ -311,7 +347,7 @@ test("searches and displays a confirmed individual record", async () => {
 test("opens the sire-name pool from the side panel", async () => {
   render(<App />);
 
-  fireEvent.click(screen.getByRole("button", { name: /種雄牛名を追加/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /種雄牛名を追加/ }));
 
   expect(
     await screen.findByRole("heading", { name: "種雄牛名を追加" }),

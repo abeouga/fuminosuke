@@ -1,3 +1,5 @@
+import pytest
+
 from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_factory import blank_ocr_document, blank_reading
 from app.domain.ocr_models import FieldReading, ReadingStatus, SaleCalf
@@ -58,3 +60,27 @@ def test_review_save_infers_era_and_blocks_invalid_note_prefix() -> None:
     assert normalized.sale_calves[0].notes.review_reason == "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
     assert normalized.sale_calves[0].sale_date.status is ReadingStatus.READABLE
     assert normalized.sale_calves[0].sale_date.normalized == "2024年11月7日"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("30 8-10", "2018年8月10日"),
+        ("30,8,10", "2018年8月10日"),
+        ("5.11.16", "2023年11月16日"),
+        ("5-11-16", "2023年11月16日"),
+        ("2001-11-6", "2001年11月6日"),
+    ],
+)
+def test_sale_date_accepts_mixed_separators_and_uses_japanese_western_display(
+    raw: str,
+    expected: str,
+) -> None:
+    document = blank_ocr_document(provider="test", source_regions=[])
+    document.sale_calves.append(_sale_calf(blank_reading("test")))
+    document.sale_calves[0].sale_date = _reading(raw)
+
+    normalized = normalize_document_numbers(document)
+
+    assert normalized.sale_calves[0].sale_date.normalized == expected
+    assert normalized.sale_calves[0].sale_date.status is ReadingStatus.READABLE

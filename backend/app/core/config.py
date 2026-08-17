@@ -37,7 +37,6 @@ class AppSettings(BaseModel):
 class StorageSettings(BaseModel):
     data_dir: Path
     max_upload_bytes: int = Field(gt=0)
-    max_batch_upload_bytes: int = Field(gt=0)
 
 
 class DatabaseSettings(BaseModel):
@@ -52,7 +51,6 @@ class JobSettings(BaseModel):
 
 class ImageProcessingSettings(BaseModel):
     max_image_pixels: int = Field(gt=0)
-    max_batch_image_pixels: int = Field(gt=0)
     max_image_edge: int = Field(gt=0)
     opencv_num_threads: int = Field(ge=1)
 
@@ -65,9 +63,6 @@ class RegistrationSettings(BaseModel):
     min_ecc_score: float = Field(ge=0, le=1)
     min_edge_overlap: float = Field(ge=0, le=1)
     min_template_confidence: float = Field(ge=0, le=1)
-    static_ink_frequency_threshold: float = Field(ge=0, le=1)
-    min_consensus_images: int = Field(ge=3)
-    max_consensus_images: int = Field(ge=3)
 
 
 class SegmentationSettings(BaseModel):
@@ -99,6 +94,61 @@ class LoggingSettings(BaseModel):
     file: Path
 
 
+class GoogleSheetsSettings(BaseModel):
+    enabled: bool
+    spreadsheet_id: str | None
+    credentials_path: Path | None
+    frontend_base_url: str
+    spreadsheet_title: str = "繁殖台帳 OCR"
+    document_sheet_name: str = "帳票一覧"
+    sale_sheet_name: str = "売却子牛一覧"
+    calving_sheet_name: str = "繁殖履歴"
+
+    @field_validator("frontend_base_url")
+    @classmethod
+    def validate_frontend_base_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            raise ValueError("GOOGLE_SHEETS_FRONTEND_BASE_URL must be a loopback URL")
+        return value.rstrip("/") + "/"
+
+
+class GoogleOAuthSettings(BaseModel):
+    enabled: bool
+    client_id: str | None
+    client_secret: SecretStr | None
+    jwt_secret: SecretStr | None
+    redirect_uri: str
+    frontend_url: str
+    session_cookie_name: str = "ledger_session"
+    state_cookie_name: str = "ledger_google_oauth_state"
+    session_ttl_seconds: int = Field(ge=300, le=2_592_000)
+    state_ttl_seconds: int = Field(ge=60, le=1_800)
+    secure_cookie: bool
+
+    @field_validator("redirect_uri", "frontend_url")
+    @classmethod
+    def validate_oauth_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        if parsed.scheme != "https" and not (parsed.scheme == "http" and is_loopback):
+            raise ValueError("Google OAuth URLs must use HTTPS except on loopback hosts")
+        return value.rstrip("/") if parsed.path in {"", "/"} else value
+
+    @property
+    def configured(self) -> bool:
+        return bool(
+            self.enabled
+            and self.client_id
+            and self.client_secret is not None
+            and self.jwt_secret is not None
+        )
+
+
 class RawSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -118,20 +168,10 @@ class RawSettings(BaseSettings):
         validation_alias="FRONTEND_ORIGINS",
     )
     data_dir: Path = Field(default=Path("./data"), validation_alias="DATA_DIR")
-    database_url: str = Field(
-        default="sqlite:///./data/app.db", validation_alias="DATABASE_URL"
-    )
+    database_url: str = Field(default="sqlite:///./data/app.db", validation_alias="DATABASE_URL")
     log_file: Path = Field(default=Path("./data/logs/app.log"), validation_alias="LOG_FILE")
     max_upload_bytes: int = Field(default=20_971_520, validation_alias="MAX_UPLOAD_BYTES")
-    max_batch_upload_bytes: int = Field(
-        default=104_857_600,
-        validation_alias="MAX_BATCH_UPLOAD_BYTES",
-    )
     max_image_pixels: int = Field(default=30_000_000, validation_alias="MAX_IMAGE_PIXELS")
-    max_batch_image_pixels: int = Field(
-        default=120_000_000,
-        validation_alias="MAX_BATCH_IMAGE_PIXELS",
-    )
     max_image_edge: int = Field(default=8000, validation_alias="MAX_IMAGE_EDGE")
     job_max_concurrency: int = Field(default=1, validation_alias="JOB_MAX_CONCURRENCY")
     job_thread_workers: int = Field(default=1, validation_alias="JOB_THREAD_WORKERS")
@@ -140,9 +180,7 @@ class RawSettings(BaseSettings):
         default="mock", validation_alias="OCR_PROVIDER"
     )
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
-    openai_primary_model: str | None = Field(
-        default=None, validation_alias="OPENAI_PRIMARY_MODEL"
-    )
+    openai_primary_model: str | None = Field(default=None, validation_alias="OPENAI_PRIMARY_MODEL")
     openai_fallback_model: str | None = Field(
         default=None, validation_alias="OPENAI_FALLBACK_MODEL"
     )
@@ -152,15 +190,9 @@ class RawSettings(BaseSettings):
     openai_reasoning_effort: Literal["low", "medium", "high"] = Field(
         default="low", validation_alias="OPENAI_REASONING_EFFORT"
     )
-    openai_max_calls_per_job: int = Field(
-        default=8, validation_alias="OPENAI_MAX_CALLS_PER_JOB"
-    )
-    openai_max_output_tokens: int = Field(
-        default=4000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS"
-    )
-    openai_timeout_seconds: int = Field(
-        default=60, validation_alias="OPENAI_TIMEOUT_SECONDS"
-    )
+    openai_max_calls_per_job: int = Field(default=8, validation_alias="OPENAI_MAX_CALLS_PER_JOB")
+    openai_max_output_tokens: int = Field(default=4000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS")
+    openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
         default="cow-ledger-v3", validation_alias="OPENAI_PROMPT_VERSION"
@@ -175,13 +207,9 @@ class RawSettings(BaseSettings):
     handwriting_model_version: str | None = Field(
         default=None, validation_alias="HANDWRITING_MODEL_VERSION"
     )
-    handwriting_threshold: float = Field(
-        default=0.55, validation_alias="HANDWRITING_THRESHOLD"
-    )
+    handwriting_threshold: float = Field(default=0.55, validation_alias="HANDWRITING_THRESHOLD")
     handwriting_tile_size: int = Field(default=1024, validation_alias="HANDWRITING_TILE_SIZE")
-    handwriting_tile_overlap: int = Field(
-        default=128, validation_alias="HANDWRITING_TILE_OVERLAP"
-    )
+    handwriting_tile_overlap: int = Field(default=128, validation_alias="HANDWRITING_TILE_OVERLAP")
     opencv_num_threads: int = Field(default=1, validation_alias="OPENCV_NUM_THREADS")
     min_feature_matches: int = Field(default=30, validation_alias="MIN_FEATURE_MATCHES")
     min_inliers: int = Field(default=20, validation_alias="MIN_INLIERS")
@@ -191,14 +219,43 @@ class RawSettings(BaseSettings):
     )
     min_ecc_score: float = Field(default=0.75, validation_alias="MIN_ECC_SCORE")
     min_edge_overlap: float = Field(default=0.7, validation_alias="MIN_EDGE_OVERLAP")
-    min_template_confidence: float = Field(
-        default=0.75, validation_alias="MIN_TEMPLATE_CONFIDENCE"
+    min_template_confidence: float = Field(default=0.75, validation_alias="MIN_TEMPLATE_CONFIDENCE")
+    google_sheets_enabled: bool = Field(default=False, validation_alias="GOOGLE_SHEETS_ENABLED")
+    google_sheets_spreadsheet_id: str | None = Field(
+        default=None, validation_alias="GOOGLE_SHEETS_SPREADSHEET_ID"
     )
-    static_ink_frequency_threshold: float = Field(
-        default=0.6, validation_alias="STATIC_INK_FREQUENCY_THRESHOLD"
+    google_sheets_credentials_path: Path | None = Field(
+        default=None, validation_alias="GOOGLE_SHEETS_CREDENTIALS_PATH"
     )
-    min_consensus_images: int = Field(default=3, validation_alias="MIN_CONSENSUS_IMAGES")
-    max_consensus_images: int = Field(default=20, validation_alias="MAX_CONSENSUS_IMAGES")
+    google_sheets_frontend_base_url: str = Field(
+        default="http://127.0.0.1:5173/",
+        validation_alias="GOOGLE_SHEETS_FRONTEND_BASE_URL",
+    )
+    google_sheets_spreadsheet_title: str = Field(
+        default="繁殖台帳 OCR",
+        validation_alias="GOOGLE_SHEETS_SPREADSHEET_TITLE",
+    )
+    google_oauth_enabled: bool = Field(default=False, validation_alias="GOOGLE_OAUTH_ENABLED")
+    google_oauth_client_id: str | None = Field(
+        default=None, validation_alias="GOOGLE_OAUTH_CLIENT_ID"
+    )
+    google_oauth_client_secret: SecretStr | None = Field(
+        default=None, validation_alias="GOOGLE_OAUTH_CLIENT_SECRET"
+    )
+    auth_jwt_secret: SecretStr | None = Field(default=None, validation_alias="AUTH_JWT_SECRET")
+    google_oauth_redirect_uri: str = Field(
+        default="http://127.0.0.1:8000/api/v1/auth/google/callback",
+        validation_alias="GOOGLE_OAUTH_REDIRECT_URI",
+    )
+    google_oauth_frontend_url: str = Field(
+        default="http://127.0.0.1:5173/",
+        validation_alias="GOOGLE_OAUTH_FRONTEND_URL",
+    )
+    auth_session_ttl_seconds: int = Field(
+        default=604_800, validation_alias="AUTH_SESSION_TTL_SECONDS"
+    )
+    auth_state_ttl_seconds: int = Field(default=600, validation_alias="AUTH_STATE_TTL_SECONDS")
+    auth_secure_cookie: bool = Field(default=False, validation_alias="AUTH_SECURE_COOKIE")
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +269,8 @@ class Settings:
     segmentation: SegmentationSettings
     ocr: OcrSettings
     logging: LoggingSettings
+    google_sheets: GoogleSheetsSettings
+    google_oauth: GoogleOAuthSettings
 
     @classmethod
     def load(cls, env_file: str | Path | None = ".env") -> Settings:
@@ -224,14 +283,28 @@ class Settings:
         log_file = raw.log_file.expanduser().resolve()
         _require_descendant(log_file, data_dir, "LOG_FILE")
         database_url = _normalize_database_url(raw.database_url, data_dir)
-        if raw.max_batch_upload_bytes < raw.max_upload_bytes:
-            raise ValueError("MAX_BATCH_UPLOAD_BYTES must be at least MAX_UPLOAD_BYTES")
-        if raw.max_batch_image_pixels < raw.max_image_pixels:
-            raise ValueError("MAX_BATCH_IMAGE_PIXELS must be at least MAX_IMAGE_PIXELS")
         origins = tuple(item.strip() for item in raw.frontend_origins.split(",") if item.strip())
         model_path = raw.handwriting_model_path
         if model_path is not None:
             model_path = model_path.expanduser().resolve()
+        credentials_path = raw.google_sheets_credentials_path
+        if credentials_path is not None:
+            credentials_path = credentials_path.expanduser().resolve()
+        if (
+            raw.google_sheets_enabled
+            and not raw.google_oauth_enabled
+            and not raw.google_sheets_spreadsheet_id
+        ):
+            raise ValueError(
+                "GOOGLE_SHEETS_SPREADSHEET_ID is required when Sheets sync uses no OAuth account"
+            )
+        if raw.google_oauth_enabled:
+            if not raw.google_oauth_client_id or raw.google_oauth_client_secret is None:
+                raise ValueError(
+                    "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required"
+                )
+            if raw.auth_jwt_secret is None or len(raw.auth_jwt_secret.get_secret_value()) < 32:
+                raise ValueError("AUTH_JWT_SECRET must contain at least 32 characters")
 
         return cls(
             app=AppSettings(
@@ -243,7 +316,6 @@ class Settings:
             storage=StorageSettings(
                 data_dir=data_dir,
                 max_upload_bytes=raw.max_upload_bytes,
-                max_batch_upload_bytes=raw.max_batch_upload_bytes,
             ),
             database=DatabaseSettings(url=database_url),
             jobs=JobSettings(
@@ -253,7 +325,6 @@ class Settings:
             ),
             image_processing=ImageProcessingSettings(
                 max_image_pixels=raw.max_image_pixels,
-                max_batch_image_pixels=raw.max_batch_image_pixels,
                 max_image_edge=raw.max_image_edge,
                 opencv_num_threads=raw.opencv_num_threads,
             ),
@@ -265,9 +336,6 @@ class Settings:
                 min_ecc_score=raw.min_ecc_score,
                 min_edge_overlap=raw.min_edge_overlap,
                 min_template_confidence=raw.min_template_confidence,
-                static_ink_frequency_threshold=raw.static_ink_frequency_threshold,
-                min_consensus_images=raw.min_consensus_images,
-                max_consensus_images=raw.max_consensus_images,
             ),
             segmentation=SegmentationSettings(
                 mode=raw.handwriting_segmenter_mode,
@@ -292,6 +360,24 @@ class Settings:
                 schema_version=raw.openai_schema_version,
             ),
             logging=LoggingSettings(level=raw.app_log_level.upper(), file=log_file),
+            google_sheets=GoogleSheetsSettings(
+                enabled=raw.google_sheets_enabled,
+                spreadsheet_id=raw.google_sheets_spreadsheet_id,
+                credentials_path=credentials_path,
+                frontend_base_url=raw.google_sheets_frontend_base_url,
+                spreadsheet_title=raw.google_sheets_spreadsheet_title,
+            ),
+            google_oauth=GoogleOAuthSettings(
+                enabled=raw.google_oauth_enabled,
+                client_id=raw.google_oauth_client_id,
+                client_secret=raw.google_oauth_client_secret,
+                jwt_secret=raw.auth_jwt_secret,
+                redirect_uri=raw.google_oauth_redirect_uri,
+                frontend_url=raw.google_oauth_frontend_url,
+                session_ttl_seconds=raw.auth_session_ttl_seconds,
+                state_ttl_seconds=raw.auth_state_ttl_seconds,
+                secure_cookie=raw.auth_secure_cookie,
+            ),
         )
 
 

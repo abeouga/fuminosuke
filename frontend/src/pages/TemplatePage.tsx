@@ -9,9 +9,8 @@ import { useJobPoller } from "../hooks/useJobPoller";
 import type { Artifact, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 
 const MODES = [
-  { id: "REFERENCE_TEMPLATE", number: "01", title: "白紙帳票から", copy: "記入前の帳票がある場合。最も安定した方法です。", count: "1枚・推奨" },
-  { id: "MULTI_SCAN_CONSENSUS", number: "02", title: "複数スキャンから", copy: "同じ帳票の記入済み画像から共通の印刷部分を復元します。", count: "3枚以上" },
-  { id: "SINGLE_IMAGE_EXPERIMENTAL", number: "03", title: "1枚だけで試す", copy: "黒い印刷と手書きを完全には分離できません。必ず目視確認します。", count: "1枚・実験的" },
+  { id: "SINGLE_IMAGE_EXPERIMENTAL", number: "01", title: "記入済みの一枚から", copy: "記入済み台帳1枚を補正し、矩形と読み取り欄を画面で設定します。", count: "記入済み・1枚" },
+  { id: "REFERENCE_TEMPLATE", number: "02", title: "白紙帳票から", copy: "記入前の白紙帳票を基準画像として使用します。", count: "白紙・1枚" },
 ] as const;
 
 export function TemplatePage({
@@ -25,7 +24,7 @@ export function TemplatePage({
   rememberJob: (id: string) => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
 }) {
-  const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("REFERENCE_TEMPLATE");
+  const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("SINGLE_IMAGE_EXPERIMENTAL");
   const [name, setName] = useState("牛繁殖台帳");
   const [files, setFiles] = useState<File[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -69,7 +68,7 @@ export function TemplatePage({
   const activeVersions = templates.flatMap((template) => template.versions
     .filter((version) => version.status === "ACTIVE")
     .map((version) => ({ templateName: template.name, version })));
-  const requiredCountValid = mode === "MULTI_SCAN_CONSENSUS" ? files.length >= 3 : files.length === 1;
+  const requiredCountValid = files.length === 1;
   const duplicateTemplate = templates.find(
     (template) => normalizeTemplateName(template.name) === normalizeTemplateName(name),
   );
@@ -110,11 +109,10 @@ export function TemplatePage({
             <span className="mode-number">{item.number}</span><strong>{item.title}</strong><p>{item.copy}</p><small>{item.count}</small>
           </button>
         ))}</div></fieldset>
-        <FilePicker key={mode} multiple={mode === "MULTI_SCAN_CONSENSUS"} onChange={(nextFiles) => {
+        <FilePicker key={mode} multiple={false} onChange={(nextFiles) => {
           idempotencyKeyRef.current = null;
           setFiles(nextFiles);
         }} />
-        {files.length > 0 && !requiredCountValid && <p className="inline-warning">複数スキャン方式には3枚以上の画像が必要です。</p>}
         {message && <div className="error-box action-message" role="alert"><span>{message}</span>{job?.status === "REVIEW_REQUIRED" && <button type="button" className="secondary compact" disabled={openingReview} onClick={() => void openPreparedTemplate(job)}>{openingReview ? "再取得中…" : "確認画面を再取得"}</button>}</div>}
         <button className="primary full" disabled={busy || submissionLocked || !name.trim() || !requiredCountValid || Boolean(duplicateTemplate)} onClick={async () => {
           if (creatingRef.current || submissionLocked) return;

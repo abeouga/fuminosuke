@@ -95,9 +95,7 @@ def _active_template(client: TestClient) -> str:
         },
     )
     assert saved_layout.status_code == 200
-    verified = client.post(
-        f"/api/v1/template-versions/{version_id}/layout/verify"
-    )
+    verified = client.post(f"/api/v1/template-versions/{version_id}/layout/verify")
     assert verified.status_code == 200
     approved = client.post(f"/api/v1/template-versions/{version_id}/approve")
     assert approved.status_code == 200
@@ -198,10 +196,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert first["individualId"] == "1234567890"
     result = first["result"]
     assert result["document"]["unifiedEarTag"]["raw"] == "1234567890"
-    assert (
-        result["document"]["unifiedEarTag"]["sourceRegionId"]
-        == "manual_mother_individual_id"
-    )
+    assert result["document"]["unifiedEarTag"]["sourceRegionId"] == "manual_mother_individual_id"
     assert result["templateId"] != "cow-breeding-ledger-v1"
     assert result["templateVersion"] == "1"
     result["document"]["cattleName"]["raw"] = "修正花子"
@@ -323,21 +318,14 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert confirmed.json()["confirmed"] is True
     assert confirmed.json()["individualId"] == "1234567890"
 
-    searched = client.get(
-        "/api/v1/individual-records", params={"individualId": "123-4567-890"}
-    )
+    searched = client.get("/api/v1/individual-records", params={"individualId": "123-4567-890"})
     assert searched.status_code == 200
     search_body = searched.json()
     assert search_body["individualId"] == "1234567890"
     assert search_body["count"] == 1
     assert search_body["records"][0]["sourceJobId"] == job_id
-    assert search_body["records"][0]["data"]["document"]["cattleName"]["raw"] == (
-        "修正花子"
-    )
-    assert (
-        search_body["records"][0]["data"]["customFields"]["treatmentHistory"]["raw"]
-        == "なし"
-    )
+    assert search_body["records"][0]["data"]["document"]["cattleName"]["raw"] == ("修正花子")
+    assert search_body["records"][0]["data"]["customFields"]["treatmentHistory"]["raw"] == "なし"
 
     catalog = client.get("/api/v1/individual-records/catalog")
     assert catalog.status_code == 200
@@ -347,9 +335,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert catalog_body["items"][0]["cattleName"] == "修正花子"
     assert catalog_body["items"][0]["recordCount"] == 1
 
-    sire_search = client.get(
-        "/api/v1/sale-calf-records", params={"sireName": "福之姫"}
-    )
+    sire_search = client.get("/api/v1/sale-calf-records", params={"sireName": "福之姫"})
     assert sire_search.status_code == 200
     sire_body = sire_search.json()
     assert sire_body["count"] == 1
@@ -357,15 +343,11 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert sire_body["matches"][0]["recordKey"] == "3"
     assert sire_body["matches"][0]["data"]["priceYen"]["normalized"] == "850000"
 
-    missing = client.get(
-        "/api/v1/individual-records", params={"individualId": "9999999999"}
-    )
+    missing = client.get("/api/v1/individual-records", params={"individualId": "9999999999"})
     assert missing.status_code == 200
     assert missing.json()["records"] == []
 
-    invalid = client.get(
-        "/api/v1/individual-records", params={"individualId": "123"}
-    )
+    invalid = client.get("/api/v1/individual-records", params={"individualId": "123"})
     assert invalid.status_code == 422
     assert invalid.json()["code"] == "INVALID_INDIVIDUAL_ID"
     assert client.get(f"/api/v1/ocr-jobs/{job_id}/export?format=json").status_code == 200
@@ -379,11 +361,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     table_body = excel_table.json()
     assert table_body["sheetName"] == "読み取り結果"
     assert table_body["fileName"].startswith("繁殖台帳_1234567890_修正花子_")
-    displays = [
-        cell["display"]
-        for row in table_body["rows"]
-        for cell in row["cells"]
-    ]
+    displays = [cell["display"] for row in table_body["rows"] for cell in row["cells"]]
     assert "売却子牛一覧" in displays
     assert "福之姫" in displays
     assert "なし" in displays
@@ -407,6 +385,63 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["code"] == "INVALID_STATE_TRANSITION"
+
+    original_record_id = search_body["records"][0]["recordId"]
+    reopened = client.post(f"/api/v1/ocr-jobs/{job_id}/reopen")
+    assert reopened.status_code == 200
+    reopened_body = reopened.json()
+    assert reopened_body["confirmed"] is False
+    assert reopened_body["individualId"] == "1234567890"
+
+    reopened_again = client.post(f"/api/v1/ocr-jobs/{job_id}/reopen")
+    assert reopened_again.status_code == 200
+
+    still_searchable = client.get(
+        "/api/v1/individual-records", params={"individualId": "1234567890"}
+    ).json()
+    assert still_searchable["records"][0]["recordId"] == original_record_id
+    assert still_searchable["records"][0]["data"]["document"]["cattleName"]["raw"] == ("修正花子")
+
+    reopened_document = reopened_body["result"]
+    reopened_document["document"]["cattleName"]["raw"] = "再修正花子"
+    reopened_document["document"]["cattleName"]["normalized"] = "再修正花子"
+    reopened_document["saleCalves"][0]["sireName"]["raw"] = "勝忠平"
+    reopened_document["saleCalves"][0]["sireName"]["normalized"] = "勝忠平"
+    resaved = client.put(
+        f"/api/v1/ocr-jobs/{job_id}/corrections",
+        json={
+            "baseRevision": reopened_body["revision"],
+            "document": reopened_document["document"],
+            "saleCalves": reopened_document["saleCalves"],
+            "pedigree": reopened_document["pedigree"],
+            "calvings": reopened_document["calvings"],
+            "customFields": reopened_document["customFields"],
+            "reviewItems": reopened_document["reviewItems"],
+        },
+    )
+    assert resaved.status_code == 200
+    assert resaved.json()["revision"] == reopened_body["revision"] + 1
+
+    reconfirmed = client.post(
+        f"/api/v1/ocr-jobs/{job_id}/confirm",
+        json={"baseRevision": resaved.json()["revision"]},
+    )
+    assert reconfirmed.status_code == 200
+    assert reconfirmed.json()["confirmed"] is True
+
+    updated_search = client.get(
+        "/api/v1/individual-records", params={"individualId": "1234567890"}
+    ).json()
+    assert updated_search["count"] == 1
+    assert updated_search["records"][0]["recordId"] == original_record_id
+    assert updated_search["records"][0]["ocrResultRevision"] == resaved.json()["revision"]
+    assert updated_search["records"][0]["data"]["document"]["cattleName"]["raw"] == ("再修正花子")
+    assert (
+        client.get("/api/v1/sale-calf-records", params={"sireName": "福之姫"}).json()["count"] == 0
+    )
+    assert (
+        client.get("/api/v1/sale-calf-records", params={"sireName": "勝忠平"}).json()["count"] == 1
+    )
 
 
 def test_openai_uses_only_snapshotted_mapped_input_cells(
@@ -449,10 +484,13 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
     monkeypatch.setattr(OpenAIOcrProvider, "extract", fake_extract)
     with TestClient(create_app(settings)) as openai_client:
         for name in ("勝忠平", "光晴重", "重波平", "百合茂"):
-            assert openai_client.post(
-                "/api/v1/sire-names",
-                json={"name": name},
-            ).status_code == 201
+            assert (
+                openai_client.post(
+                    "/api/v1/sire-names",
+                    json={"name": name},
+                ).status_code
+                == 201
+            )
         version_id = _active_template(openai_client)
         mappings = openai_client.get(
             f"/api/v1/template-versions/{version_id}/field-mappings"
@@ -494,9 +532,7 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         assert len(snapshot["sireNamePoolHash"]) == 64
         assert snapshot["saleNoteSexSymbolPool"] == ["♂", "♀"]
 
-        mapped_cells = openai_client.get(
-            f"/api/v1/jobs/{job_id}/artifacts/mappedCells"
-        ).json()
+        mapped_cells = openai_client.get(f"/api/v1/jobs/{job_id}/artifacts/mappedCells").json()
         assert mapped_cells["mappedCellCount"] == 1
         assert mapped_cells["openAiCropCount"] == 1
         assert mapped_cells["openAiImageCount"] == 2
@@ -518,21 +554,20 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
                 "targetPath": "document.cattleName",
                 "mappingId": mapping_id,
                 "artifactUrl": (
-                    f"/api/v1/jobs/{job_id}/artifacts/"
-                    f"fieldCrop.{mapping_id}.alignedColor"
+                    f"/api/v1/jobs/{job_id}/artifacts/fieldCrop.{mapping_id}.alignedColor"
                 ),
-                    "boundingBox": {
-                        "x": 120,
-                        "y": 20,
-                        "width": 240,
-                        "height": 80,
-                    },
-                    "recordGroupId": None,
-                    "fieldKey": None,
-                    "mappingType": "text",
-                    "markOptions": [],
-                }
-            ]
+                "boundingBox": {
+                    "x": 120,
+                    "y": 20,
+                    "width": 240,
+                    "height": 80,
+                },
+                "recordGroupId": None,
+                "fieldKey": None,
+                "mappingType": "text",
+                "markOptions": [],
+            }
+        ]
 
 
 def test_openai_rejects_active_template_without_field_mappings(
@@ -639,9 +674,7 @@ def test_ocr_uses_the_template_snapshot_captured_at_acceptance(
     assert snapshot["sourceArtifactId"]
     assert len(snapshot["cleanTemplateSha256"]) == 64
     assert len(snapshot["configSha256"]) == 64
-    assert snapshot["cleanTemplatePath"].startswith(
-        f"uploads/{job_id}/template_snapshot/"
-    )
+    assert snapshot["cleanTemplatePath"].startswith(f"uploads/{job_id}/template_snapshot/")
     assert isinstance(snapshot["config"], dict)
 
     try:
@@ -670,10 +703,6 @@ def test_ocr_uses_the_template_snapshot_captured_at_acceptance(
         allow_processing.set()
 
     _wait_for(client, job_id, "REVIEW_REQUIRED")
-    copied_template = client.get(
-        f"/api/v1/jobs/{job_id}/artifacts/cleanTemplate"
-    )
+    copied_template = client.get(f"/api/v1/jobs/{job_id}/artifacts/cleanTemplate")
     assert copied_template.status_code == 200
-    assert hashlib.sha256(copied_template.content).hexdigest() == (
-        snapshot["cleanTemplateSha256"]
-    )
+    assert hashlib.sha256(copied_template.content).hexdigest() == (snapshot["cleanTemplateSha256"])

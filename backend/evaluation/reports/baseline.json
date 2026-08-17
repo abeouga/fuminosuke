@@ -14,10 +14,7 @@
       "max_reprojection_error_px": 5.0,
       "min_ecc_score": 0.75,
       "min_edge_overlap": 0.7,
-      "min_template_confidence": 0.75,
-      "static_ink_frequency_threshold": 0.6,
-      "min_consensus_images": 3,
-      "max_consensus_images": 20
+      "min_template_confidence": 0.75
     },
     "segmentation": {
       "mode": "heuristic",

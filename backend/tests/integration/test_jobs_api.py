@@ -218,7 +218,7 @@ def test_rejects_non_image_upload(client: TestClient) -> None:
     assert "traceback" not in response.text.lower()
 
 
-def test_rejects_consensus_batches_above_configured_limit(
+def test_rejects_removed_multi_scan_mode_before_reading_upload(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -232,55 +232,12 @@ def test_rejects_consensus_batches_above_configured_limit(
     monkeypatch.setattr(template_routes, "read_upload", unexpected_read)
     response = client.post(
         "/api/v1/template-jobs",
-        data={"name": "画像上限テスト", "mode": "MULTI_SCAN_CONSENSUS"},
-        files=[
-            ("files", (f"scan-{index}.png", _png(), "image/png"))
-            for index in range(21)
-        ],
+        data={"name": "廃止モード", "mode": "MULTI_SCAN_CONSENSUS"},
+        files=[("files", ("scan.png", _png(), "image/png"))],
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == "TOO_MANY_CONSENSUS_IMAGES"
-    assert "20枚まで" in response.json()["detail"]
     assert read_called is False
-
-
-def test_rejects_consensus_batch_above_aggregate_byte_limit(
-    client: TestClient,
-) -> None:
-    image = _png()
-    client.app.state.settings.storage.max_batch_upload_bytes = len(image) * 2
-
-    response = client.post(
-        "/api/v1/template-jobs",
-        data={"name": "合計サイズ上限", "mode": "MULTI_SCAN_CONSENSUS"},
-        files=[
-            ("files", (f"scan-{index}.png", image, "image/png"))
-            for index in range(3)
-        ],
-    )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == "TEMPLATE_BATCH_TOO_LARGE"
-
-
-def test_rejects_consensus_batch_above_aggregate_pixel_limit(
-    client: TestClient,
-) -> None:
-    image = _png()
-    client.app.state.settings.image_processing.max_batch_image_pixels = 100_000
-
-    response = client.post(
-        "/api/v1/template-jobs",
-        data={"name": "合計画素上限", "mode": "MULTI_SCAN_CONSENSUS"},
-        files=[
-            ("files", (f"scan-{index}.png", image, "image/png"))
-            for index in range(3)
-        ],
-    )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == "TEMPLATE_BATCH_PIXEL_LIMIT_EXCEEDED"
 
 
 def test_failed_empty_template_does_not_block_recovery(

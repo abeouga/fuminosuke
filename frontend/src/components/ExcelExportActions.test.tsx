@@ -27,6 +27,6 @@ test("copies the confirmed table and offers a per-document xlsx download", async
   );
   fireEvent.click(screen.getByRole("button", { name: "Excelへコピー" }));
 
-  expect(await screen.findByText("コピーしました。Excelで貼り付けできます。")).toBeInTheDocument();
+  expect(await screen.findByText("罫線付きでコピーしました。Excelで貼り付けできます。")).toBeInTheDocument();
   expect(writeText).toHaveBeenCalledWith("よつば");
 });

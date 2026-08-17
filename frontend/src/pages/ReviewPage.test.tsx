@@ -331,6 +331,83 @@ test("confirms OCR-detected identity before showing the full result table", asyn
   });
 });
 
+test("navigates to Google Sheets after a successful manual resync", async () => {
+  const onSpreadsheetNavigate = vi.fn();
+  const resultBody = {
+    jobId: "job-resync",
+    revision: 1,
+    result: {
+      schemaVersion: "1.0",
+      templateId: "template-1",
+      templateVersion: "1",
+      document: {},
+      saleCalves: [],
+      pedigree: {},
+      calvings: [],
+      customFields: {},
+      reviewItems: [],
+      processingMetadata: {},
+    },
+    validation: { valid: true, issues: [] },
+    provider: "openai",
+    modelId: "gpt-5-mini",
+    promptVersion: "test",
+    apiCallCount: 1,
+    inputTokens: 10,
+    outputTokens: 5,
+    estimatedCost: 0.001,
+    confirmed: false,
+    individualId: null,
+    fieldPreviews: [],
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-resync/spreadsheet-sync") && init?.method === "POST") {
+      return jsonResponse({
+        ...resultBody,
+        spreadsheetSync: {
+          enabled: true,
+          status: "synced",
+          spreadsheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+          lastError: null,
+        },
+      });
+    }
+    if (path.endsWith("/ocr-jobs/job-resync/result")) {
+      return jsonResponse({
+        ...resultBody,
+        spreadsheetSync: {
+          enabled: true,
+          status: "failed",
+          spreadsheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+          lastError: "一時的に同期できませんでした。",
+        },
+      });
+    }
+    if (path.endsWith("/jobs/job-resync/artifacts")) {
+      return jsonResponse({ items: [] });
+    }
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({});
+  }));
+
+  render(
+    <ReviewPage
+      jobId="job-resync"
+      onClose={() => undefined}
+      onSpreadsheetNavigate={onSpreadsheetNavigate}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "再同期" }));
+
+  await waitFor(() => {
+    expect(onSpreadsheetNavigate).toHaveBeenCalledWith(
+      "https://docs.google.com/spreadsheets/d/test/edit",
+    );
+  });
+});
+
 test("moves an entire result column from its header controls", async () => {
   const readableDate = (value: string, sourceRegionId: string) => ({
     ...reading,
@@ -414,9 +491,9 @@ test("moves an entire result column from its header controls", async () => {
   fireEvent.click(moveUp);
 
   expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を移動" }))
-    .toHaveTextContent("2026/01/10");
+    .toHaveTextContent("2026年1月10日");
   expect(screen.getByRole("button", { name: "売却日 saleCalves.1.saleDate を移動" }))
-    .toHaveTextContent("2026/02/20");
+    .toHaveTextContent("2026年2月20日");
   expect(screen.getByRole("button", { name: "売却日 saleCalves.2.saleDate を移動" }))
     .toHaveTextContent("空欄");
   expect(screen.getByText("売却日列を上へ1行移動しました。")).toBeInTheDocument();
@@ -428,7 +505,7 @@ test("moves an entire result column from its header controls", async () => {
   expect(editMode).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("button", { name: "売却日列を下へ1行移動" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }))
-    .toHaveTextContent("2026/01/10");
+    .toHaveTextContent("2026年1月10日");
   fireEvent.click(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }));
   expect(screen.getByAltText("saleCalves.0.saleDate の切り出し"))
     .toHaveAttribute("src", "/sale-date-0.png");
@@ -439,9 +516,9 @@ test("selects the exact crop and opens the editor when a table cell is clicked",
 
   expect(await screen.findByAltText("位置合わせ済み帳票")).toHaveAttribute("src", "/full.jpg");
 
-  fireEvent.click(screen.getByRole("button", { name: "次の要確認（2件）" }));
+  fireEvent.click(screen.getByRole("button", { name: "次の要確認（1件）" }));
   expect(await screen.findByAltText("document.cattleName の切り出し")).toHaveAttribute("src", "/correct-crop.jpg");
-  fireEvent.click(screen.getByRole("button", { name: "次の要確認（2件）" }));
+  fireEvent.click(screen.getByRole("button", { name: "生年月日 document.birthDate を編集" }));
   expect(await screen.findByAltText("document.birthDate の切り出し")).toHaveAttribute("src", "/birth-date-crop.jpg");
 
   const cattleCellButton = screen.getByRole("button", { name: "牛名 document.cattleName を編集" });
@@ -465,10 +542,24 @@ test("selects the exact crop and opens the editor when a table cell is clicked",
     expect(screen.getByAltText("document.birthDate の切り出し")).toHaveAttribute("src", "/birth-date-crop.jpg");
   });
   expect(screen.getByText(/x 380 .* y 120 .* 幅 180 .* 高さ 60/)).toBeInTheDocument();
-  expect(container.querySelectorAll(".ocr-cell-warning")).toHaveLength(1);
+  expect(container.querySelectorAll(".ocr-cell-warning")).toHaveLength(0);
 
   fireEvent.click(screen.getByRole("button", { name: "帳票全体" }));
   expect(screen.getByAltText("位置合わせ済み帳票")).toHaveAttribute("src", "/full.jpg");
+});
+
+test("opens the correction cell requested by a Google Sheets deep link", async () => {
+  render(
+    <ReviewPage
+      jobId="job-1"
+      initialSelectedPath="document.birthDate"
+      onClose={() => undefined}
+    />,
+  );
+
+  expect(await screen.findByAltText("document.birthDate の切り出し"))
+    .toHaveAttribute("src", "/birth-date-crop.jpg");
+  expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
 });
 
 test("opens a full-screen six-choice editor for a calving mark cell", async () => {
@@ -631,9 +722,15 @@ test("converts an era date and offers only male or female note prefixes", async 
   };
   const saleDate = {
     ...reading,
-    raw: "6 11 7",
+    raw: "30 8-10",
     reviewReason: "BIRTH_DATE_ERA_REQUIRED",
     sourceRegionId: "sale_date_cell",
+  };
+  const dottedSaleDate = {
+    ...reading,
+    raw: "5.11.16",
+    reviewReason: "BIRTH_DATE_ERA_REQUIRED",
+    sourceRegionId: "sale_date_dotted_cell",
   };
   const calvingDate = {
     ...reading,
@@ -652,7 +749,10 @@ test("converts an era date and offers only male or female note prefixes", async 
           templateId: "template-1",
           templateVersion: "1",
           document: { birthDate },
-          saleCalves: [{ saleDate, notes: saleNote }],
+          saleCalves: [
+            { saleDate, notes: saleNote },
+            { saleDate: dottedSaleDate },
+          ],
           pedigree: {},
           calvings: [{ calvingDate }],
           customFields: {},
@@ -709,13 +809,14 @@ test("converts an era date and offers only male or female note prefixes", async 
   const saleDateCell = screen.getByRole("button", {
     name: "売却日 saleCalves.0.saleDate を編集",
   });
+  expect(saleDateCell).toHaveTextContent("2018年8月10日");
+  expect(screen.getByRole("button", {
+    name: "売却日 saleCalves.1.saleDate を編集",
+  })).toHaveTextContent("2023年11月16日");
   fireEvent.click(saleDateCell);
-  expect(screen.getByLabelText("元号年・月・日（数字のみ）")).toHaveValue("6 11 7");
-  expect(screen.getByLabelText("元号")).toHaveValue("reiwa");
-  expect(screen.getByLabelText("西暦表記")).toHaveValue("2024年11月7日");
-  fireEvent.change(screen.getByLabelText("元号"), { target: { value: "heisei" } });
-  expect(screen.getByLabelText("西暦表記")).toHaveValue("1994年11月7日");
-  expect(saleDateCell).toHaveTextContent("1994年11月7日");
+  expect(screen.getByLabelText("元号年・月・日（数字のみ）")).toHaveValue("30 8 10");
+  expect(screen.getByLabelText("元号")).toHaveValue("heisei");
+  expect(screen.getByLabelText("西暦表記")).toHaveValue("2018年8月10日");
 
   const noteCell = screen.getByRole("button", {
     name: "備考 saleCalves.0.notes を編集",

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -31,6 +31,7 @@ from app.domain.template_config import load_template_config
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
 from app.services.excel_export_service import ExcelExportService
+from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -47,11 +48,17 @@ class CorrectionValues:
 
 
 class OcrResultService:
-    def __init__(self, database: Database, storage: LocalStorageService) -> None:
+    def __init__(
+        self,
+        database: Database,
+        storage: LocalStorageService,
+        google_sheets: GoogleSheetsSyncService | None = None,
+    ) -> None:
         self._database = database
         self._storage = storage
         self._validator = DeterministicValidator()
         self._excel = ExcelExportService()
+        self._google_sheets = google_sheets
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self._database.session() as session:
@@ -111,9 +118,7 @@ class OcrResultService:
                 },
                 deep=True,
             )
-            candidate = OcrDocument.model_validate(
-                candidate.model_dump(mode="json", by_alias=True)
-            )
+            candidate = OcrDocument.model_validate(candidate.model_dump(mode="json", by_alias=True))
             candidate = normalize_document_numbers(candidate)
             report = self._validator.validate(
                 candidate,
@@ -134,7 +139,59 @@ class OcrResultService:
                     title="OCR result revision conflict",
                     detail="別の修正が保存されています。最新結果を再取得してください。",
                 )
+            if self._google_sheets is not None:
+                self._google_sheets.sync(
+                    job_id=job_id,
+                    revision=updated.revision,
+                    document=updated.current_corrected_json,
+                    confirmed=False,
+                )
             return self._response(updated, job=job, confirmed=False)
+
+    def reopen(self, job_id: str) -> dict[str, Any]:
+        with self._database.session() as session:
+            self._begin_mutation(session)
+            job = JobRepository(session).get(job_id)
+            if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
+                raise self._not_found()
+            repository = OcrResultRepository(session)
+            stored = repository.get_by_job(job_id)
+            if stored is None:
+                raise self._not_found()
+            confirmed_result = repository.get_confirmed(job_id)
+            if job.status == JobStatus.CONFIRMED.value:
+                if confirmed_result is None:
+                    raise AppError(
+                        status=409,
+                        code="CONFIRMED_RESULT_MISSING",
+                        title="Confirmed OCR result is missing",
+                        detail="確定済みデータを取得できないため、編集を開始できません。",
+                    )
+                job.status = JobStatus.REVIEW_REQUIRED.value
+                job.confirmed_at = None
+                session.commit()
+            elif job.status != JobStatus.REVIEW_REQUIRED.value:
+                raise AppError(
+                    status=409,
+                    code="INVALID_STATE_TRANSITION",
+                    title="OCR result cannot be reopened",
+                    detail="確定済み、または編集中のOCR結果だけを編集できます。",
+                )
+            if self._google_sheets is not None:
+                self._google_sheets.sync(
+                    job_id=job_id,
+                    revision=stored.revision,
+                    document=self._normalized_document_json(stored.current_corrected_json),
+                    confirmed=False,
+                )
+            return self._response(
+                stored,
+                job=job,
+                confirmed=False,
+                individual_id=(
+                    confirmed_result.individual_id if confirmed_result is not None else None
+                ),
+            )
 
     def confirm(self, job_id: str, *, base_revision: int) -> dict[str, Any]:
         with self._database.session() as session:
@@ -144,9 +201,7 @@ class OcrResultService:
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             repository = OcrResultRepository(session)
-            if job.status != JobStatus.REVIEW_REQUIRED.value or repository.get_confirmed(
-                job_id
-            ):
+            if job.status != JobStatus.REVIEW_REQUIRED.value:
                 raise AppError(
                     status=409,
                     code="INVALID_STATE_TRANSITION",
@@ -170,9 +225,7 @@ class OcrResultService:
                 configured_paths=self._configured_paths(job),
             )
             document = self._validator.merge_review_items(document, report)
-            has_unresolved_error = any(
-                item.severity == "error" for item in document.review_items
-            )
+            has_unresolved_error = any(item.severity == "error" for item in document.review_items)
             if not report.valid or has_unresolved_error:
                 raise AppError(
                     status=409,
@@ -224,16 +277,30 @@ class OcrResultService:
                 f"exports/{job_id}/confirmed_result.xlsx",
                 self._excel.render_xlsx(excel_table),
             )
-            confirmed_result = ConfirmedResult(
-                job_id=job_id,
-                ocr_result_revision=stored.revision,
-                individual_id=individual_id,
-                confirmed_json=serialized,
-                confirmed_at=confirmed_at,
-                export_relative_path=json_relative,
-            )
-            session.add(confirmed_result)
-            session.flush()
+            confirmed_result = repository.get_confirmed(job_id)
+            if confirmed_result is None:
+                confirmed_result = ConfirmedResult(
+                    job_id=job_id,
+                    ocr_result_revision=stored.revision,
+                    individual_id=individual_id,
+                    confirmed_json=serialized,
+                    confirmed_at=confirmed_at,
+                    export_relative_path=json_relative,
+                )
+                session.add(confirmed_result)
+                session.flush()
+            else:
+                confirmed_result.ocr_result_revision = stored.revision
+                confirmed_result.individual_id = individual_id
+                confirmed_result.confirmed_json = serialized
+                confirmed_result.confirmed_at = confirmed_at
+                confirmed_result.export_relative_path = json_relative
+                session.execute(
+                    delete(ConfirmedRecordField).where(
+                        ConfirmedRecordField.confirmed_result_id == confirmed_result.id
+                    )
+                )
+                session.flush()
             self._index_record_fields(
                 session,
                 confirmed_result=confirmed_result,
@@ -243,11 +310,44 @@ class OcrResultService:
             job.status = JobStatus.CONFIRMED.value
             job.confirmed_at = confirmed_at
             session.commit()
+            if self._google_sheets is not None:
+                self._google_sheets.sync(
+                    job_id=job_id,
+                    revision=stored.revision,
+                    document=serialized,
+                    confirmed=True,
+                )
             return self._response(
                 stored,
                 job=job,
                 confirmed=True,
                 individual_id=individual_id,
+            )
+
+    def sync_spreadsheet(self, job_id: str) -> dict[str, Any]:
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            stored = OcrResultRepository(session).get_by_job(job_id)
+            if job is None or stored is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
+                raise self._not_found()
+            confirmed = job.status == JobStatus.CONFIRMED.value
+            if self._google_sheets is not None:
+                self._google_sheets.sync(
+                    job_id=job_id,
+                    revision=stored.revision,
+                    document=self._normalized_document_json(stored.current_corrected_json),
+                    confirmed=confirmed,
+                )
+            confirmed_result = (
+                OcrResultRepository(session).get_confirmed(job_id) if confirmed else None
+            )
+            return self._response(
+                stored,
+                job=job,
+                confirmed=confirmed,
+                individual_id=(
+                    confirmed_result.individual_id if confirmed_result is not None else None
+                ),
             )
 
     @staticmethod
@@ -259,6 +359,11 @@ class OcrResultService:
             # multiple browser tabs, so the confirmed snapshot cannot lag
             # behind the latest accepted correction.
             session.execute(text("BEGIN IMMEDIATE"))
+
+    @staticmethod
+    def _normalized_document_json(document: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_document_numbers(OcrDocument.model_validate(document))
+        return normalized.model_dump(mode="json", by_alias=True)
 
     def export_path(self, job_id: str, format_name: str) -> tuple[str, str, str]:
         if format_name not in {"json", "csv", "xlsx"}:
@@ -328,9 +433,7 @@ class OcrResultService:
     ) -> dict[str, Any]:
         snapshot_individual_id = job.config_snapshot_json.get("motherIndividualId")
         resolved_individual_id = individual_id or (
-            snapshot_individual_id
-            if isinstance(snapshot_individual_id, str)
-            else None
+            snapshot_individual_id if isinstance(snapshot_individual_id, str) else None
         )
         return {
             "jobId": stored.job_id,
@@ -353,6 +456,16 @@ class OcrResultService:
                 stored.current_corrected_json,
             ),
             "recordStructure": self._record_structure(job),
+            "spreadsheetSync": (
+                self._google_sheets.status(stored.job_id).payload()
+                if self._google_sheets is not None
+                else {
+                    "enabled": False,
+                    "status": "disabled",
+                    "spreadsheetUrl": None,
+                    "lastError": None,
+                }
+            ),
         }
 
     @staticmethod
@@ -420,13 +533,10 @@ class OcrResultService:
                         # The reading's source cell is authoritative. This also
                         # remains correct if a collection row is moved or
                         # compacted after the template snapshot was created.
-                        "targetPath": current_path_by_mapping.get(
-                            mapping_id, target_path
-                        ),
+                        "targetPath": current_path_by_mapping.get(mapping_id, target_path),
                         "mappingId": mapping_id,
                         "artifactUrl": (
-                            f"/api/v1/jobs/{job.id}/artifacts/"
-                            f"fieldCrop.{mapping_id}.alignedColor"
+                            f"/api/v1/jobs/{job.id}/artifacts/fieldCrop.{mapping_id}.alignedColor"
                         ),
                         "boundingBox": current_box
                         if mapping_id in current_box_by_mapping
@@ -458,15 +568,19 @@ class OcrResultService:
     @staticmethod
     def _record_structure(job: ProcessingJob) -> dict[str, object]:
         raw = job.config_snapshot_json.get("recordStructure")
-        return dict(raw) if isinstance(raw, dict) else {
-            "layoutSchemaVersion": 3,
-            "verified": False,
-            "canonicalWidth": 0,
-            "canonicalHeight": 0,
-            "sections": [],
-            "groups": [],
-            "fieldBindings": [],
-        }
+        return (
+            dict(raw)
+            if isinstance(raw, dict)
+            else {
+                "layoutSchemaVersion": 3,
+                "verified": False,
+                "canonicalWidth": 0,
+                "canonicalHeight": 0,
+                "sections": [],
+                "groups": [],
+                "fieldBindings": [],
+            }
+        )
 
     @staticmethod
     def _configured_paths(job: ProcessingJob) -> set[str] | None:
@@ -476,8 +590,7 @@ class OcrResultService:
         paths = {
             target_path
             for raw in raw_mappings
-            if isinstance(raw, dict)
-            and isinstance((target_path := raw.get("targetPath")), str)
+            if isinstance(raw, dict) and isinstance((target_path := raw.get("targetPath")), str)
         }
         return paths
 
@@ -543,9 +656,7 @@ class OcrResultService:
                     normalized_value = reading.get("normalized")
                     raw_text = raw_value if isinstance(raw_value, str) else None
                     selected_text = (
-                        normalized_value
-                        if isinstance(normalized_value, str)
-                        else raw_text
+                        normalized_value if isinstance(normalized_value, str) else raw_text
                     )
                     if selected_text is None:
                         continue
@@ -563,9 +674,9 @@ class OcrResultService:
                             record_key=record_key,
                             field_key=field_key,
                             raw_value=raw_text,
-                            normalized_value=unicodedata.normalize(
-                                "NFKC", selected_text
-                            ).strip().casefold(),
+                            normalized_value=unicodedata.normalize("NFKC", selected_text)
+                            .strip()
+                            .casefold(),
                             numeric_value=numeric_value,
                         )
                     )
@@ -624,9 +735,7 @@ class OcrResultService:
         bases = [path.removesuffix(".raw") for path in configured]
         columns = [f"{base}.{leaf}" for base in bases for leaf in ("raw", "normalized", "status")]
         row = {
-            column: OcrResultService._csv_safe(
-                OcrResultService._value_at(document, column)
-            )
+            column: OcrResultService._csv_safe(OcrResultService._value_at(document, column))
             for column in columns
         }
         output = io.StringIO(newline="")

@@ -28,16 +28,21 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
         "job_artifacts",
         "ocr_results",
         "ocr_result_revisions",
-            "confirmed_results",
-            "confirmed_record_fields",
-            "sire_names",
+        "confirmed_results",
+        "confirmed_record_fields",
+        "sire_names",
+        "google_oauth_accounts",
         "job_events",
         "alembic_version",
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0007_repair_confirmed_individual_ids"
+            "0009_user_spreadsheet_targets"
         )
+    oauth_columns = {
+        column["name"] for column in inspect(engine).get_columns("google_oauth_accounts")
+    }
+    assert {"spreadsheet_id", "spreadsheet_url"} <= oauth_columns
     confirmed_columns = {
         column["name"] for column in inspect(engine).get_columns("confirmed_results")
     }
@@ -51,14 +56,10 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     }
     assert "layout_json" in template_version_columns
     record_field_indexes = {
-        index["name"]
-        for index in inspect(engine).get_indexes("confirmed_record_fields")
+        index["name"] for index in inspect(engine).get_indexes("confirmed_record_fields")
     }
     assert "ix_confirmed_record_field_lookup" in record_field_indexes
-    job_indexes = {
-        index["name"]: index
-        for index in inspect(engine).get_indexes("processing_jobs")
-    }
+    job_indexes = {index["name"]: index for index in inspect(engine).get_indexes("processing_jobs")}
     assert job_indexes["ix_processing_jobs_idempotency_key"]["unique"] == 1
     with engine.connect() as connection:
         sire_names = list(

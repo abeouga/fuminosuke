@@ -1,4 +1,4 @@
-import type { Artifact, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, SaleCalfSireSearch, SireName, SireNamePool, Template } from "./types";
+import type { Artifact, AuthSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, SaleCalfSireSearch, SireName, SireNamePool, Template } from "./types";
 
 const API = "/api/v1";
 
@@ -11,7 +11,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, init);
+  const response = await fetch(`${API}${path}`, { ...init, credentials: "include" });
   if (!response.ok) {
     let problem: Problem = {};
     try {
@@ -19,10 +19,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // A non-JSON reverse-proxy error still becomes a safe local message.
     }
-    throw new ApiError(
+    const apiError = new ApiError(
       problem.detail ?? problem.message ?? "バックエンドとの通信に失敗しました。",
       problem.code,
     );
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent("ledger-auth-required"));
+    }
+    throw apiError;
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -37,6 +41,10 @@ export function createIdempotencyKey(scope: "template" | "ocr"): string {
 
 export const api = {
   health: () => request<Health>("/health"),
+  authSession: () => request<AuthSession>("/auth/session"),
+  logout: () => request<{ authenticated: false }>("/auth/logout", { method: "POST" }),
+  disconnectGoogle: () =>
+    request<{ authenticated: false }>("/auth/google/disconnect", { method: "POST" }),
   templates: () => request<Template[]>("/templates"),
   template: (id: string) => request<Template>(`/templates/${id}`),
   sireNames: () => request<SireNamePool>("/sire-names"),
@@ -152,9 +160,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ baseRevision: revision }),
     }),
+  reopenResult: (id: string) =>
+    request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST" }),
+  syncSpreadsheet: (id: string) =>
+    request<OcrResult>(`/ocr-jobs/${id}/spreadsheet-sync`, { method: "POST" }),
   retry: (id: string) => request<Job>(`/jobs/${id}/retry`, { method: "POST" }),
   cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
 };
+
+export const googleLoginUrl = (returnTo: string) =>
+  `${API}/auth/google/start?returnTo=${encodeURIComponent(returnTo)}`;
 
 export const absoluteArtifactUrl = (path: string) => path;
 export const exportUrl = (jobId: string, format: "json" | "csv" | "xlsx") =>

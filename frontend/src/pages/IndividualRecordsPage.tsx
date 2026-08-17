@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { ApiError, api } from "../api";
-import { ExcelExportActions } from "../components/ExcelExportActions";
+import { SalePriceChart } from "../components/SalePriceChart";
+import { normalizeJapaneseDateDisplay } from "../japaneseDates";
+import {
+  navigateToSpreadsheet,
+  type SpreadsheetNavigator,
+} from "../spreadsheetNavigation";
 import type {
   FieldReading,
   IndividualRecordCatalog,
@@ -9,7 +14,19 @@ import type {
   SaleCalfSireSearch,
 } from "../types";
 
-export function IndividualRecordsPage() {
+type RecordActionMessage = {
+  kind: "success" | "error";
+  text: string;
+  spreadsheetUrl?: string | null;
+};
+
+export function IndividualRecordsPage({
+  onEditResult,
+  onSpreadsheetNavigate = navigateToSpreadsheet,
+}: {
+  onEditResult?: (jobId: string) => void;
+  onSpreadsheetNavigate?: SpreadsheetNavigator;
+}) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<IndividualRecordSearch | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,6 +36,10 @@ export function IndividualRecordsPage() {
   const [sireQuery, setSireQuery] = useState("");
   const [sireResult, setSireResult] = useState<SaleCalfSireSearch | null>(null);
   const [sireBusy, setSireBusy] = useState(false);
+  const [actionJobId, setActionJobId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<RecordActionMessage | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchMode, setSearchMode] = useState<"individual" | "sire">("individual");
 
   useEffect(() => {
     let cancelled = false;
@@ -41,23 +62,35 @@ export function IndividualRecordsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!searchOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy && !sireBusy) setSearchOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, searchOpen, sireBusy]);
+
   const showIndividual = async (individualId: string) => {
     setBusy(true);
     setError(null);
     try {
       setResult(await api.searchIndividualRecords(individualId));
+      setSireResult(null);
+      return true;
     } catch (reason) {
       setResult(null);
       setError(
         reason instanceof ApiError ? reason.message : "個体データを検索できませんでした。",
       );
+      return false;
     } finally {
       setBusy(false);
     }
   };
-  const search = (event: React.FormEvent) => {
+  const search = async (event: React.FormEvent) => {
     event.preventDefault();
-    void showIndividual(query);
+    if (await showIndividual(query)) setSearchOpen(false);
   };
 
   const searchSire = async (event: React.FormEvent) => {
@@ -66,6 +99,8 @@ export function IndividualRecordsPage() {
     setError(null);
     try {
       setSireResult(await api.searchSaleCalvesBySire(sireQuery));
+      setResult(null);
+      setSearchOpen(false);
     } catch (reason) {
       setSireResult(null);
       setError(
@@ -73,6 +108,61 @@ export function IndividualRecordsPage() {
       );
     } finally {
       setSireBusy(false);
+    }
+  };
+
+  const syncSpreadsheet = async (jobId: string) => {
+    setActionJobId(jobId);
+    setActionMessage(null);
+    try {
+      const synced = await api.syncSpreadsheet(jobId);
+      const sync = synced.spreadsheetSync;
+      if (sync?.status === "synced") {
+        setActionMessage({
+          kind: "success",
+          text: "この帳票をGoogleスプレッドシートへ反映しました。",
+          spreadsheetUrl: sync.spreadsheetUrl,
+        });
+        if (sync.spreadsheetUrl) {
+          onSpreadsheetNavigate(sync.spreadsheetUrl);
+        }
+      } else {
+        setActionMessage({
+          kind: "error",
+          text: sync?.lastError
+            ?? (sync?.enabled === false
+              ? "Googleスプレッドシート連携が有効ではありません。"
+              : "Googleスプレッドシートへ反映できませんでした。"),
+          spreadsheetUrl: sync?.spreadsheetUrl,
+        });
+      }
+    } catch (reason) {
+      setActionMessage({
+        kind: "error",
+        text: reason instanceof ApiError
+          ? reason.message
+          : "Googleスプレッドシートへ反映できませんでした。",
+      });
+    } finally {
+      setActionJobId(null);
+    }
+  };
+
+  const editResult = async (jobId: string) => {
+    setActionJobId(jobId);
+    setActionMessage(null);
+    try {
+      await api.reopenResult(jobId);
+      onEditResult?.(jobId);
+    } catch (reason) {
+      setActionMessage({
+        kind: "error",
+        text: reason instanceof ApiError
+          ? reason.message
+          : "検出結果の編集を開始できませんでした。",
+      });
+    } finally {
+      setActionJobId(null);
     }
   };
 
@@ -97,11 +187,13 @@ export function IndividualRecordsPage() {
         </div>
         {catalogBusy ? (
           <p className="record-catalog-message">個体一覧を読み込んでいます…</p>
-        ) : !catalog || catalog.items.length === 0 ? (
-          <p className="record-catalog-message">確定保存された個体はまだありません。</p>
         ) : (
-          <div className="individual-catalog-list">
-            {catalog.items.map((item) => (
+          <>
+            {(!catalog || catalog.items.length === 0) && (
+              <p className="record-catalog-message">確定保存された個体はまだありません。</p>
+            )}
+            <div className="individual-catalog-list">
+              {catalog?.items.map((item) => (
               <button
                 type="button"
                 className="individual-catalog-item"
@@ -120,50 +212,134 @@ export function IndividualRecordsPage() {
                 {item.needsReview && <span className="status-pill status-needs-review">要再確認</span>}
                 <strong>表示する →</strong>
               </button>
-            ))}
-          </div>
+              ))}
+              <button
+                type="button"
+                className="individual-catalog-item individual-search-launch"
+                onClick={() => setSearchOpen(true)}
+              >
+                <span className="individual-search-plus" aria-hidden="true">＋</span>
+                <span>
+                  <strong>個体を検索</strong>
+                  <small>個体識別番号・種雄牛名</small>
+                </span>
+              </button>
+            </div>
+          </>
         )}
       </section>
 
-      <form className="record-search" onSubmit={search}>
-        <label htmlFor="individual-id-search">個体識別番号</label>
-        <div>
-          <input
-            id="individual-id-search"
-            inputMode="numeric"
-            autoComplete="off"
-            maxLength={10}
-            pattern="[0-9]{10}"
-            placeholder="例: 1234567890"
-            value={query}
-            onChange={(event) => setQuery(limitIndividualId(event.target.value))}
-          />
-          <button className="primary" disabled={busy || query.length !== 10} type="submit">
-            {busy ? "検索中…" : "個体を検索"}
-          </button>
-        </div>
-        <small>数字10桁で入力してください。11桁目以降は入力されません。</small>
-      </form>
+      {searchOpen && (
+        <div
+          className="record-search-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy && !sireBusy) setSearchOpen(false);
+          }}
+        >
+          <section
+            className="record-search-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="record-search-title"
+          >
+            <header>
+              <div>
+                <span className="eyebrow">OPTIONAL SEARCH</span>
+                <h2 id="record-search-title">登録データを検索</h2>
+                <p>登録済みカードにない個体や、種雄牛名から売却記録を探せます。</p>
+              </div>
+              <button
+                type="button"
+                className="ghost compact"
+                disabled={busy || sireBusy}
+                aria-label="検索画面を閉じる"
+                onClick={() => setSearchOpen(false)}
+              >
+                閉じる
+              </button>
+            </header>
 
-      <form className="record-search" onSubmit={searchSire}>
-        <label htmlFor="sire-name-search">種雄牛名</label>
-        <div>
-          <input
-            id="sire-name-search"
-            autoComplete="off"
-            maxLength={200}
-            placeholder="例: 福之姫"
-            value={sireQuery}
-            onChange={(event) => setSireQuery(event.target.value)}
-          />
-          <button className="primary" disabled={sireBusy || !sireQuery.trim()} type="submit">
-            {sireBusy ? "検索中…" : "産次・価格を検索"}
-          </button>
+            <div className="record-search-tabs" role="tablist" aria-label="検索方法">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={searchMode === "individual"}
+                className={searchMode === "individual" ? "active" : ""}
+                onClick={() => setSearchMode("individual")}
+              >
+                個体識別番号
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={searchMode === "sire"}
+                className={searchMode === "sire" ? "active" : ""}
+                onClick={() => setSearchMode("sire")}
+              >
+                種雄牛名
+              </button>
+            </div>
+
+            {searchMode === "individual" ? (
+              <form className="record-search modal-search-form" onSubmit={search}>
+                <label htmlFor="individual-id-search">個体識別番号</label>
+                <div>
+                  <input
+                    id="individual-id-search"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    autoFocus
+                    maxLength={10}
+                    pattern="[0-9]{10}"
+                    placeholder="例: 1234567890"
+                    value={query}
+                    onChange={(event) => setQuery(limitIndividualId(event.target.value))}
+                  />
+                  <button className="primary" disabled={busy || query.length !== 10} type="submit">
+                    {busy ? "検索中…" : "個体を検索"}
+                  </button>
+                </div>
+                <small>数字10桁で入力してください。11桁目以降は入力されません。</small>
+              </form>
+            ) : (
+              <form className="record-search modal-search-form" onSubmit={searchSire}>
+                <label htmlFor="sire-name-search">種雄牛名</label>
+                <div>
+                  <input
+                    id="sire-name-search"
+                    autoComplete="off"
+                    autoFocus
+                    maxLength={200}
+                    placeholder="例: 福之姫"
+                    value={sireQuery}
+                    onChange={(event) => setSireQuery(event.target.value)}
+                  />
+                  <button className="primary" disabled={sireBusy || !sireQuery.trim()} type="submit">
+                    {sireBusy ? "検索中…" : "産次・価格を検索"}
+                  </button>
+                </div>
+                <small>同じ行レコードに保存された産次、価格、体重などをまとめて返します。</small>
+              </form>
+            )}
+          </section>
         </div>
-        <small>同じ行レコードに保存された産次、価格、体重などをまとめて返します。</small>
-      </form>
+      )}
 
       {error && <p className="error-box">{error}</p>}
+      {actionMessage && (
+        <aside
+          className={actionMessage.kind === "error" ? "error-box action-message" : "notice compact action-message"}
+          role={actionMessage.kind === "error" ? "alert" : "status"}
+        >
+          <span>{actionMessage.text}</span>
+          {actionMessage.spreadsheetUrl && (
+            <a className="secondary compact" href={actionMessage.spreadsheetUrl} target="_blank" rel="noreferrer">
+              スプレッドシートを開く ↗
+            </a>
+          )}
+        </aside>
+      )}
 
       {result && (
         <section className="record-results" aria-live="polite">
@@ -188,6 +364,9 @@ export function IndividualRecordsPage() {
                   key={record.recordId}
                   record={record}
                   defaultOpen={index === 0}
+                  actionBusy={actionJobId === record.sourceJobId}
+                  onSyncSpreadsheet={() => void syncSpreadsheet(record.sourceJobId)}
+                  onEditResult={() => void editResult(record.sourceJobId)}
                 />
               ))}
             </div>
@@ -233,6 +412,11 @@ export function IndividualRecordsPage() {
                     <div><dt>レコード順</dt><dd>{match.recordOrder}</dd></div>
                     <div><dt>元ジョブ</dt><dd className="mono">{match.sourceJobId}</dd></div>
                   </dl>
+                  <RecordActions
+                    busy={actionJobId === match.sourceJobId}
+                    onSyncSpreadsheet={() => void syncSpreadsheet(match.sourceJobId)}
+                    onEditResult={() => void editResult(match.sourceJobId)}
+                  />
                 </article>
               ))}
             </div>
@@ -246,10 +430,17 @@ export function IndividualRecordsPage() {
 function RecordCard({
   record,
   defaultOpen,
+  actionBusy,
+  onSyncSpreadsheet,
+  onEditResult,
 }: {
   record: IndividualRecord;
   defaultOpen: boolean;
+  actionBusy: boolean;
+  onSyncSpreadsheet: () => void;
+  onEditResult: () => void;
 }) {
+  const [saleView, setSaleView] = useState<"table" | "chart">("table");
   const identity = record.data.document;
   const saleCalves = record.data.saleCalves.filter(hasRecordedValue);
   const calvings = record.data.calvings.filter(hasRecordedValue);
@@ -276,7 +467,11 @@ function RecordCard({
       </div>
       <div className="record-export-bar">
         <span>この帳票の確定結果</span>
-        <ExcelExportActions jobId={record.sourceJobId} compact />
+        <RecordActions
+          busy={actionBusy}
+          onSyncSpreadsheet={onSyncSpreadsheet}
+          onEditResult={onEditResult}
+        />
       </div>
 
       <details className="record-gui-details" open={defaultOpen}>
@@ -317,9 +512,34 @@ function RecordCard({
             </div>
           </RecordSection>
 
-          <RecordSection title="売却子牛一覧" subtitle={`${saleCalves.length}件の記録`}>
+          <RecordSection
+            title="売却子牛一覧"
+            subtitle={`${saleCalves.length}件の記録`}
+            actions={saleCalves.length > 0 ? (
+              <div className="record-view-switch" role="group" aria-label="売却子牛一覧の表示">
+                <button
+                  type="button"
+                  className={saleView === "table" ? "active" : ""}
+                  aria-pressed={saleView === "table"}
+                  onClick={() => setSaleView("table")}
+                >
+                  表
+                </button>
+                <button
+                  type="button"
+                  className={saleView === "chart" ? "active" : ""}
+                  aria-pressed={saleView === "chart"}
+                  onClick={() => setSaleView("chart")}
+                >
+                  グラフ
+                </button>
+              </div>
+            ) : undefined}
+          >
             {saleCalves.length === 0 ? (
               <p className="record-section-empty">記録はありません。</p>
+            ) : saleView === "chart" ? (
+              <SalePriceChart saleCalves={saleCalves} />
             ) : (
               <div className="record-table-wrap">
                 <table className="record-data-table">
@@ -331,7 +551,7 @@ function RecordCard({
                       <td>{formatUnit(readingValue(calf.weightKg), "kg")}</td>
                       <td>{formatPrice(readingValue(calf.priceYen))}</td>
                       <td>{displayReading(calf.sireName)}</td>
-                      <td>{displayReading(calf.saleDate)}</td>
+                      <td>{displayDateReading(calf.saleDate)}</td>
                       <td>{displayReading(calf.notes)}</td>
                     </tr>
                   ))}</tbody>
@@ -350,7 +570,7 @@ function RecordCard({
                   <tbody>{calvings.map((calving, index) => (
                     <tr key={`${readingValue(calving.parity)}-${index}`}>
                       <td>{displayReading(calving.parity, String(index + 1))}</td>
-                      <td>{displayReading(calving.calvingDate)}</td>
+                      <td>{displayDateReading(calving.calvingDate)}</td>
                       <td>{displayReading(calving.sex)}</td>
                       <td>{displayReading(calving.outcome)}</td>
                       <td>{displayReading(calving.notes)}</td>
@@ -395,20 +615,46 @@ function RecordCard({
   );
 }
 
+function RecordActions({
+  busy,
+  onSyncSpreadsheet,
+  onEditResult,
+}: {
+  busy: boolean;
+  onSyncSpreadsheet: () => void;
+  onEditResult: () => void;
+}) {
+  return (
+    <div className="record-card-actions">
+      <button type="button" className="secondary compact" disabled={busy} onClick={onSyncSpreadsheet}>
+        {busy ? "処理中…" : "スプレッドシートへ出力"}
+      </button>
+      <button type="button" className="primary compact" disabled={busy} onClick={onEditResult}>
+        検出結果を編集
+      </button>
+    </div>
+  );
+}
+
 function RecordSection({
   title,
   subtitle,
+  actions,
   children,
 }: {
   title: string;
   subtitle: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="record-gui-section">
       <div className="record-gui-section-head">
         <h3>{title}</h3>
-        <span>{subtitle}</span>
+        <div className="record-gui-section-meta">
+          <span>{subtitle}</span>
+          {actions}
+        </div>
       </div>
       {children}
     </section>
@@ -449,6 +695,12 @@ function hasRecordedValue(record: Record<string, FieldReading>) {
 
 function displayReading(reading?: FieldReading, fallback = "—") {
   return readingValue(reading) || fallback;
+}
+
+function displayDateReading(reading?: FieldReading, fallback = "—") {
+  return normalizeJapaneseDateDisplay(reading?.raw, reading?.normalized)
+    || readingValue(reading)
+    || fallback;
 }
 
 function formatUnit(value: string, unit: string) {

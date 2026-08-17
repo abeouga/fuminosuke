@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { AuthGate } from "./components/AuthGate";
 import { HomePage } from "./pages/HomePage";
 import { IndividualRecordsPage } from "./pages/IndividualRecordsPage";
 import { JobPage } from "./pages/JobPage";
@@ -7,7 +8,7 @@ import { OcrPage } from "./pages/OcrPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { SireNamesPage } from "./pages/SireNamesPage";
 import { TemplatePage } from "./pages/TemplatePage";
-import type { Health, Job, Template } from "./types";
+import type { AuthSession, Health, Job, Template } from "./types";
 
 type Page = "home" | "templates" | "ocr" | "review" | "job" | "records" | "sireNames";
 type NavigationGuard = "review" | "ocr" | "template";
@@ -23,19 +24,26 @@ const ATTENTION_STATUSES = new Set([
 ]);
 
 export default function App() {
-  const initialReviewJobId = new URLSearchParams(window.location.search).get("job");
+  const initialSearchParams = new URLSearchParams(window.location.search);
+  const initialReviewJobId = initialSearchParams.get("job");
+  const initialReviewField = initialSearchParams.get("field");
   const [page, setPage] = useState<Page>(initialReviewJobId ? "review" : "home");
   const [health, setHealth] = useState<Health | null>(null);
+  const [auth, setAuth] = useState<AuthSession | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [reviewJobId, setReviewJobId] = useState<string | null>(initialReviewJobId);
+  const [reviewRequiresIdentityConfirmation, setReviewRequiresIdentityConfirmation] = useState(true);
   const [monitoredJobId, setMonitoredJobId] = useState<string | null>(null);
   const [navigationGuard, setNavigationGuard] = useState<NavigationGuard | null>(
     initialReviewJobId ? "review" : null,
   );
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
+  const [disconnectPending, setDisconnectPending] = useState(false);
   const templateRefreshRef = useRef<Promise<void> | null>(null);
   const templateAutoRetryAttemptedRef = useRef(false);
   const updateReviewGuard = useCallback((shouldWarn: boolean) => {
@@ -46,6 +54,19 @@ export default function App() {
   }, []);
   const updateTemplateGuard = useCallback((shouldWarn: boolean) => {
     setNavigationGuard((current) => shouldWarn ? "template" : current === "template" ? null : current);
+  }, []);
+  const refreshAuth = useCallback(async () => {
+    setAuthLoading(true);
+    try {
+      const session = await api.authSession();
+      setAuth(session);
+      setAuthError(null);
+    } catch (error) {
+      setAuth(null);
+      setAuthError(error instanceof Error ? error.message : "認証状態を確認できませんでした。");
+    } finally {
+      setAuthLoading(false);
+    }
   }, []);
 
   const refreshTemplates = useCallback(() => {
@@ -95,11 +116,13 @@ export default function App() {
     writeRecentJobIds([id, ...current.filter((item) => item !== id)].slice(0, 20));
     void refreshJobs();
   }, [refreshJobs]);
-  const openReview = (id: string) => {
+  const openReview = (id: string, requireIdentityConfirmation = true) => {
     const url = new URL(window.location.href);
     url.searchParams.set("job", id);
+    url.searchParams.delete("field");
     window.history.replaceState({}, "", url);
     setReviewJobId(id);
+    setReviewRequiresIdentityConfirmation(requireIdentityConfirmation);
     setNavigationGuard("review");
     setPage("review");
   };
@@ -123,6 +146,7 @@ export default function App() {
     if (nextPage !== "review") {
       const url = new URL(window.location.href);
       url.searchParams.delete("job");
+      url.searchParams.delete("field");
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
@@ -148,7 +172,18 @@ export default function App() {
     const timer = window.setInterval(check, 5000);
     return () => { stopped = true; window.clearInterval(timer); };
   }, []);
-  useEffect(() => { retryTemplates(); void refreshJobs(); }, [refreshJobs, retryTemplates]);
+  useEffect(() => {
+    void refreshAuth();
+    const requireAuth = () => { void refreshAuth(); };
+    window.addEventListener("ledger-auth-required", requireAuth);
+    return () => window.removeEventListener("ledger-auth-required", requireAuth);
+  }, [refreshAuth]);
+  const authReady = auth !== null && (!auth.required || auth.authenticated);
+  useEffect(() => {
+    if (!authReady) return;
+    retryTemplates();
+    void refreshJobs();
+  }, [authReady, refreshJobs, retryTemplates]);
   const backendHealthy = health !== null;
   useEffect(() => {
     if (!templateLoadFailed) {
@@ -163,6 +198,16 @@ export default function App() {
     templateAutoRetryAttemptedRef.current = true;
     retryTemplates();
   }, [backendHealthy, retryTemplates, templateLoadFailed, templatesLoading]);
+  if (authLoading || authError || (auth?.required && !auth.authenticated)) {
+    return (
+      <AuthGate
+        session={auth}
+        loading={authLoading}
+        error={authError}
+        onRetry={() => { void refreshAuth(); }}
+      />
+    );
+  }
   return (
     <div className="app-shell">
       <aside className="side-nav">
@@ -176,7 +221,35 @@ export default function App() {
           <NavButton active={page === "sireNames"} icon="種" label="種雄牛名を追加" onClick={() => navigateTo("sireNames")} />
           <NavButton active={page === "records"} icon="個" label="個体検索" onClick={() => navigateTo("records")} />
         </nav>
-        <div className="side-footer"><span className={health ? "status-dot ok" : "status-dot"} /><div><strong>{health ? "ローカル接続中" : "接続待ち"}</strong><small>127.0.0.1</small></div></div>
+        <div className="side-footer">
+          {auth?.user?.pictureUrl
+            ? <img className="auth-avatar" src={auth.user.pictureUrl} alt="" referrerPolicy="no-referrer" />
+            : <span className={health ? "status-dot ok" : "status-dot"} />}
+          <div>
+            <strong>{auth?.user?.displayName ?? (health ? "ローカル接続中" : "接続待ち")}</strong>
+            <small>{auth?.user?.email ?? "127.0.0.1"}</small>
+          </div>
+          {auth?.required && (
+            <div className="auth-session-actions">
+              <button
+                type="button"
+                className="auth-logout"
+                onClick={() => {
+                  void api.logout().finally(() => { void refreshAuth(); });
+                }}
+              >
+                ログアウト
+              </button>
+              <button
+                type="button"
+                className="auth-disconnect"
+                onClick={() => setDisconnectPending(true)}
+              >
+                連携解除
+              </button>
+            </div>
+          )}
+        </div>
       </aside>
       <main className="main-content">
         {templateLoadFailed && (
@@ -190,7 +263,7 @@ export default function App() {
         {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={navigateTo} onOpenJob={openJob} />}
         {page === "templates" && <TemplatePage templates={templates} refresh={refreshTemplates} rememberJob={rememberJob} onNavigationGuardChange={updateTemplateGuard} />}
         {page === "ocr" && <OcrPage templates={templates} rememberJob={rememberJob} openReview={openReview} openTemplates={() => navigateTo("templates")} onNavigationGuardChange={updateOcrGuard} />}
-        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} requireIdentityConfirmation onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
+        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} initialSelectedPath={initialReviewField} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
@@ -199,7 +272,7 @@ export default function App() {
           onStartNewReading={() => navigateTo("ocr")}
         />}
         {page === "sireNames" && <SireNamesPage />}
-        {page === "records" && <IndividualRecordsPage />}
+        {page === "records" && <IndividualRecordsPage onEditResult={(id) => openReview(id, false)} />}
       </main>
       {pendingNavigation && (
         <NavigationConfirmDialog
@@ -212,6 +285,45 @@ export default function App() {
           }}
         />
       )}
+      {disconnectPending && (
+        <AuthDisconnectDialog
+          onCancel={() => setDisconnectPending(false)}
+          onConfirm={() => {
+            setDisconnectPending(false);
+            void api.disconnectGoogle().finally(() => { void refreshAuth(); });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AuthDisconnectDialog({
+  onCancel,
+  onConfirm,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="navigation-confirm-backdrop" role="presentation">
+      <section
+        className="navigation-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-disconnect-title"
+      >
+        <span className="navigation-confirm-icon" aria-hidden="true">G</span>
+        <div>
+          <p className="eyebrow">GOOGLE CONNECTION</p>
+          <h2 id="auth-disconnect-title">Google連携を解除しますか？</h2>
+          <p>保存済みのGoogleトークンを削除します。再利用にはGoogle認証が必要です。</p>
+        </div>
+        <div className="navigation-confirm-actions">
+          <button type="button" className="secondary" onClick={onCancel}>キャンセル</button>
+          <button type="button" className="danger-button" onClick={onConfirm}>連携を解除</button>
+        </div>
+      </section>
     </div>
   );
 }

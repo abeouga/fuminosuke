@@ -32,6 +32,28 @@ test("builds Excel-pasteable TSV and rich HTML while protecting formula-like tex
   expect(html).toContain('colspan="2"');
   expect(html).toContain("mso-number-format:'\\@'");
   expect(html).toContain("&#39;=1+1");
+  expect(html).toContain("border-collapse:collapse");
+  expect(html).toContain("border:1px solid #D7E0E7");
+  expect(html).toContain("background:#5B9BD5");
+  expect(html).toContain("background:#D9EAF7");
+});
+
+test("writes both formatted HTML and TSV to the rich clipboard", async () => {
+  let payload: Record<string, Blob> | null = null;
+  class FakeClipboardItem {
+    constructor(data: Record<string, Blob>) {
+      payload = data;
+    }
+  }
+  const write = vi.fn(async () => undefined);
+  vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+  vi.stubGlobal("navigator", { clipboard: { write } });
+
+  await copyExcelTable(table);
+
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(payload).not.toBeNull();
+  expect(Object.keys(payload ?? {})).toEqual(["text/plain", "text/html"]);
 });
 
 test("falls back to plain clipboard text when rich clipboard is unavailable", async () => {

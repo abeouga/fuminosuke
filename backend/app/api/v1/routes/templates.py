@@ -197,12 +197,9 @@ async def create_template_job(
 
     max_bytes = request.app.state.settings.storage.max_upload_bytes
     uploads: list[UploadPayload] = []
-    total_bytes = 0
     for index, item in enumerate(files):
         try:
             upload = await read_upload(item, max_bytes)
-            total_bytes += len(upload.content)
-            job_service.validate_template_batch_bytes(total_bytes)
         except Exception:
             for remaining in files[index + 1 :]:
                 await remaining.close()

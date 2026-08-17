@@ -301,6 +301,110 @@ test("starts OCR without sending a manually entered individual id", async () => 
   expect(rememberJob).toHaveBeenCalledWith("job-1");
 });
 
+test("navigates to Google Sheets when the initial OCR sync completes", async () => {
+  const onSpreadsheetNavigate = vi.fn();
+  const openReview = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs") && init?.method === "POST") {
+      return new Response(JSON.stringify({ jobId: "job-sheet" }), { status: 202 });
+    }
+    if (path.endsWith("/jobs/job-sheet")) {
+      return new Response(JSON.stringify({
+        id: "job-sheet",
+        jobType: "EXTRACT_DOCUMENT",
+        status: "REVIEW_REQUIRED",
+        progressStage: "COMPLETED",
+        progressPercent: 100,
+        attemptNumber: 1,
+        error: null,
+        createdAt: "2026-07-30T00:00:00Z",
+        startedAt: "2026-07-30T00:00:00Z",
+        completedAt: "2026-07-30T00:01:00Z",
+      }), { status: 200 });
+    }
+    if (path.endsWith("/ocr-jobs/job-sheet/result")) {
+      return new Response(JSON.stringify({
+        jobId: "job-sheet",
+        revision: 1,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-1",
+          templateVersion: "1",
+          document: {},
+          saleCalves: [],
+          pedigree: {},
+          calvings: [],
+          customFields: {},
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: true, issues: [] },
+        provider: "openai",
+        modelId: "gpt-5-mini",
+        promptVersion: "test",
+        apiCallCount: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCost: 0.001,
+        confirmed: false,
+        individualId: null,
+        fieldPreviews: [],
+        spreadsheetSync: {
+          enabled: true,
+          status: "synced",
+          spreadsheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+          lastError: null,
+        },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [{
+        mappingId: "field_cattle_name",
+        targetPath: "document.cattleName",
+        label: "牛名",
+        x: 120,
+        y: 20,
+        width: 240,
+        height: 80,
+        padding: 4,
+        enabled: true,
+        modelDetail: "high",
+      }],
+      targets: [],
+      validForOcr: true,
+      warnings: [],
+    }), { status: 200 });
+  }));
+
+  const { container } = render(
+    <OcrPage
+      templates={templates}
+      rememberJob={() => undefined}
+      openReview={openReview}
+      openTemplates={() => undefined}
+      onSpreadsheetNavigate={onSpreadsheetNavigate}
+    />,
+  );
+
+  await screen.findByText("document.cattleName · field_cattle_name");
+  fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
+  fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+    target: { files: [new File(["image"], "ledger.png", { type: "image/png" })] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "内容確認へ" }));
+  fireEvent.click(screen.getByRole("button", { name: "読み取りを開始" }));
+
+  await waitFor(() => {
+    expect(onSpreadsheetNavigate).toHaveBeenCalledWith(
+      "https://docs.google.com/spreadsheets/d/test/edit",
+    );
+  });
+  expect(openReview).not.toHaveBeenCalled();
+});
+
 test("reuses the OCR idempotency key for a communication retry and rotates it after input changes", async () => {
   const idempotencyKeys: Array<string | null> = [];
   let createCalls = 0;

@@ -7,6 +7,7 @@ import logging
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.session import Database
+from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
@@ -26,6 +27,7 @@ from app.ocr.text_presence import PaddleTextPresenceGate
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
 from app.services.extraction_service import ExtractionOutput
+from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -39,12 +41,14 @@ class OcrWorkflowService:
         settings: Settings,
         database: Database,
         storage: LocalStorageService,
+        google_sheets: GoogleSheetsSyncService,
     ) -> None:
         self._settings = settings
         self._database = database
         self._writer = ArtifactWriter(database, storage)
         self._validator = DeterministicValidator()
         self._presence_gate = PaddleTextPresenceGate()
+        self._google_sheets = google_sheets
 
     def process(self, extraction: ExtractionOutput) -> None:
         with self._database.session() as session:
@@ -179,16 +183,16 @@ class OcrWorkflowService:
         if provider_name == "openai":
             for mapping in mark_mappings:
                 state = mark_state_by_id[mapping.mapping_id]
-                crop = extraction.crops.get(mapping.mapping_id)
-                if state[0] != ReadingStatus.UNCERTAIN or crop is None:
+                mark_crop = extraction.crops.get(mapping.mapping_id)
+                if state[0] != ReadingStatus.UNCERTAIN or mark_crop is None:
                     local_resolution_by_id[mapping.mapping_id] = "mark_detector"
                     continue
                 openai_mark_ids.add(mapping.mapping_id)
                 all_regions.append(
                     OcrRegionInput(
                         region_id=mapping.mapping_id,
-                        image_png=encode_png(crop.aligned_color),
-                        handwriting_png=encode_png(crop.handwriting_only),
+                        image_png=encode_png(mark_crop.aligned_color),
+                        handwriting_png=encode_png(mark_crop.handwriting_only),
                         target_path=mapping.target_path,
                         source_region_id=mapping.mapping_id,
                         bounding_box=crop.bbox,
@@ -252,14 +256,14 @@ class OcrWorkflowService:
             for mapping in mark_mappings:
                 if mapping.mapping_id in sent_mapping_ids:
                     continue
-                crop = extraction.crops.get(mapping.mapping_id)
-                if crop is None:
+                preview_crop = extraction.crops.get(mapping.mapping_id)
+                if preview_crop is None:
                     continue
                 preview_regions.append(
                     OcrRegionInput(
                         region_id=mapping.mapping_id,
-                        image_png=encode_png(crop.aligned_color),
-                        handwriting_png=encode_png(crop.handwriting_only),
+                        image_png=encode_png(preview_crop.aligned_color),
+                        handwriting_png=encode_png(preview_crop.handwriting_only),
                         target_path=mapping.target_path,
                         source_region_id=mapping.mapping_id,
                         bounding_box=crop.bbox,
@@ -307,12 +311,12 @@ class OcrWorkflowService:
         )
         response.document.template_id = request.template_id
         response.document.template_version = request.template_version
-        for region in fixed_record_regions:
-            target_path = region.target_path
+        for fixed_region in fixed_record_regions:
+            target_path = fixed_region.target_path
             if target_path is None:
                 continue
             value = fixed_calving_keys[target_path]
-            box = region.bounding_box
+            box = fixed_region.bounding_box
             assign_mapped_reading(
                 response.document,
                 target_path,
@@ -322,7 +326,7 @@ class OcrWorkflowService:
                     status=ReadingStatus.READABLE,
                     alternatives=[],
                     review_reason=None,
-                    source_region_id=region.source_region_id or region.region_id,
+                    source_region_id=(fixed_region.source_region_id or fixed_region.region_id),
                     bounding_box=(
                         BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3])
                         if box
@@ -376,12 +380,13 @@ class OcrWorkflowService:
                 configured_paths,
             )
         )
+        normalized_document = normalize_document_numbers(response.document)
         report = self._validator.validate(
-            response.document,
+            normalized_document,
             image_quality=extraction.quality,
             configured_paths=configured_paths,
         )
-        response_document = self._validator.merge_review_items(response.document, report)
+        response_document = self._validator.merge_review_items(normalized_document, report)
         if mapped_cells_payload is not None:
             result_json = response_document.model_dump(mode="json", by_alias=True)
             cells = mapped_cells_payload.get("cells")
@@ -422,6 +427,13 @@ class OcrWorkflowService:
                 report=report,
             )
             revision = stored.revision
+        self._progress(extraction.job_id, "SYNCING_GOOGLE_SHEETS", 94)
+        self._google_sheets.sync(
+            job_id=extraction.job_id,
+            revision=revision,
+            document=response_document.model_dump(mode="json", by_alias=True),
+            confirmed=False,
+        )
         self._progress(extraction.job_id, "WRITING_ARTIFACTS", 96)
         self._writer.json(
             job_id=extraction.job_id,
@@ -503,14 +515,8 @@ class OcrWorkflowService:
         is_era_date = target_path == "document.birthDate" or bool(
             target_path
             and (
-                (
-                    target_path.startswith("calvings.")
-                    and target_path.endswith(".calvingDate")
-                )
-                or (
-                    target_path.startswith("saleCalves.")
-                    and target_path.endswith(".saleDate")
-                )
+                (target_path.startswith("calvings.") and target_path.endswith(".calvingDate"))
+                or (target_path.startswith("saleCalves.") and target_path.endswith(".saleDate"))
             )
         )
         return "japanese_era_date_numbers" if is_era_date else None

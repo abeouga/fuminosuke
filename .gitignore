@@ -12,8 +12,18 @@ node_modules/
 *.tsbuildinfo
 *.egg-info/
 
-# Local runtime configuration can contain API keys and must never be committed.
-backend/.env
+# Terraform runtime state and local Google credentials.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+/llm-ocr-sheets-*.json
+
+# The project intentionally versions its local runtime configuration, including
+# API credentials, so a clone can be pushed and started without re-entry.
+!backend/.env
 
 # Test-run artifacts generated under the backend workspace.
 backend/.pytest-full-mapping-*/
@@ -22,6 +32,10 @@ data/**
 !data/.gitkeep
 backend/data/**
 !backend/data/.gitkeep
+
+# Version the live SQLite database. It is checkpointed before committing;
+# volatile write-ahead-log sidecars and other runtime artifacts remain local-only.
+!backend/data/app.db
 
 # Sanitized active-template bootstrap data is intentionally versioned so a new
 # local runtime starts with the shared templates. It contains no API keys,

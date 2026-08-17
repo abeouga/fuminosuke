@@ -9,7 +9,9 @@ description = "Local FastAPI backend for the cow breeding ledger OCR prototype"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "alembic==1.16.4",
+  "cryptography==50.0.0",
   "fastapi==0.116.1",
+  "google-auth==2.56.3",
   "numpy==2.2.6",
   "openai==1.97.1",
   "opencv-contrib-python==4.10.0.84",
@@ -18,6 +20,7 @@ dependencies = [
   "pydantic==2.11.7",
   "pydantic-settings==2.10.1",
   "python-multipart==0.0.20",
+  "requests==2.34.2",
   "pyyaml==6.0.2",
   "sqlalchemy==2.0.41",
   "uvicorn[standard]==0.35.0",

@@ -233,6 +233,12 @@ export type OcrResult = {
   individualId: string | null;
   fieldPreviews: OcrFieldPreview[];
   recordStructure?: RecordStructure;
+  spreadsheetSync?: {
+    enabled: boolean;
+    status: "disabled" | "pending" | "ready" | "synced" | "failed";
+    spreadsheetUrl: string | null;
+    lastError: string | null;
+  };
 };
 
 export type IndividualRecord = {
@@ -289,6 +295,20 @@ export type SaleCalfSireSearch = {
 };
 
 export type Problem = { code?: string; detail?: string; message?: string };
+
+export type AuthUser = {
+  subject: string;
+  email: string;
+  displayName: string | null;
+  pictureUrl: string | null;
+};
+
+export type AuthSession = {
+  required: boolean;
+  configured: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+};
 
 export type ExcelCellKind = "text" | "identifier" | "integer" | "decimal" | "currency" | "date";
 

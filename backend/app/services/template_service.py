@@ -64,9 +64,6 @@ class TemplatePreparationService:
         self._progress(job_id, "NORMALIZING_DOCUMENT", 15)
         if mode is TemplateMode.REFERENCE_TEMPLATE:
             prepared = self._pipelines.reference(images)
-        elif mode is TemplateMode.MULTI_SCAN_CONSENSUS:
-            self._progress(job_id, "REGISTERING_TEMPLATE", 35)
-            prepared = self._pipelines.consensus(images)
         else:
             self._progress(job_id, "RECOVERING_TEMPLATE", 35)
             prepared = self._pipelines.single_experimental(images)

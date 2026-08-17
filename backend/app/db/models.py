@@ -42,11 +42,29 @@ class SireName(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    normalized_name: Mapped[str] = mapped_column(
-        String(100), nullable=False, index=True
-    )
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class GoogleOAuthAccount(Base):
+    __tablename__ = "google_oauth_accounts"
+
+    google_subject: Mapped[str] = mapped_column(String(255), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    picture_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    spreadsheet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
 
 
@@ -176,9 +194,7 @@ class JobInput(Base):
 class JobArtifact(Base):
     __tablename__ = "job_artifacts"
     __table_args__ = (
-        UniqueConstraint(
-            "job_id", "attempt_number", "artifact_name", name="uq_job_artifact_name"
-        ),
+        UniqueConstraint("job_id", "attempt_number", "artifact_name", name="uq_job_artifact_name"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
@@ -196,9 +212,7 @@ class JobArtifact(Base):
         DateTime(timezone=True), nullable=False, default=utc_now
     )
 
-    job: Mapped[ProcessingJob] = relationship(
-        back_populates="artifacts", foreign_keys=[job_id]
-    )
+    job: Mapped[ProcessingJob] = relationship(back_populates="artifacts", foreign_keys=[job_id])
 
 
 class OcrResult(Base):
@@ -233,9 +247,7 @@ class OcrResult(Base):
 
 class OcrResultRevision(Base):
     __tablename__ = "ocr_result_revisions"
-    __table_args__ = (
-        UniqueConstraint("ocr_result_id", "revision", name="uq_ocr_result_revision"),
-    )
+    __table_args__ = (UniqueConstraint("ocr_result_id", "revision", name="uq_ocr_result_revision"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     ocr_result_id: Mapped[str] = mapped_column(
@@ -261,9 +273,7 @@ class ConfirmedResult(Base):
         unique=True,
     )
     ocr_result_revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    individual_id: Mapped[str | None] = mapped_column(
-        String(10), nullable=True, index=True
-    )
+    individual_id: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     confirmed_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now

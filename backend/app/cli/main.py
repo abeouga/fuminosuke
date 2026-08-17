@@ -36,9 +36,6 @@ def build_parser() -> argparse.ArgumentParser:
         item = subparsers.add_parser(command)
         item.add_argument("--source", type=Path, required=True)
         _common_recovery_arguments(item)
-    consensus = subparsers.add_parser("recover-consensus")
-    consensus.add_argument("--inputs", nargs="+", type=Path, required=True)
-    _common_recovery_arguments(consensus)
     extract = subparsers.add_parser("extract-document")
     extract.add_argument("--source", type=Path, required=True)
     extract.add_argument("--template", type=Path, required=True)
@@ -74,13 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     config = load_template_config(args.template_config)
     if args.command.startswith("recover-"):
-        paths = args.inputs if args.command == "recover-consensus" else [args.source]
-        images = [_read_image(path) for path in paths]
+        images = [_read_image(args.source)]
         pipelines = TemplateRecoveryPipelines(settings, config)
         if args.command == "recover-reference":
             result = pipelines.reference(images)
-        elif args.command == "recover-consensus":
-            result = pipelines.consensus(images)
         else:
             result = pipelines.single_experimental(images)
         _write_recovery(args.output, result)

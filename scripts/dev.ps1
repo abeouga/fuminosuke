@@ -135,8 +135,21 @@ finally {
     Pop-Location
 }
 
-$backendPort = Find-FreeLocalPort 8000
-$frontendPort = Find-FreeLocalPort 5173
+$oauthEnabled = Get-Content -LiteralPath $envFile |
+    Where-Object { $_ -match '^GOOGLE_OAUTH_ENABLED=' } |
+    Select-Object -Last 1 |
+    ForEach-Object { ($_ -split '=', 2)[1].Trim().ToLowerInvariant() }
+if ($oauthEnabled -in @('true', '1', 'yes', 'on')) {
+    if ((Test-LocalPortInUse 8000) -or (Test-LocalPortInUse 5173)) {
+        throw 'Google OAuth requires the registered local ports 8000 and 5173. Stop the process using those ports, then restart.'
+    }
+    $backendPort = 8000
+    $frontendPort = 5173
+}
+else {
+    $backendPort = Find-FreeLocalPort 8000
+    $frontendPort = Find-FreeLocalPort 5173
+}
 $backendUrl = "http://127.0.0.1:$backendPort"
 $frontendUrl = "http://127.0.0.1:$frontendPort"
 

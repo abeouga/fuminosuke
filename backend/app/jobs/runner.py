@@ -205,12 +205,7 @@ class JobRunner:
                 if job_type is JobType.PREPARE_TEMPLATE
                 else None
             )
-            minimum, maximum = job_input_bounds(
-                job_type,
-                mode,
-                min_consensus_images=self._settings.registration.min_consensus_images,
-                max_consensus_images=self._settings.registration.max_consensus_images,
-            )
+            minimum, maximum = job_input_bounds(job_type, mode)
         except ValueError:
             return False
 
@@ -218,14 +213,6 @@ class JobRunner:
             return False
         ordered = sorted(inputs, key=lambda item: item.input_index)
         if [item.input_index for item in ordered] != list(range(len(ordered))):
-            return False
-
-        total_bytes = sum(item.file_bytes for item in ordered)
-        total_pixels = sum(item.width * item.height for item in ordered)
-        if (
-            total_bytes > self._settings.storage.max_batch_upload_bytes
-            or total_pixels > self._settings.image_processing.max_batch_image_pixels
-        ):
             return False
 
         upload_root = self._storage.resolve(f"uploads/{job.id}")

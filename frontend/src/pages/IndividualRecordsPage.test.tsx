@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { IndividualRecordsPage } from "./IndividualRecordsPage";
 
@@ -28,8 +28,23 @@ afterEach(() => {
 });
 
 test("renders an individual record as human-readable sections instead of JSON code", async () => {
+  const onEditResult = vi.fn();
+  const onSpreadsheetNavigate = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-1/spreadsheet-sync")) {
+      return new Response(JSON.stringify({
+        spreadsheetSync: {
+          enabled: true,
+          status: "synced",
+          spreadsheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+          lastError: null,
+        },
+      }), { status: 200 });
+    }
+    if (path.endsWith("/ocr-jobs/job-1/reopen")) {
+      return new Response(JSON.stringify({}), { status: 200 });
+    }
     if (path.endsWith("/individual-records/catalog")) {
       return new Response(JSON.stringify({
         count: 1,
@@ -72,7 +87,7 @@ test("renders an individual record as human-readable sections instead of JSON co
                 weightKg: readable("323"),
                 priceYen: readable("762.300"),
                 sireName: readable("光晴重"),
-                saleDate: readable("令和1年11月6日"),
+                saleDate: readable("30 8-10"),
                 notes: blank,
               },
               {
@@ -112,13 +127,21 @@ test("renders an individual record as human-readable sections instead of JSON co
     return new Response("{}", { status: 200 });
   }));
 
-  const { container } = render(<IndividualRecordsPage />);
+  const { container } = render(
+    <IndividualRecordsPage
+      onEditResult={onEditResult}
+      onSpreadsheetNavigate={onSpreadsheetNavigate}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /個体を検索.*個体識別番号・種雄牛名/ }));
+  expect(screen.getByRole("dialog", { name: "登録データを検索" })).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("個体識別番号"), {
     target: { value: "000-0000-001" },
   });
   fireEvent.click(screen.getByRole("button", { name: "個体を検索" }));
 
   expect(await screen.findByRole("heading", { name: "基本情報" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "登録データを検索" })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "血統" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "売却子牛一覧" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "繁殖履歴" })).toBeInTheDocument();
@@ -129,11 +152,42 @@ test("renders an individual record as human-readable sections instead of JSON co
   const saleSection = screen.getByRole("heading", { name: "売却子牛一覧" }).closest("section");
   expect(saleSection).not.toBeNull();
   expect(within(saleSection as HTMLElement).getByText("762,300円")).toBeInTheDocument();
+  expect(within(saleSection as HTMLElement).getByText("2018年8月10日")).toBeInTheDocument();
   expect(within(saleSection as HTMLElement).getAllByRole("row")).toHaveLength(2);
+
+  const saleViewSwitch = within(saleSection as HTMLElement).getByRole("group", {
+    name: "売却子牛一覧の表示",
+  });
+  expect(within(saleViewSwitch).getByRole("button", { name: "表" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  fireEvent.click(within(saleViewSwitch).getByRole("button", { name: "グラフ" }));
+  expect(within(saleSection as HTMLElement).queryByRole("table")).not.toBeInTheDocument();
+  expect(within(saleSection as HTMLElement).getByRole("img", {
+    name: "売却日と売却価格のグラフ。1件を表示。",
+  })).toBeInTheDocument();
+  expect(within(saleSection as HTMLElement).getByText("762,300円")).toBeInTheDocument();
+  expect(within(saleSection as HTMLElement).getByText("2018/8/10")).toBeInTheDocument();
+  fireEvent.click(within(saleViewSwitch).getByRole("button", { name: "表" }));
+  expect(within(saleSection as HTMLElement).getByRole("table")).toBeInTheDocument();
 
   expect(container.querySelector("pre")).not.toBeInTheDocument();
   expect(screen.queryByText("保存されているJSON全体")).not.toBeInTheDocument();
   expect(screen.queryByText("APIのJSONを開く")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "スプレッドシートへ出力" }));
+  expect(await screen.findByText("この帳票をGoogleスプレッドシートへ反映しました。")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /スプレッドシートを開く/ })).toHaveAttribute(
+    "href",
+    "https://docs.google.com/spreadsheets/d/test/edit",
+  );
+  expect(onSpreadsheetNavigate).toHaveBeenCalledWith(
+    "https://docs.google.com/spreadsheets/d/test/edit",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "検出結果を編集" }));
+  await waitFor(() => expect(onEditResult).toHaveBeenCalledWith("job-1"));
 });
 
 test("selects an individual from the confirmed record catalog", async () => {
@@ -162,10 +216,60 @@ test("selects an individual from the confirmed record catalog", async () => {
   }));
 
   render(<IndividualRecordsPage />);
-  fireEvent.click(await screen.findByRole("button", { name: /よみ.*表示する/ }));
+  const catalogButtons = await screen.findAllByRole("button");
+  const catalogSearch = screen.getByRole("button", { name: /個体を検索.*個体識別番号・種雄牛名/ });
+  expect(catalogButtons.indexOf(catalogSearch)).toBeGreaterThan(
+    catalogButtons.indexOf(screen.getByRole("button", { name: /よみ.*表示する/ })),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /よみ.*表示する/ }));
 
-  expect(screen.getByLabelText("個体識別番号")).toHaveValue("0000000001");
+  expect(screen.queryByLabelText("個体識別番号")).not.toBeInTheDocument();
   expect(await screen.findByText("0件の確定済み帳票が見つかりました。")).toBeInTheDocument();
+});
+
+test("keeps optional searches in the plus-card dialog", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/individual-records/catalog")) {
+      return new Response(JSON.stringify({ count: 0, items: [] }), { status: 200 });
+    }
+    if (path.includes("/sale-calf-records?sireName=")) {
+      return new Response(JSON.stringify({
+        query: "福之姫",
+        normalizedQuery: "福之姫",
+        count: 0,
+        matches: [],
+      }), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }));
+
+  render(<IndividualRecordsPage />);
+  expect(screen.queryByLabelText("個体識別番号")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("種雄牛名")).not.toBeInTheDocument();
+
+  const launch = await screen.findByRole("button", {
+    name: /個体を検索.*個体識別番号・種雄牛名/,
+  });
+  fireEvent.click(launch);
+  const dialog = screen.getByRole("dialog", { name: "登録データを検索" });
+  expect(within(dialog).getByRole("tab", { name: "個体識別番号" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  fireEvent.click(within(dialog).getByRole("tab", { name: "種雄牛名" }));
+  fireEvent.change(within(dialog).getByLabelText("種雄牛名"), {
+    target: { value: "福之姫" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "産次・価格を検索" }));
+
+  expect(await screen.findByRole("heading", { name: "福之姫" })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "登録データを検索" })).not.toBeInTheDocument();
+
+  fireEvent.click(launch);
+  expect(screen.getByRole("dialog", { name: "登録データを検索" })).toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "登録データを検索" })).not.toBeInTheDocument();
 });
 
 test("marks legacy confirmed data that needs rechecking", async () => {

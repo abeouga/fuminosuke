@@ -22,7 +22,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.app.frontend_origins),
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Accept", "Content-Type", "If-Match", "Idempotency-Key"],
     )
@@ -32,4 +32,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

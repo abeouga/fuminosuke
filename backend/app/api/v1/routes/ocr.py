@@ -53,6 +53,7 @@ class OcrResultResponse(ApiModel):
     individual_id: str | None
     field_previews: list[OcrFieldPreview]
     record_structure: dict[str, Any]
+    spreadsheet_sync: dict[str, Any]
 
 
 class OcrCorrectionRequest(ApiModel):
@@ -124,6 +125,15 @@ def save_ocr_corrections(
 
 
 @router.post(
+    "/ocr-jobs/{job_id}/reopen",
+    response_model=OcrResultResponse,
+    response_model_by_alias=True,
+)
+def reopen_ocr_result(request: Request, job_id: str) -> dict[str, Any]:
+    return get_ocr_result_service(request).reopen(job_id)
+
+
+@router.post(
     "/ocr-jobs/{job_id}/confirm",
     response_model=OcrResultResponse,
     response_model_by_alias=True,
@@ -140,13 +150,18 @@ def confirm_ocr_result(
 
 
 @router.get("/ocr-jobs/{job_id}/export", response_class=FileResponse)
-def export_ocr_result(
-    request: Request, job_id: str, format: str = "json"
-) -> FileResponse:
-    path, media_type, file_name = get_ocr_result_service(request).export_path(
-        job_id, format
-    )
+def export_ocr_result(request: Request, job_id: str, format: str = "json") -> FileResponse:
+    path, media_type, file_name = get_ocr_result_service(request).export_path(job_id, format)
     return FileResponse(path, media_type=media_type, filename=file_name)
+
+
+@router.post(
+    "/ocr-jobs/{job_id}/spreadsheet-sync",
+    response_model=OcrResultResponse,
+    response_model_by_alias=True,
+)
+def retry_spreadsheet_sync(request: Request, job_id: str) -> dict[str, Any]:
+    return get_ocr_result_service(request).sync_spreadsheet(job_id)
 
 
 @router.get("/ocr-jobs/{job_id}/excel-table")

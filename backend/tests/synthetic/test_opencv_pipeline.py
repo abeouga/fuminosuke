@@ -94,16 +94,14 @@ def test_registration_rejects_unrelated_image(
     assert caught.value.code == "LOW_REGISTRATION_CONFIDENCE"
 
 
-def test_consensus_and_single_modes(settings_factory: Callable[..., Settings]) -> None:
+def test_single_mode_requires_layout_review(
+    settings_factory: Callable[..., Settings],
+) -> None:
     settings = settings_factory()
     pipelines = TemplateRecoveryPipelines(settings, load_template_config())
-    inputs = [ledger_image(handwriting_seed=index) for index in range(1, 4)]
+    single = pipelines.single_experimental([ledger_image(handwriting_seed=1)])
 
-    consensus = pipelines.consensus(inputs)
-    single = pipelines.single_experimental([inputs[0]])
-
-    assert consensus.clean_template_rgb.shape == (1754, 1240, 3)
-    assert consensus.quality["acceptedImageCount"] >= 3
+    assert single.clean_template_rgb.shape == (1754, 1240, 3)
     assert single.handwriting_mask is None
     assert single.quality["processingOrder"] == [
         "PERSPECTIVE_CORRECTION",

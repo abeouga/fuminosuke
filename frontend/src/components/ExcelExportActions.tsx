@@ -11,7 +11,7 @@ export function ExcelExportActions({ jobId, compact = false }: { jobId: string; 
     setMessage(null);
     try {
       await copyExcelTable(await api.excelTable(jobId));
-      setMessage("コピーしました。Excelで貼り付けできます。");
+      setMessage("罫線付きでコピーしました。Excelで貼り付けできます。");
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "コピーできませんでした。");
     } finally {

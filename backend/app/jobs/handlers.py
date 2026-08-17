@@ -7,6 +7,7 @@ from app.db.session import Database
 from app.domain.enums import JobType
 from app.repositories.job_repository import JobRepository
 from app.services.extraction_service import ImageExtractionService
+from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.services.ocr_workflow_service import OcrWorkflowService
 from app.services.template_service import TemplatePreparationService
 from app.storage.local_storage import LocalStorageService
@@ -30,6 +31,7 @@ class PipelineJobHandler:
         settings: Settings,
         database: Database,
         storage: LocalStorageService,
+        google_sheets: GoogleSheetsSyncService,
     ) -> None:
         self._database = database
         self._template_service = TemplatePreparationService(
@@ -46,6 +48,7 @@ class PipelineJobHandler:
             settings=settings,
             database=database,
             storage=storage,
+            google_sheets=google_sheets,
         )
 
     def __call__(self, job_id: str) -> None:
