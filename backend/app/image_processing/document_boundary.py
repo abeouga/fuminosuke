@@ -22,11 +22,23 @@ class NormalizedDocument:
 
 
 class DocumentNormalizer:
-    def __init__(self, *, canonical_width: int, canonical_height: int) -> None:
+    def __init__(
+        self,
+        *,
+        canonical_width: int,
+        canonical_height: int,
+        allow_orientation_swap: bool = False,
+    ) -> None:
         self._width = canonical_width
         self._height = canonical_height
+        self._allow_orientation_swap = allow_orientation_swap
 
-    def normalize(self, image_rgb: NDArray[np.uint8]) -> NormalizedDocument:
+    def normalize(
+        self,
+        image_rgb: NDArray[np.uint8],
+        *,
+        source_corners: NDArray[np.float32] | None = None,
+    ) -> NormalizedDocument:
         source_height, source_width = image_rgb.shape[:2]
         scale = min(1.0, 1600.0 / max(source_width, source_height))
         small = cv2.resize(
@@ -46,44 +58,63 @@ class DocumentNormalizer:
             paper_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         image_area = float(small.shape[0] * small.shape[1])
-        target_ratio = self._width / self._height
-        best: tuple[float, NDArray[np.float32]] | None = None
-        for contour in [*contours, *paper_contours]:
-            area = cv2.contourArea(contour)
-            if area < image_area * 0.2:
-                continue
-            perimeter = cv2.arcLength(contour, True)
-            for corners in self._quadrilateral_candidates(contour, perimeter):
-                quad_area = abs(float(cv2.contourArea(corners)))
-                if quad_area < image_area * 0.2:
+        target_shapes = self._target_shapes()
+        best: tuple[float, NDArray[np.float32], int, int] | None = None
+        manual_boundary_used = source_corners is not None
+        if source_corners is not None:
+            manual_corners = self._validated_manual_corners(
+                source_corners,
+                source_width=source_width,
+                source_height=source_height,
+            )
+            ratio = self._quad_ratio(manual_corners)
+            _, output_width, output_height = min(
+                target_shapes,
+                key=lambda target: abs(ratio - target[0]) / target[0],
+            )
+            best = 1.0, manual_corners, output_width, output_height
+        else:
+            for contour in [*contours, *paper_contours]:
+                area = cv2.contourArea(contour)
+                if area < image_area * 0.2:
                     continue
-                top = np.linalg.norm(corners[1] - corners[0])
-                bottom = np.linalg.norm(corners[2] - corners[3])
-                left = np.linalg.norm(corners[3] - corners[0])
-                right = np.linalg.norm(corners[2] - corners[1])
-                ratio = max(float(top), float(bottom)) / max(
-                    1.0, max(float(left), float(right))
-                )
-                ratio_error = abs(ratio - target_ratio) / target_ratio
-                if ratio_error > 0.45:
-                    continue
-                # The document aspect ratio is known. Weighting it strongly avoids
-                # selecting a strip of desk or binder that happens to touch the page.
-                score = quad_area / image_area - ratio_error * 1.25
-                if best is None or score > best[0]:
-                    best = score, corners / scale
+                perimeter = cv2.arcLength(contour, True)
+                for corners in self._quadrilateral_candidates(contour, perimeter):
+                    quad_area = abs(float(cv2.contourArea(corners)))
+                    if quad_area < image_area * 0.2:
+                        continue
+                    ratio = self._quad_ratio(corners)
+                    target_ratio, output_width, output_height = min(
+                        target_shapes,
+                        key=lambda target: abs(ratio - target[0]) / target[0],
+                    )
+                    ratio_error = abs(ratio - target_ratio) / target_ratio
+                    if ratio_error > 0.45:
+                        continue
+                    # The document aspect ratio is known. Weighting it strongly avoids
+                    # selecting a strip of desk or binder that happens to touch the page.
+                    score = quad_area / image_area - ratio_error * 1.25
+                    if best is None or score > best[0]:
+                        best = score, corners / scale, output_width, output_height
 
         warnings: list[str] = []
         if best is None:
             fallback = True
             source_ratio = source_width / source_height
+            target_ratio, output_width, output_height = min(
+                target_shapes,
+                key=lambda target: abs(source_ratio - target[0]) / target[0],
+            )
             ratio_error = abs(source_ratio - target_ratio) / target_ratio
             if ratio_error > 0.22:
                 raise AppError(
                     status=422,
                     code="DOCUMENT_BOUNDARY_NOT_FOUND",
                     title="Document boundary not found",
-                    detail="帳票の外周を検出できません。帳票全体が写るように撮影してください。",
+                    detail=(
+                        "自動で書類の範囲を判断できませんでした。"
+                        "書類全体が写っている場合は、画面で書類の四隅を指定してください。"
+                    ),
                 )
             corners = np.array(
                 [
@@ -100,8 +131,17 @@ class DocumentNormalizer:
             fallback = False
             confidence = min(1.0, max(0.0, best[0]))
             corners = best[1]
+            output_width = best[2]
+            output_height = best[3]
+            if manual_boundary_used:
+                warnings.append("MANUAL_DOCUMENT_BOUNDARY")
 
-        normalized, transform = warp_quad(image_rgb, corners, self._width, self._height)
+        normalized, transform = warp_quad(
+            image_rgb,
+            corners,
+            output_width,
+            output_height,
+        )
         debug = image_rgb.copy()
         cv2.polylines(debug, [corners.astype(np.int32)], True, (0, 180, 0), 4)
         return NormalizedDocument(
@@ -112,13 +152,62 @@ class DocumentNormalizer:
             quality=DocumentQuality(
                 boundary_confidence=confidence,
                 fallback_used=fallback,
+                manual_boundary_used=manual_boundary_used,
                 source_width=source_width,
                 source_height=source_height,
-                output_width=self._width,
-                output_height=self._height,
+                output_width=output_width,
+                output_height=output_height,
                 warnings=warnings,
             ),
         )
+
+    def _target_shapes(self) -> list[tuple[float, int, int]]:
+        shapes = [(self._width / self._height, self._width, self._height)]
+        if self._allow_orientation_swap and self._width != self._height:
+            shapes.append((self._height / self._width, self._height, self._width))
+        return shapes
+
+    @staticmethod
+    def _quad_ratio(corners: NDArray[np.float32]) -> float:
+        top = np.linalg.norm(corners[1] - corners[0])
+        bottom = np.linalg.norm(corners[2] - corners[3])
+        left = np.linalg.norm(corners[3] - corners[0])
+        right = np.linalg.norm(corners[2] - corners[1])
+        return max(float(top), float(bottom)) / max(
+            1.0,
+            max(float(left), float(right)),
+        )
+
+    @staticmethod
+    def _validated_manual_corners(
+        corners: NDArray[np.float32],
+        *,
+        source_width: int,
+        source_height: int,
+    ) -> NDArray[np.float32]:
+        values = np.asarray(corners, dtype=np.float32)
+        if values.shape != (4, 2) or not np.isfinite(values).all():
+            raise AppError(
+                status=422,
+                code="DOCUMENT_BOUNDARY_INVALID",
+                title="Document boundary is invalid",
+                detail="書類の四隅を正しく指定してください。",
+            )
+        ordered = order_quad(values)
+        if (
+            (ordered[:, 0] < 0).any()
+            or (ordered[:, 0] >= source_width).any()
+            or (ordered[:, 1] < 0).any()
+            or (ordered[:, 1] >= source_height).any()
+            or abs(float(cv2.contourArea(ordered))) < source_width * source_height * 0.1
+        ):
+            raise AppError(
+                status=422,
+                code="DOCUMENT_BOUNDARY_INVALID",
+                title="Document boundary is invalid",
+                detail="四隅は画像内で、書類全体を囲むように指定してください。",
+            )
+        return ordered
 
     @staticmethod
     def _paper_mask(image_rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:

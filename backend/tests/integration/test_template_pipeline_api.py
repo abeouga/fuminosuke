@@ -1,3 +1,4 @@
+import json
 import time
 
 import cv2
@@ -18,6 +19,62 @@ def _wait_for(client: TestClient, job_id: str, target: str) -> dict[str, object]
         time.sleep(0.01)
     assert detail["status"] == target, detail
     return detail
+
+
+def test_failed_boundary_can_be_confirmed_and_reprocessed(client: TestClient) -> None:
+    source = np.full((400, 1200, 3), 72, dtype=np.uint8)
+    create = client.post(
+        "/api/v1/template-jobs",
+        data={
+            "name": "横長書類",
+            "mode": "REFERENCE_TEMPLATE",
+            "fieldNames": json.dumps(["宛名", "金額"], ensure_ascii=False),
+        },
+        files=[("files", ("wide.png", encode_png(source), "image/png"))],
+    )
+    assert create.status_code == 202
+    job_id = create.json()["jobId"]
+    failed = _wait_for(client, job_id, "FAILED")
+    assert failed["error"]["code"] == "DOCUMENT_BOUNDARY_NOT_FOUND"
+
+    boundary_image = client.get(f"/api/v1/template-jobs/{job_id}/boundary-image")
+    assert boundary_image.status_code == 200
+    assert boundary_image.headers["content-type"] == "image/png"
+
+    update = client.put(
+        f"/api/v1/template-jobs/{job_id}/boundary",
+        json={
+            "corners": [
+                {"x": 0.03, "y": 0.03},
+                {"x": 0.97, "y": 0.03},
+                {"x": 0.97, "y": 0.97},
+                {"x": 0.03, "y": 0.97},
+            ]
+        },
+    )
+    assert update.status_code == 200
+    assert update.json()["status"] == "QUEUED"
+    assert update.json()["attemptNumber"] == 2
+
+    _wait_for(client, job_id, "REVIEW_REQUIRED")
+    templates = client.get("/api/v1/templates").json()
+    template_id = next(
+        template["id"] for template in templates if template["name"] == "横長書類"
+    )
+    version = client.get(f"/api/v1/templates/{template_id}").json()["versions"][0]
+    assert version["canonicalWidth"] == 1754
+    assert version["canonicalHeight"] == 1240
+    assert version["quality"]["manualBoundaryUsed"] is True
+    layout = client.get(f"/api/v1/template-versions/{version['id']}/layout").json()
+    assert [item["label"] for item in layout["labelPool"]] == ["宛名", "金額"]
+    mapping_config = client.get(
+        f"/api/v1/template-versions/{version['id']}/field-mappings"
+    ).json()
+    assert [target["label"] for target in mapping_config["targets"]] == ["宛名", "金額"]
+    assert not any(target["label"] == "個体識別番号" for target in mapping_config["targets"])
+    redetected = client.post(f"/api/v1/template-versions/{version['id']}/layout/detect")
+    assert redetected.status_code == 200
+    assert [item["label"] for item in redetected.json()["labelPool"]] == ["宛名", "金額"]
 
 
 def test_reference_approve_then_extract(client: TestClient) -> None:
@@ -50,7 +107,7 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     assert mapping_config["mappings"] == []
     assert mapping_config["validForOcr"] is False
     assert mapping_config["warnings"]
-    assert any(target["path"] == "document.cattleName" for target in mapping_config["targets"])
+    assert mapping_config["targets"] == []
 
     custom_mapping = client.put(
         f"/api/v1/template-versions/{version_id}/field-mappings",
@@ -68,7 +125,14 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
                     "enabled": True,
                     "modelDetail": "high",
                 }
-            ]
+            ],
+            "documentIdentity": {
+                "mappingId": "custom_treatment",
+                "targetPath": "customFields.treatmentHistory",
+                "label": "治療歴",
+                "valueType": "text",
+                "exactLength": None,
+            },
         },
     )
     assert custom_mapping.status_code == 200
@@ -78,6 +142,78 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
         target["path"] == "customFields.treatmentHistory"
         for target in custom_mapping.json()["targets"]
     )
+
+    compound_mapping = client.put(
+        f"/api/v1/template-versions/{version_id}/field-mappings",
+        json={
+            "mappings": [
+                custom_mapping.json()["mappings"][0],
+                {
+                    "mappingId": "cattle_name",
+                    "targetPath": "document.cattleName",
+                    "label": "牛名",
+                    "x": 450,
+                    "y": 120,
+                    "width": 220,
+                    "height": 90,
+                    "padding": 4,
+                    "enabled": True,
+                    "modelDetail": "high",
+                },
+            ],
+            "documentIdentity": {
+                **custom_mapping.json()["documentIdentity"],
+                "matchRole": "primary",
+                "displayRole": "subtitle",
+            },
+            "documentIdentityFields": [
+                {
+                    **custom_mapping.json()["documentIdentity"],
+                    "matchRole": "primary",
+                    "displayRole": "subtitle",
+                },
+                {
+                    "mappingId": "cattle_name",
+                    "targetPath": "document.cattleName",
+                    "label": "牛名",
+                    "valueType": "text",
+                    "exactLength": None,
+                    "matchRole": "confirmation",
+                    "displayRole": "title",
+                },
+            ],
+        },
+    )
+    assert compound_mapping.status_code == 200
+    assert [
+        field["targetPath"] for field in compound_mapping.json()["documentIdentityFields"]
+    ] == ["customFields.treatmentHistory", "document.cattleName"]
+    assert compound_mapping.json()["documentIdentity"]["matchRole"] == "primary"
+
+    combined_confirmation_mapping = client.put(
+        f"/api/v1/template-versions/{version_id}/field-mappings",
+        json={
+            "mappings": compound_mapping.json()["mappings"],
+            "documentIdentity": None,
+            "documentIdentityFields": [
+                {
+                    **compound_mapping.json()["documentIdentityFields"][0],
+                    "matchRole": "confirmation",
+                },
+                {
+                    **compound_mapping.json()["documentIdentityFields"][1],
+                    "matchRole": "confirmation",
+                },
+            ],
+        },
+    )
+    assert combined_confirmation_mapping.status_code == 200
+    assert combined_confirmation_mapping.json()["validForOcr"] is True
+    assert combined_confirmation_mapping.json()["documentIdentity"] is None
+    assert [
+        field["matchRole"]
+        for field in combined_confirmation_mapping.json()["documentIdentityFields"]
+    ] == ["confirmation", "confirmation"]
 
     detected_layout = client.post(
         f"/api/v1/template-versions/{version_id}/layout/detect"
@@ -281,7 +417,14 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
                     "enabled": True,
                     "modelDetail": "high",
                 }
-            ]
+            ],
+            "documentIdentity": {
+                "mappingId": "field_document_cattleName",
+                "targetPath": "document.cattleName",
+                "label": "名号",
+                "valueType": "text",
+                "exactLength": None,
+            },
         },
     )
     assert save_mapping.status_code == 200
@@ -296,7 +439,10 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     assert approve.json()["status"] == "ACTIVE"
     active_mapping = client.put(
         f"/api/v1/template-versions/{version_id}/field-mappings",
-        json={"mappings": save_mapping.json()["mappings"]},
+        json={
+            "mappings": save_mapping.json()["mappings"],
+            "documentIdentity": save_mapping.json()["documentIdentity"],
+        },
     )
     assert active_mapping.status_code == 200
 

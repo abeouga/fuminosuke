@@ -100,6 +100,27 @@ class FieldMappingConfig(TemplateConfigModel):
         )
 
 
+class DocumentIdentityConfig(TemplateConfigModel):
+    mapping_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    target_path: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=100)
+    value_type: Literal["text", "digits"] = "text"
+    exact_length: int | None = Field(default=None, ge=1, le=100)
+    match_role: Literal["primary", "confirmation"] = "primary"
+    display_role: Literal["title", "subtitle", "none"] = "title"
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_format(self) -> DocumentIdentityConfig:
+        if self.value_type == "text" and self.exact_length is not None:
+            raise ValueError("exactLength is supported only for digit identifiers")
+        return self
+
+
 class MarkConfig(TemplateConfigModel):
     mark_id: str
     region_id: str
@@ -125,6 +146,11 @@ class TemplateConfig(TemplateConfigModel):
     registration: RegistrationConfig
     regions: list[RegionConfig]
     field_mappings: list[FieldMappingConfig] = Field(default_factory=list)
+    document_identity: DocumentIdentityConfig | None = None
+    document_identity_fields: list[DocumentIdentityConfig] = Field(
+        default_factory=list,
+        max_length=20,
+    )
     marks: list[MarkConfig]
     export: ExportConfig
 
@@ -156,10 +182,58 @@ class TemplateConfig(TemplateConfigModel):
                     raise ValueError(f"Mark option {option.id} exceeds mapping width")
                 if option.y + option.height > mapping.height:
                     raise ValueError(f"Mark option {option.id} exceeds mapping height")
+        identity_fields = self.effective_document_identity_fields()
+        if identity_fields:
+            identity_target_paths = [field.target_path for field in identity_fields]
+            if len(set(identity_target_paths)) != len(identity_target_paths):
+                raise ValueError("documentIdentityFields targetPath values must be unique")
+            primary_count = sum(field.match_role == "primary" for field in identity_fields)
+            combined_confirmation = primary_count == 0 and len(identity_fields) >= 2
+            if primary_count != 1 and not combined_confirmation:
+                raise ValueError(
+                    "documentIdentityFields must contain exactly one primary field or "
+                    "at least two confirmation fields"
+                )
+            if sum(field.display_role == "title" for field in identity_fields) != 1:
+                raise ValueError("documentIdentityFields must contain exactly one title field")
+            if sum(field.display_role == "subtitle" for field in identity_fields) > 1:
+                raise ValueError("documentIdentityFields can contain at most one subtitle field")
+            for identity_field in identity_fields:
+                identity_mapping = next(
+                    (
+                        mapping
+                        for mapping in self.field_mappings
+                        if mapping.mapping_id == identity_field.mapping_id
+                    ),
+                    None,
+                )
+                if identity_mapping is None:
+                    raise ValueError("documentIdentityFields references an unknown mappingId")
+                if not identity_mapping.enabled:
+                    raise ValueError("documentIdentityFields references a disabled mapping")
+                if identity_mapping.target_path != identity_field.target_path:
+                    raise ValueError("documentIdentityFields targetPath does not match its mapping")
+                if identity_mapping.mapping_type != "text":
+                    raise ValueError("documentIdentityFields must reference text mappings")
+            primary = next(
+                (field for field in identity_fields if field.match_role == "primary"),
+                None,
+            )
+            if self.document_identity is not None and (
+                primary is None
+                or self.document_identity.mapping_id != primary.mapping_id
+                or self.document_identity.target_path != primary.target_path
+            ):
+                raise ValueError("documentIdentity must match the primary documentIdentityField")
         for mark in self.marks:
             if mark.region_id not in region_ids:
                 raise ValueError(f"Mark {mark.mark_id} references an unknown region")
         return self
+
+    def effective_document_identity_fields(self) -> list[DocumentIdentityConfig]:
+        if self.document_identity_fields:
+            return list(self.document_identity_fields)
+        return [self.document_identity] if self.document_identity is not None else []
 
     def ocr_regions(self) -> list[RegionConfig]:
         if self.field_mappings:
@@ -184,6 +258,36 @@ def load_template_config(path: Path | None = None) -> TemplateConfig:
     config_path = path or default_template_config_path()
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     return TemplateConfig.model_validate(raw)
+
+
+def build_blank_template_config(
+    *,
+    template_id: str,
+    template_version: int,
+    name: str,
+    canonical_width: int,
+    canonical_height: int,
+) -> TemplateConfig:
+    base = load_template_config()
+    config = base.model_copy(
+        update={
+            "template_id": template_id,
+            "template_version": template_version,
+            "name": name,
+            "canonical_width": canonical_width,
+            "canonical_height": canonical_height,
+            "regions": [],
+            "field_mappings": [],
+            "document_identity": None,
+            "document_identity_fields": [],
+            "marks": [],
+            "export": base.export.model_copy(update={"csv_columns": []}, deep=True),
+        },
+        deep=True,
+    )
+    return TemplateConfig.model_validate(
+        config.model_dump(mode="json", by_alias=True)
+    )
 
 
 def parse_template_config(content: str) -> TemplateConfig:

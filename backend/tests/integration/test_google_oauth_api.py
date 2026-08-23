@@ -24,8 +24,16 @@ class _TokenResponse:
             "access_token": "short-lived-access-token",
             "refresh_token": "stored-refresh-token",
             "id_token": "signed-google-id-token",
-            "scope": "openid email profile https://www.googleapis.com/auth/spreadsheets",
+            "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
         }
+
+
+class _FailedTokenResponse:
+    ok = False
+    status_code = 400
+
+    def json(self) -> dict[str, str]:
+        return {"error": "invalid_grant", "error_description": "must not reach the browser"}
 
 
 @contextmanager
@@ -76,7 +84,16 @@ def test_google_oauth_login_uses_encrypted_refresh_token_and_jwt_cookie(
         assert started.status_code == 302
         authorization_url = started.headers["location"]
         assert urlparse(authorization_url).netloc == "accounts.google.com"
-        state = parse_qs(urlparse(authorization_url).query)["state"][0]
+        authorization_query = parse_qs(urlparse(authorization_url).query)
+        assert (
+            "https://www.googleapis.com/auth/drive.file" in authorization_query["scope"][0].split()
+        )
+        assert "https://www.googleapis.com/auth/spreadsheets" not in authorization_query[
+            "scope"
+        ][0].split()
+        assert authorization_query["include_granted_scopes"] == ["false"]
+        assert authorization_query["prompt"] == ["consent select_account"]
+        state = authorization_query["state"][0]
 
         completed = client.get(
             "/api/v1/auth/google/callback",
@@ -93,6 +110,7 @@ def test_google_oauth_login_uses_encrypted_refresh_token_and_jwt_cookie(
             "required": True,
             "configured": True,
             "authenticated": True,
+            "authorizationCurrent": True,
             "user": {
                 "subject": "google-user-1",
                 "email": "owner@example.com",
@@ -138,3 +156,28 @@ def test_oauth_return_url_cannot_leave_configured_frontend(
         payload = client.app.state.google_oauth._safe_return_to("https://attacker.example/steal")
         assert state
         assert payload == "http://127.0.0.1:5173/"
+
+
+def test_oauth_token_exchange_error_redirects_with_safe_code(
+    settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.google_oauth_service.requests.post",
+        lambda *args, **kwargs: _FailedTokenResponse(),
+    )
+
+    with _oauth_client(settings_factory) as client:
+        started = client.get("/api/v1/auth/google/start", follow_redirects=False)
+        state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+
+        completed = client.get(
+            "/api/v1/auth/google/callback",
+            params={"code": "expired-code", "state": state},
+            follow_redirects=False,
+        )
+
+        assert completed.status_code == 302
+        redirect = urlparse(completed.headers["location"])
+        assert parse_qs(redirect.query) == {"authError": ["GOOGLE_OAUTH_INVALID_GRANT"]}
+        assert "must not reach the browser" not in completed.headers["location"]

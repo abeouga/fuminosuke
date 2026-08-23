@@ -3,19 +3,29 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.db.models import ConfirmedRecordField, ConfirmedResult, ProcessingJob
+from app.db.models import (
+    ConfirmedRecordField,
+    ConfirmedResult,
+    LedgerDocument,
+    OcrResult,
+    OcrResultRevision,
+    ProcessingJob,
+    SpreadsheetEditEvent,
+)
 from app.db.session import Database
-from app.domain.enums import JobStatus, JobType
+from app.domain.enums import JobStatus, JobType, RevisionSource
+from app.domain.generic_data import build_generic_data, build_generic_values
 from app.domain.individual_id import individual_id_from_document
 from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_models import (
@@ -30,8 +40,12 @@ from app.domain.ocr_models import (
 from app.domain.template_config import load_template_config
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
+from app.services.document_reconciliation_service import (
+    DocumentReconciliationService,
+    ResolutionAction,
+)
 from app.services.excel_export_service import ExcelExportService
-from app.services.google_sheets_sync_service import GoogleSheetsSyncService
+from app.services.google_sheets_sync_service import GoogleSheetsSyncService, SpreadsheetEdit
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -47,7 +61,20 @@ class CorrectionValues:
     review_items: list[ReviewItem]
 
 
+@dataclass(frozen=True, slots=True)
+class SpreadsheetEditOutcome:
+    status: str
+    revision: int | None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 class OcrResultService:
+    _SHEET_FIELD_PATH = re.compile(
+        r"^(?:(?:document|pedigree)\.[A-Za-z][A-Za-z0-9]*|"
+        r"(?:saleCalves|calvings)\.\d+\.[A-Za-z][A-Za-z0-9]*)$"
+    )
+
     def __init__(
         self,
         database: Database,
@@ -59,6 +86,7 @@ class OcrResultService:
         self._validator = DeterministicValidator()
         self._excel = ExcelExportService()
         self._google_sheets = google_sheets
+        self._documents = DocumentReconciliationService(self._validator)
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self._database.session() as session:
@@ -119,6 +147,11 @@ class OcrResultService:
                 deep=True,
             )
             candidate = OcrDocument.model_validate(candidate.model_dump(mode="json", by_alias=True))
+            candidate.generic_data = build_generic_data(
+                candidate,
+                job.config_snapshot_json.get("genericTemplateDefinition"),
+            )
+            candidate.generic_values = build_generic_values(candidate.generic_data)
             candidate = normalize_document_numbers(candidate)
             report = self._validator.validate(
                 candidate,
@@ -139,14 +172,232 @@ class OcrResultService:
                     title="OCR result revision conflict",
                     detail="別の修正が保存されています。最新結果を再取得してください。",
                 )
-            if self._google_sheets is not None:
+            resolution = self._documents.payload(
+                session, job=job, document_json=updated.current_corrected_json
+            )
+            if self._google_sheets is not None and self._may_sync_before_confirmation(resolution):
                 self._google_sheets.sync(
                     job_id=job_id,
                     revision=updated.revision,
                     document=updated.current_corrected_json,
                     confirmed=False,
+                    template_version_id=job.template_version_id,
+                    document_id=self._documents.document_id_for_job(session, job_id),
                 )
-            return self._response(updated, job=job, confirmed=False)
+            return self._response(updated, job=job, confirmed=False, document_resolution=resolution)
+
+    def resolve_document(
+        self,
+        job_id: str,
+        *,
+        action: ResolutionAction,
+        target_document_id: str | None = None,
+        target_job_id: str | None = None,
+        target_page_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self._database.session() as session:
+            self._begin_mutation(session)
+            job = JobRepository(session).get(job_id)
+            repository = OcrResultRepository(session)
+            stored = repository.get_by_job(job_id)
+            if job is None or stored is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
+                raise self._not_found()
+            if job.status != JobStatus.REVIEW_REQUIRED.value:
+                raise AppError(
+                    status=409,
+                    code="INVALID_STATE_TRANSITION",
+                    title="Document cannot be assigned",
+                    detail="確認中の読取結果だけ保存先を選択できます。",
+                )
+            updated = self._documents.resolve(
+                session,
+                job=job,
+                stored=stored,
+                action=action,
+                target_document_id=target_document_id,
+                target_job_id=target_job_id,
+                target_page_id=target_page_id,
+                configured_paths=self._configured_paths(job),
+            )
+            session.commit()
+            resolution = self._documents.payload(
+                session, job=job, document_json=updated.current_corrected_json
+            )
+            return self._response(updated, job=job, confirmed=False, document_resolution=resolution)
+
+    def apply_spreadsheet_edit(self, edit: SpreadsheetEdit) -> SpreadsheetEditOutcome:
+        sync_payload: tuple[int, dict[str, Any], bool, str | None, str | None] | None = None
+        with self._database.session() as session:
+            self._begin_mutation(session)
+            existing = session.get(SpreadsheetEditEvent, edit.edit_id)
+            if existing is not None:
+                return SpreadsheetEditOutcome(
+                    status=existing.status,
+                    revision=existing.applied_revision,
+                    error_code=existing.error_code,
+                    error_message=existing.error_message,
+                )
+            job = JobRepository(session).get(edit.job_id)
+            if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
+                return SpreadsheetEditOutcome(
+                    status="FAILED",
+                    revision=None,
+                    error_code="OCR_RESULT_NOT_FOUND",
+                    error_message="対象のOCR結果が見つかりません。",
+                )
+            event = SpreadsheetEditEvent(
+                edit_id=edit.edit_id,
+                job_id=edit.job_id,
+                record_id=edit.record_id,
+                field_id=edit.field_id,
+                previous_value=edit.previous_value,
+                new_value=edit.new_value,
+                base_revision=edit.base_revision,
+                source_sheet=edit.source_sheet,
+                source_cell=edit.source_cell,
+                status="PROCESSING",
+            )
+            session.add(event)
+            if job.status not in {
+                JobStatus.REVIEW_REQUIRED.value,
+                JobStatus.CONFIRMED.value,
+            }:
+                return self._fail_spreadsheet_edit(
+                    session,
+                    event,
+                    "INVALID_STATE_TRANSITION",
+                    "レビュー可能または確定済みのOCR結果だけを修正できます。",
+                )
+            repository = OcrResultRepository(session)
+            stored = repository.get_by_job(edit.job_id)
+            if stored is None:
+                return self._fail_spreadsheet_edit(
+                    session,
+                    event,
+                    "OCR_RESULT_NOT_FOUND",
+                    "対象のOCR結果が見つかりません。",
+                )
+            if not edit.edit_id or edit.base_revision < 1:
+                return self._fail_spreadsheet_edit(
+                    session,
+                    event,
+                    "SHEET_EDIT_INVALID",
+                    "編集イベントのIDまたはrevisionが不正です。",
+                )
+            try:
+                candidate, previous = self._apply_sheet_value(
+                    OcrDocument.model_validate(stored.current_corrected_json),
+                    field_id=edit.field_id,
+                    record_id=edit.record_id,
+                    value=edit.new_value,
+                )
+            except (IndexError, KeyError, TypeError, ValueError):
+                return self._fail_spreadsheet_edit(
+                    session,
+                    event,
+                    "SHEET_FIELD_NOT_EDITABLE",
+                    "このセルは通常修正の対象ではありません。詳細修正画面を使用してください。",
+                )
+            if stored.revision != edit.base_revision:
+                safe_to_rebase = previous == edit.previous_value
+                if edit.previous_value is None:
+                    base = session.scalar(
+                        select(OcrResultRevision).where(
+                            OcrResultRevision.ocr_result_id == stored.id,
+                            OcrResultRevision.revision == edit.base_revision,
+                        )
+                    )
+                    if base is not None:
+                        try:
+                            _, base_value = self._apply_sheet_value(
+                                OcrDocument.model_validate(base.result_json),
+                                field_id=edit.field_id,
+                                record_id=edit.record_id,
+                                value=edit.new_value,
+                            )
+                        except (IndexError, KeyError, TypeError, ValueError):
+                            base_value = None
+                        safe_to_rebase = base_value is not None and base_value == previous
+                if not safe_to_rebase:
+                    return self._fail_spreadsheet_edit(
+                        session,
+                        event,
+                        "REVISION_CONFLICT",
+                        "別の修正が先に保存されています。Sheetを再読み込みしてください。",
+                    )
+            candidate = normalize_document_numbers(candidate)
+            report = self._validator.validate(
+                candidate,
+                configured_paths=self._configured_paths(job),
+            )
+            candidate = self._validator.merge_review_items(candidate, report)
+            serialized = candidate.model_dump(mode="json", by_alias=True)
+            was_confirmed = job.status == JobStatus.CONFIRMED.value
+            updated = repository.save_correction(
+                result=stored,
+                base_revision=stored.revision,
+                candidate=serialized,
+                report=report,
+                source=RevisionSource.SHEET_EDIT,
+                commit=False,
+            )
+            if updated is None:
+                return self._fail_spreadsheet_edit(
+                    session,
+                    event,
+                    "REVISION_CONFLICT",
+                    "別の修正が先に保存されています。Sheetを再読み込みしてください。",
+                )
+            remains_confirmed = False
+            if was_confirmed:
+                has_error = any(item.severity == "error" for item in candidate.review_items)
+                if report.valid and not has_error:
+                    try:
+                        individual_id = individual_id_from_document(candidate)
+                    except ValueError:
+                        individual_id = None
+                    if individual_id is not None:
+                        self._persist_confirmed_snapshot(
+                            session,
+                            repository=repository,
+                            job=job,
+                            stored=updated,
+                            serialized=serialized,
+                            individual_id=individual_id,
+                        )
+                        remains_confirmed = True
+                if not remains_confirmed:
+                    job.status = JobStatus.REVIEW_REQUIRED.value
+                    job.confirmed_at = None
+            event.status = "APPLIED"
+            event.applied_revision = updated.revision
+            event.processed_at = datetime.now(UTC)
+            document_id = self._documents.document_id_for_job(session, edit.job_id)
+            if remains_confirmed and document_id:
+                ledger = session.get(LedgerDocument, document_id)
+                if ledger is not None:
+                    ledger.current_document_json = serialized
+                    ledger.current_job_id = edit.job_id
+            session.commit()
+            sync_payload = (
+                updated.revision,
+                serialized,
+                remains_confirmed,
+                job.template_version_id,
+                document_id,
+            )
+            outcome = SpreadsheetEditOutcome(status="APPLIED", revision=updated.revision)
+        if self._google_sheets is not None and sync_payload is not None:
+            revision, document, confirmed, template_version_id, document_id = sync_payload
+            self._google_sheets.sync(
+                job_id=edit.job_id,
+                revision=revision,
+                document=document,
+                confirmed=confirmed,
+                template_version_id=template_version_id,
+                document_id=document_id,
+            )
+        return outcome
 
     def reopen(self, job_id: str) -> dict[str, Any]:
         with self._database.session() as session:
@@ -178,11 +429,14 @@ class OcrResultService:
                     detail="確定済み、または編集中のOCR結果だけを編集できます。",
                 )
             if self._google_sheets is not None:
+                document_id = self._documents.document_id_for_job(session, job_id)
                 self._google_sheets.sync(
                     job_id=job_id,
                     revision=stored.revision,
                     document=self._normalized_document_json(stored.current_corrected_json),
                     confirmed=False,
+                    template_version_id=job.template_version_id,
+                    document_id=document_id,
                 )
             return self._response(
                 stored,
@@ -259,56 +513,26 @@ class OcrResultService:
                         detail="別の修正が保存されています。最新結果を再取得してください。",
                     )
                 stored = updated
-            json_relative = self._storage.write_text(
-                f"exports/{job_id}/confirmed_result.json",
-                json.dumps(serialized, ensure_ascii=False, indent=2),
+            ledger, page = self._documents.ensure_for_confirmation(
+                session, job=job, document_json=serialized
             )
-            self._storage.write_text(
-                f"exports/{job_id}/confirmed_result.csv", self._to_csv(serialized)
-            )
-            confirmed_at = datetime.now(UTC)
-            excel_table = self._excel.build_table(
-                serialized,
-                config_snapshot=job.config_snapshot_json,
-                individual_id=individual_id,
-                confirmed_at=confirmed_at,
-            )
-            self._storage.write_bytes(
-                f"exports/{job_id}/confirmed_result.xlsx",
-                self._excel.render_xlsx(excel_table),
-            )
-            confirmed_result = repository.get_confirmed(job_id)
-            if confirmed_result is None:
-                confirmed_result = ConfirmedResult(
-                    job_id=job_id,
-                    ocr_result_revision=stored.revision,
-                    individual_id=individual_id,
-                    confirmed_json=serialized,
-                    confirmed_at=confirmed_at,
-                    export_relative_path=json_relative,
-                )
-                session.add(confirmed_result)
-                session.flush()
-            else:
-                confirmed_result.ocr_result_revision = stored.revision
-                confirmed_result.individual_id = individual_id
-                confirmed_result.confirmed_json = serialized
-                confirmed_result.confirmed_at = confirmed_at
-                confirmed_result.export_relative_path = json_relative
-                session.execute(
-                    delete(ConfirmedRecordField).where(
-                        ConfirmedRecordField.confirmed_result_id == confirmed_result.id
-                    )
-                )
-                session.flush()
-            self._index_record_fields(
+            self._persist_confirmed_snapshot(
                 session,
-                confirmed_result=confirmed_result,
-                document=serialized,
-                raw_structure=job.config_snapshot_json.get("recordStructure"),
+                repository=repository,
+                job=job,
+                stored=stored,
+                serialized=serialized,
+                individual_id=individual_id,
             )
-            job.status = JobStatus.CONFIRMED.value
-            job.confirmed_at = confirmed_at
+            if ledger is not None and page is not None:
+                self._documents.mark_confirmed(
+                    session,
+                    ledger,
+                    page,
+                    job_id=job_id,
+                    document_json=serialized,
+                    individual_id=individual_id,
+                )
             session.commit()
             if self._google_sheets is not None:
                 self._google_sheets.sync(
@@ -316,6 +540,8 @@ class OcrResultService:
                     revision=stored.revision,
                     document=serialized,
                     confirmed=True,
+                    template_version_id=job.template_version_id,
+                    document_id=ledger.id if ledger is not None else None,
                 )
             return self._response(
                 stored,
@@ -331,12 +557,24 @@ class OcrResultService:
             if job is None or stored is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             confirmed = job.status == JobStatus.CONFIRMED.value
+            resolution = self._documents.payload(
+                session, job=job, document_json=stored.current_corrected_json
+            )
+            if resolution["required"]:
+                raise AppError(
+                    status=409,
+                    code="DOCUMENT_RESOLUTION_REQUIRED",
+                    title="Document destination must be selected",
+                    detail="同じ個体の台帳があります。保存方法を先に選択してください。",
+                )
             if self._google_sheets is not None:
                 self._google_sheets.sync(
                     job_id=job_id,
                     revision=stored.revision,
                     document=self._normalized_document_json(stored.current_corrected_json),
                     confirmed=confirmed,
+                    template_version_id=job.template_version_id,
+                    document_id=self._documents.document_id_for_job(session, job_id),
                 )
             confirmed_result = (
                 OcrResultRepository(session).get_confirmed(job_id) if confirmed else None
@@ -349,6 +587,13 @@ class OcrResultService:
                     confirmed_result.individual_id if confirmed_result is not None else None
                 ),
             )
+
+    def document_id(self, job_id: str) -> str | None:
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
+                raise self._not_found()
+            return self._documents.document_id_for_job(session, job_id)
 
     @staticmethod
     def _begin_mutation(session: Session) -> None:
@@ -364,6 +609,134 @@ class OcrResultService:
     def _normalized_document_json(document: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_document_numbers(OcrDocument.model_validate(document))
         return normalized.model_dump(mode="json", by_alias=True)
+
+    @staticmethod
+    def _fail_spreadsheet_edit(
+        session: Session,
+        event: SpreadsheetEditEvent,
+        code: str,
+        message: str,
+    ) -> SpreadsheetEditOutcome:
+        event.status = "FAILED"
+        event.error_code = code
+        event.error_message = message
+        event.processed_at = datetime.now(UTC)
+        session.commit()
+        return SpreadsheetEditOutcome(
+            status="FAILED",
+            revision=None,
+            error_code=code,
+            error_message=message,
+        )
+
+    @classmethod
+    def _apply_sheet_value(
+        cls,
+        document: OcrDocument,
+        *,
+        field_id: str,
+        record_id: str,
+        value: str | None,
+    ) -> tuple[OcrDocument, str]:
+        if cls._SHEET_FIELD_PATH.fullmatch(field_id) is None:
+            raise ValueError("unsupported field path")
+        parts = field_id.split(".")
+        expected_record_id = (
+            ".".join(parts[:2]) if parts[0] in {"saleCalves", "calvings"} else "document"
+        )
+        if record_id != expected_record_id:
+            raise ValueError("record and field do not match")
+        payload = document.model_dump(mode="json", by_alias=True)
+        container: object = payload
+        for part in parts[:-1]:
+            if isinstance(container, list):
+                container = container[int(part)]
+            elif isinstance(container, dict):
+                container = container[part]
+            else:
+                raise TypeError("field path does not resolve")
+        if not isinstance(container, dict):
+            raise TypeError("field container is not an object")
+        reading = container[parts[-1]]
+        if not isinstance(reading, dict) or "sourceRegionId" not in reading:
+            raise TypeError("field is not an OCR reading")
+        normalized = reading.get("normalized")
+        raw = reading.get("raw")
+        previous = (
+            normalized if isinstance(normalized, str) else raw if isinstance(raw, str) else ""
+        )
+        text_value = value if value is not None and value.strip() else None
+        reading.update(
+            {
+                "raw": text_value,
+                "normalized": text_value,
+                "status": "readable" if text_value is not None else "blank",
+                "reviewReason": None,
+            }
+        )
+        return OcrDocument.model_validate(payload), previous
+
+    def _persist_confirmed_snapshot(
+        self,
+        session: Session,
+        *,
+        repository: OcrResultRepository,
+        job: ProcessingJob,
+        stored: OcrResult,
+        serialized: dict[str, Any],
+        individual_id: str,
+    ) -> None:
+        json_relative = self._storage.write_text(
+            f"exports/{job.id}/confirmed_result.json",
+            json.dumps(serialized, ensure_ascii=False, indent=2),
+        )
+        self._storage.write_text(
+            f"exports/{job.id}/confirmed_result.csv",
+            self._to_csv(serialized),
+        )
+        confirmed_at = datetime.now(UTC)
+        excel_table = self._excel.build_table(
+            serialized,
+            config_snapshot=job.config_snapshot_json,
+            individual_id=individual_id,
+            confirmed_at=confirmed_at,
+        )
+        self._storage.write_bytes(
+            f"exports/{job.id}/confirmed_result.xlsx",
+            self._excel.render_xlsx(excel_table),
+        )
+        confirmed_result = repository.get_confirmed(job.id)
+        if confirmed_result is None:
+            confirmed_result = ConfirmedResult(
+                job_id=job.id,
+                ocr_result_revision=stored.revision,
+                individual_id=individual_id,
+                confirmed_json=serialized,
+                confirmed_at=confirmed_at,
+                export_relative_path=json_relative,
+            )
+            session.add(confirmed_result)
+            session.flush()
+        else:
+            confirmed_result.ocr_result_revision = stored.revision
+            confirmed_result.individual_id = individual_id
+            confirmed_result.confirmed_json = serialized
+            confirmed_result.confirmed_at = confirmed_at
+            confirmed_result.export_relative_path = json_relative
+            session.execute(
+                delete(ConfirmedRecordField).where(
+                    ConfirmedRecordField.confirmed_result_id == confirmed_result.id
+                )
+            )
+            session.flush()
+        self._index_record_fields(
+            session,
+            confirmed_result=confirmed_result,
+            document=serialized,
+            raw_structure=job.config_snapshot_json.get("recordStructure"),
+        )
+        job.status = JobStatus.CONFIRMED.value
+        job.confirmed_at = confirmed_at
 
     def export_path(self, job_id: str, format_name: str) -> tuple[str, str, str]:
         if format_name not in {"json", "csv", "xlsx"}:
@@ -430,11 +803,13 @@ class OcrResultService:
         job: ProcessingJob,
         confirmed: bool,
         individual_id: str | None = None,
+        document_resolution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         snapshot_individual_id = job.config_snapshot_json.get("motherIndividualId")
         resolved_individual_id = individual_id or (
             snapshot_individual_id if isinstance(snapshot_individual_id, str) else None
         )
+        resolution = document_resolution or self._document_resolution(job, stored)
         return {
             "jobId": stored.job_id,
             "revision": stored.revision,
@@ -456,8 +831,12 @@ class OcrResultService:
                 stored.current_corrected_json,
             ),
             "recordStructure": self._record_structure(job),
+            "documentResolution": resolution,
             "spreadsheetSync": (
-                self._google_sheets.status(stored.job_id).payload()
+                self._google_sheets.status(
+                    stored.job_id,
+                    resolution.get("documentId"),
+                ).payload()
                 if self._google_sheets is not None
                 else {
                     "enabled": False,
@@ -467,6 +846,19 @@ class OcrResultService:
                 }
             ),
         }
+
+    def _document_resolution(self, job: ProcessingJob, stored: Any) -> dict[str, Any]:
+        with self._database.session() as session:
+            current_job = session.get(ProcessingJob, job.id) or job
+            return self._documents.payload(
+                session,
+                job=current_job,
+                document_json=stored.current_corrected_json,
+            )
+
+    @staticmethod
+    def _may_sync_before_confirmation(resolution: dict[str, Any]) -> bool:
+        return False
 
     @staticmethod
     def _field_previews(
@@ -603,8 +995,11 @@ class OcrResultService:
         raw_structure: object,
     ) -> None:
         section_titles = {
+            "document": "基本情報",
+            "pedigree": "血統",
             "saleCalves": "売却子牛一覧",
             "calvings": "繁殖履歴",
+            "customFields": "追加項目",
         }
         group_keys: dict[tuple[str, int], str] = {}
         if isinstance(raw_structure, dict):
@@ -636,6 +1031,55 @@ class OcrResultService:
                         and value.strip()
                     ):
                         group_keys[(collection, order)] = value.strip()
+        def add_field(
+            *,
+            collection: str,
+            record_order: int,
+            record_key: str | None,
+            field_key: str,
+            reading: object,
+        ) -> None:
+            if not isinstance(reading, dict):
+                return
+            raw_value = reading.get("raw")
+            normalized_value = reading.get("normalized")
+            raw_text = raw_value if isinstance(raw_value, str) else None
+            selected_text = normalized_value if isinstance(normalized_value, str) else raw_text
+            if selected_text is None:
+                return
+            compact = selected_text.replace(",", "").strip()
+            try:
+                numeric_value = Decimal(compact)
+            except InvalidOperation:
+                numeric_value = None
+            session.add(
+                ConfirmedRecordField(
+                    confirmed_result_id=confirmed_result.id,
+                    section_key=collection,
+                    section_title=section_titles[collection],
+                    record_order=record_order,
+                    record_key=record_key,
+                    field_key=field_key[:100],
+                    raw_value=raw_text,
+                    normalized_value=unicodedata.normalize("NFKC", selected_text)
+                    .strip()
+                    .casefold(),
+                    numeric_value=numeric_value,
+                )
+            )
+
+        for collection in ("document", "pedigree", "customFields"):
+            fields = document.get(collection)
+            if not isinstance(fields, dict):
+                continue
+            for field_key, reading in fields.items():
+                add_field(
+                    collection=collection,
+                    record_order=0,
+                    record_key=None,
+                    field_key=field_key,
+                    reading=reading,
+                )
         for collection in ("saleCalves", "calvings"):
             records = document.get(collection)
             if not isinstance(records, list):
@@ -650,35 +1094,12 @@ class OcrResultService:
                     if isinstance(key_value, str) and key_value.strip():
                         record_key = key_value.strip()
                 for field_key, reading in record.items():
-                    if not isinstance(reading, dict):
-                        continue
-                    raw_value = reading.get("raw")
-                    normalized_value = reading.get("normalized")
-                    raw_text = raw_value if isinstance(raw_value, str) else None
-                    selected_text = (
-                        normalized_value if isinstance(normalized_value, str) else raw_text
-                    )
-                    if selected_text is None:
-                        continue
-                    compact = selected_text.replace(",", "").strip()
-                    try:
-                        numeric_value = Decimal(compact)
-                    except InvalidOperation:
-                        numeric_value = None
-                    session.add(
-                        ConfirmedRecordField(
-                            confirmed_result_id=confirmed_result.id,
-                            section_key=collection,
-                            section_title=section_titles[collection],
-                            record_order=index + 1,
-                            record_key=record_key,
-                            field_key=field_key,
-                            raw_value=raw_text,
-                            normalized_value=unicodedata.normalize("NFKC", selected_text)
-                            .strip()
-                            .casefold(),
-                            numeric_value=numeric_value,
-                        )
+                    add_field(
+                        collection=collection,
+                        record_order=index + 1,
+                        record_key=record_key,
+                        field_key=field_key,
+                        reading=reading,
                     )
 
     @staticmethod

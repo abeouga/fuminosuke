@@ -335,6 +335,7 @@ class ImageExtractionService:
                 file_name=file_name,
                 image=value,
                 rgb=rgb,
+                replace=True,
             )
             artifacts[name] = artifact.artifact_name
 
@@ -392,6 +393,7 @@ class ImageExtractionService:
             name="fieldResults",
             file_name="field_results.json",
             value=field_results,
+            replace=True,
         )
         artifacts["fieldResults"] = "fieldResults"
         return artifacts

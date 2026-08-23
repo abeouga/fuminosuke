@@ -19,6 +19,8 @@ from app.image_processing.line_detection import LineDetector
 class PreparedTemplate:
     clean_template_rgb: NDArray[np.uint8]
     preview_rgb: NDArray[np.uint8]
+    canonical_width: int
+    canonical_height: int
     images: dict[str, tuple[str, NDArray[np.uint8], bool]] = field(default_factory=dict)
     quality: dict[str, Any] = field(default_factory=dict)
     handwriting_mask: NDArray[np.uint8] | None = None
@@ -33,14 +35,20 @@ class TemplateRecoveryPipelines:
         self._normalizer = DocumentNormalizer(
             canonical_width=config.canonical_width,
             canonical_height=config.canonical_height,
+            allow_orientation_swap=True,
         )
         self._line_detector = LineDetector()
 
-    def reference(self, images: list[NDArray[np.uint8]]) -> PreparedTemplate:
+    def reference(
+        self,
+        images: list[NDArray[np.uint8]],
+        *,
+        source_corners: NDArray[np.float32] | None = None,
+    ) -> PreparedTemplate:
         if len(images) != 1:
             raise ValueError("REFERENCE_TEMPLATE requires one image")
         started = time.perf_counter()
-        normalized = self._normalizer.normalize(images[0])
+        normalized = self._normalizer.normalize(images[0], source_corners=source_corners)
         gray = cv2.cvtColor(normalized.image_rgb, cv2.COLOR_RGB2GRAY)
         line_mask = self._line_detector.detect(gray)
         quality = {
@@ -54,6 +62,8 @@ class TemplateRecoveryPipelines:
         return PreparedTemplate(
             clean_template_rgb=normalized.image_rgb,
             preview_rgb=normalized.image_rgb.copy(),
+            canonical_width=normalized.quality.output_width,
+            canonical_height=normalized.quality.output_height,
             images={
                 "normalized": ("normalized.png", normalized.image_rgb, True),
                 "registrationDebug": (
@@ -65,11 +75,16 @@ class TemplateRecoveryPipelines:
             quality=quality,
         )
 
-    def single_experimental(self, images: list[NDArray[np.uint8]]) -> PreparedTemplate:
+    def single_experimental(
+        self,
+        images: list[NDArray[np.uint8]],
+        *,
+        source_corners: NDArray[np.float32] | None = None,
+    ) -> PreparedTemplate:
         if len(images) != 1:
             raise ValueError("SINGLE_IMAGE_EXPERIMENTAL requires one image")
         started = time.perf_counter()
-        normalized = self._normalizer.normalize(images[0])
+        normalized = self._normalizer.normalize(images[0], source_corners=source_corners)
         quality = {
             "mode": TemplateMode.SINGLE_IMAGE_EXPERIMENTAL.value,
             **normalized.quality.to_dict(),
@@ -89,6 +104,8 @@ class TemplateRecoveryPipelines:
         return PreparedTemplate(
             clean_template_rgb=normalized.image_rgb,
             preview_rgb=normalized.image_rgb.copy(),
+            canonical_width=normalized.quality.output_width,
+            canonical_height=normalized.quality.output_height,
             images={
                 "normalized": ("normalized.png", normalized.image_rgb, True),
                 "registrationDebug": (

@@ -25,7 +25,7 @@ export function HomePage({
           <p className="hero-copy">帳票の位置合わせ、手書き分離、文字読み取り、目視確認までをこの端末内で管理します。</p>
           <div className="hero-actions">
             <button className="primary" onClick={() => onNavigate("ocr")}>新しいOCRを開始</button>
-            <button className="secondary" onClick={() => onNavigate("records")}>個体JSONを検索</button>
+            <button className="secondary" onClick={() => onNavigate("records")}>登録データを検索</button>
             <button className="secondary" onClick={() => onNavigate("templates")}>テンプレートを準備</button>
           </div>
         </div>

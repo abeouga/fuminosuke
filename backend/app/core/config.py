@@ -87,6 +87,11 @@ class OcrSettings(BaseModel):
     max_retries: int = Field(ge=0)
     prompt_version: str
     schema_version: str
+    initial_image_detail: Literal["low", "high", "auto"] = "high"
+    uncertain_retry_image_detail: Literal["low", "high", "auto"] = "high"
+    retry_uncertain_high_detail: bool = False
+    max_concurrency: int = Field(default=2, ge=1, le=4)
+    paddle_presence_audit_enabled: bool = False
 
 
 class LoggingSettings(BaseModel):
@@ -103,6 +108,8 @@ class GoogleSheetsSettings(BaseModel):
     document_sheet_name: str = "帳票一覧"
     sale_sheet_name: str = "売却子牛一覧"
     calving_sheet_name: str = "繁殖履歴"
+    edit_queue_sheet_name: str = "_OCR編集キュー"
+    edit_poll_interval_seconds: int = Field(default=5, ge=1, le=300)
 
     @field_validator("frontend_base_url")
     @classmethod
@@ -129,6 +136,8 @@ class GoogleOAuthSettings(BaseModel):
     session_ttl_seconds: int = Field(ge=300, le=2_592_000)
     state_ttl_seconds: int = Field(ge=60, le=1_800)
     secure_cookie: bool
+    picker_api_key: str | None = None
+    picker_app_id: str | None = None
 
     @field_validator("redirect_uri", "frontend_url")
     @classmethod
@@ -147,6 +156,33 @@ class GoogleOAuthSettings(BaseModel):
             and self.client_secret is not None
             and self.jwt_secret is not None
         )
+
+    @property
+    def picker_configured(self) -> bool:
+        return bool(
+            self.configured
+            and self.picker_api_key
+            and self.picker_app_id
+            and self.picker_project_matches
+        )
+
+    @property
+    def picker_project_matches(self) -> bool:
+        if not self.client_id or not self.picker_app_id:
+            return False
+        project_number = self.client_id.partition("-")[0]
+        return project_number.isdigit() and project_number == self.picker_app_id
+
+    @property
+    def picker_configuration_error(self) -> str | None:
+        if not self.picker_api_key or not self.picker_app_id:
+            return "Google Picker APIキーとApp IDが設定されていません。"
+        if not self.picker_project_matches:
+            return (
+                "PickerのApp IDがOAuthクライアントのGoogle Cloudプロジェクト番号と"
+                "一致していません。同じプロジェクトでAPIキーを作成してください。"
+            )
+        return None
 
 
 class RawSettings(BaseSettings):
@@ -187,6 +223,18 @@ class RawSettings(BaseSettings):
     openai_image_detail: Literal["low", "high", "auto"] = Field(
         default="high", validation_alias="OPENAI_IMAGE_DETAIL"
     )
+    openai_initial_image_detail: Literal["low", "high", "auto"] = Field(
+        default="high", validation_alias="OPENAI_INITIAL_IMAGE_DETAIL"
+    )
+    openai_retry_uncertain_high_detail: bool = Field(
+        default=False, validation_alias="OPENAI_RETRY_UNCERTAIN_HIGH_DETAIL"
+    )
+    openai_max_concurrency: int = Field(
+        default=2, validation_alias="OPENAI_MAX_CONCURRENCY"
+    )
+    paddle_presence_audit_enabled: bool = Field(
+        default=False, validation_alias="PADDLE_PRESENCE_AUDIT_ENABLED"
+    )
     openai_reasoning_effort: Literal["low", "medium", "high"] = Field(
         default="low", validation_alias="OPENAI_REASONING_EFFORT"
     )
@@ -195,7 +243,7 @@ class RawSettings(BaseSettings):
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
-        default="cow-ledger-v3", validation_alias="OPENAI_PROMPT_VERSION"
+        default="mapped-compact-v1", validation_alias="OPENAI_PROMPT_VERSION"
     )
     openai_schema_version: str = Field(default="1.0", validation_alias="OPENAI_SCHEMA_VERSION")
     handwriting_segmenter_mode: Literal["heuristic", "onnx", "combined"] = Field(
@@ -235,6 +283,10 @@ class RawSettings(BaseSettings):
         default="繁殖台帳 OCR",
         validation_alias="GOOGLE_SHEETS_SPREADSHEET_TITLE",
     )
+    google_sheets_edit_poll_interval_seconds: int = Field(
+        default=5,
+        validation_alias="GOOGLE_SHEETS_EDIT_POLL_INTERVAL_SECONDS",
+    )
     google_oauth_enabled: bool = Field(default=False, validation_alias="GOOGLE_OAUTH_ENABLED")
     google_oauth_client_id: str | None = Field(
         default=None, validation_alias="GOOGLE_OAUTH_CLIENT_ID"
@@ -250,6 +302,14 @@ class RawSettings(BaseSettings):
     google_oauth_frontend_url: str = Field(
         default="http://127.0.0.1:5173/",
         validation_alias="GOOGLE_OAUTH_FRONTEND_URL",
+    )
+    google_picker_api_key: str | None = Field(
+        default=None,
+        validation_alias="GOOGLE_PICKER_API_KEY",
+    )
+    google_picker_app_id: str | None = Field(
+        default=None,
+        validation_alias="GOOGLE_PICKER_APP_ID",
     )
     auth_session_ttl_seconds: int = Field(
         default=604_800, validation_alias="AUTH_SESSION_TTL_SECONDS"
@@ -274,7 +334,14 @@ class Settings:
 
     @classmethod
     def load(cls, env_file: str | Path | None = ".env") -> Settings:
-        raw = RawSettings(_env_file=env_file)
+        if env_file is None:
+            raw = RawSettings(_env_file=None)
+        else:
+            primary = Path(env_file)
+            env_sources: str | Path | tuple[Path, Path] = primary
+            if primary.name == ".env":
+                env_sources = (primary, primary.with_name(".env.local"))
+            raw = RawSettings(_env_file=env_sources)
         return cls.from_raw(raw)
 
     @classmethod
@@ -351,6 +418,11 @@ class Settings:
                 primary_model=raw.openai_primary_model,
                 fallback_model=raw.openai_fallback_model,
                 image_detail=raw.openai_image_detail,
+                initial_image_detail=raw.openai_initial_image_detail,
+                uncertain_retry_image_detail=raw.openai_image_detail,
+                retry_uncertain_high_detail=raw.openai_retry_uncertain_high_detail,
+                max_concurrency=raw.openai_max_concurrency,
+                paddle_presence_audit_enabled=raw.paddle_presence_audit_enabled,
                 reasoning_effort=raw.openai_reasoning_effort,
                 max_calls_per_job=raw.openai_max_calls_per_job,
                 max_output_tokens=raw.openai_max_output_tokens,
@@ -366,6 +438,7 @@ class Settings:
                 credentials_path=credentials_path,
                 frontend_base_url=raw.google_sheets_frontend_base_url,
                 spreadsheet_title=raw.google_sheets_spreadsheet_title,
+                edit_poll_interval_seconds=raw.google_sheets_edit_poll_interval_seconds,
             ),
             google_oauth=GoogleOAuthSettings(
                 enabled=raw.google_oauth_enabled,
@@ -377,6 +450,8 @@ class Settings:
                 session_ttl_seconds=raw.auth_session_ttl_seconds,
                 state_ttl_seconds=raw.auth_state_ttl_seconds,
                 secure_cookie=raw.auth_secure_cookie,
+                picker_api_key=raw.google_picker_api_key,
+                picker_app_id=raw.google_picker_app_id,
             ),
         )
 

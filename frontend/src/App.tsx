@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, googleLoginUrl } from "./api";
 import { AuthGate } from "./components/AuthGate";
+import { ToastViewport } from "./components/Toast";
+import { DevelopmentPage } from "./pages/DevelopmentPage";
 import { HomePage } from "./pages/HomePage";
 import { IndividualRecordsPage } from "./pages/IndividualRecordsPage";
+import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
+import { DriveSettingsPage } from "./pages/DriveSettingsPage";
 import { JobPage } from "./pages/JobPage";
 import { OcrPage } from "./pages/OcrPage";
 import { ReviewPage } from "./pages/ReviewPage";
-import { SireNamesPage } from "./pages/SireNamesPage";
 import { TemplatePage } from "./pages/TemplatePage";
-import type { AuthSession, Health, Job, Template } from "./types";
+import type { AuthSession, Health, Job, OcrLibraryContext, Template } from "./types";
 
-type Page = "home" | "templates" | "ocr" | "review" | "job" | "records" | "sireNames";
+type Page = "home" | "templates" | "ocr" | "review" | "job" | "records" | "library" | "drive" | "development";
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard };
 const RECENT_KEY = "ledger-ocr-recent-jobs";
@@ -27,18 +30,25 @@ export default function App() {
   const initialSearchParams = new URLSearchParams(window.location.search);
   const initialReviewJobId = initialSearchParams.get("job");
   const initialReviewField = initialSearchParams.get("field");
+  const initialReviewEdit = initialSearchParams.get("edit") === "1";
+  const initialOAuthError = oauthErrorMessage(initialSearchParams.get("authError"));
   const [page, setPage] = useState<Page>(initialReviewJobId ? "review" : "home");
   const [health, setHealth] = useState<Health | null>(null);
   const [auth, setAuth] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [oauthCallbackError, setOAuthCallbackError] = useState<string | null>(initialOAuthError);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [reviewJobId, setReviewJobId] = useState<string | null>(initialReviewJobId);
-  const [reviewRequiresIdentityConfirmation, setReviewRequiresIdentityConfirmation] = useState(true);
+  const [reviewRequiresIdentityConfirmation, setReviewRequiresIdentityConfirmation] = useState(
+    !initialReviewEdit,
+  );
   const [monitoredJobId, setMonitoredJobId] = useState<string | null>(null);
+  const [ocrLibraryContext, setOcrLibraryContext] = useState<OcrLibraryContext | null>(null);
+  const [libraryDocumentId, setLibraryDocumentId] = useState<string | null>(null);
   const [navigationGuard, setNavigationGuard] = useState<NavigationGuard | null>(
     initialReviewJobId ? "review" : null,
   );
@@ -150,6 +160,7 @@ export default function App() {
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
+    if (nextPage === "ocr") setOcrLibraryContext(null);
     setPage(nextPage);
   };
   const navigateTo = (nextPage: Page) => {
@@ -178,7 +189,16 @@ export default function App() {
     window.addEventListener("ledger-auth-required", requireAuth);
     return () => window.removeEventListener("ledger-auth-required", requireAuth);
   }, [refreshAuth]);
-  const authReady = auth !== null && (!auth.required || auth.authenticated);
+  useEffect(() => {
+    if (!initialSearchParams.has("authError")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("authError");
+    window.history.replaceState({}, "", url);
+  }, []);
+  const authorizationCurrent = auth?.authorizationCurrent !== false;
+  const authReady = auth !== null && (
+    !auth.required || (auth.authenticated && authorizationCurrent)
+  );
   useEffect(() => {
     if (!authReady) return;
     retryTemplates();
@@ -198,13 +218,36 @@ export default function App() {
     templateAutoRetryAttemptedRef.current = true;
     retryTemplates();
   }, [backendHealthy, retryTemplates, templateLoadFailed, templatesLoading]);
-  if (authLoading || authError || (auth?.required && !auth.authenticated)) {
+  const displayedAuthError = oauthCallbackError ?? authError;
+  const reconnectRequired = Boolean(
+    auth?.required && auth.authenticated && auth.authorizationCurrent === false,
+  );
+  if (
+    authLoading
+    || displayedAuthError
+    || (auth?.required && (!auth.authenticated || !authorizationCurrent))
+  ) {
     return (
       <AuthGate
         session={auth}
         loading={authLoading}
-        error={authError}
-        onRetry={() => { void refreshAuth(); }}
+        error={displayedAuthError}
+        reconnectRequired={reconnectRequired}
+        onRetry={() => {
+          setOAuthCallbackError(null);
+          void refreshAuth();
+        }}
+        onReconnect={() => {
+          setAuthLoading(true);
+          void api.disconnectGoogle()
+            .then(() => window.location.assign(googleLoginUrl(window.location.href)))
+            .catch((error: unknown) => {
+              setAuthError(
+                error instanceof Error ? error.message : "Google連携を更新できませんでした。",
+              );
+              setAuthLoading(false);
+            });
+        }}
       />
     );
   }
@@ -215,11 +258,13 @@ export default function App() {
           <span>V2</span><div><strong>帳票 OCR V2</strong><small>FORM DEFINITION TOOL</small></div>
         </button>
         <nav aria-label="メインメニュー">
-          <NavButton active={page === "home"} icon="⌂" label="ホーム" onClick={() => navigateTo("home")} />
-          <NavButton active={page === "templates"} icon="型" label="テンプレート" onClick={() => navigateTo("templates")} />
-          <NavButton active={page === "ocr" || page === "review"} icon="読" label="読み取り" onClick={() => navigateTo("ocr")} />
-          <NavButton active={page === "sireNames"} icon="種" label="種雄牛名を追加" onClick={() => navigateTo("sireNames")} />
-          <NavButton active={page === "records"} icon="個" label="個体検索" onClick={() => navigateTo("records")} />
+          <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
+          <NavButton active={page === "templates"} icon="templates" label="テンプレート" onClick={() => navigateTo("templates")} />
+          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={() => navigateTo("ocr")} />
+          <NavButton active={page === "library"} icon="library" label="書類ライブラリ" onClick={() => { setLibraryDocumentId(null); navigateTo("library"); }} />
+          <NavButton active={page === "records"} icon="search" label="データ検索" onClick={() => navigateTo("records")} />
+          <NavButton active={page === "drive"} icon="drive" label="保存先設定" onClick={() => navigateTo("drive")} />
+          <NavButton active={page === "development"} icon="development" label="開発情報" onClick={() => navigateTo("development")} />
         </nav>
         <div className="side-footer">
           {auth?.user?.pictureUrl
@@ -253,17 +298,25 @@ export default function App() {
       </aside>
       <main className="main-content">
         {templateLoadFailed && (
-          <aside className="error-box action-message" role="alert">
-            <span>テンプレートを取得できませんでした。接続が戻ると自動で再取得します。</span>
-            <button type="button" className="secondary compact" disabled={templatesLoading} onClick={retryTemplates}>
+          <aside className="notice danger persistent-system-notice" role="alert">
+            <div>
+              <strong>テンプレートを取得できませんでした。</strong>
+              <span>接続が戻ると自動で再取得します。必要な場合は手動で再取得できます。</span>
+            </div>
+            <button
+              type="button"
+              className="secondary compact"
+              disabled={templatesLoading}
+              onClick={retryTemplates}
+            >
               {templatesLoading ? "再取得中…" : "テンプレートを再取得"}
             </button>
           </aside>
         )}
         {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={navigateTo} onOpenJob={openJob} />}
         {page === "templates" && <TemplatePage templates={templates} refresh={refreshTemplates} rememberJob={rememberJob} onNavigationGuardChange={updateTemplateGuard} />}
-        {page === "ocr" && <OcrPage templates={templates} rememberJob={rememberJob} openReview={openReview} openTemplates={() => navigateTo("templates")} onNavigationGuardChange={updateOcrGuard} />}
-        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} initialSelectedPath={initialReviewField} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
+        {page === "ocr" && <OcrPage templates={templates} libraryContext={ocrLibraryContext} rememberJob={rememberJob} openReview={openReview} openTemplates={() => navigateTo("templates")} onNavigationGuardChange={updateOcrGuard} />}
+        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} initialSelectedPath={initialReviewField} autoReopenConfirmed={initialReviewEdit} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
@@ -271,9 +324,18 @@ export default function App() {
           onOpenTemplates={() => { retryTemplates(); navigateTo("templates"); }}
           onStartNewReading={() => navigateTo("ocr")}
         />}
-        {page === "sireNames" && <SireNamesPage />}
-        {page === "records" && <IndividualRecordsPage onEditResult={(id) => openReview(id, false)} />}
+        {page === "records" && <IndividualRecordsPage
+          onEditResult={(id) => openReview(id, false)}
+          onOpenDocument={(documentId) => {
+            setLibraryDocumentId(documentId);
+            setPage("library");
+          }}
+        />}
+        {page === "library" && <DocumentLibraryPage initialDocumentId={libraryDocumentId} openReview={(id) => openReview(id, false)} startReading={(context) => { setOcrLibraryContext(context); setPage("ocr"); }} />}
+        {page === "drive" && <DriveSettingsPage />}
+        {page === "development" && <DevelopmentPage />}
       </main>
+      <ToastViewport />
       {pendingNavigation && (
         <NavigationConfirmDialog
           guard={pendingNavigation.guard}
@@ -415,6 +477,33 @@ function writeRecentJobIds(ids: string[]) {
   }
 }
 
-function NavButton({ active, icon, label, onClick }: { active: boolean; icon: string; label: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span>{label}</button>;
+function oauthErrorMessage(code: string | null): string | null {
+  if (!code) return null;
+  if (code === "GOOGLE_OAUTH_INVALID_CLIENT") {
+    return "Google OAuthのクライアント設定が一致しません。管理者が設定を確認してください。";
+  }
+  if (code === "GOOGLE_OAUTH_INVALID_GRANT") {
+    return "Google認証コードが期限切れ、再使用済み、またはリダイレクトURIと一致しません。認証を最初からやり直してください。";
+  }
+  if (code === "GOOGLE_OAUTH_CANCELLED") {
+    return "Googleアカウントの認証は完了していません。";
+  }
+  return "Googleアカウントの認証に失敗しました。認証を最初からやり直してください。";
+}
+
+type SidebarIconName = "home" | "templates" | "ocr" | "library" | "search" | "drive" | "development";
+
+function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick}><span><SidebarIcon name={icon} /></span>{label}</button>;
+}
+
+function SidebarIcon({ name }: { name: SidebarIconName }) {
+  const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
+  if (name === "templates") return <svg {...props}><path d="m12 3 8 4.5-8 4.5-8-4.5Z" /><path d="m4 12 8 4.5 8-4.5" /><path d="m4 16.5 8 4.5 8-4.5" /></svg>;
+  if (name === "ocr") return <svg {...props}><rect x="3" y="7" width="18" height="12" rx="2" /><path d="M8 7 9.5 4h5L16 7M12 10v6m-3-3h6" /></svg>;
+  if (name === "library") return <svg {...props}><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17.5H6.5A2.5 2.5 0 0 0 4 22Z" /><path d="M4 4.5V22m4-15h8m-8 4h8" /></svg>;
+  if (name === "search") return <svg {...props}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>;
+  if (name === "drive") return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M7 15h.01M11 15h6" /></svg>;
+  return <svg {...props}><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16" /></svg>;
 }

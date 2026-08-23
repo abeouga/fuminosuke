@@ -12,7 +12,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.db.models import JobArtifact, ProcessingJob, Template, TemplateVersion
+from app.db.models import (
+    JobArtifact,
+    LedgerDocument,
+    LedgerDocumentPage,
+    ProcessingJob,
+    Template,
+    TemplateDefinitionRevision,
+    TemplateVersion,
+)
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType, TemplateMode, TemplateVersionStatus
 from app.domain.field_targets import is_supported_field_path
@@ -22,13 +30,18 @@ from app.domain.job_state import require_transition
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
 from app.domain.sire_names import SIRE_NAME_ALLOWED_SUFFIXES
 from app.domain.template_config import TemplateConfig, parse_template_config
-from app.domain.template_quality import has_full_image_boundary_fallback
+from app.domain.template_fields import build_template_field_catalog
+from app.domain.template_quality import (
+    has_approved_generic_definition,
+    has_full_image_boundary_fallback,
+)
 from app.image_processing.image_loader import ImageLoader, LoadedImage
 from app.jobs.runner import JobRunner
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.sire_name_service import SireNameService
+from app.services.template_candidate_service import TemplateCandidateService
 from app.storage.local_storage import LocalStorageService, StoragePathError
 
 ATTENTION_JOB_STATUSES = (
@@ -69,6 +82,7 @@ class JobService:
         mode: TemplateMode,
         uploads: list[UploadPayload],
         idempotency_key: str | None,
+        field_names: list[str] | None = None,
     ) -> ProcessingJob:
         cleaned_name = name.strip()
         if not cleaned_name or len(cleaned_name) > 200:
@@ -81,7 +95,20 @@ class JobService:
         self._ensure_template_name_available(cleaned_name, idempotency_key)
         self.validate_template_input_count(mode, len(uploads))
         loaded = [self._loader.load(item.content, item.declared_media_type) for item in uploads]
-        config_snapshot = {"name": cleaned_name, "mode": mode.value}
+        try:
+            field_catalog = build_template_field_catalog(field_names or [])
+        except ValueError as exc:
+            raise AppError(
+                status=422,
+                code="INVALID_TEMPLATE_FIELD_CATALOG",
+                title="Invalid template field catalog",
+                detail=str(exc),
+            ) from exc
+        config_snapshot = {
+            "name": cleaned_name,
+            "mode": mode.value,
+            "fieldCatalog": field_catalog,
+        }
         job, created = self._create_job_record(
             job_type=JobType.PREPARE_TEMPLATE,
             mode=mode,
@@ -102,6 +129,10 @@ class JobService:
         mother_individual_id: str | None,
         upload: UploadPayload,
         ocr_enabled: bool,
+        send_full_document_to_openai: bool = False,
+        document_action: str | None = None,
+        target_document_id: str | None = None,
+        target_page_id: str | None = None,
         idempotency_key: str | None,
     ) -> ProcessingJob:
         normalized_mother_id: str | None = None
@@ -131,6 +162,43 @@ class JobService:
                     title="Template version is not active",
                     detail="OCRにはACTIVEテンプレート版を指定してください。",
                 )
+            if document_action not in {None, "ADD_PAGE", "RESCAN_PAGE", "NEW_DOCUMENT"}:
+                raise AppError(
+                    status=422,
+                    code="DOCUMENT_ACTION_INVALID",
+                    title="Document action is invalid",
+                    detail="読み取り方法の指定が正しくありません。",
+                )
+            target_document = (
+                session.get(LedgerDocument, target_document_id) if target_document_id else None
+            )
+            if document_action in {"ADD_PAGE", "RESCAN_PAGE"}:
+                if target_document is None:
+                    raise AppError(
+                        status=404,
+                        code="LEDGER_DOCUMENT_NOT_FOUND",
+                        title="Ledger document was not found",
+                        detail="更新する台帳が見つかりません。",
+                    )
+                if target_document.template_id != template_version.template_id:
+                    raise AppError(
+                        status=409,
+                        code="DOCUMENT_TEMPLATE_MISMATCH",
+                        title="Document template does not match",
+                        detail="選択した台帳とテンプレートが一致しません。",
+                    )
+                normalized_mother_id = target_document.individual_id
+            if document_action == "RESCAN_PAGE":
+                target_page = (
+                    session.get(LedgerDocumentPage, target_page_id) if target_page_id else None
+                )
+                if target_page is None or target_page.ledger_document_id != target_document_id:
+                    raise AppError(
+                        status=404,
+                        code="TARGET_PAGE_REQUIRED",
+                        title="A page to reread is required",
+                        detail="読み直すページを選択してください。",
+                    )
             if has_full_image_boundary_fallback(template_version.quality_json):
                 raise AppError(
                     status=409,
@@ -167,18 +235,14 @@ class JobService:
                 )
             config_relative_path = template_version.config_relative_path
             template_config_bytes = self._storage.read_bytes(config_relative_path)
-            template_config = parse_template_config(
-                template_config_bytes.decode("utf-8")
-            )
+            template_config = parse_template_config(template_config_bytes.decode("utf-8"))
             session.refresh(template_version)
             if (
                 template_version.status != TemplateVersionStatus.ACTIVE.value
                 or template_version.clean_template_artifact_id != clean_artifact.id
                 or template_version.config_relative_path != config_relative_path
-                or self._storage.read_bytes(clean_artifact.relative_path)
-                != clean_template_bytes
-                or self._storage.read_bytes(config_relative_path)
-                != template_config_bytes
+                or self._storage.read_bytes(clean_artifact.relative_path) != clean_template_bytes
+                or self._storage.read_bytes(config_relative_path) != template_config_bytes
             ):
                 raise AppError(
                     status=409,
@@ -189,12 +253,35 @@ class JobService:
                         "内容を確認して、もう一度読み取りを開始してください。"
                     ),
                 )
+            generic_definition: dict[str, object] | None = None
+            if has_approved_generic_definition(template_version.quality_json):
+                definition_revision = template_version.quality_json.get(
+                    "templateDefinitionRevision"
+                )
+                definition_row = session.scalar(
+                    select(TemplateDefinitionRevision).where(
+                        TemplateDefinitionRevision.template_version_id == template_version.id,
+                        TemplateDefinitionRevision.revision == definition_revision,
+                        TemplateDefinitionRevision.source == "APPROVED",
+                    )
+                )
+                if definition_row is None:
+                    raise AppError(
+                        status=409,
+                        code="TEMPLATE_DEFINITION_REQUIRED",
+                        title="Approved template definition is missing",
+                        detail="承認済み汎用テンプレート定義を確認できません。",
+                    )
+                generic_definition = definition_row.definition_json
             mapping_snapshot = self._field_mapping_snapshot(
                 template_version,
                 required=ocr_enabled and self._settings.ocr.provider == "openai",
                 config=template_config,
+                generic_definition=generic_definition,
             )
-            if template_version.quality_json.get("layoutVerified") is not True:
+            if template_version.quality_json.get(
+                "layoutVerified"
+            ) is not True and not has_approved_generic_definition(template_version.quality_json):
                 raise AppError(
                     status=409,
                     code="TEMPLATE_LAYOUT_NOT_VERIFIED",
@@ -210,11 +297,23 @@ class JobService:
                 clean_template_sha256=clean_template_sha256,
                 config=template_config,
             )
-            sire_name_snapshot = self._sire_name_snapshot(session) if ocr_enabled else {
-                "sireNamePool": [],
-                "sireNameAllowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
-                "sireNamePoolHash": None,
-            }
+            sire_name_snapshot = (
+                self._sire_name_snapshot(session)
+                if ocr_enabled
+                else {
+                    "sireNamePool": [],
+                    "sireNameAllowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
+                    "sireNamePoolHash": None,
+                }
+            )
+            template_candidate_snapshot = (
+                TemplateCandidateService.snapshot(session, template_version.template_id)
+                if ocr_enabled
+                else {
+                    "templateCandidatePools": [],
+                    "templateCandidatePoolsHash": None,
+                }
+            )
         loaded = [self._loader.load(upload.content, upload.declared_media_type)]
         config_snapshot = {
             "templateVersionId": template_version_id,
@@ -222,15 +321,30 @@ class JobService:
             "templateVersionNumber": template_version.version_number,
             "ocrEnabled": ocr_enabled,
             "ocrProvider": self._settings.ocr.provider if ocr_enabled else "disabled",
+            "sendFullDocumentToOpenAi": bool(
+                ocr_enabled
+                and self._settings.ocr.provider == "openai"
+                and send_full_document_to_openai
+            ),
             "schemaVersion": self._settings.ocr.schema_version,
             "promptVersion": self._settings.ocr.prompt_version,
             "templateSnapshot": template_snapshot,
             **mapping_snapshot,
             **sire_name_snapshot,
+            **template_candidate_snapshot,
             "saleNoteSexSymbolPool": list(SALE_NOTE_SEX_SYMBOLS),
             **(
                 {"motherIndividualId": normalized_mother_id}
                 if normalized_mother_id is not None
+                else {}
+            ),
+            **(
+                {
+                    "documentAction": document_action,
+                    "targetDocumentId": target_document_id,
+                    "targetPageId": target_page_id,
+                }
+                if document_action is not None
                 else {}
             ),
         }
@@ -289,10 +403,7 @@ class JobService:
             if job is None:
                 raise self._not_found()
             current = JobStatus(job.status)
-            if (
-                current is JobStatus.FAILED
-                and job.error_code == "INCOMPLETE_JOB_INPUTS"
-            ):
+            if current is JobStatus.FAILED and job.error_code == "INCOMPLETE_JOB_INPUTS":
                 raise AppError(
                     status=409,
                     code="INCOMPLETE_JOB_INPUTS",
@@ -340,6 +451,79 @@ class JobService:
         await self._runner.enqueue(job_id)
         return self.get(job_id)
 
+    async def set_template_boundary_and_retry(
+        self,
+        job_id: str,
+        corners: list[tuple[float, float]],
+    ) -> ProcessingJob:
+        self._validate_normalized_boundary(corners)
+        with self._database.session() as session:
+            repository = JobRepository(session)
+            job = repository.get(job_id)
+            if job is None:
+                raise self._not_found()
+            if (
+                job.job_type != JobType.PREPARE_TEMPLATE.value
+                or job.status != JobStatus.FAILED.value
+                or job.error_code != "DOCUMENT_BOUNDARY_NOT_FOUND"
+            ):
+                raise AppError(
+                    status=409,
+                    code="DOCUMENT_BOUNDARY_REVIEW_NOT_AVAILABLE",
+                    title="Document boundary review is not available",
+                    detail="この処理は書類の四隅を指定できる状態ではありません。",
+                )
+            snapshot = dict(job.config_snapshot_json)
+            snapshot["manualBoundaryNormalized"] = [list(point) for point in corners]
+            repository.update(job_id, config_snapshot_json=snapshot)
+            repository.add_event(
+                job_id=job_id,
+                level="INFO",
+                event_code="MANUAL_DOCUMENT_BOUNDARY_SET",
+                stage=job.progress_stage,
+                metadata={"attemptNumber": job.attempt_number},
+            )
+        return await self.retry(job_id)
+
+    @staticmethod
+    def _validate_normalized_boundary(corners: list[tuple[float, float]]) -> None:
+        if len(corners) != 4 or any(
+            not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0)
+            for x, y in corners
+        ):
+            raise AppError(
+                status=422,
+                code="DOCUMENT_BOUNDARY_INVALID",
+                title="Document boundary is invalid",
+                detail="四隅は画像の内側に指定してください。",
+            )
+        crosses = []
+        for index in range(4):
+            first = corners[index]
+            second = corners[(index + 1) % 4]
+            third = corners[(index + 2) % 4]
+            crosses.append(
+                (second[0] - first[0]) * (third[1] - second[1])
+                - (second[1] - first[1]) * (third[0] - second[0])
+            )
+        polygon_area = abs(
+            sum(
+                corners[index][0] * corners[(index + 1) % 4][1]
+                - corners[(index + 1) % 4][0] * corners[index][1]
+                for index in range(4)
+            )
+        ) / 2
+        if (
+            polygon_area < 0.1
+            or not (all(value > 0 for value in crosses) or all(value < 0 for value in crosses))
+        ):
+            raise AppError(
+                status=422,
+                code="DOCUMENT_BOUNDARY_INVALID",
+                title="Document boundary is invalid",
+                detail="四隅が交差しないように、書類全体を囲んでください。",
+            )
+
     def cancel(self, job_id: str) -> ProcessingJob:
         with self._database.session() as session:
             repository = JobRepository(session)
@@ -362,18 +546,14 @@ class JobService:
                         )
                         if reprocess_version is not None:
                             persisted_statement = persisted_statement.where(
-                                TemplateVersion.template_id
-                                == reprocess_version.template_id,
-                                TemplateVersion.version_number
-                                > reprocess_version.version_number,
+                                TemplateVersion.template_id == reprocess_version.template_id,
+                                TemplateVersion.version_number > reprocess_version.version_number,
                             )
                         else:
                             persisted_statement = persisted_statement.where(
                                 TemplateVersion.id != reprocess_version_id
                             )
-                    persisted_version_id = session.scalar(
-                        persisted_statement.limit(1)
-                    )
+                    persisted_version_id = session.scalar(persisted_statement.limit(1))
                     if persisted_version_id is not None:
                         raise AppError(
                             status=409,
@@ -422,9 +602,7 @@ class JobService:
                     detail="確定済みジョブの削除には confirm=true が必要です。",
                 )
             referenced_version_id = session.scalar(
-                select(TemplateVersion.id)
-                .where(TemplateVersion.source_job_id == job_id)
-                .limit(1)
+                select(TemplateVersion.id).where(TemplateVersion.source_job_id == job_id).limit(1)
             )
             if referenced_version_id is not None:
                 raise AppError(
@@ -475,9 +653,7 @@ class JobService:
                     config_snapshot=config_snapshot,
                     mode=mode,
                     idempotency_key=idempotency_key,
-                    image_sha256=(
-                        loaded[0].metadata.sha256 if len(loaded) == 1 else None
-                    ),
+                    image_sha256=(loaded[0].metadata.sha256 if len(loaded) == 1 else None),
                     template_version_id=template_version_id,
                 )
             except IntegrityError:
@@ -492,9 +668,7 @@ class JobService:
                         status=409,
                         code="IDEMPOTENCY_KEY_CONFLICT",
                         title="Idempotency key conflict",
-                        detail=(
-                            "同じIdempotency-Keyが異なるリクエストで使用されています。"
-                        ),
+                        detail=("同じIdempotency-Keyが異なるリクエストで使用されています。"),
                     ) from None
                 session.expunge(existing)
                 return existing, False
@@ -513,9 +687,7 @@ class JobService:
                 repository = JobRepository(session)
                 for index, (upload, image) in enumerate(zip(uploads, loaded, strict=True)):
                     suffix = "" if len(uploads) == 1 else f"_{index + 1:03d}"
-                    relative_path = (
-                        f"uploads/{job.id}/original{suffix}.{image.metadata.extension}"
-                    )
+                    relative_path = f"uploads/{job.id}/original{suffix}.{image.metadata.extension}"
                     stored_path = self._storage.write_bytes(relative_path, upload.content)
                     repository.add_input(
                         job_id=job.id,
@@ -527,6 +699,7 @@ class JobService:
                         file_bytes=image.metadata.file_bytes,
                         sha256=image.metadata.sha256,
                         relative_path=stored_path,
+                        content_bytes=upload.content,
                     )
                     manifest_items.append(
                         {
@@ -582,6 +755,7 @@ class JobService:
                 repository.update(
                     job.id,
                     config_snapshot_json=config_snapshot,
+                    template_snapshot_bytes=clean_template_bytes,
                 )
         except Exception:
             with self._database.session() as session:
@@ -609,9 +783,7 @@ class JobService:
         ):
             return False
         try:
-            snapshot_root = self._storage.resolve(
-                f"uploads/{job.id}/template_snapshot"
-            )
+            snapshot_root = self._storage.resolve(f"uploads/{job.id}/template_snapshot")
             path = self._storage.resolve(relative_path)
             path.relative_to(snapshot_root)
             if not path.is_file():
@@ -642,9 +814,7 @@ class JobService:
                 metadata={"attemptNumber": 1},
             )
 
-    def _ensure_template_name_available(
-        self, name: str, idempotency_key: str | None
-    ) -> None:
+    def _ensure_template_name_available(self, name: str, idempotency_key: str | None) -> None:
         normalized = TemplateRepository.normalize_name(name)
         orphan_template_ids: list[str] = []
         with self._database.session() as session:
@@ -698,6 +868,7 @@ class JobService:
         *,
         required: bool,
         config: TemplateConfig | None = None,
+        generic_definition: dict[str, object] | None = None,
     ) -> dict[str, object]:
         if config is None:
             config = parse_template_config(
@@ -709,8 +880,7 @@ class JobService:
             if mapping.enabled
         ]
         unsupported = [
-            mapping for mapping in mappings
-            if not is_supported_field_path(mapping.target_path)
+            mapping for mapping in mappings if not is_supported_field_path(mapping.target_path)
         ]
         if unsupported:
             invalid = unsupported[0]
@@ -737,9 +907,7 @@ class JobService:
                     "テンプレート画面で記入欄とJSON項目を設定してください。"
                 ),
             )
-        serialized = [
-            mapping.model_dump(mode="json", by_alias=True) for mapping in mappings
-        ]
+        serialized = [mapping.model_dump(mode="json", by_alias=True) for mapping in mappings]
         record_structure: dict[str, object] = {
             "layoutSchemaVersion": 3,
             "verified": False,
@@ -773,8 +941,7 @@ class JobService:
                 for input_id in group.input_cell_ids
             }
             target_by_input = {
-                relation.input_cell_id: relation.target_path
-                for relation in layout.relations
+                relation.input_cell_id: relation.target_path for relation in layout.relations
             }
             record_structure = {
                 "layoutSchemaVersion": layout.layout_schema_version,
@@ -786,8 +953,7 @@ class JobService:
                     for section in layout.record_sections
                 ],
                 "groups": [
-                    group.model_dump(mode="json", by_alias=True)
-                    for group in layout.record_groups
+                    group.model_dump(mode="json", by_alias=True) for group in layout.record_groups
                 ],
                 "fieldBindings": [
                     {
@@ -799,11 +965,7 @@ class JobService:
                     for input_id, group in group_by_input.items()
                     if (
                         mapping := next(
-                            (
-                                item
-                                for item in mappings
-                                if item.mapping_id == f"layout_{input_id}"
-                            ),
+                            (item for item in mappings if item.mapping_id == f"layout_{input_id}"),
                             None,
                         )
                     )
@@ -815,6 +977,7 @@ class JobService:
             {
                 "fieldMappings": serialized,
                 "recordStructure": record_structure,
+                "genericTemplateDefinition": generic_definition,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -828,6 +991,7 @@ class JobService:
             "mappingCanonicalWidth": config.canonical_width,
             "mappingCanonicalHeight": config.canonical_height,
             "recordStructure": record_structure,
+            "genericTemplateDefinition": generic_definition,
         }
 
     @staticmethod

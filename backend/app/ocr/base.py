@@ -22,11 +22,15 @@ class OcrRegionInput:
     transcription_format: str | None = None
     printed_label_excluded: bool = False
     printed_label_text: str = ""
+    is_document_identity: bool = False
+    identity_value_type: str | None = None
+    identity_exact_length: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class OcrProviderRequest:
     regions: list[OcrRegionInput]
+    full_document_png: bytes | None = None
     template_id: str = "cow-breeding-ledger-v1"
     template_version: str = "1"
     should_cancel: Callable[[], bool] | None = None

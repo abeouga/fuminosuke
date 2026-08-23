@@ -1,29 +1,38 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, Header, Request, UploadFile, status
-from pydantic import Field
+from fastapi import APIRouter, File, Form, Header, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import Field, model_validator
 
 from app.api.dependencies import get_job_service
-from app.api.v1.routes.shared import JobAccepted, job_accepted
+from app.api.v1.routes.shared import JobAccepted, JobDetail, job_accepted, job_detail
 from app.api.v1.routes.uploads import read_upload
 from app.core.errors import ApiModel, AppError
 from app.db.models import TemplateVersion
-from app.domain.enums import TemplateMode
+from app.domain.enums import JobStatus, JobType, TemplateMode
 from app.domain.field_targets import (
+    FIELD_TARGET_BY_PATH,
     FieldTarget,
     custom_field_key,
-    field_targets,
     is_supported_field_path,
 )
-from app.domain.template_config import FieldMappingConfig
+from app.domain.template_config import DocumentIdentityConfig, FieldMappingConfig
+from app.domain.template_definition import (
+    TemplateDefinition,
+    TemplateDefinitionRevisionView,
+)
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.job_service import UploadPayload
 from app.services.layout_service import LayoutService
+from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
+from app.services.template_candidate_service import TemplateCandidateService
+from app.services.template_definition_service import TemplateDefinitionService
 from app.services.template_management_service import TemplateManagementService
 
 router = APIRouter(tags=["templates"])
@@ -50,6 +59,67 @@ class TemplateView(ApiModel):
     versions: list[TemplateVersionView] = Field(default_factory=list)
 
 
+class TemplateOutputFolderView(ApiModel):
+    template_folder_id: str | None
+    template_folder_name: str | None
+    effective_folder_id: str | None
+    effective_folder_name: str | None
+    uses_default: bool
+
+
+class TemplateOutputFolderSelection(ApiModel):
+    folder_id: str = Field(min_length=1, max_length=255)
+
+
+class BoundaryPoint(ApiModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
+class TemplateBoundaryUpdate(ApiModel):
+    corners: list[BoundaryPoint] = Field(min_length=4, max_length=4)
+
+
+class TemplateCandidateBindingView(ApiModel):
+    target_pattern: str
+    label: str
+
+
+class TemplateCandidateSetView(ApiModel):
+    id: str
+    name: str
+    values: list[str]
+    allowed_suffixes: list[str]
+    bindings: list[TemplateCandidateBindingView]
+
+
+class TemplateCandidateSettingsView(ApiModel):
+    template_id: str
+    sets: list[TemplateCandidateSetView]
+
+
+class TemplateCandidateSetUpdate(ApiModel):
+    name: str = Field(min_length=1, max_length=100)
+    values: list[str] = Field(min_length=1, max_length=500)
+    allowed_suffixes: list[str] = Field(default_factory=list, max_length=30)
+    target_patterns: list[str] = Field(default_factory=list, max_length=300)
+
+
+class TemplateCandidateSettingsUpdate(ApiModel):
+    template_version_id: str = Field(min_length=1, max_length=36)
+    sets: list[TemplateCandidateSetUpdate] = Field(default_factory=list, max_length=30)
+
+
+class MarkOptionView(ApiModel):
+    id: str
+    label: str
+    value: str
+    x: int
+    y: int
+    width: int
+    height: int
+
+
 class FieldMappingView(ApiModel):
     mapping_id: str
     target_path: str
@@ -62,6 +132,9 @@ class FieldMappingView(ApiModel):
     enabled: bool = True
     model_detail: str = "high"
     printed_label_text: str = ""
+    mapping_type: str = "text"
+    mark_selection_mode: str = "multiple"
+    mark_options: list[MarkOptionView] = Field(default_factory=list)
 
 
 class FieldMappingTargetView(ApiModel):
@@ -70,10 +143,22 @@ class FieldMappingTargetView(ApiModel):
     section: str
 
 
+class DocumentIdentityView(ApiModel):
+    mapping_id: str
+    target_path: str
+    label: str
+    value_type: str = "text"
+    exact_length: int | None = None
+    match_role: Literal["primary", "confirmation"] = "primary"
+    display_role: Literal["title", "subtitle", "none"] = "title"
+
+
 class FieldMappingsResponse(ApiModel):
     canonical_width: int
     canonical_height: int
     mappings: list[FieldMappingView]
+    document_identity: DocumentIdentityView | None
+    document_identity_fields: list[DocumentIdentityView] = Field(default_factory=list)
     targets: list[FieldMappingTargetView]
     valid_for_ocr: bool
     warnings: list[str]
@@ -81,34 +166,77 @@ class FieldMappingsResponse(ApiModel):
 
 class FieldMappingsUpdate(ApiModel):
     mappings: list[FieldMappingView] = Field(max_length=300)
+    document_identity: DocumentIdentityView | None = None
+    document_identity_fields: list[DocumentIdentityView] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @model_validator(mode="after")
+    def validate_identity_roles(self) -> FieldMappingsUpdate:
+        fields = self.document_identity_fields or (
+            [self.document_identity] if self.document_identity is not None else []
+        )
+        if not fields:
+            return self
+        if len({field.target_path for field in fields}) != len(fields):
+            raise ValueError("書類を見分ける項目を重複して指定できません。")
+        primary_count = sum(field.match_role == "primary" for field in fields)
+        if primary_count != 1 and not (primary_count == 0 and len(fields) >= 2):
+            raise ValueError(
+                "書類を見分ける基準を1つ指定するか、"
+                "2項目以上をすべて「違っていたら確認」にしてください。"
+            )
+        if sum(field.display_role == "title" for field in fields) != 1:
+            raise ValueError("一覧で大きく表示する項目を1つ指定してください。")
+        if sum(field.display_role == "subtitle" for field in fields) > 1:
+            raise ValueError("見出しの下に表示する項目は1つまでです。")
+        return self
 
 
-def _mapping_targets(mappings: list[FieldMappingConfig]) -> list[FieldTarget]:
-    targets = field_targets()
+def _mapping_targets(
+    mappings: list[FieldMappingConfig],
+    layout: LayoutDefinition,
+) -> list[FieldTarget]:
+    targets = [
+        FieldTarget(path=entry.target_path, label=entry.label, section=entry.section)
+        for entry in layout.label_pool
+    ]
     known_paths = {target.path for target in targets}
-    for mapping in mappings:
-        key = custom_field_key(mapping.target_path)
-        if key is None or mapping.target_path in known_paths:
+    used_paths = [relation.target_path for relation in layout.relations]
+    used_paths.extend(
+        mark_set.target_path
+        for cell in layout.cells
+        for mark_set in cell.mark_sets
+    )
+    mapping_by_path = {mapping.target_path: mapping for mapping in mappings}
+    for target_path in [*used_paths, *mapping_by_path]:
+        if target_path in known_paths:
             continue
+        mapping = mapping_by_path.get(target_path)
+        known = FIELD_TARGET_BY_PATH.get(target_path)
+        key = custom_field_key(target_path)
         targets.append(
             FieldTarget(
-                path=mapping.target_path,
-                label=mapping.label,
-                section="追加項目",
+                path=target_path,
+                label=(mapping.label if mapping else "")
+                or (known.label if known else key or target_path),
+                section=known.section if known else "追加項目",
             )
         )
-        known_paths.add(mapping.target_path)
+        known_paths.add(target_path)
     return targets
 
 
 def _mapping_validation(
     mappings: list[FieldMappingConfig],
+    document_identity: DocumentIdentityConfig | None = None,
+    document_identity_fields: list[DocumentIdentityConfig] | None = None,
+    *,
+    require_identity: bool = False,
 ) -> tuple[bool, list[str]]:
     enabled = [mapping for mapping in mappings if mapping.enabled]
-    invalid = [
-        mapping for mapping in enabled
-        if not is_supported_field_path(mapping.target_path)
-    ]
+    invalid = [mapping for mapping in enabled if not is_supported_field_path(mapping.target_path)]
     warnings = [
         (
             f"{mapping.label}: {mapping.target_path} は帳票の行数上限を超えています。"
@@ -118,7 +246,41 @@ def _mapping_validation(
     ]
     if not enabled:
         warnings.append("読み取りに使用できる意味づけ済みセルがありません。")
-    return bool(enabled) and not invalid, warnings
+    identity_fields = document_identity_fields or (
+        [document_identity] if document_identity is not None else []
+    )
+    if not identity_fields:
+        warnings.append("書類を見分ける項目が未設定です。")
+    else:
+        selected_count = sum(
+            any(
+                mapping.mapping_id == field.mapping_id
+                and mapping.target_path == field.target_path
+                and mapping.mapping_type == "text"
+                for mapping in enabled
+            )
+            for field in identity_fields
+        )
+        if selected_count != len(identity_fields):
+            warnings.append("書類を見分ける項目を、使用中の文字欄から選び直してください。")
+        primary_count = sum(field.match_role == "primary" for field in identity_fields)
+        if primary_count != 1 and not (primary_count == 0 and len(identity_fields) >= 2):
+            warnings.append(
+                "書類を見分ける基準を1つ指定するか、"
+                "2項目以上をすべて「違っていたら確認」にしてください。"
+            )
+        if sum(field.display_role == "title" for field in identity_fields) != 1:
+            warnings.append("一覧で大きく表示する項目を1つ指定してください。")
+    identity_valid = bool(identity_fields) and not any(
+        warning.startswith(("書類を見分ける項目", "書類を見分ける基準", "一覧で大きく"))
+        for warning in warnings
+    )
+    return (
+        bool(enabled)
+        and not invalid
+        and (identity_valid or not require_identity),
+        warnings,
+    )
 
 
 def _version_view(version: TemplateVersion) -> TemplateVersionView:
@@ -174,6 +336,84 @@ def get_template(request: Request, template_id: str) -> TemplateView:
         )
 
 
+@router.get(
+    "/templates/{template_id}/output-folder",
+    response_model=TemplateOutputFolderView,
+    response_model_by_alias=True,
+)
+def get_template_output_folder(
+    request: Request,
+    template_id: str,
+) -> TemplateOutputFolderView:
+    return TemplateOutputFolderView.model_validate(
+        request.app.state.google_drive.template_output_folder(template_id)
+    )
+
+
+@router.put(
+    "/templates/{template_id}/output-folder",
+    response_model=TemplateOutputFolderView,
+    response_model_by_alias=True,
+)
+def select_template_output_folder(
+    request: Request,
+    template_id: str,
+    payload: TemplateOutputFolderSelection,
+) -> TemplateOutputFolderView:
+    return TemplateOutputFolderView.model_validate(
+        request.app.state.google_drive.select_template_output_folder(
+            template_id,
+            payload.folder_id,
+        )
+    )
+
+
+@router.get(
+    "/templates/{template_id}/candidate-settings",
+    response_model=TemplateCandidateSettingsView,
+    response_model_by_alias=True,
+)
+def get_template_candidate_settings(
+    request: Request,
+    template_id: str,
+) -> TemplateCandidateSettingsView:
+    result = TemplateCandidateService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).get_settings(template_id)
+    return TemplateCandidateSettingsView.model_validate(result)
+
+
+@router.put(
+    "/templates/{template_id}/candidate-settings",
+    response_model=TemplateCandidateSettingsView,
+    response_model_by_alias=True,
+)
+def replace_template_candidate_settings(
+    request: Request,
+    template_id: str,
+    payload: TemplateCandidateSettingsUpdate,
+) -> TemplateCandidateSettingsView:
+    result = TemplateCandidateService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).replace_settings(
+        template_id,
+        payload.template_version_id,
+        [item.model_dump(mode="json", by_alias=True) for item in payload.sets],
+    )
+    return TemplateCandidateSettingsView.model_validate(result)
+
+
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template(request: Request, template_id: str) -> Response:
+    TemplateManagementService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).delete_template(template_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post(
     "/template-jobs",
     response_model=JobAccepted,
@@ -185,6 +425,7 @@ async def create_template_job(
     name: Annotated[str, Form()],
     mode: Annotated[TemplateMode, Form()],
     files: Annotated[list[UploadFile], File()],
+    field_names_json: Annotated[str, Form(alias="fieldNames")] = "[]",
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
     job_service = get_job_service(request)
@@ -206,13 +447,156 @@ async def create_template_job(
             raise
         uploads.append(upload)
 
+    try:
+        field_names = json.loads(field_names_json)
+    except json.JSONDecodeError as exc:
+        raise AppError(
+            status=422,
+            code="INVALID_TEMPLATE_FIELD_CATALOG",
+            title="Invalid template field catalog",
+            detail="保存する項目の形式が正しくありません。",
+        ) from exc
+    if not isinstance(field_names, list) or any(not isinstance(item, str) for item in field_names):
+        raise AppError(
+            status=422,
+            code="INVALID_TEMPLATE_FIELD_CATALOG",
+            title="Invalid template field catalog",
+            detail="保存する項目は文字列の一覧で指定してください。",
+        )
+
     job = await job_service.create_template_job(
         name=name,
         mode=mode,
         uploads=uploads,
         idempotency_key=idempotency_key,
+        field_names=field_names,
     )
     return job_accepted(job)
+
+
+@router.post(
+    "/spreadsheet-template-jobs",
+    response_model=JobAccepted,
+    response_model_by_alias=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_spreadsheet_template_job(
+    request: Request,
+    name: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> JobAccepted:
+    max_bytes = request.app.state.settings.storage.max_upload_bytes
+    try:
+        content = await file.read(max_bytes + 1)
+    finally:
+        await file.close()
+    if len(content) > max_bytes:
+        raise AppError(
+            status=413,
+            code="UPLOAD_TOO_LARGE",
+            title="Upload is too large",
+            detail="XLSXファイルが許容サイズを超えています。",
+        )
+    job = SpreadsheetTemplateImportService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).import_xlsx(
+        name=name,
+        source_name=file.filename or "source.xlsx",
+        content=content,
+        idempotency_key=idempotency_key,
+    )
+    return job_accepted(job)
+
+
+@router.get(
+    "/template-versions/{version_id}/print",
+    response_class=HTMLResponse,
+)
+def print_template_version(
+    request: Request,
+    version_id: str,
+    auto_print: bool = False,
+) -> HTMLResponse:
+    with request.app.state.database.session() as session:
+        version = TemplateRepository(session).get_version(version_id)
+        if version is None:
+            raise AppError(
+                status=404,
+                code="TEMPLATE_NOT_FOUND",
+                title="Template not found",
+                detail="指定されたテンプレート版が見つかりません。",
+            )
+        template = TemplateRepository(session).get_template(version.template_id)
+        if template is None:
+            raise AppError(
+                status=404,
+                code="TEMPLATE_NOT_FOUND",
+                title="Template not found",
+                detail="指定されたテンプレートが見つかりません。",
+            )
+        content = SpreadsheetTemplateImportService.printable_html(
+            version,
+            template_name=template.name,
+            auto_print=auto_print,
+        )
+    return HTMLResponse(content)
+
+
+@router.get("/template-jobs/{job_id}/boundary-image", response_class=FileResponse)
+def get_template_boundary_image(request: Request, job_id: str) -> FileResponse:
+    job = get_job_service(request).get(job_id)
+    if (
+        job.job_type != JobType.PREPARE_TEMPLATE.value
+        or job.status != JobStatus.FAILED.value
+        or job.error_code != "DOCUMENT_BOUNDARY_NOT_FOUND"
+    ):
+        raise AppError(
+            status=409,
+            code="DOCUMENT_BOUNDARY_REVIEW_NOT_AVAILABLE",
+            title="Document boundary review is not available",
+            detail="この処理は書類の四隅を指定できる状態ではありません。",
+        )
+    with request.app.state.database.session() as session:
+        inputs = JobRepository(session).list_inputs(job_id)
+    if len(inputs) != 1:
+        raise AppError(
+            status=409,
+            code="DOCUMENT_BOUNDARY_SOURCE_NOT_AVAILABLE",
+            title="Document boundary source is not available",
+            detail="四隅の指定に使用する元画像を取得できません。",
+        )
+    source = inputs[0]
+    path = request.app.state.storage.resolve(source.relative_path)
+    if not path.is_file():
+        raise AppError(
+            status=404,
+            code="DOCUMENT_BOUNDARY_SOURCE_NOT_AVAILABLE",
+            title="Document boundary source is not available",
+            detail="四隅の指定に使用する元画像が見つかりません。",
+        )
+    return FileResponse(
+        path=path,
+        media_type=source.media_type,
+    )
+
+
+@router.put(
+    "/template-jobs/{job_id}/boundary",
+    response_model=JobDetail,
+    response_model_by_alias=True,
+)
+async def update_template_boundary(
+    request: Request,
+    job_id: str,
+    body: TemplateBoundaryUpdate,
+) -> JobDetail:
+    job = await get_job_service(request).set_template_boundary_and_retry(
+        job_id,
+        [(point.x, point.y) for point in body.corners],
+    )
+    return job_detail(job)
 
 
 @router.post(
@@ -221,11 +605,16 @@ async def create_template_job(
     response_model_by_alias=True,
 )
 def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
-    _, _, mappings = TemplateManagementService(
+    _, _, mappings, document_identity, document_identity_fields = TemplateManagementService(
         request.app.state.database,
         request.app.state.storage,
-    ).get_field_mappings(version_id)
-    valid_for_ocr, warnings = _mapping_validation(mappings)
+    ).get_mapping_configuration(version_id)
+    valid_for_ocr, warnings = _mapping_validation(
+        mappings,
+        document_identity,
+        document_identity_fields,
+        require_identity=True,
+    )
     if not valid_for_ocr:
         raise AppError(
             status=409,
@@ -269,17 +658,37 @@ async def update_handwriting_mask(
     response_model_by_alias=True,
 )
 def get_field_mappings(request: Request, version_id: str) -> FieldMappingsResponse:
-    width, height, mappings = TemplateManagementService(
-        request.app.state.database, request.app.state.storage
-    ).get_field_mappings(version_id)
-    valid_for_ocr, warnings = _mapping_validation(mappings)
+    width, height, mappings, document_identity, document_identity_fields = (
+        TemplateManagementService(
+            request.app.state.database,
+            request.app.state.storage,
+        ).get_mapping_configuration(version_id)
+    )
+    layout = LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).get(version_id)
+    valid_for_ocr, warnings = _mapping_validation(
+        mappings,
+        document_identity,
+        document_identity_fields,
+    )
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
         mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
+        document_identity=(
+            DocumentIdentityView.model_validate(document_identity.model_dump())
+            if document_identity is not None
+            else None
+        ),
+        document_identity_fields=[
+            DocumentIdentityView.model_validate(item.model_dump())
+            for item in document_identity_fields
+        ],
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
-            for item in _mapping_targets(mappings)
+            for item in _mapping_targets(mappings, layout)
         ],
         valid_for_ocr=valid_for_ocr,
         warnings=warnings,
@@ -295,19 +704,50 @@ def update_field_mappings(
     request: Request, version_id: str, body: FieldMappingsUpdate
 ) -> FieldMappingsResponse:
     service = TemplateManagementService(request.app.state.database, request.app.state.storage)
+    incoming_identity_fields = body.document_identity_fields or (
+        [body.document_identity] if body.document_identity is not None else []
+    )
     mappings = service.save_field_mappings(
         version_id,
         [FieldMappingConfig.model_validate(item.model_dump()) for item in body.mappings],
+        document_identity=(
+            DocumentIdentityConfig.model_validate(body.document_identity.model_dump())
+            if body.document_identity is not None
+            else None
+        ),
+        document_identity_fields=[
+            DocumentIdentityConfig.model_validate(item.model_dump())
+            for item in incoming_identity_fields
+        ],
     )
-    width, height, _ = service.get_field_mappings(version_id)
-    valid_for_ocr, warnings = _mapping_validation(mappings)
+    width, height, _, document_identity, document_identity_fields = (
+        service.get_mapping_configuration(version_id)
+    )
+    layout = LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).get(version_id)
+    valid_for_ocr, warnings = _mapping_validation(
+        mappings,
+        document_identity,
+        document_identity_fields,
+    )
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
         mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
+        document_identity=(
+            DocumentIdentityView.model_validate(document_identity.model_dump())
+            if document_identity is not None
+            else None
+        ),
+        document_identity_fields=[
+            DocumentIdentityView.model_validate(item.model_dump())
+            for item in document_identity_fields
+        ],
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
-            for item in _mapping_targets(mappings)
+            for item in _mapping_targets(mappings, layout)
         ],
         valid_for_ocr=valid_for_ocr,
         warnings=warnings,
@@ -336,6 +776,23 @@ def detect_template_layout(request: Request, version_id: str) -> LayoutDefinitio
     ).detect(version_id)
 
 
+@router.post(
+    "/template-versions/{version_id}/layout/recognize-labels",
+    response_model=LayoutDefinition,
+    response_model_by_alias=True,
+)
+def recognize_template_labels(
+    request: Request,
+    version_id: str,
+    body: LayoutDefinition,
+) -> LayoutDefinition:
+    return LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+        handwriting_threshold=request.app.state.settings.segmentation.threshold,
+    ).recognize_labels(version_id, body)
+
+
 @router.put(
     "/template-versions/{version_id}/layout",
     response_model=LayoutDefinition,
@@ -362,6 +819,71 @@ def verify_template_layout(request: Request, version_id: str) -> LayoutDefinitio
         request.app.state.storage,
         handwriting_threshold=request.app.state.settings.segmentation.threshold,
     ).verify(version_id)
+
+
+@router.get(
+    "/template-versions/{version_id}/template-definition",
+    response_model=TemplateDefinitionRevisionView | None,
+    response_model_by_alias=True,
+)
+def get_template_definition(
+    request: Request, version_id: str
+) -> TemplateDefinitionRevisionView | None:
+    return TemplateDefinitionService(request.app.state.database).latest(version_id)
+
+
+@router.get(
+    "/template-versions/{version_id}/template-definition/history",
+    response_model=list[TemplateDefinitionRevisionView],
+    response_model_by_alias=True,
+)
+def get_template_definition_history(
+    request: Request, version_id: str
+) -> list[TemplateDefinitionRevisionView]:
+    return TemplateDefinitionService(request.app.state.database).history(version_id)
+
+
+@router.post(
+    "/template-versions/{version_id}/template-definition/generate",
+    response_model=TemplateDefinitionRevisionView,
+    response_model_by_alias=True,
+)
+async def generate_template_definition(
+    request: Request, version_id: str
+) -> TemplateDefinitionRevisionView:
+    return await TemplateDefinitionService(
+        request.app.state.database,
+        request.app.state.settings.ocr,
+    ).generate(version_id)
+
+
+@router.put(
+    "/template-versions/{version_id}/template-definition",
+    response_model=TemplateDefinitionRevisionView,
+    response_model_by_alias=True,
+)
+def save_template_definition(
+    request: Request, version_id: str, body: TemplateDefinition
+) -> TemplateDefinitionRevisionView:
+    return TemplateDefinitionService(request.app.state.database).save_human_revision(
+        version_id, body
+    )
+
+
+@router.post(
+    "/template-versions/{version_id}/template-definition/approve",
+    response_model=TemplateDefinitionRevisionView,
+    response_model_by_alias=True,
+)
+def approve_template_definition(
+    request: Request,
+    version_id: str,
+    body: TemplateDefinition | None = None,
+) -> TemplateDefinitionRevisionView:
+    return TemplateDefinitionService(
+        request.app.state.database,
+        storage=request.app.state.storage,
+    ).approve(version_id, body)
 
 
 @router.post(

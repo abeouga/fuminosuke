@@ -2,8 +2,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import ReadingStatus
 from app.domain.template_config import FieldMappingConfig
+from app.ocr.base import OcrRegionInput
+from app.ocr.deterministic_mapper import assign_mapped_reading
 from app.services.ocr_workflow_service import OcrWorkflowService
 
 
@@ -115,3 +118,38 @@ def test_nonblank_local_mark_keeps_its_row_and_only_skips_rows_below_it() -> Non
     }
 
     assert OcrWorkflowService._trailing_blank_rows(extraction, states) == {("calvings", 2)}
+
+
+def test_local_ink_turns_openai_blank_into_uncertain_review() -> None:
+    document = blank_ocr_document(provider="openai", source_regions=["cell-1", "cell-2"])
+    assign_mapped_reading(
+        document,
+        "customFields.inked",
+        document.document.cattle_name.model_copy(update={"source_region_id": "cell-1"}),
+    )
+    assign_mapped_reading(
+        document,
+        "customFields.empty",
+        document.document.cattle_name.model_copy(update={"source_region_id": "cell-2"}),
+    )
+    extraction = SimpleNamespace(
+        crops={"cell-1": _crop(ink=True), "cell-2": _crop(ink=False)}
+    )
+    regions = [
+        OcrRegionInput(
+            region_id="cell-1",
+            image_png=b"crop",
+            target_path="customFields.inked",
+        ),
+        OcrRegionInput(
+            region_id="cell-2",
+            image_png=b"crop",
+            target_path="customFields.empty",
+        ),
+    ]
+
+    OcrWorkflowService._flag_local_ink_conflicts(document, regions, extraction)
+
+    assert document.custom_fields["inked"].status is ReadingStatus.UNCERTAIN
+    assert document.custom_fields["inked"].review_reason == "LOCAL_INK_OCR_BLANK"
+    assert document.custom_fields["empty"].status is ReadingStatus.BLANK

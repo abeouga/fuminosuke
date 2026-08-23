@@ -20,6 +20,7 @@ class JobStatus(StrEnum):
 class TemplateMode(StrEnum):
     REFERENCE_TEMPLATE = "REFERENCE_TEMPLATE"
     SINGLE_IMAGE_EXPERIMENTAL = "SINGLE_IMAGE_EXPERIMENTAL"
+    SPREADSHEET_TEMPLATE = "SPREADSHEET_TEMPLATE"
 
 
 class TemplateVersionStatus(StrEnum):
@@ -38,5 +39,6 @@ class EventLevel(StrEnum):
 class RevisionSource(StrEnum):
     OCR = "OCR"
     USER_EDIT = "USER_EDIT"
+    SHEET_EDIT = "SHEET_EDIT"
     REPROCESS = "REPROCESS"
-
+    RECONCILIATION = "RECONCILIATION"

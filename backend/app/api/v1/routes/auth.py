@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -24,6 +25,10 @@ def auth_session(request: Request) -> dict[str, object]:
         "required": service.enabled,
         "configured": service.configured,
         "authenticated": user is not None,
+        "authorizationCurrent": (
+            not service.enabled
+            or (user is not None and service.authorization_is_current(user.subject))
+        ),
         "user": user.payload() if user is not None else None,
     }
 
@@ -57,17 +62,15 @@ def google_callback(
 ) -> RedirectResponse:
     service = _service(request)
     if error or not code or not state:
-        raise AppError(
-            status=400,
-            code="GOOGLE_OAUTH_CANCELLED",
-            title="Google OAuth was cancelled",
-            detail="Googleアカウントの認証が完了しませんでした。",
+        return _oauth_failure_response(service, "GOOGLE_OAUTH_CANCELLED")
+    try:
+        completed = service.complete(
+            code=code,
+            state=state,
+            state_cookie=request.cookies.get(service.state_cookie_name),
         )
-    completed = service.complete(
-        code=code,
-        state=state,
-        state_cookie=request.cookies.get(service.state_cookie_name),
-    )
+    except AppError as exc:
+        return _oauth_failure_response(service, exc.code)
     response = RedirectResponse(completed.return_to, status_code=302)
     response.set_cookie(
         service.session_cookie_name,
@@ -80,6 +83,17 @@ def google_callback(
     )
     response.delete_cookie(service.state_cookie_name, path="/api/v1/auth/google/callback")
     request.app.state.google_sheets.reset_authorization()
+    request.app.state.google_drive.reset_authorization()
+    return response
+
+
+def _oauth_failure_response(service: GoogleOAuthService, code: str) -> RedirectResponse:
+    parsed = urlparse(service.frontend_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["authError"] = code
+    location = urlunparse(parsed._replace(query=urlencode(query)))
+    response = RedirectResponse(location, status_code=302)
+    response.delete_cookie(service.state_cookie_name, path="/api/v1/auth/google/callback")
     return response
 
 
@@ -100,6 +114,7 @@ def disconnect_google(
     if user is not None:
         service.disconnect(user)
     request.app.state.google_sheets.reset_authorization()
+    request.app.state.google_drive.reset_authorization()
     response = JSONResponse({"authenticated": False})
     response.delete_cookie(service.session_cookie_name, path="/")
     return response

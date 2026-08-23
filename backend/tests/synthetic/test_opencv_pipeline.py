@@ -65,6 +65,57 @@ def test_document_normalizer_corrects_perspective_before_layout_detection() -> N
     )
 
 
+def test_document_normalizer_detects_landscape_orientation() -> None:
+    source = cv2.rotate(ledger_image(), cv2.ROTATE_90_CLOCKWISE)
+    source_height, source_width = source.shape[:2]
+    canvas = np.full((900, 1300, 3), 45, dtype=np.uint8)
+    transform = cv2.getPerspectiveTransform(
+        np.float32(
+            [
+                [0, 0],
+                [source_width - 1, 0],
+                [source_width - 1, source_height - 1],
+                [0, source_height - 1],
+            ]
+        ),
+        np.float32([[55, 70], [1240, 35], [1270, 830], [35, 855]]),
+    )
+    photographed = cv2.warpPerspective(
+        source,
+        transform,
+        (canvas.shape[1], canvas.shape[0]),
+        dst=canvas,
+        borderMode=cv2.BORDER_TRANSPARENT,
+    )
+
+    result = DocumentNormalizer(
+        canonical_width=1240,
+        canonical_height=1754,
+        allow_orientation_swap=True,
+    ).normalize(photographed)
+
+    assert result.image_rgb.shape == (1240, 1754, 3)
+    assert result.quality.output_width == 1754
+    assert result.quality.output_height == 1240
+    assert result.quality.fallback_used is False
+
+
+def test_document_normalizer_uses_manually_confirmed_corners() -> None:
+    image = np.full((700, 1000, 3), 80, dtype=np.uint8)
+    corners = np.float32([[45, 50], [950, 35], [970, 660], [30, 675]])
+
+    result = DocumentNormalizer(
+        canonical_width=1240,
+        canonical_height=1754,
+        allow_orientation_swap=True,
+    ).normalize(image, source_corners=corners)
+
+    assert result.image_rgb.shape == (1240, 1754, 3)
+    assert result.quality.manual_boundary_used is True
+    assert result.quality.fallback_used is False
+    assert "MANUAL_DOCUMENT_BOUNDARY" in result.quality.warnings
+
+
 def test_registration_and_handwriting_isolation(
     settings_factory: Callable[..., Settings],
 ) -> None:

@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, TypeVar
 
 import cv2
 import numpy as np
 import yaml
+from numpy.typing import NDArray
 from sqlalchemy import select
 
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.db.models import JobArtifact, Template, TemplateVersion
 from app.db.session import Database
 from app.domain.enums import TemplateMode, TemplateVersionStatus
-from app.domain.template_config import load_template_config
+from app.domain.template_config import (
+    FieldMappingConfig,
+    RegionConfig,
+    TemplateConfig,
+    load_template_config,
+)
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.image_loader import ImageLoader
 from app.layout_analysis.detector import LayoutDetector
-from app.layout_analysis.models import LayoutDefinition
+from app.layout_analysis.models import LayoutDefinition, LayoutLabelPoolEntry
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.segmentation.candidate_regions import (
@@ -25,6 +32,8 @@ from app.segmentation.candidate_regions import (
 )
 from app.storage.local_storage import LocalStorageService
 from app.template_recovery.pipelines import PreparedTemplate, TemplateRecoveryPipelines
+
+BoxConfig = TypeVar("BoxConfig", RegionConfig, FieldMappingConfig)
 
 
 class TemplatePreparationService:
@@ -52,6 +61,7 @@ class TemplatePreparationService:
             inputs = job_repository.list_inputs(job_id)
             mode = TemplateMode(job.mode or "")
             name = str(job.config_snapshot_json.get("name", self._config.name))
+            manual_boundary = job.config_snapshot_json.get("manualBoundaryNormalized")
             attempt = job.attempt_number
             if job.cancel_requested:
                 return ""
@@ -61,12 +71,16 @@ class TemplatePreparationService:
             ).rgb
             for item in inputs
         ]
+        source_corners = self._manual_source_corners(manual_boundary, images[0])
         self._progress(job_id, "NORMALIZING_DOCUMENT", 15)
         if mode is TemplateMode.REFERENCE_TEMPLATE:
-            prepared = self._pipelines.reference(images)
+            prepared = self._pipelines.reference(images, source_corners=source_corners)
         else:
             self._progress(job_id, "RECOVERING_TEMPLATE", 35)
-            prepared = self._pipelines.single_experimental(images)
+            prepared = self._pipelines.single_experimental(
+                images,
+                source_corners=source_corners,
+            )
         if self._cancel_requested(job_id):
             return ""
         prepared = self._apply_edited_mask(job_id, mode, prepared)
@@ -131,13 +145,30 @@ class TemplatePreparationService:
                 versions = repository.list_versions(template_id)
                 version_number = max(item.version_number for item in versions) + 1
         normalized_entry = prepared.images.get("normalized")
-        if previous is not None and previous.layout_json:
+        if (
+            previous is not None
+            and previous.layout_json
+            and previous.canonical_width == prepared.canonical_width
+            and previous.canonical_height == prepared.canonical_height
+        ):
             initial_layout = LayoutDefinition.model_validate(previous.layout_json)
         elif normalized_entry is not None:
             self._progress(job_id, "DETECTING_LAYOUT", 65)
             initial_layout = LayoutDetector().detect(normalized_entry[1])
         else:
             initial_layout = LayoutDetector().detect(prepared.clean_template_rgb)
+        if previous is None and job is not None:
+            raw_catalog = job.config_snapshot_json.get("fieldCatalog", [])
+            if isinstance(raw_catalog, list):
+                field_catalog = [
+                    LayoutLabelPoolEntry.model_validate(item)
+                    for item in raw_catalog
+                    if isinstance(item, dict)
+                ]
+                initial_layout = initial_layout.model_copy(
+                    update={"label_pool": field_catalog},
+                    deep=True,
+                )
         prepared.quality = {
             **prepared.quality,
             "layoutPreDetected": True,
@@ -221,7 +252,10 @@ class TemplatePreparationService:
                 f"{base_path}/handwriting_mask.png",
                 encode_png(prepared.handwriting_mask, rgb=False),
             )
-        version_config = self._config.model_copy(
+        version_config = self._config_for_dimensions(
+            prepared.canonical_width,
+            prepared.canonical_height,
+        ).model_copy(
             update={
                 "template_id": template_id,
                 "template_version": version_number,
@@ -245,8 +279,8 @@ class TemplatePreparationService:
             version = TemplateRepository(session).create_version(
                 template_id=template_id,
                 mode=mode,
-                canonical_width=self._config.canonical_width,
-                canonical_height=self._config.canonical_height,
+                canonical_width=prepared.canonical_width,
+                canonical_height=prepared.canonical_height,
                 source_job_id=job_id,
                 clean_template_artifact_id=clean_artifact.id,
                 mask_artifact_id=mask_artifact_id,
@@ -289,6 +323,55 @@ class TemplatePreparationService:
             value=result,
         )
         return version_id
+
+    def _config_for_dimensions(self, width: int, height: int) -> TemplateConfig:
+        if (
+            width == self._config.canonical_width
+            and height == self._config.canonical_height
+        ):
+            return self._config.model_copy(deep=True)
+        scale_x = width / self._config.canonical_width
+        scale_y = height / self._config.canonical_height
+
+        def scaled_box(item: BoxConfig) -> BoxConfig:
+            x = min(width - 1, max(0, round(item.x * scale_x)))
+            y = min(height - 1, max(0, round(item.y * scale_y)))
+            box_width = min(width - x, max(1, round(item.width * scale_x)))
+            box_height = min(height - y, max(1, round(item.height * scale_y)))
+            return item.model_copy(
+                update={"x": x, "y": y, "width": box_width, "height": box_height},
+                deep=True,
+            )
+
+        return self._config.model_copy(
+            update={
+                "canonical_width": width,
+                "canonical_height": height,
+                "regions": [scaled_box(item) for item in self._config.regions],
+                "field_mappings": [
+                    scaled_box(item) for item in self._config.field_mappings
+                ],
+            },
+            deep=True,
+        )
+
+    @staticmethod
+    def _manual_source_corners(
+        value: object,
+        image_rgb: NDArray[np.uint8],
+    ) -> NDArray[np.float32] | None:
+        if value is None:
+            return None
+        points = np.asarray(value, dtype=np.float32)
+        if points.shape != (4, 2) or not np.isfinite(points).all():
+            raise AppError(
+                status=422,
+                code="DOCUMENT_BOUNDARY_INVALID",
+                title="Document boundary is invalid",
+                detail="保存された四隅の指定が正しくありません。もう一度指定してください。",
+            )
+        height, width = image_rgb.shape[:2]
+        return points * np.asarray([width - 1, height - 1], dtype=np.float32)
 
     def _remove_empty_template(self, name: str) -> None:
         normalized_name = TemplateRepository.normalize_name(name)

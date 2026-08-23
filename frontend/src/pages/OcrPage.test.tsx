@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToastViewport } from "../components/Toast";
 import type { Template } from "../types";
 import { OcrPage } from "./OcrPage";
 
@@ -105,10 +106,10 @@ test("shows unverified active templates but does not allow selecting them", asyn
   );
   fireEvent.click(screen.getByRole("button", { name: "テンプレート設定を開く" }));
   expect(openTemplates).toHaveBeenCalledOnce();
-  expect(await screen.findByRole("option", {
-    name: /v4 · 記入欄の再検出が必要/,
-  })).toBeDisabled();
-  expect(screen.getByRole("combobox")).toHaveValue("version-12345678");
+  const selectedCard = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
+  expect(selectedCard).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "繁殖台帳A v4を選択" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 });
 
 test("blocks progress when the active template has no mapped cells", async () => {
@@ -130,7 +131,8 @@ test("blocks progress when the active template has no mapped cells", async () =>
   );
 
   expect(screen.getByLabelText("読み取り手順")).toBeInTheDocument();
-  expect(await screen.findByText("このテンプレートには読み取りセルの意味づけがありません。")).toBeInTheDocument();
+  expect(await screen.findByText("このテンプレートは現在読み取りに使用できません。テンプレート設定を確認してください。")).toBeInTheDocument();
+  expect(screen.queryByText(/読み取りセルの意味づけがありません/)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
 });
 
@@ -165,7 +167,7 @@ test("protects an in-progress reading wizard from accidental navigation", async 
     />,
   );
 
-  await screen.findByText("document.cattleName · field_cattle_name");
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
 
   await waitFor(() => expect(guard).toHaveBeenLastCalledWith(true));
@@ -185,12 +187,13 @@ test("shows a retry action when template mappings cannot be loaded", async () =>
     />,
   );
 
-  expect(await screen.findByText("意味づけの取得に失敗しました。")).toBeInTheDocument();
+  expect(await screen.findByText("テンプレート設定を確認できませんでした。")).toBeInTheDocument();
+  expect(screen.queryByText("意味づけの取得に失敗しました。")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "もう一度読み込む" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
 });
 
-test("previews the exact mapped cells before enabling reading", async () => {
+test("selects a template with a graphical card without exposing implementation details", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
     canonicalWidth: 1400,
     canonicalHeight: 990,
@@ -221,8 +224,13 @@ test("previews the exact mapped cells before enabling reading", async () => {
     />,
   );
 
-  expect(await screen.findByText("document.cattleName · field_cattle_name")).toBeInTheDocument();
-  expect(screen.getByText(/ラベルセルと帳票全体は送信しません/)).toBeInTheDocument();
+  const card = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
+  expect(card).toHaveAttribute("aria-pressed", "true");
+  expect(card.querySelector("img")).toHaveAttribute("src", expect.stringContaining("/template-jobs/template-job/boundary-image"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
+  expect(screen.queryByText(/OpenAIへ送信/)).not.toBeInTheDocument();
+  expect(screen.queryByText("document.cattleName · field_cattle_name")).not.toBeInTheDocument();
+  expect(screen.queryByText(/1 項目/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   fireEvent.change(input!, {
@@ -287,7 +295,7 @@ test("starts OCR without sending a manually entered individual id", async () => 
     />,
   );
 
-  await screen.findByText("document.cattleName · field_cattle_name");
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   fireEvent.change(input!, {
@@ -389,7 +397,7 @@ test("navigates to Google Sheets when the initial OCR sync completes", async () 
     />,
   );
 
-  await screen.findByText("document.cattleName · field_cattle_name");
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
     target: { files: [new File(["image"], "ledger.png", { type: "image/png" })] },
@@ -451,15 +459,18 @@ test("reuses the OCR idempotency key for a communication retry and rotates it af
     }), { status: 200 });
   }));
   const { container } = render(
-    <OcrPage
-      templates={templates}
-      rememberJob={() => undefined}
-      openReview={() => undefined}
-      openTemplates={() => undefined}
-    />,
+    <>
+      <OcrPage
+        templates={templates}
+        rememberJob={() => undefined}
+        openReview={() => undefined}
+        openTemplates={() => undefined}
+      />
+      <ToastViewport />
+    </>,
   );
 
-  await screen.findByText("document.cattleName · field_cattle_name");
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
   fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
     target: { files: [new File(["image"], "ledger.png", { type: "image/png" })] },
@@ -467,7 +478,9 @@ test("reuses the OCR idempotency key for a communication retry and rotates it af
   fireEvent.click(screen.getByRole("button", { name: "内容確認へ" }));
 
   fireEvent.click(screen.getByRole("button", { name: "読み取りを開始" }));
-  expect(await screen.findByText("開始できませんでした。")).toBeInTheDocument();
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("読み取りを開始できませんでした");
+  expect(alert).toHaveTextContent("バックエンドとの接続を確認してください。");
   fireEvent.click(screen.getByRole("button", { name: "読み取りを開始" }));
   await waitFor(() => expect(idempotencyKeys).toHaveLength(2));
 

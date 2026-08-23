@@ -121,6 +121,35 @@ class ProcessingMetadata(OcrModel):
     notes: list[str] = Field(default_factory=list, max_length=50)
 
 
+class GenericFieldValue(OcrModel):
+    field_id: str = Field(max_length=120)
+    key: str = Field(max_length=100)
+    name: str = Field(max_length=300)
+    value_type: str = Field(max_length=20)
+    reading: FieldReading
+
+
+class GenericRecordValue(OcrModel):
+    record_id: str = Field(max_length=120)
+    name: str = Field(max_length=200)
+    order: int = Field(ge=1)
+    record_key_value: str | None = Field(default=None, max_length=100)
+    fields: list[GenericFieldValue] = Field(default_factory=list, max_length=200)
+
+
+class GenericSectionValue(OcrModel):
+    section_id: str = Field(max_length=120)
+    key: str = Field(max_length=100)
+    name: str = Field(max_length=300)
+    records: list[GenericRecordValue] = Field(default_factory=list, max_length=300)
+
+
+class GenericDataDocument(OcrModel):
+    template_name: str = Field(max_length=300)
+    standalone_fields: list[GenericFieldValue] = Field(default_factory=list, max_length=1000)
+    sections: list[GenericSectionValue] = Field(default_factory=list, max_length=200)
+
+
 class OcrDocument(OcrModel):
     schema_version: str = Field(pattern=r"^1\.0$")
     template_id: str = Field(max_length=100)
@@ -136,5 +165,7 @@ class OcrDocument(OcrModel):
         max_length=CALVING_ROW_COUNT,
     )
     custom_fields: dict[str, FieldReading] = Field(default_factory=dict, max_length=300)
+    generic_data: GenericDataDocument | None = None
+    generic_values: dict[str, object] | None = None
     review_items: list[ReviewItem] = Field(default_factory=list, max_length=200)
     processing_metadata: ProcessingMetadata

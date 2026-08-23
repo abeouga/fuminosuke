@@ -30,6 +30,7 @@ class RegistrationQuality:
 class DocumentQuality:
     boundary_confidence: float
     fallback_used: bool
+    manual_boundary_used: bool
     source_width: int
     source_height: int
     output_width: int
@@ -44,4 +45,3 @@ class DocumentQuality:
 def _camel(value: str) -> str:
     head, *tail = value.split("_")
     return head + "".join(part.capitalize() for part in tail)
-

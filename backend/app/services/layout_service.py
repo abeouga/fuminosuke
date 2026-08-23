@@ -12,16 +12,23 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.db.session import Database
+from app.domain.enums import TemplateMode
 from app.domain.field_targets import (
     FIELD_TARGET_BY_PATH,
     custom_field_key,
     is_supported_field_path,
 )
 from app.domain.template_config import FieldMappingConfig, MarkOptionConfig
+from app.domain.template_fields import parse_legacy_spreadsheet_metadata
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.line_detection import LineDetector, adaptive_ink_mask
 from app.layout_analysis.detector import LayoutDetector, TextRegion
-from app.layout_analysis.models import LayoutCell, LayoutDefinition, LayoutRelation
+from app.layout_analysis.models import (
+    LayoutCell,
+    LayoutDefinition,
+    LayoutLabelPoolEntry,
+    LayoutRelation,
+)
 from app.repositories.artifact_repository import ArtifactRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
@@ -30,6 +37,10 @@ from app.segmentation.candidate_regions import (
     handwriting_candidates_payload,
 )
 from app.segmentation.heuristic import HeuristicHandwritingSegmenter
+from app.services.label_cell_ocr_service import (
+    protected_label_cell_ids,
+    recognize_label_cells,
+)
 from app.services.template_management_service import TemplateManagementService
 from app.services.template_mutation import (
     LAYOUT_INPUT_REVISION_KEY,
@@ -80,18 +91,50 @@ class LayoutService:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._not_found()
-            if version.layout_json:
-                return LayoutDefinition.model_validate(version.layout_json)
-            return LayoutDefinition(
-                canonical_width=version.canonical_width,
-                canonical_height=version.canonical_height,
+            layout = (
+                LayoutDefinition.model_validate(version.layout_json)
+                if version.layout_json
+                else LayoutDefinition(
+                    canonical_width=version.canonical_width,
+                    canonical_height=version.canonical_height,
+                )
             )
+            legacy_config_path = (
+                version.config_relative_path
+                if version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
+                and not layout.label_pool
+                else None
+            )
+        if legacy_config_path is None:
+            return layout
+        legacy = parse_legacy_spreadsheet_metadata(
+            self._storage.read_bytes(legacy_config_path).decode("utf-8")
+        )
+        if legacy is None:
+            return layout
+        _, field_catalog = legacy
+        return layout.model_copy(
+            update={
+                "label_pool": [
+                    LayoutLabelPoolEntry.model_validate(item) for item in field_catalog
+                ]
+            },
+            deep=True,
+        )
 
     def detect(self, version_id: str) -> LayoutDefinition:
         with self._database.session() as session:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._not_found()
+            current_layout = (
+                LayoutDefinition.model_validate(version.layout_json)
+                if version.layout_json
+                else LayoutDefinition(
+                    canonical_width=version.canonical_width,
+                    canonical_height=version.canonical_height,
+                )
+            )
             source_job = JobRepository(session).get(version.source_job_id or "")
             artifact = (
                 ArtifactRepository(session).get_by_name(
@@ -122,7 +165,80 @@ class LayoutService:
                 detail="帳票整形画像を読み込めませんでした。",
             )
         image_rgb = np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
-        return self._detector.detect(image_rgb)
+        detected = self._detector.detect(image_rgb)
+        return detected.model_copy(
+            update={"label_pool": current_layout.label_pool},
+            deep=True,
+        )
+
+    def recognize_labels(
+        self,
+        version_id: str,
+        layout: LayoutDefinition,
+    ) -> LayoutDefinition:
+        with self._database.session() as session:
+            version = TemplateRepository(session).get_version(version_id)
+            if version is None:
+                raise self._not_found()
+            if (
+                layout.canonical_width != version.canonical_width
+                or layout.canonical_height != version.canonical_height
+            ):
+                raise AppError(
+                    status=422,
+                    code="INVALID_LAYOUT_DIMENSIONS",
+                    title="Invalid layout dimensions",
+                    detail="レイアウト寸法がテンプレート画像と一致しません。",
+                )
+            artifact = (
+                session.get(JobArtifact, version.clean_template_artifact_id)
+                if version.clean_template_artifact_id
+                else None
+            )
+            if artifact is None:
+                source_job = JobRepository(session).get(version.source_job_id or "")
+                artifact = (
+                    ArtifactRepository(session).get_by_name(
+                        job_id=source_job.id,
+                        attempt_number=source_job.attempt_number,
+                        artifact_name="normalized",
+                    )
+                    if source_job is not None
+                    else None
+                )
+            if artifact is None:
+                raise AppError(
+                    status=409,
+                    code="CLEAN_TEMPLATE_NOT_READY",
+                    title="Clean template is not ready",
+                    detail="ラベルOCRに使用する帳票整形画像がまだ生成されていません。",
+                )
+            relative_path = artifact.relative_path
+
+        encoded = np.frombuffer(self._storage.read_bytes(relative_path), dtype=np.uint8)
+        bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise AppError(
+                status=422,
+                code="INVALID_TEMPLATE_IMAGE",
+                title="Invalid template image",
+                detail="ラベルOCR用の帳票画像を読み込めませんでした。",
+            )
+        image_rgb = np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
+        result = recognize_label_cells(
+            image_rgb,
+            layout.cells,
+            excluded_cell_ids=protected_label_cell_ids(layout),
+        )
+        warnings = [warning for warning in layout.warnings if not warning.startswith("LABEL_OCR_")]
+        warnings.extend(result.warnings)
+        return layout.model_copy(
+            update={
+                "cells": result.cells,
+                "ocr_available": result.ocr_available,
+                "warnings": warnings,
+            }
+        )
 
     def save(self, version_id: str, layout: LayoutDefinition) -> LayoutDefinition:
         with template_mutation_lock():
@@ -144,14 +260,17 @@ class LayoutService:
                     detail="レイアウト寸法がテンプレート画像と一致しません。",
                 )
 
+        layout = layout.model_copy(
+            update={
+                "record_structure_verified": self._record_structure_is_complete(layout)
+            }
+        )
         mapping_finalized = False
         try:
             mappings = self._as_field_mappings(layout)
             mapped_cell_ids = {relation.input_cell_id for relation in layout.relations}
             mapped_cell_ids.update(
-                cell.id
-                for cell in layout.cells
-                if cell.role == "mark" and cell.mark_sets
+                cell.id for cell in layout.cells if cell.role == "mark" and cell.mark_sets
             )
             has_unassigned_fields = any(
                 cell.role in {"input", "mark"} and cell.id not in mapped_cell_ids
@@ -169,6 +288,7 @@ class LayoutService:
             if error.code not in {
                 "MARK_OPTIONS_REQUIRED",
                 "RECORD_STRUCTURE_REQUIRED",
+                "RECORD_PARENT_LABEL_REQUIRED",
                 "RECORD_KEY_REQUIRED",
             }:
                 raise
@@ -189,6 +309,7 @@ class LayoutService:
                 ),
                 "layoutCellCount": len(layout.cells),
                 "layoutLabelCount": sum(cell.role == "label" for cell in layout.cells),
+                "layoutParentLabelCount": sum(cell.role == "parent_label" for cell in layout.cells),
                 "layoutInputCount": sum(cell.role == "input" for cell in layout.cells),
                 "layoutMarkCount": sum(cell.role == "mark" for cell in layout.cells),
                 "layoutRelationCount": len(layout.relations),
@@ -347,8 +468,7 @@ class LayoutService:
     ) -> JobArtifact | None:
         quality = version.quality_json
         has_saved_edit = bool(
-            quality.get("editedMaskSha256")
-            or quality.get("editedMaskArtifactId")
+            quality.get("editedMaskSha256") or quality.get("editedMaskArtifactId")
         )
         has_inherited_edit = (
             quality.get("maskSource") == "USER_EDITED"
@@ -383,8 +503,7 @@ class LayoutService:
             if (
                 candidate_artifact is not None
                 and candidate_artifact.job_id == source_job.id
-                and candidate_artifact.artifact_name
-                in {"handwritingMaskEdited", "handwritingMask"}
+                and candidate_artifact.artifact_name in {"handwritingMaskEdited", "handwritingMask"}
             ):
                 edited_mask_artifact = candidate_artifact
         if (has_saved_edit or has_inherited_edit) and edited_mask_artifact is None:
@@ -425,8 +544,7 @@ class LayoutService:
                 )
             quality = version.quality_json
             has_saved_edit = bool(
-                quality.get("editedMaskSha256")
-                or quality.get("editedMaskArtifactId")
+                quality.get("editedMaskSha256") or quality.get("editedMaskArtifactId")
             )
             has_inherited_edit = (
                 quality.get("maskSource") == "USER_EDITED"
@@ -474,14 +592,10 @@ class LayoutService:
                 )
             relative_path = artifact.relative_path
             edited_mask_relative_path = (
-                edited_mask_artifact.relative_path
-                if edited_mask_artifact is not None
-                else None
+                edited_mask_artifact.relative_path if edited_mask_artifact is not None else None
             )
             edited_mask_sha256 = (
-                edited_mask_artifact.sha256
-                if edited_mask_artifact is not None
-                else None
+                edited_mask_artifact.sha256 if edited_mask_artifact is not None else None
             )
             job_id = source_job.id
             attempt = source_job.attempt_number
@@ -515,9 +629,9 @@ class LayoutService:
             y2 = max(y1, cell.y + cell.height - inset)
             scope[y1:y2, x1:x2] = 255
 
-        automatic_mask = (
-            (probability >= self._handwriting_threshold) & (scope > 0)
-        ).astype(np.uint8) * 255
+        automatic_mask = ((probability >= self._handwriting_threshold) & (scope > 0)).astype(
+            np.uint8
+        ) * 255
         automatic_mask = np.asarray(
             cv2.morphologyEx(
                 automatic_mask,
@@ -549,9 +663,7 @@ class LayoutService:
         )
         mask = edited_mask.copy() if edited_mask is not None else automatic_mask
         mask = np.asarray(cv2.bitwise_or(mask, direct_text_mask), dtype=np.uint8)
-        mask_source = (
-            "USER_EDITED" if edited_mask is not None else "USER_CLASSIFIED_LAYOUT"
-        )
+        mask_source = "USER_EDITED" if edited_mask is not None else "USER_CLASSIFIED_LAYOUT"
 
         handwriting_only = np.full_like(image_rgb, 255)
         handwriting_only[mask > 0] = image_rgb[mask > 0]
@@ -564,9 +676,7 @@ class LayoutService:
         debug[selected] = cv2.addWeighted(image_rgb, 0.35, red, 0.65, 0)[selected]
         candidates = handwriting_candidate_regions(mask, probability)
         input_cells = [cells[input_id] for input_id in input_ids]
-        verified_text_cells = [
-            cell for cell in verified_layout.cells if cell.text.strip()
-        ]
+        verified_text_cells = [cell for cell in verified_layout.cells if cell.text.strip()]
         for candidate in candidates:
             center_x = (float(candidate["x"]) + float(candidate["width"]) / 2) * image_rgb.shape[1]
             center_y = (float(candidate["y"]) + float(candidate["height"]) / 2) * image_rgb.shape[0]
@@ -612,7 +722,13 @@ class LayoutService:
         for cell in layout.cells:
             if cell.role == "ignored":
                 continue
-            color = (179, 107, 0) if cell.role == "label" else (0, 119, 125)
+            color = (
+                (22, 128, 93)
+                if cell.role == "parent_label"
+                else (179, 107, 0)
+                if cell.role == "label"
+                else (0, 119, 125)
+            )
             cv2.rectangle(
                 verification_overlay,
                 (cell.x, cell.y),
@@ -697,9 +813,7 @@ class LayoutService:
         )
         base_path = f"templates/{template_id}/versions/{version_number}"
         self._storage.write_bytes(f"{base_path}/clean_template.png", encode_png(clean))
-        self._storage.write_bytes(
-            f"{base_path}/handwriting_mask.png", encode_png(mask, rgb=False)
-        )
+        self._storage.write_bytes(f"{base_path}/handwriting_mask.png", encode_png(mask, rgb=False))
         return _HandwritingFinalization(
             detector=verified_layout.detector,
             clean_artifact_id=clean_artifact.id,
@@ -768,9 +882,7 @@ class LayoutService:
         fallback = np.zeros(gray.shape, dtype=np.uint8)
         cell_by_id = {cell.id: cell for cell in layout.cells}
         direct_input_ids = {
-            relation.input_cell_id
-            for relation in layout.relations
-            if not relation.label_cell_ids
+            relation.input_cell_id for relation in layout.relations if not relation.label_cell_ids
         }
         eligible = [
             cell
@@ -809,12 +921,7 @@ class LayoutService:
             polygon[:, 1] = np.clip(polygon[:, 1], 0, gray.shape[0] - 1)
             region_mask = np.zeros(gray.shape, dtype=np.uint8)
             cv2.fillPoly(region_mask, [polygon], (255,))
-            selected = (
-                (region_mask > 0)
-                & ink
-                & (scope > 0)
-                & (protected_lines == 0)
-            )
+            selected = (region_mask > 0) & ink & (scope > 0) & (protected_lines == 0)
             fallback[selected] = 255
 
         fallback = np.asarray(
@@ -830,18 +937,13 @@ class LayoutService:
         center_x = (left + right) / 2
         center_y = (top + bottom) / 2
         return (
-            cell.x <= center_x <= cell.x + cell.width
-            and cell.y <= center_y <= cell.y + cell.height
+            cell.x <= center_x <= cell.x + cell.width and cell.y <= center_y <= cell.y + cell.height
         )
 
     @staticmethod
     def _is_exact_printed_label(detected_text: str, printed_label_text: str) -> bool:
         def normalize(value: str) -> str:
-            return "".join(
-                character
-                for character in value.strip().lower()
-                if character.isalnum()
-            )
+            return "".join(character for character in value.strip().lower() if character.isalnum())
 
         printed = normalize(printed_label_text)
         return bool(printed) and normalize(detected_text) == printed
@@ -890,11 +992,7 @@ class LayoutService:
                     detail=f"同じ保存先が複数の記入欄に割り当てられています: {target_path}",
                 )
             target_paths.add(target_path)
-            label_ids = [
-                label_id
-                for item in relations
-                for label_id in item.label_cell_ids
-            ]
+            label_ids = [label_id for item in relations for label_id in item.label_cell_ids]
             label_texts = [
                 cell_by_id[label_id].text.strip()
                 for label_id in dict.fromkeys(label_ids)
@@ -990,6 +1088,25 @@ class LayoutService:
         return mappings
 
     @staticmethod
+    def _record_structure_is_complete(layout: LayoutDefinition) -> bool:
+        has_array_bindings = any(
+            relation.target_path.startswith(("saleCalves.", "calvings."))
+            for relation in layout.relations
+        ) or any(
+            mark_set.target_path.startswith(("saleCalves.", "calvings."))
+            for cell in layout.cells
+            if cell.role == "mark"
+            for mark_set in cell.mark_sets
+        )
+        if not has_array_bindings:
+            return layout.record_structure_verified
+        try:
+            LayoutService._require_verified_record_structure(layout)
+        except AppError:
+            return False
+        return True
+
+    @staticmethod
     def _require_verified_record_structure(layout: LayoutDefinition) -> None:
         array_relations = [
             relation
@@ -1006,9 +1123,7 @@ class LayoutService:
         if not array_relations and not mark_bindings:
             return
         grouped_inputs = {
-            input_id
-            for group in layout.record_groups
-            for input_id in group.input_cell_ids
+            input_id for group in layout.record_groups for input_id in group.input_cell_ids
         }
         missing_inputs = sorted(
             {
@@ -1016,18 +1131,9 @@ class LayoutService:
                 for relation in array_relations
                 if relation.input_cell_id not in grouped_inputs
             }
-            | {
-                cell_id
-                for cell_id, _ in mark_bindings
-                if cell_id not in grouped_inputs
-            }
+            | {cell_id for cell_id, _ in mark_bindings if cell_id not in grouped_inputs}
         )
-        if (
-            not layout.record_structure_verified
-            or not layout.record_sections
-            or not layout.record_groups
-            or missing_inputs
-        ):
+        if not layout.record_sections or not layout.record_groups or missing_inputs:
             raise AppError(
                 status=422,
                 code="RECORD_STRUCTURE_REQUIRED",
@@ -1037,6 +1143,22 @@ class LayoutService:
                     "親セクションを設定してください。"
                 ),
                 metadata={"unassignedInputCellIds": missing_inputs},
+            )
+        grouped_section_ids = {group.section_id for group in layout.record_groups}
+        missing_parent_sections = sorted(
+            section.id
+            for section in layout.record_sections
+            if section.id in grouped_section_ids and section.parent_label_cell_id is None
+        )
+        if missing_parent_sections:
+            raise AppError(
+                status=422,
+                code="RECORD_PARENT_LABEL_REQUIRED",
+                title="Record parent label is required",
+                detail=(
+                    "列ラベルから作成したレコードを表全体の親ラベルへ接続してください。"
+                ),
+                metadata={"recordSectionIds": missing_parent_sections},
             )
         relations_by_input: dict[str, list[LayoutRelation]] = {}
         for relation in array_relations:

@@ -21,9 +21,12 @@ terraform.tfvars
 crash.log
 /llm-ocr-sheets-*.json
 
-# The project intentionally versions its local runtime configuration, including
-# API credentials, so a clone can be pushed and started without re-entry.
+# The existing runtime file is retained for compatibility. Do not add new
+# credentials to it; machine-local secrets belong in backend/.env.local.
 !backend/.env
+
+# Machine-local overrides must never be committed. New credentials belong here.
+/backend/.env.local
 
 # Test-run artifacts generated under the backend workspace.
 backend/.pytest-full-mapping-*/

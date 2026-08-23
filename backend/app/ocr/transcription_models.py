@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.errors import to_camel
@@ -34,3 +36,20 @@ class TranscriptionItem(TranscriptionModel):
 
 class TranscriptionBatch(TranscriptionModel):
     items: list[TranscriptionItem]
+
+
+class CompactTranscriptionItem(BaseModel):
+    """Token-efficient wire model used only for OpenAI structured output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    i: str = Field(min_length=1, max_length=12)
+    v: str | None = Field(max_length=500)
+    s: Literal["r", "b", "u"]
+    c: str | None = Field(max_length=120)
+
+
+class CompactTranscriptionBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CompactTranscriptionItem]

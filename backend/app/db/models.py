@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -59,6 +60,11 @@ class GoogleOAuthAccount(Base):
     scopes: Mapped[str] = mapped_column(Text, nullable=False)
     spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     spreadsheet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_root_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_root_folder_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    default_output_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    default_output_folder_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    default_output_folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
@@ -84,6 +90,81 @@ class Template(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateOutputFolder(Base):
+    __tablename__ = "template_output_folders"
+
+    google_subject: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("google_oauth_accounts.google_subject", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), primary_key=True
+    )
+    folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    folder_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateCandidateSet(Base):
+    __tablename__ = "template_candidate_sets"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id",
+            "normalized_name",
+            name="uq_template_candidate_sets_template_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    values_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    allowed_suffixes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateCandidateBinding(Base):
+    __tablename__ = "template_candidate_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id",
+            "target_pattern",
+            name="uq_template_candidate_bindings_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    candidate_set_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("template_candidate_sets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_pattern: Mapped[str] = mapped_column(String(200), nullable=False)
+    field_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 
@@ -121,6 +202,75 @@ class TemplateVersion(Base):
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TemplateDefinitionRevision(Base):
+    __tablename__ = "template_definition_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_version_id",
+            "revision",
+            name="uq_template_definition_revision",
+        ),
+        Index(
+            "ix_template_definition_latest",
+            "template_version_id",
+            "revision",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("template_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    definition_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    validation_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class OutputLayoutTemplateRevision(Base):
+    __tablename__ = "output_layout_template_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_key",
+            "template_version_id",
+            "revision",
+            name="uq_output_layout_template_revision",
+        ),
+        Index(
+            "ix_output_layout_template_latest",
+            "owner_key",
+            "template_version_id",
+            "revision",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    owner_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    template_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("template_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    layout_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    source_sheet_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_job_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("processing_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
@@ -146,6 +296,7 @@ class ProcessingJob(Base):
     progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     config_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    template_snapshot_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message_safe: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -169,6 +320,86 @@ class ProcessingJob(Base):
     )
 
 
+class DocumentFolder(Base):
+    __tablename__ = "document_folders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    parent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document_folders.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class LedgerDocument(Base):
+    __tablename__ = "ledger_documents"
+    __table_args__ = (Index("ix_ledger_documents_identity", "template_id", "individual_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    individual_id: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    current_job_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    current_document_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    spreadsheet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    library_folder_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("document_folders.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    library_location_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    spreadsheet_sync_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    spreadsheet_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class LedgerDocumentPage(Base):
+    __tablename__ = "ledger_document_pages"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_ledger_document_pages_job_id"),
+        Index("ix_ledger_document_pages_position", "ledger_document_id", "page_number"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    ledger_document_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("ledger_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    replaces_page_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("ledger_document_pages.id", ondelete="SET NULL"), nullable=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    page_content_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class JobInput(Base):
     __tablename__ = "job_inputs"
 
@@ -184,6 +415,7 @@ class JobInput(Base):
     file_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    content_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
@@ -260,6 +492,33 @@ class OcrResultRevision(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
+
+
+class SpreadsheetEditEvent(Base):
+    __tablename__ = "spreadsheet_edit_events"
+
+    edit_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("processing_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    record_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    field_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    previous_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_sheet: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_cell: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ConfirmedResult(Base):

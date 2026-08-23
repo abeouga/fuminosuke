@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.session import Database
+from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
+from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.storage.local_storage import LocalStorageService
 
 
@@ -29,6 +31,17 @@ def get_job_service(request: Request) -> JobService:
 
 def get_ocr_result_service(request: Request) -> OcrResultService:
     return cast(OcrResultService, request.app.state.ocr_result_service)
+
+
+def get_google_sheets(request: Request) -> GoogleSheetsSyncService:
+    return cast(GoogleSheetsSyncService, request.app.state.google_sheets)
+
+
+def get_output_layout_templates(request: Request) -> OutputLayoutTemplateService:
+    return cast(
+        OutputLayoutTemplateService,
+        request.app.state.output_layout_templates,
+    )
 
 
 def get_session(request: Request) -> Iterator[Session]:

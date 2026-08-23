@@ -27,7 +27,7 @@ import {
   navigateToSpreadsheet,
   type SpreadsheetNavigator,
 } from "../spreadsheetNavigation";
-import type { Artifact, FieldReading, OcrDocument, OcrFieldPreview, OcrResult } from "../types";
+import type { Artifact, FieldReading, OcrDocument, OcrFieldPreview, OcrResult, OutputLayoutTemplateStatus } from "../types";
 
 type ReadingEntry = { path: string; label: string; value: FieldReading };
 type ReviewColumn = { key: string; label: string };
@@ -204,6 +204,7 @@ export function ReviewPage({
   onNavigationGuardChange,
   requireIdentityConfirmation = false,
   initialSelectedPath = null,
+  autoReopenConfirmed = false,
   onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   jobId: string;
@@ -211,6 +212,7 @@ export function ReviewPage({
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
   requireIdentityConfirmation?: boolean;
   initialSelectedPath?: string | null;
+  autoReopenConfirmed?: boolean;
   onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
   const [result, setResult] = useState<OcrResult | null>(null);
@@ -229,15 +231,21 @@ export function ReviewPage({
   const [revisionConflict, setRevisionConflict] = useState<RevisionConflictBackup | null>(null);
   const [sireCandidates, setSireCandidates] = useState<string[]>([]);
   const [identityStepComplete, setIdentityStepComplete] = useState(false);
+  const [comparisonPageByDocument, setComparisonPageByDocument] = useState<Record<string, string>>({});
+  const [outputLayout, setOutputLayout] = useState<OutputLayoutTemplateStatus | null>(null);
   const load = async () => {
     setSelectedPath(null);
     setSelectedMappingId(null);
     setMarkEditorRow(null);
     setPreviewWarning(null);
-    const next = await api.result(jobId);
-    const [artifactList, sirePool] = await Promise.all([
+    let next = await api.result(jobId);
+    if (autoReopenConfirmed && next.confirmed) {
+      next = await api.reopenResult(jobId);
+    }
+    const [artifactList, sirePool, layoutStatus] = await Promise.all([
       api.artifacts(jobId).catch(() => null),
       api.sireNames().catch(() => null),
+      api.outputLayout(jobId).catch(() => null),
     ]);
     const hydrated = normalizeReviewDateReadings(
       hydrateMappedReadings(next.result, next.fieldPreviews),
@@ -264,6 +272,7 @@ export function ReviewPage({
         sirePool.items.flatMap((item) => [item.name, `${item.name}ET`]),
       );
     }
+    setOutputLayout(layoutStatus);
   };
   useEffect(() => {
     setResult(null);
@@ -274,10 +283,12 @@ export function ReviewPage({
     setInteractionMode("edit");
     setMarkEditorRow(null);
     setIdentityStepComplete(false);
+    setComparisonPageByDocument({});
+    setOutputLayout(null);
     void load().catch((reason) => {
       setLoadError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
     });
-  }, [jobId, initialSelectedPath]);
+  }, [autoReopenConfirmed, jobId, initialSelectedPath]);
   useEffect(() => {
     if (!selectedPath || (requireIdentityConfirmation && !identityStepComplete && !result?.confirmed)) {
       return;
@@ -358,6 +369,11 @@ export function ReviewPage({
       ?? selectedPreview.artifactUrl
     : (legacyRegionId ? byName.get(`fieldCrop.${legacyRegionId}.alignedColor`) : undefined);
   const suggestedPath = entries[0]?.path ?? null;
+  const handlePreviewLoadError = () => {
+    setPreviewWarning(
+      "保存された画像ファイルが見つかりません。DBを別PCから移した旧データは、元画像の再登録が必要です。",
+    );
+  };
   const documentEntries = orderedEntries(entryByPath, "document", DOCUMENT_ORDER);
   const pedigreeEntries = orderedEntries(entryByPath, "pedigree", PEDIGREE_ORDER);
   const customEntries = entries.filter((entry) => entry.path.startsWith("customFields."));
@@ -647,6 +663,80 @@ export function ReviewPage({
       </div>
     );
   }
+  if (!result.confirmed && result.documentResolution?.required) {
+    const resolve = async (
+      action: "ADD_PAGE" | "RESCAN_PAGE" | "NEW_DOCUMENT",
+      candidate?: (typeof result.documentResolution.candidates)[number],
+    ) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const candidateKey = candidate?.documentId ?? candidate?.sourceJobId ?? "";
+        const selectedPageId = comparisonPageByDocument[candidateKey];
+        const activePage = candidate?.pages.find((page) => (
+          selectedPageId
+            ? (page.pageId ?? page.sourceJobId) === selectedPageId
+            : page.active
+        )) ?? candidate?.pages[0];
+        const resolved = await api.resolveDocument(jobId, action, {
+          documentId: candidate?.documentId,
+          jobId: activePage?.sourceJobId ?? candidate?.sourceJobId,
+          pageId: activePage?.pageId,
+        });
+        setResult(resolved);
+        setDraft(hydrateMappedReadings(resolved.result, resolved.fieldPreviews));
+        setMessage(action === "ADD_PAGE" ? "続きのページとしてまとめました。内容を確認して確定してください。" : action === "RESCAN_PAGE" ? "以前のページと比較しました。変更箇所を確認して確定してください。" : "別の台帳として扱います。内容を確認して確定してください。");
+      } catch (reason) {
+        setError(reason instanceof ApiError ? reason.message : "保存方法を設定できませんでした。");
+      } finally {
+        setBusy(false);
+      }
+    };
+    return (
+      <div className="page-stack document-resolution-page">
+        <header className="page-header split">
+          <div>
+            <span className="eyebrow">DOCUMENT CHECK · REVISION {result.revision}</span>
+            <h1>同じ個体の台帳が見つかりました</h1>
+            <p>今回の画像を、以前の台帳へどう反映するか選択してください。この選択が終わるまでスプレッドシートは更新されません。</p>
+          </div>
+          <button className="ghost" onClick={onClose}>← ホームへ</button>
+        </header>
+        <section className="document-candidate-list" aria-label="以前の台帳">
+          {result.documentResolution.candidates.map((candidate, index) => (
+            <article className="document-candidate-card" key={candidate.documentId ?? candidate.sourceJobId ?? index}>
+              <div>
+                <span className="eyebrow">以前の台帳 {index + 1}</span>
+                <h2>{candidate.cattleName || "牛名なし"}</h2>
+                <p>個体識別番号 {candidate.individualId} · {candidate.pageCount}ページ · 最終確認 {new Date(candidate.lastConfirmedAt).toLocaleString("ja-JP")}</p>
+              </div>
+              <div className="document-resolution-actions">
+                <button className="primary" disabled={busy} onClick={() => void resolve("ADD_PAGE", candidate)}>続きのページとして追加</button>
+                {candidate.pages.length > 1 && (
+                  <label className="document-page-choice">
+                    比較するページ
+                    <select
+                      value={comparisonPageByDocument[candidate.documentId ?? candidate.sourceJobId ?? ""] ?? (candidate.pages.find((page) => page.active)?.pageId ?? candidate.pages.find((page) => page.active)?.sourceJobId ?? "")}
+                      onChange={(event) => setComparisonPageByDocument((current) => ({ ...current, [candidate.documentId ?? candidate.sourceJobId ?? ""]: event.target.value }))}
+                    >
+                      {candidate.pages.filter((page) => page.active).map((page) => <option key={page.pageId ?? page.sourceJobId ?? page.pageNumber} value={page.pageId ?? page.sourceJobId ?? ""}>{page.pageNumber}ページ目</option>)}
+                    </select>
+                  </label>
+                )}
+                <button className="secondary" disabled={busy} onClick={() => void resolve("RESCAN_PAGE", candidate)}>前に読み取ったページと比較</button>
+              </div>
+            </article>
+          ))}
+        </section>
+        <aside className="notice compact">
+          <strong>以前の台帳とは関係がない場合</strong>
+          <span>同じ個体でも、年度や用途が異なる別の台帳として保存できます。</span>
+          <button className="secondary" disabled={busy} onClick={() => void resolve("NEW_DOCUMENT")}>別の台帳として保存</button>
+        </aside>
+        {error && <p className="error-box">{error}</p>}
+      </div>
+    );
+  }
   const unresolved = new Set([
     ...entries
       .filter((entry) => (
@@ -665,8 +755,22 @@ export function ReviewPage({
       {result.provider === "mock" && <aside className="notice compact"><strong>試運転データ</strong><span>現在の候補は固定fixtureから作られています。</span></aside>}
       {result.provider === "openai" && <aside className="notice compact"><strong>{result.modelId ?? "OpenAI OCR"}</strong><span>入力 {result.inputTokens?.toLocaleString() ?? "-"} / 出力 {result.outputTokens?.toLocaleString() ?? "-"} tokens · API推定 {result.estimatedCost == null ? "計算不可" : `$${result.estimatedCost.toFixed(6)}`} · prompt {result.promptVersion ?? "-"}</span></aside>}
       {mappedPaths && <aside className="notice compact"><strong>意味づけ済み項目のみ表示</strong><span>テンプレートで設定された {mappedPaths.size} 項目を表示しています。</span></aside>}
+      {result.documentResolution?.resolved && result.documentResolution.changes.length > 0 && (
+        <aside className="notice external compact">
+          <strong>以前の台帳との差分 {result.documentResolution.changes.length}件</strong>
+          <span>追加または変更された項目を下の結果表で確認し、「内容を確定」を押すまでスプレッドシートには反映されません。</span>
+          <details>
+            <summary>変更箇所を表示</summary>
+            <ul className="document-change-list">
+              {result.documentResolution.changes.slice(0, 50).map((change) => (
+                <li key={change.path}><code>{change.path}</code>：{change.previousValue || "空欄"} → {change.currentValue || "空欄"}</li>
+              ))}
+            </ul>
+          </details>
+        </aside>
+      )}
       {!identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
-      {result.confirmed && result.individualId && <aside className="notice external compact"><strong>個体JSONへ保存済み</strong><span>個体識別番号 {result.individualId} で検索できます。</span></aside>}
+      {result.confirmed && result.individualId && <aside className="notice external compact"><strong>登録データへ保存済み</strong><span>データ検索から個体識別番号 {result.individualId} で検索できます。</span></aside>}
       {result.spreadsheetSync?.enabled && (
         <aside className={`notice compact ${result.spreadsheetSync.status === "failed" ? "external" : ""}`}>
           <strong>{result.spreadsheetSync.status === "failed" ? "スプレッドシート同期に失敗" : result.spreadsheetSync.status === "synced" ? "Googleスプレッドシートへ同期済み" : "Googleスプレッドシート連携設定済み"}</strong>
@@ -695,6 +799,84 @@ export function ReviewPage({
           {result.spreadsheetSync.spreadsheetUrl && <a className="secondary compact" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>}
         </aside>
       )}
+      {result.spreadsheetSync?.enabled && outputLayout && (
+        <aside className="notice compact output-layout-notice">
+          <strong>
+            {outputLayout.active
+              ? `出力レイアウト保存済み · REVISION ${outputLayout.revision}`
+              : "出力レイアウトは未保存です"}
+          </strong>
+          <span>
+            {!outputLayout.active && "最初にレイアウト用シートを出力してください。"}
+            Googleスプレッドシートの「{outputLayout.sheetName}」で、セル結合・列幅・行高・罫線・色・固定文字を調整してください。調整後に取り込むと、次回から同じ書類テンプレートの出力へ適用します。
+          </span>
+          <button
+            type="button"
+            className="secondary compact"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              setMessage(null);
+              try {
+                const synced = await api.syncSpreadsheet(jobId);
+                setResult(synced);
+                if (synced.spreadsheetSync?.status === "synced") {
+                  setMessage(
+                    outputLayout.active
+                      ? "保存済みレイアウトで帳票レイアウトシートを更新しました。"
+                      : "編集用の帳票レイアウトシートを作成しました。",
+                  );
+                } else {
+                  setError(
+                    synced.spreadsheetSync?.lastError
+                      ?? "帳票レイアウトシートを出力できませんでした。",
+                  );
+                }
+              } catch (reason) {
+                setError(
+                  reason instanceof Error
+                    ? reason.message
+                    : "帳票レイアウトシートを出力できませんでした。",
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {outputLayout.active
+              ? "保存済みレイアウトで再出力"
+              : "レイアウト用シートを初期出力"}
+          </button>
+          <button
+            type="button"
+            className="secondary compact"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              setMessage(null);
+              try {
+                const imported = await api.importOutputLayout(jobId);
+                setOutputLayout(imported);
+                setMessage(
+                  `帳票レイアウトをREVISION ${imported.revision}として保存しました。`,
+                );
+              } catch (reason) {
+                setError(
+                  reason instanceof Error
+                    ? reason.message
+                    : "帳票レイアウトを取り込めませんでした。",
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "取り込み中…" : "シートのレイアウトを取り込む"}
+          </button>
+        </aside>
+      )}
       {previewWarning && <aside className="notice compact"><strong>画像表示のみ利用できません</strong><span>{previewWarning}</span></aside>}
       <div
         className="ocr-review-layout"
@@ -720,9 +902,20 @@ export function ReviewPage({
           </div>
           <div className="source-image">
             {!selectedPath ? (
-              <img src={byName.get("alignedSource")} alt="位置合わせ済み帳票" />
+              <img
+                src={byName.get("alignedSource")}
+                alt="位置合わせ済み帳票"
+                onError={handlePreviewLoadError}
+                onLoad={() => setPreviewWarning(null)}
+              />
             ) : regionImage ? (
-              <img key={`${selectedPath}:${selectedPreview?.mappingId ?? legacyRegionId}`} src={regionImage} alt={`${selectedPath} の切り出し`} />
+              <img
+                key={`${selectedPath}:${selectedPreview?.mappingId ?? legacyRegionId}`}
+                src={regionImage}
+                alt={`${selectedPath} の切り出し`}
+                onError={handlePreviewLoadError}
+                onLoad={() => setPreviewWarning(null)}
+              />
             ) : (
               <div className="preview-missing">この項目に対応する矩形画像がありません。</div>
             )}
@@ -930,7 +1123,7 @@ export function ReviewPage({
         </section>
       )}
       {error && <p className="error-box">{error}</p>}{message && <p className="success-box">{message}</p>}
-      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? "確定結果はGoogleスプレッドシートの同じ行へ反映されました。" : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? (result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null) : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。個体検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
+      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? "確定結果はGoogleスプレッドシートの同じ行へ反映されました。" : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? (result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null) : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。データ検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
       {markEditorRow !== null && (
         <CalvingMarkModal
           rowIndex={markEditorRow}
@@ -2008,6 +2201,7 @@ function reviewReasonLabel(reason: string) {
     BIRTH_DATE_NUMBERS_INVALID: "元号年・月・日の3つの数字を確認してください。",
     SALE_NOTE_SEX_SYMBOL_UNRESOLVED: "備考の先頭を♂または♀から選択してください。",
     SIRE_NAME_CANDIDATE_UNRESOLVED: "登録済みの種雄牛名と一致しません。画像と候補を確認してください。",
+    MANAGED_CANDIDATE_UNRESOLVED: "登録済みの読み取り候補と一致しません。画像と候補を確認してください。",
     DITTO_SOURCE_UNAVAILABLE: "同上マークの上段に確定した値がありません。",
     MISSING_TRANSCRIPTION: "この欄の読み取り結果が返されませんでした。",
     DITTO_PENDING: "同上マークの参照先を確認しています。",

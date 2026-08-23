@@ -132,6 +132,7 @@ class OcrResultRepository:
         base_revision: int,
         candidate: dict[str, object],
         report: ValidationReport,
+        source: RevisionSource = RevisionSource.USER_EDIT,
         commit: bool = True,
     ) -> OcrResult | None:
         next_revision = base_revision + 1
@@ -152,7 +153,7 @@ class OcrResultRepository:
             OcrResultRevision(
                 ocr_result_id=result.id,
                 revision=next_revision,
-                source=RevisionSource.USER_EDIT.value,
+                source=source.value,
                 result_json=candidate,
                 validation_json=validation,
             )

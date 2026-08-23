@@ -37,7 +37,15 @@ class LayoutMarkSet(LayoutModel):
 
 class LayoutCell(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
-    role: Literal["label", "input", "mark", "ignored"]
+    role: Literal[
+        "label",
+        "parent_label",
+        "input",
+        "mark",
+        "record_key_cell",
+        "column_key_cell",
+        "ignored",
+    ]
     x: int = Field(ge=0)
     y: int = Field(ge=0)
     width: int = Field(gt=0)
@@ -66,13 +74,67 @@ class LayoutRelation(LayoutModel):
     target_path: str = Field(min_length=1, max_length=200)
 
 
+class LayoutLabelPoolEntry(LayoutModel):
+    id: str = Field(min_length=1, max_length=120)
+    label: str = Field(min_length=1, max_length=100)
+    target_path: str = Field(min_length=1, max_length=200)
+    section: str = Field(min_length=1, max_length=100)
+    aliases: list[str] = Field(default_factory=list, max_length=30)
+    source: Literal["manual", "ocr"] = "manual"
+
+    @field_validator("label", "section", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @field_validator("aliases")
+    @classmethod
+    def validate_aliases(cls, value: list[str]) -> list[str]:
+        normalized = [repair_utf8_mojibake(alias).strip() for alias in value if alias.strip()]
+        if any(len(alias) > 100 for alias in normalized):
+            raise ValueError("Label pool aliases must not exceed 100 characters")
+        return list(dict.fromkeys(normalized))
+
+
 class LayoutRecordSection(LayoutModel):
     id: str = Field(min_length=1, max_length=120)
     title: str = Field(min_length=1, max_length=200)
-    collection_path: Literal["saleCalves", "calvings"]
-    record_type: Literal["saleCalf", "calving"]
+    collection_path: str = Field(min_length=1, max_length=120)
+    record_type: Literal["saleCalf", "calving", "generic"]
+    record_label_cell_ids: list[str] = Field(default_factory=list, max_length=30)
     parent_label_cell_id: str | None = Field(default=None, max_length=100)
+    row_key_strategy: Literal["printed", "position"] = "position"
+    row_key_cell_ids: list[str] = Field(default_factory=list, max_length=300)
+    include_empty_rows: bool = False
     source: Literal["manual", "inferred"] = "manual"
+
+    @field_validator("collection_path")
+    @classmethod
+    def validate_collection_path(cls, value: str) -> str:
+        if value in {"saleCalves", "calvings"}:
+            return value
+        if not re.fullmatch(r"genericRecords\.[A-Za-z][A-Za-z0-9_]{0,99}", value):
+            raise ValueError("Generic record collection paths must use genericRecords.<key>")
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_single_record_label(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw: dict[str, Any] = dict(value)
+        plural = raw.get("recordLabelCellIds", raw.get("record_label_cell_ids"))
+        singular = raw.pop("recordLabelCellId", raw.pop("record_label_cell_id", None))
+        if plural is None:
+            raw["recordLabelCellIds"] = [singular] if isinstance(singular, str) else []
+        return raw
+
+    @field_validator("record_label_cell_ids")
+    @classmethod
+    def validate_unique_record_labels(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("Record label cell IDs must be unique")
+        return value
 
     @field_validator("title", mode="before")
     @classmethod
@@ -91,6 +153,7 @@ class LayoutRecordGroup(LayoutModel):
     input_cell_ids: list[str] = Field(min_length=1, max_length=100)
     record_key_field: str = Field(default="parity", min_length=1, max_length=100)
     record_key_value: str | None = Field(default=None, max_length=100)
+    record_key_cell_id: str | None = Field(default=None, max_length=100)
     source: Literal["manual", "inferred"] = "manual"
 
 
@@ -102,6 +165,7 @@ class LayoutDefinition(LayoutModel):
     ocr_available: bool = False
     cells: list[LayoutCell] = Field(default_factory=list, max_length=1000)
     relations: list[LayoutRelation] = Field(default_factory=list, max_length=1000)
+    label_pool: list[LayoutLabelPoolEntry] = Field(default_factory=list, max_length=500)
     record_sections: list[LayoutRecordSection] = Field(default_factory=list, max_length=100)
     record_groups: list[LayoutRecordGroup] = Field(default_factory=list, max_length=300)
     record_structure_verified: bool = False
@@ -188,6 +252,11 @@ class LayoutDefinition(LayoutModel):
                     "title": title,
                     "collectionPath": collection,
                     "recordType": record_type,
+                    "recordLabelCellIds": [
+                        label_id
+                        for label_id in label_ids_by_collection.get(collection, [])
+                        if label_id != parent_label_id
+                    ],
                     "parentLabelCellId": parent_label_id,
                     "source": "inferred",
                 }
@@ -239,6 +308,12 @@ class LayoutDefinition(LayoutModel):
         relation_ids = [relation.id for relation in self.relations]
         if len(relation_ids) != len(set(relation_ids)):
             raise ValueError("Layout relation IDs must be unique")
+        pool_ids = [entry.id for entry in self.label_pool]
+        if len(pool_ids) != len(set(pool_ids)):
+            raise ValueError("Label pool IDs must be unique")
+        pool_paths = [entry.target_path for entry in self.label_pool]
+        if len(pool_paths) != len(set(pool_paths)):
+            raise ValueError("Label pool target paths must be unique")
         for cell in self.cells:
             if cell.x + cell.width > self.canonical_width:
                 raise ValueError(f"Cell {cell.id} exceeds canonical width")
@@ -259,6 +334,15 @@ class LayoutDefinition(LayoutModel):
             raise ValueError("Record section IDs must be unique")
         sections = {section.id: section for section in self.record_sections}
         for section in self.record_sections:
+            if any(label_id not in known for label_id in section.record_label_cell_ids):
+                raise ValueError(
+                    f"Record section {section.id} references an unknown record label cell"
+                )
+            if any(
+                next(cell for cell in self.cells if cell.id == label_id).role != "label"
+                for label_id in section.record_label_cell_ids
+            ):
+                raise ValueError(f"Record section {section.id} record anchors must be label cells")
             if (
                 section.parent_label_cell_id is not None
                 and section.parent_label_cell_id not in known
@@ -271,10 +355,30 @@ class LayoutDefinition(LayoutModel):
                 and next(
                     cell for cell in self.cells if cell.id == section.parent_label_cell_id
                 ).role
-                != "label"
+                not in {"label", "parent_label"}
             ):
                 raise ValueError(f"Record section {section.id} parent must be a label cell")
-            expected_type = "saleCalf" if section.collection_path == "saleCalves" else "calving"
+            if len(section.row_key_cell_ids) != len(set(section.row_key_cell_ids)):
+                raise ValueError(f"Record section {section.id} row key cells must be unique")
+            for row_key_cell_id in section.row_key_cell_ids:
+                if row_key_cell_id not in known:
+                    raise ValueError(
+                        f"Record section {section.id} references an unknown row key cell"
+                    )
+                row_key_cell = next(
+                    cell for cell in self.cells if cell.id == row_key_cell_id
+                )
+                if row_key_cell.role != "record_key_cell":
+                    raise ValueError(
+                        f"Record section {section.id} row keys must be row number cells"
+                    )
+            expected_type = (
+                "saleCalf"
+                if section.collection_path == "saleCalves"
+                else "calving"
+                if section.collection_path == "calvings"
+                else "generic"
+            )
             if section.record_type != expected_type:
                 raise ValueError(f"Record section {section.id} has an incompatible record type")
         group_ids = [group.id for group in self.record_groups]
@@ -293,6 +397,18 @@ class LayoutDefinition(LayoutModel):
                 raise ValueError(f"Record group {group.id} exceeds canonical width")
             if group.y + group.height > self.canonical_height:
                 raise ValueError(f"Record group {group.id} exceeds canonical height")
+            if group.record_key_cell_id is not None:
+                if group.record_key_cell_id not in known:
+                    raise ValueError(
+                        f"Record group {group.id} references an unknown row key cell"
+                    )
+                key_cell = next(
+                    cell for cell in self.cells if cell.id == group.record_key_cell_id
+                )
+                if key_cell.role != "record_key_cell":
+                    raise ValueError(
+                        f"Record group {group.id} row key must be a row number cell"
+                    )
             if len(group.input_cell_ids) != len(set(group.input_cell_ids)):
                 raise ValueError(f"Record group {group.id} contains duplicate input cells")
             for input_id in group.input_cell_ids:
@@ -307,6 +423,12 @@ class LayoutDefinition(LayoutModel):
                     raise ValueError(f"Input cell {input_id} belongs to more than one record group")
                 claimed_inputs.add(input_id)
                 for relation in relations_by_input.get(input_id, []):
+                    if record_section.record_type == "generic":
+                        if not relation.target_path.startswith("customFields."):
+                            raise ValueError(
+                                f"Generic record input {input_id} must use a custom field target"
+                            )
+                        continue
                     match = re.fullmatch(
                         r"^(saleCalves|calvings)\.(\d+)\.([^.]+)$",
                         relation.target_path,

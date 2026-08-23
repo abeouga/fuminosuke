@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response, status
+from pydantic import Field
 
 from app.core.errors import ApiModel
 from app.domain.ocr_models import OcrDocument
+from app.services.document_library_service import DocumentLibraryService
 from app.services.individual_record_service import IndividualRecordService
 
 router = APIRouter(tags=["individual-records"])
@@ -65,6 +67,20 @@ class SaleCalfSireSearchResponse(ApiModel):
     matches: list[SaleCalfRecordMatch]
 
 
+class DocumentFolderCreate(ApiModel):
+    name: str = Field(min_length=1, max_length=100)
+    parent_id: str | None = None
+
+
+class DocumentFolderRename(ApiModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class DocumentLocationUpdate(ApiModel):
+    folder_id: str | None = None
+    expected_version: int = Field(ge=1)
+
+
 @router.get(
     "/individual-records/catalog",
     response_model=IndividualRecordCatalogResponse,
@@ -75,6 +91,52 @@ def list_individual_records(request: Request) -> dict[str, Any]:
     return service.list_individuals()
 
 
+@router.get("/document-library")
+def document_library(request: Request) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.list_library()
+
+
+@router.post("/document-library/folders", status_code=status.HTTP_201_CREATED)
+def create_document_folder(request: Request, body: DocumentFolderCreate) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.create_folder(name=body.name, parent_id=body.parent_id)
+
+
+@router.patch("/document-library/folders/{folder_id}")
+def rename_document_folder(
+    request: Request,
+    folder_id: str,
+    body: DocumentFolderRename,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.rename_folder(folder_id, name=body.name)
+
+
+@router.delete(
+    "/document-library/folders/{folder_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_document_folder(request: Request, folder_id: str) -> Response:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    service.delete_folder(folder_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/document-library/documents/{document_id}/location")
+def move_library_document(
+    request: Request,
+    document_id: str,
+    body: DocumentLocationUpdate,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.move_document(
+        document_id,
+        folder_id=body.folder_id,
+        expected_version=body.expected_version,
+    )
+
+
 @router.get(
     "/individual-records",
     response_model=IndividualRecordSearchResponse,
@@ -82,9 +144,7 @@ def list_individual_records(request: Request) -> dict[str, Any]:
 )
 def search_individual_records(
     request: Request,
-    individual_id: Annotated[
-        str, Query(alias="individualId", min_length=1, max_length=50)
-    ],
+    individual_id: Annotated[str, Query(alias="individualId", min_length=1, max_length=50)],
 ) -> dict[str, Any]:
     service = cast(IndividualRecordService, request.app.state.individual_record_service)
     return service.search(individual_id)
@@ -97,9 +157,7 @@ def search_individual_records(
 )
 def search_sale_calf_records(
     request: Request,
-    sire_name: Annotated[
-        str, Query(alias="sireName", min_length=1, max_length=200)
-    ],
+    sire_name: Annotated[str, Query(alias="sireName", min_length=1, max_length=200)],
 ) -> dict[str, Any]:
     service = cast(IndividualRecordService, request.app.state.individual_record_service)
     return service.search_sale_calves_by_sire(sire_name)

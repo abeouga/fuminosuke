@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.core.config import GoogleOAuthSettings
 from app.core.errors import AppError
@@ -33,8 +33,10 @@ _SCOPES = (
     "openid",
     "email",
     "profile",
-    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
 )
+_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+_SPREADSHEETS_SCOPE_PREFIX = "https://www.googleapis.com/auth/spreadsheets"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +122,8 @@ class GoogleOAuthService:
                 "response_type": "code",
                 "scope": " ".join(_SCOPES),
                 "access_type": "offline",
-                "include_granted_scopes": "true",
-                "prompt": "select_account",
+                "include_granted_scopes": "false",
+                "prompt": "consent select_account",
                 "state": state,
             }
         )
@@ -155,10 +157,16 @@ class GoogleOAuthService:
         except requests.RequestException as exc:
             raise self._oauth_error("Google認証サーバーへ接続できませんでした。") from exc
         if not token_response.ok:
+            provider_error = self._provider_error(token_response)
             logger.warning(
-                "Google OAuth token exchange failed", extra={"status": token_response.status_code}
+                "Google OAuth token exchange failed",
+                extra={
+                    "status": token_response.status_code,
+                    "providerError": provider_error,
+                },
             )
-            raise self._oauth_error("Google認証コードをアクセストークンへ交換できませんでした。")
+            code, detail = self._token_exchange_error(provider_error)
+            raise self._oauth_error(detail, code=code)
         token_data = token_response.json()
         if not isinstance(token_data, dict):
             raise self._oauth_error("Google認証レスポンスの形式が不正です。")
@@ -220,12 +228,37 @@ class GoogleOAuthService:
         if not self.configured:
             return False
         with self._database.session() as session:
-            return (
-                session.query(GoogleOAuthAccount.google_subject)
+            account = (
+                session.query(GoogleOAuthAccount)
                 .filter(GoogleOAuthAccount.is_active.is_(True))
                 .first()
-                is not None
             )
+            return account is not None and self._authorization_is_current(account.scopes)
+
+    def authorization_is_current(self, subject: str) -> bool:
+        if not self.configured:
+            return False
+        with self._database.session() as session:
+            account = session.get(GoogleOAuthAccount, subject)
+            return bool(
+                account is not None
+                and account.is_active
+                and self._authorization_is_current(account.scopes)
+            )
+
+    def active_subject(self) -> str | None:
+        if not self.configured:
+            return None
+        with self._database.session() as session:
+            account = session.scalar(
+                select(GoogleOAuthAccount)
+                .where(GoogleOAuthAccount.is_active.is_(True))
+                .order_by(GoogleOAuthAccount.updated_at.desc())
+                .limit(1)
+            )
+            if account is None or not self._authorization_is_current(account.scopes):
+                return None
+            return account.google_subject
 
     def credentials(self) -> Credentials:
         self._require_configured()
@@ -238,6 +271,10 @@ class GoogleOAuthService:
             )
             if account is None:
                 raise RuntimeError("Googleアカウントが接続されていません。")
+            if not self._authorization_is_current(account.scopes):
+                raise RuntimeError(
+                    "Google連携の権限が旧形式です。連携を解除して再認証してください。"
+                )
             refresh_token = self._decrypt(account.encrypted_refresh_token)
             scopes = tuple(item for item in account.scopes.split(" ") if item)
         return Credentials(  # type: ignore[no-untyped-call]
@@ -260,6 +297,10 @@ class GoogleOAuthService:
             )
             if account is None:
                 raise RuntimeError("Googleアカウントが接続されていません。")
+            if not self._authorization_is_current(account.scopes):
+                raise RuntimeError(
+                    "Google連携の権限が旧形式です。連携を解除して再認証してください。"
+                )
             return account.spreadsheet_id, account.spreadsheet_url
 
     def save_spreadsheet_target(self, spreadsheet_id: str, spreadsheet_url: str) -> None:
@@ -273,6 +314,10 @@ class GoogleOAuthService:
             )
             if account is None:
                 raise RuntimeError("Googleアカウントが接続されていません。")
+            if not self._authorization_is_current(account.scopes):
+                raise RuntimeError(
+                    "Google連携の権限が旧形式です。連携を解除して再認証してください。"
+                )
             account.spreadsheet_id = spreadsheet_id
             account.spreadsheet_url = spreadsheet_url
             session.commit()
@@ -296,7 +341,7 @@ class GoogleOAuthService:
         with self._database.session() as session:
             existing = session.get(GoogleOAuthAccount, user.subject)
             if not isinstance(refresh_token, str):
-                if existing is None:
+                if existing is None or not self._authorization_is_current(existing.scopes):
                     raise self._oauth_error(
                         "Googleからrefresh tokenを取得できませんでした。"
                         "連携を解除して再認証してください。"
@@ -402,6 +447,41 @@ class GoogleOAuthService:
         return secret.get_secret_value()
 
     @staticmethod
+    def _authorization_is_current(scope_value: str) -> bool:
+        scopes = {item for item in scope_value.split() if item}
+        return _DRIVE_FILE_SCOPE in scopes and not any(
+            item.startswith(_SPREADSHEETS_SCOPE_PREFIX) for item in scopes
+        )
+
+    @staticmethod
+    def _provider_error(token_response: requests.Response) -> str | None:
+        try:
+            payload = token_response.json()
+        except (requests.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("error")
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _token_exchange_error(provider_error: str | None) -> tuple[str, str]:
+        if provider_error == "invalid_client":
+            return (
+                "GOOGLE_OAUTH_INVALID_CLIENT",
+                "Google OAuthのクライアントIDまたはクライアントシークレットが一致しません。",
+            )
+        if provider_error in {"invalid_grant", "redirect_uri_mismatch"}:
+            return (
+                "GOOGLE_OAUTH_INVALID_GRANT",
+                "Google認証コードが期限切れ、再使用済み、またはリダイレクトURIと一致しません。認証を最初からやり直してください。",
+            )
+        return (
+            "GOOGLE_OAUTH_FAILED",
+            "Google認証コードをアクセストークンへ交換できませんでした。",
+        )
+
+    @staticmethod
     def _user(account: GoogleOAuthAccount) -> AuthenticatedUser:
         return AuthenticatedUser(
             subject=account.google_subject,
@@ -411,10 +491,10 @@ class GoogleOAuthService:
         )
 
     @staticmethod
-    def _oauth_error(detail: str) -> AppError:
+    def _oauth_error(detail: str, *, code: str = "GOOGLE_OAUTH_FAILED") -> AppError:
         return AppError(
             status=400,
-            code="GOOGLE_OAUTH_FAILED",
+            code=code,
             title="Google OAuth failed",
             detail=detail,
         )

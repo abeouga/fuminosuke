@@ -3,17 +3,344 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from app.core.errors import AppError
 from app.layout_analysis.detector import TextRegion
 from app.layout_analysis.models import (
     LayoutCell,
     LayoutDefinition,
+    LayoutLabelPoolEntry,
     LayoutMarkOption,
     LayoutMarkSet,
     LayoutRecordGroup,
     LayoutRecordSection,
     LayoutRelation,
 )
+from app.services.label_cell_ocr_service import (
+    protected_label_cell_ids,
+    recognize_label_cells,
+)
 from app.services.layout_service import LayoutService
+
+
+def test_record_section_migrates_the_legacy_single_label_anchor() -> None:
+    section = LayoutRecordSection.model_validate(
+        {
+            "id": "sale",
+            "title": "売却子牛一覧",
+            "collectionPath": "saleCalves",
+            "recordType": "saleCalf",
+            "recordLabelCellId": "price_label",
+            "parentLabelCellId": None,
+            "source": "manual",
+        }
+    )
+
+    assert section.record_label_cell_ids == ["price_label"]
+    assert section.model_dump(mode="json", by_alias=True)["recordLabelCellIds"] == [
+        "price_label"
+    ]
+
+
+def test_layout_preserves_a_reusable_label_candidate_pool() -> None:
+    layout = LayoutDefinition(
+        canonical_width=300,
+        canonical_height=200,
+        label_pool=[
+            LayoutLabelPoolEntry(
+                id="sale_price",
+                label="価格",
+                target_path="customFields.salePrice",
+                section="追加項目",
+                aliases=["売価", "販売価格", "売価"],
+            )
+        ],
+    )
+
+    dumped = layout.model_dump(mode="json", by_alias=True)
+    assert dumped["labelPool"][0] == {
+        "id": "sale_price",
+        "label": "価格",
+        "targetPath": "customFields.salePrice",
+        "section": "追加項目",
+        "aliases": ["売価", "販売価格"],
+        "source": "manual",
+    }
+
+
+def test_verified_record_structure_requires_a_parent_label_link() -> None:
+    column_label = LayoutCell(
+        id="price_label",
+        role="label",
+        x=10,
+        y=10,
+        width=80,
+        height=30,
+        confidence=1,
+        text="価格",
+    )
+    parent_label = LayoutCell(
+        id="sale_parent",
+        role="parent_label",
+        x=100,
+        y=10,
+        width=120,
+        height=30,
+        confidence=1,
+        text="売却子牛一覧",
+    )
+    input_cell = LayoutCell(
+        id="price_1",
+        role="input",
+        x=10,
+        y=60,
+        width=80,
+        height=30,
+        confidence=1,
+    )
+    section = LayoutRecordSection(
+        id="sale",
+        title="売却子牛一覧",
+        collection_path="saleCalves",
+        record_type="saleCalf",
+        record_label_cell_ids=[column_label.id],
+    )
+    layout = LayoutDefinition(
+        canonical_width=300,
+        canonical_height=120,
+        cells=[column_label, parent_label, input_cell],
+        relations=[
+            LayoutRelation(
+                id="price_relation",
+                input_cell_id=input_cell.id,
+                label_cell_ids=[column_label.id],
+                axis="vertical",
+                order=1,
+                target_path="saleCalves.0.priceYen",
+            )
+        ],
+        record_sections=[section],
+        record_groups=[
+            LayoutRecordGroup(
+                id="sale_1",
+                section_id=section.id,
+                order=1,
+                x=input_cell.x,
+                y=input_cell.y,
+                width=input_cell.width,
+                height=input_cell.height,
+                input_cell_ids=[input_cell.id],
+                record_key_value="1",
+            )
+        ],
+        record_structure_verified=True,
+    )
+
+    with pytest.raises(AppError) as caught:
+        LayoutService._require_verified_record_structure(layout)
+
+    assert caught.value.code == "RECORD_PARENT_LABEL_REQUIRED"
+
+    linked = layout.model_copy(
+        update={
+            "record_sections": [
+                section.model_copy(update={"parent_label_cell_id": parent_label.id})
+            ]
+        }
+    )
+    LayoutService._require_verified_record_structure(linked)
+
+    stale_but_complete = linked.model_copy(
+        update={"record_structure_verified": False}
+    )
+    assert LayoutService._record_structure_is_complete(stale_but_complete) is True
+    LayoutService._require_verified_record_structure(stale_but_complete)
+
+
+def test_label_ocr_updates_only_user_classified_label_cells() -> None:
+    cells = [
+        LayoutCell(
+            id="label",
+            role="label",
+            x=10,
+            y=10,
+            width=80,
+            height=30,
+            confidence=1,
+            text="旧価格",
+        ),
+        LayoutCell(
+            id="parent",
+            role="parent_label",
+            x=10,
+            y=60,
+            width=80,
+            height=30,
+            confidence=1,
+        ),
+        LayoutCell(
+            id="value",
+            role="input",
+            x=120,
+            y=10,
+            width=80,
+            height=30,
+            confidence=1,
+            text="手書き値",
+        ),
+    ]
+
+    class FakeDetector:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, ...]] = []
+
+        def detect(self, image_rgb):
+            self.calls.append(image_rgb.shape)
+            text, confidence = [("価格", 0.96), ("売上", 0.91)][len(self.calls) - 1]
+            return [
+                TextRegion(((2, 2), (60, 2), (60, 20), (2, 20)), text, confidence),
+            ]
+
+    detector = FakeDetector()
+    result = recognize_label_cells(
+        np.zeros((120, 240, 3), dtype=np.uint8),
+        cells,
+        text_detector=detector,
+    )
+
+    assert detector.calls == [(30, 80, 3), (30, 80, 3)]
+    assert result.recognized_count == 2
+    assert result.ocr_available is True
+    assert result.warnings == []
+    assert result.cells[0].text == "価格"
+    assert result.cells[0].text_confidence == 0.96
+    assert result.cells[1].text == "売上"
+    assert result.cells[2].text == "手書き値"
+
+
+def test_label_ocr_retains_existing_text_when_engine_is_unavailable() -> None:
+    cells = [
+        LayoutCell(
+            id="label",
+            role="label",
+            x=10,
+            y=10,
+            width=80,
+            height=30,
+            confidence=1,
+            text="価格",
+        )
+    ]
+
+    class UnavailableDetector:
+        available = False
+
+        def detect(self, _image_rgb):
+            raise AssertionError("detect must not be called")
+
+    result = recognize_label_cells(
+        np.zeros((60, 120, 3), dtype=np.uint8),
+        cells,
+        text_detector=UnavailableDetector(),
+    )
+
+    assert result.cells[0].text == "価格"
+    assert result.ocr_available is False
+    assert result.warnings == ["LABEL_OCR_NOT_AVAILABLE_EXISTING_TEXT_RETAINED"]
+
+
+def test_label_ocr_excludes_confirmed_meaning_and_record_labels() -> None:
+    confirmed = LayoutCell(
+        id="confirmed_label",
+        role="label",
+        x=10,
+        y=10,
+        width=80,
+        height=30,
+        confidence=1,
+        text="確定済み",
+    )
+    record_label = LayoutCell(
+        id="record_label",
+        role="label",
+        x=10,
+        y=50,
+        width=80,
+        height=30,
+        confidence=1,
+        text="産歴",
+    )
+    pending = LayoutCell(
+        id="pending_label",
+        role="label",
+        x=10,
+        y=90,
+        width=80,
+        height=30,
+        confidence=1,
+    )
+    input_cell = LayoutCell(
+        id="input",
+        role="input",
+        x=120,
+        y=10,
+        width=80,
+        height=30,
+        confidence=1,
+    )
+    layout = LayoutDefinition(
+        canonical_width=240,
+        canonical_height=140,
+        cells=[confirmed, record_label, pending, input_cell],
+        relations=[
+            LayoutRelation(
+                id="confirmed_relation",
+                input_cell_id="input",
+                label_cell_ids=["confirmed_label"],
+                axis="horizontal",
+                order=1,
+                target_path="document.cattleName",
+            )
+        ],
+        record_sections=[
+            LayoutRecordSection(
+                id="calvings",
+                title="繁殖履歴",
+                collection_path="calvings",
+                record_type="calving",
+                record_label_cell_ids=["record_label"],
+            )
+        ],
+    )
+
+    class FakeDetector:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def detect(self, _image_rgb):
+            self.calls += 1
+            return [
+                TextRegion(((2, 2), (60, 2), (60, 20), (2, 20)), "新規ラベル", 0.95),
+            ]
+
+    detector = FakeDetector()
+    protected = protected_label_cell_ids(layout)
+    result = recognize_label_cells(
+        np.zeros((140, 240, 3), dtype=np.uint8),
+        layout.cells,
+        text_detector=detector,
+        excluded_cell_ids=protected,
+    )
+
+    assert protected == {"confirmed_label", "record_label"}
+    assert detector.calls == 1
+    assert result.recognized_count == 1
+    assert result.cells[0].text == "確定済み"
+    assert result.cells[1].text == "産歴"
+    assert result.cells[2].text == "新規ラベル"
 
 
 def test_calving_mark_cell_becomes_two_choice_mappings() -> None:
@@ -41,12 +368,22 @@ def test_calving_mark_cell_becomes_two_choice_mappings() -> None:
                 target_path="calvings.0.outcome",
                 options=[
                     LayoutMarkOption(
-                        id="twin", label="双", value="twin",
-                        x=0, y=0, width=30, height=30,
+                        id="twin",
+                        label="双",
+                        value="twin",
+                        x=0,
+                        y=0,
+                        width=30,
+                        height=30,
                     ),
                     LayoutMarkOption(
-                        id="early", label="早", value="premature",
-                        x=30, y=0, width=30, height=30,
+                        id="early",
+                        label="早",
+                        value="premature",
+                        x=30,
+                        y=0,
+                        width=30,
+                        height=30,
                     ),
                 ],
             ),
@@ -55,12 +392,22 @@ def test_calving_mark_cell_becomes_two_choice_mappings() -> None:
                 target_path="calvings.0.sex",
                 options=[
                     LayoutMarkOption(
-                        id="male", label="♂", value="male",
-                        x=120, y=0, width=30, height=30,
+                        id="male",
+                        label="♂",
+                        value="male",
+                        x=120,
+                        y=0,
+                        width=30,
+                        height=30,
                     ),
                     LayoutMarkOption(
-                        id="female", label="♀", value="female",
-                        x=150, y=0, width=30, height=30,
+                        id="female",
+                        label="♀",
+                        value="female",
+                        x=150,
+                        y=0,
+                        width=30,
+                        height=30,
                     ),
                 ],
             ),

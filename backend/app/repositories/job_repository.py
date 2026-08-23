@@ -96,6 +96,7 @@ class JobRepository:
         file_bytes: int,
         sha256: str,
         relative_path: str,
+        content_bytes: bytes | None = None,
     ) -> JobInput:
         item = JobInput(
             job_id=job_id,
@@ -107,6 +108,7 @@ class JobRepository:
             file_bytes=file_bytes,
             sha256=sha256,
             relative_path=relative_path,
+            content_bytes=content_bytes,
         )
         self._session.add(item)
         self._session.commit()
@@ -232,6 +234,7 @@ class JobRepository:
             "completed_at",
             "confirmed_at",
             "config_snapshot_json",
+            "template_snapshot_bytes",
         }
         unknown = set(changes) - allowed
         if unknown:

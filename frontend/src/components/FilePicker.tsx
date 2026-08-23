@@ -4,25 +4,31 @@ export function FilePicker({
   multiple,
   onChange,
   label = "画像を選択",
+  accept = "image/png,image/jpeg,image/webp,image/tiff",
+  help = "PNG / JPEG / WebP / TIFF・最大20 MB",
 }: {
   multiple: boolean;
   onChange: (files: File[]) => void;
   label?: string;
+  accept?: string;
+  help?: string;
 }) {
   const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
+  const [previews, setPreviews] = useState<Array<{ index: number; url: string }>>([]);
   useEffect(() => {
-    const urls = files.map((file) => URL.createObjectURL(file));
-    setPreviews(urls);
-    return () => urls.forEach(URL.revokeObjectURL);
+    const next = files.flatMap((file, index) => (
+      file.type.startsWith("image/") ? [{ index, url: URL.createObjectURL(file) }] : []
+    ));
+    setPreviews(next);
+    return () => next.forEach((preview) => URL.revokeObjectURL(preview.url));
   }, [files]);
   return (
     <div>
       <label className="drop-zone">
         <input
           type="file"
-          accept="image/png,image/jpeg,image/webp,image/tiff"
-          capture={!multiple ? "environment" : undefined}
+          accept={accept}
+          capture={!multiple && accept.startsWith("image/") ? "environment" : undefined}
           multiple={multiple}
           onChange={(event) => {
             const selected = Array.from(event.target.files ?? []);
@@ -32,14 +38,19 @@ export function FilePicker({
         />
         <span className="drop-icon" aria-hidden="true">＋</span>
         <strong>{label}</strong>
-        <small>PNG / JPEG / WebP / TIFF・最大20 MB</small>
+        <small>{help}</small>
       </label>
+      {files.length > 0 && previews.length === 0 && (
+        <div className="selected-file-list" aria-label="選択したファイル">
+          {files.map((file) => <span key={`${file.name}:${file.size}`}>{file.name}</span>)}
+        </div>
+      )}
       {previews.length > 0 && (
         <div className="thumb-grid">
-          {previews.map((preview, index) => (
-            <figure key={preview}>
-              <img src={preview} alt={`選択画像 ${index + 1}`} />
-              <figcaption>{files[index]?.name}</figcaption>
+          {previews.map((preview) => (
+            <figure key={preview.url}>
+              <img src={preview.url} alt={`選択画像 ${preview.index + 1}`} />
+              <figcaption>{files[preview.index]?.name}</figcaption>
             </figure>
           ))}
         </div>

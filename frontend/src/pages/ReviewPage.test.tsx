@@ -229,6 +229,85 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+test("imports the edited Google Sheets layout as a versioned output template", async () => {
+  const resultBody = {
+    jobId: "job-layout",
+    revision: 2,
+    result: {
+      schemaVersion: "1.0",
+      templateId: "template-layout",
+      templateVersion: "1",
+      document: { cattleName: reading },
+      saleCalves: [],
+      pedigree: {},
+      calvings: [],
+      customFields: {},
+      reviewItems: [],
+      processingMetadata: {},
+    },
+    validation: { valid: true, issues: [] },
+    provider: "mock",
+    modelId: null,
+    promptVersion: null,
+    apiCallCount: 0,
+    inputTokens: null,
+    outputTokens: null,
+    estimatedCost: null,
+    confirmed: false,
+    individualId: null,
+    fieldPreviews: [],
+    spreadsheetSync: {
+      enabled: true,
+      status: "synced",
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+      lastError: null,
+    },
+  };
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-layout/result")) return jsonResponse(resultBody);
+    if (path.endsWith("/jobs/job-layout/artifacts")) return jsonResponse({ items: [] });
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    if (path.endsWith("/ocr-jobs/job-layout/output-layout/import")) {
+      expect(init?.method).toBe("POST");
+      return jsonResponse({
+        active: true,
+        templateVersionId: "version-layout",
+        revision: 1,
+        sheetName: "帳票レイアウト",
+        bindingCount: 4,
+        sourceJobId: "job-layout",
+        createdAt: "2026-08-20T00:00:00+00:00",
+      });
+    }
+    if (path.endsWith("/ocr-jobs/job-layout/output-layout")) {
+      return jsonResponse({
+        active: false,
+        templateVersionId: "version-layout",
+        revision: null,
+        sheetName: "帳票レイアウト",
+        bindingCount: 0,
+        sourceJobId: null,
+        createdAt: null,
+      });
+    }
+    return jsonResponse({});
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<ReviewPage jobId="job-layout" onClose={() => undefined} />);
+
+  expect(await screen.findByText("出力レイアウトは未保存です")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "レイアウト用シートを初期出力" }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "シートのレイアウトを取り込む" }));
+  expect(
+    await screen.findByText("出力レイアウト保存済み · REVISION 1"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("帳票レイアウトをREVISION 1として保存しました。")).toBeInTheDocument();
+});
+
 test("confirms OCR-detected identity before showing the full result table", async () => {
   const makeReading = (value: string, sourceRegionId: string) => ({
     ...reading,
@@ -548,6 +627,16 @@ test("selects the exact crop and opens the editor when a table cell is clicked",
   expect(screen.getByAltText("位置合わせ済み帳票")).toHaveAttribute("src", "/full.jpg");
 });
 
+test("reports a missing persisted preview image instead of showing a silent blank", async () => {
+  render(<ReviewPage jobId="job-1" onClose={() => undefined} />);
+
+  const image = await screen.findByAltText("位置合わせ済み帳票");
+  fireEvent.error(image);
+
+  expect(screen.getByText("画像表示のみ利用できません")).toBeInTheDocument();
+  expect(screen.getByText(/DBを別PCから移した旧データ/)).toBeInTheDocument();
+});
+
 test("opens the correction cell requested by a Google Sheets deep link", async () => {
   render(
     <ReviewPage
@@ -560,6 +649,66 @@ test("opens the correction cell requested by a Google Sheets deep link", async (
   expect(await screen.findByAltText("document.birthDate の切り出し"))
     .toHaveAttribute("src", "/birth-date-crop.jpg");
   expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
+});
+
+test("reopens a confirmed result when requested by a Google Sheets correction link", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    const confirmed = path.endsWith("/ocr-jobs/job-sheet-link/result");
+    if (confirmed || path.endsWith("/ocr-jobs/job-sheet-link/reopen")) {
+      return jsonResponse({
+        jobId: "job-sheet-link",
+        revision: 4,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-1",
+          templateVersion: "1",
+          document: { cattleName: { ...reading, raw: "花子", normalized: "花子" } },
+          saleCalves: [],
+          pedigree: {},
+          calvings: [],
+          customFields: {},
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: true, issues: [] },
+        provider: "mock",
+        modelId: null,
+        promptVersion: null,
+        apiCallCount: 0,
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCost: null,
+        confirmed,
+        individualId: "1234567890",
+        fieldPreviews: [{
+          targetPath: "document.cattleName",
+          mappingId: "header_identity",
+          artifactUrl: "/cattle-name.jpg",
+          boundingBox: null,
+        }],
+      });
+    }
+    if (path.endsWith("/jobs/job-sheet-link/artifacts")) {
+      return jsonResponse({ items: [] });
+    }
+    return jsonResponse({ items: [] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <ReviewPage
+      jobId="job-sheet-link"
+      initialSelectedPath="document.cattleName"
+      autoReopenConfirmed
+      onClose={() => undefined}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "修正を保存" })).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([input]) => (
+    String(input).endsWith("/ocr-jobs/job-sheet-link/reopen")
+  ))).toBe(true);
 });
 
 test("opens a full-screen six-choice editor for a calving mark cell", async () => {
@@ -1033,6 +1182,7 @@ test("shows only the twenty fields mapped by the template", async () => {
             title: "売却子牛一覧",
             collectionPath: "saleCalves",
             recordType: "saleCalf",
+            recordLabelCellIds: [],
             parentLabelCellId: "sale_label",
             source: "manual",
           }],

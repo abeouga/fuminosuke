@@ -1,6 +1,6 @@
 # Google Cloud API setup
 
-This stack only enables the Google Sheets API. The OCR backend and
+This stack enables the Google Sheets API, Google Drive API, and Google Picker API. The OCR backend and
 database continue to run locally; it does not create AWS Lambda resources.
 
 ## Authentication for Terraform (gcloud is not required)
@@ -33,5 +33,8 @@ http://127.0.0.1:8000/api/v1/auth/google/callback
 ```
 
 Copy the resulting client ID and secret to `backend/.env` as documented in the
-root README. Never add `terraform.tfvars`, Terraform state, or credential JSON
-files to Git.
+root README. Then create a browser API key for Google Picker, restrict it to the
+application's exact HTTP referrers and to the Google Picker API, and copy the
+Cloud project number as `GOOGLE_PICKER_APP_ID`. The API key is intentionally
+visible to the browser, so referrer and API restrictions are required. Never add
+`terraform.tfvars`, Terraform state, or credential JSON files to Git.

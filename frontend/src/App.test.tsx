@@ -16,6 +16,43 @@ beforeEach(() => {
       count: 1,
       allowedSuffixes: ["ET"],
     }), { status: 200 });
+    if (path.endsWith("/data-search/catalog")) return jsonResponse({
+      count: 1,
+      templates: [{
+        templateId: "template-1",
+        templateName: "繁殖台帳",
+        documentCount: 1,
+        fields: [{
+          fieldKey: "document.unifiedEarTag",
+          label: "個体識別番号",
+          sectionTitle: "基本情報",
+          valueType: "text",
+          repeated: false,
+          identity: true,
+          suggestions: [],
+        }],
+      }],
+    });
+    if (path.endsWith("/data-search")) return jsonResponse({
+      query: "123-4567-890",
+      count: 1,
+      page: 1,
+      pageSize: 20,
+      items: [{
+        documentId: "document-1",
+        templateId: "template-1",
+        templateName: "繁殖台帳",
+        sourceJobId: "job-1",
+        confirmedAt: "2026-07-22T12:00:00Z",
+        pageCount: 1,
+        spreadsheetUrl: null,
+        displayTitle: "修正花子",
+        displayTitleLabel: "牛名",
+        displaySubtitle: "123-4567-890",
+        displaySubtitleLabel: "個体識別番号",
+        matches: [],
+      }],
+    });
     if (path.endsWith("/individual-records/catalog")) return new Response(JSON.stringify({
       count: 1,
       items: [{
@@ -152,6 +189,37 @@ test("shows OAuth setup guidance when the backend is not configured", async () =
 
   expect(await screen.findByText("管理者のOAuth設定が必要です")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Googleでログイン" })).not.toBeInTheDocument();
+});
+
+test("requires reconnecting when the stored Google authorization is broader than current policy", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/health")) {
+      return jsonResponse({ status: "ok", database: "ok", jobWorker: "running", ocrProvider: "mock" });
+    }
+    if (path.endsWith("/auth/session")) {
+      return jsonResponse({
+        required: true,
+        configured: true,
+        authenticated: true,
+        authorizationCurrent: false,
+        user: {
+          subject: "legacy-user",
+          email: "owner@example.com",
+          displayName: "台帳 管理者",
+          pictureUrl: null,
+        },
+      });
+    }
+    return jsonResponse({});
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Google連携の更新が必要です" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Google連携を更新" })).toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/templates"))).toBe(false);
 });
 
 test("shows the local workbench home", async () => {
@@ -329,31 +397,29 @@ test("keeps the normal recent list when the action-required request fails", asyn
   expect(screen.getByText("帳票読み取り")).toBeInTheDocument();
 });
 
-test("searches and displays a confirmed individual record", async () => {
+test("searches and displays confirmed data", async () => {
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: /個体検索/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /個体を検索.*個体識別番号・種雄牛名/ }));
-  fireEvent.change(screen.getByLabelText("個体識別番号"), {
+  fireEvent.click(await screen.findByRole("button", { name: /データ検索/ }));
+  fireEvent.change(screen.getByLabelText("書類の見出しから検索"), {
     target: { value: "123-4567-890" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "個体を検索" }));
+  fireEvent.click(await screen.findByRole("button", { name: "検索" }));
 
-  expect((await screen.findAllByText("123-4567-890")).length).toBeGreaterThanOrEqual(1);
-  expect(screen.getAllByText("修正花子").length).toBeGreaterThan(0);
-  expect(screen.getByText("1件の確定済み帳票が見つかりました。")).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "基本情報" })).toBeInTheDocument();
+  expect(await screen.findByText((_, node) => (
+    node?.tagName === "P" && node.textContent === "個体識別番号 123-4567-890"
+  ))).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "修正花子" })).toBeInTheDocument();
+  expect(screen.getByText("1件")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "検索結果" })).toBeInTheDocument();
 });
 
-test("opens the sire-name pool from the side panel", async () => {
+test("does not expose the legacy sire-name management page in the side panel", async () => {
   render(<App />);
 
-  fireEvent.click(await screen.findByRole("button", { name: /種雄牛名を追加/ }));
-
-  expect(
-    await screen.findByRole("heading", { name: "種雄牛名を追加" }),
-  ).toBeInTheDocument();
-  expect(screen.getByText("勝忠平")).toBeInTheDocument();
-  expect(screen.getAllByText(/勝忠平ET/).length).toBeGreaterThan(0);
+  const navigation = await screen.findByRole("navigation", { name: "メインメニュー" });
+  expect(within(navigation).getByRole("button", { name: /テンプレート/ })).toBeInTheDocument();
+  expect(within(navigation).queryByRole("button", { name: /種雄牛名を追加/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "種雄牛名を追加" })).not.toBeInTheDocument();
 });
 
 test("warns before leaving an unconfirmed OCR review", async () => {
@@ -362,14 +428,29 @@ test("warns before leaving an unconfirmed OCR review", async () => {
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "この個体で間違いありませんか？" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /個体検索/ }));
+  fireEvent.click(screen.getByRole("button", { name: /データ検索/ }));
   expect(screen.getByRole("dialog", { name: "未保存の変更があります" })).toBeInTheDocument();
   expect(confirm).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "この画面に残る" }));
   expect(screen.getByRole("heading", { name: "この個体で間違いありませんか？" })).toBeInTheDocument();
   expect(screen.queryByRole("dialog", { name: "未保存の変更があります" })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: /個体検索/ }));
+  fireEvent.click(screen.getByRole("button", { name: /データ検索/ }));
   fireEvent.click(screen.getByRole("button", { name: "変更を破棄して移動" }));
-  expect(await screen.findByRole("heading", { name: "確定済みレコードを検索" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "登録済みデータを検索" })).toBeInTheDocument();
+});
+
+test("opens a Google Sheets correction link directly in edit mode", async () => {
+  window.history.pushState(
+    {},
+    "",
+    "/?job=job-review&field=document.cattleName&edit=1",
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole("button", { name: "修正を保存" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", {
+    name: "この個体で間違いありませんか？",
+  })).not.toBeInTheDocument();
 });

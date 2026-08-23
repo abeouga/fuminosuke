@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type {
+  DocumentIdentity,
   FieldMappingTarget,
   LayoutCell,
   LayoutDefinition,
+  LayoutLabelPoolEntry,
   LayoutMarkSet,
   LayoutRecordGroup,
   LayoutRecordSection,
@@ -11,44 +14,122 @@ import type {
 
 type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
-type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent";
+type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "identity";
+type OcrLabelAlignment = "left" | "center" | "right";
+export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
 
-const ROLE_COLOR = {
-  label: "#b36b00",
-  input: "#00777d",
-  mark: "#7c3aed",
-  ignored: "#6b7280",
-} as const;
+export type LayoutEditorHandle = {
+  saveIfNeeded: () => Promise<boolean>;
+};
 
-export function LayoutEditor({
-  source,
-  initialLayout,
-  targets,
-  onDetect,
-  onSave,
-  allowUnchangedSave = false,
-  disabled = false,
-  onDirtyChange,
-  onBusyChange,
-}: {
+type LayoutEditorProps = {
   source: string;
   initialLayout: LayoutDefinition;
   targets: FieldMappingTarget[];
   onDetect: () => Promise<LayoutDefinition>;
+  onRecognizeLabels?: (layout: LayoutDefinition) => Promise<LayoutDefinition>;
   onSave: (layout: LayoutDefinition) => Promise<LayoutDefinition>;
   allowUnchangedSave?: boolean;
   disabled?: boolean;
+  workflowStep?: LayoutWorkflowStep;
+  documentIdentityFields?: DocumentIdentity[];
+  onDocumentIdentityFieldsChange?: (fields: DocumentIdentity[]) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
-}) {
+  draftStorageKey?: string;
+};
+
+const DEFAULT_MAGNIFIER_SCALE = 2.5;
+const DEFAULT_MAGNIFIER_SIZE = 220;
+
+const ROLE_COLOR = {
+  label: "#b36b00",
+  parent_label: "#16805d",
+  input: "#00777d",
+  mark: "#7c3aed",
+  record_key_cell: "#d97706",
+  column_key_cell: "#a16207",
+  ignored: "#6b7280",
+} as const;
+
+const OCR_LABEL_BADGE_STYLE = {
+  label: {
+    background: "rgba(255, 240, 213, 0.92)",
+    text: "#5f3a00",
+  },
+  parent_label: {
+    background: "rgba(226, 243, 236, 0.92)",
+    text: "#0f513d",
+  },
+} as const;
+
+export function drawOcrLabelText(
+  context: CanvasRenderingContext2D,
+  cell: LayoutCell,
+  canonicalWidth: number,
+  alignment: OcrLabelAlignment = "left",
+) {
+  if (cell.role !== "label" && cell.role !== "parent_label") return;
+  const text = cell.text.trim();
+  if (!text) return;
+  const padding = 4;
+  const fontSize = Math.max(8, Math.min(22, cell.height - 6, canonicalWidth / 85));
+  const badgeX = cell.x + 2;
+  const badgeY = cell.y + 2;
+  const badgeWidth = Math.max(1, cell.width - 4);
+  const badgeHeight = Math.max(1, Math.min(cell.height - 4, fontSize + padding * 2));
+  const badgeStyle = OCR_LABEL_BADGE_STYLE[cell.role];
+  context.save();
+  context.fillStyle = badgeStyle.background;
+  context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+  context.fillStyle = badgeStyle.text;
+  context.font = `700 ${fontSize}px sans-serif`;
+  context.textBaseline = "top";
+  context.textAlign = alignment;
+  const textX = alignment === "left"
+    ? badgeX + padding
+    : alignment === "center"
+      ? badgeX + badgeWidth / 2
+      : badgeX + badgeWidth - padding;
+  context.fillText(
+    text,
+    textX,
+    badgeY + padding,
+    Math.max(1, badgeWidth - padding * 2),
+  );
+  context.restore();
+}
+
+export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(function LayoutEditor({
+  source,
+  initialLayout,
+  targets,
+  onDetect,
+  onRecognizeLabels,
+  onSave,
+  allowUnchangedSave = false,
+  disabled = false,
+  workflowStep,
+  documentIdentityFields = [],
+  onDocumentIdentityFieldsChange,
+  onDirtyChange,
+  onBusyChange,
+  draftStorageKey,
+}: LayoutEditorProps, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasWrapRef = useRef<HTMLDivElement>(null);
+  const magnifierRef = useRef<HTMLDivElement>(null);
+  const magnifierCanvasRef = useRef<HTMLCanvasElement>(null);
+  const magnifierPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const magnifierFrameRef = useRef<number | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const dragStart = useRef<Point | null>(null);
   const additiveSelection = useRef(false);
   const linkLabelId = useRef<string | null>(null);
   const relationHistory = useRef<LayoutRelation[][]>([]);
   const operationLockRef = useRef(false);
-  const [layout, setLayout] = useState(() => normalizeLayout(initialLayout));
+  const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
+  const [layout, setLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
   const [baselineSignature, setBaselineSignature] = useState(
     () => layoutSignature(normalizeLayout(initialLayout)),
   );
@@ -60,28 +141,128 @@ export function LayoutEditor({
   const [linkPoint, setLinkPoint] = useState<Point | null>(null);
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [recognizingLabels, setRecognizingLabels] = useState(false);
+  const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("left");
+  const [magnifierEnabled, setMagnifierEnabled] = useState(false);
+  const [magnifierScale, setMagnifierScale] = useState(DEFAULT_MAGNIFIER_SCALE);
+  const [magnifierSize, setMagnifierSize] = useState(DEFAULT_MAGNIFIER_SIZE);
   const [message, setMessage] = useState<string | null>(null);
   const [historyDepth, setHistoryDepth] = useState(0);
-  const [customTargets, setCustomTargets] = useState<FieldMappingTarget[]>([]);
   const [customLabel, setCustomLabel] = useState("");
-  const [customKey, setCustomKey] = useState("");
-  const [recordSectionTitle, setRecordSectionTitle] = useState("売却子牛一覧");
-  const [recordCollectionPath, setRecordCollectionPath] = useState<"saleCalves" | "calvings">("saleCalves");
+  const [customTargetPlacement, setCustomTargetPlacement] = useState<"sidebar" | "catalog" | null>(null);
+  const [meaningCatalogQuery, setMeaningCatalogQuery] = useState("");
+  const [meaningCatalogSection, setMeaningCatalogSection] = useState("all");
+  const [recordSectionTitle, setRecordSectionTitle] = useState("明細");
+  const [rowKeyStrategy, setRowKeyStrategy] = useState<"printed" | "position">("printed");
   const [selectedRecordSectionId, setSelectedRecordSectionId] = useState("");
-  const [manualRect, setManualRect] = useState<Rect>({
-    x: 0,
-    y: 0,
-    width: 120,
-    height: 40,
-  });
-  const [accessibleLabelId, setAccessibleLabelId] = useState("");
-  const [accessibleInputId, setAccessibleInputId] = useState("");
-  const [accessibleRecordInputIds, setAccessibleRecordInputIds] = useState<Set<string>>(
-    () => new Set(),
-  );
   const currentSignature = useMemo(() => layoutSignature(layout), [layout]);
   const dirty = currentSignature !== baselineSignature;
   const dirtyRef = useRef(dirty);
+
+  const hideMagnifier = useCallback(() => {
+    if (magnifierFrameRef.current !== null) {
+      window.cancelAnimationFrame(magnifierFrameRef.current);
+      magnifierFrameRef.current = null;
+    }
+    if (magnifierRef.current) magnifierRef.current.hidden = true;
+  }, []);
+
+  const drawMagnifier = useCallback(() => {
+    magnifierFrameRef.current = null;
+    const pointer = magnifierPointerRef.current;
+    const sourceCanvas = canvasRef.current;
+    const wrapper = canvasWrapRef.current;
+    const lens = magnifierRef.current;
+    const lensCanvas = magnifierCanvasRef.current;
+    if (!pointer || !sourceCanvas || !wrapper || !lens || !lensCanvas || !magnifierEnabled) {
+      hideMagnifier();
+      return;
+    }
+    const sourceBounds = sourceCanvas.getBoundingClientRect();
+    if (
+      sourceBounds.width <= 0
+      || sourceBounds.height <= 0
+      || pointer.clientX < sourceBounds.left
+      || pointer.clientX > sourceBounds.right
+      || pointer.clientY < sourceBounds.top
+      || pointer.clientY > sourceBounds.bottom
+    ) {
+      hideMagnifier();
+      return;
+    }
+    const context = lensCanvas.getContext("2d");
+    if (!context) {
+      hideMagnifier();
+      return;
+    }
+
+    const deviceScale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    const outputSize = Math.round(magnifierSize * deviceScale);
+    if (lensCanvas.width !== outputSize || lensCanvas.height !== outputSize) {
+      lensCanvas.width = outputSize;
+      lensCanvas.height = outputSize;
+    }
+    const sourceX = (pointer.clientX - sourceBounds.left)
+      * sourceCanvas.width / sourceBounds.width;
+    const sourceY = (pointer.clientY - sourceBounds.top)
+      * sourceCanvas.height / sourceBounds.height;
+    const cropWidth = Math.min(
+      sourceCanvas.width,
+      magnifierSize * sourceCanvas.width / sourceBounds.width / magnifierScale,
+    );
+    const cropHeight = Math.min(
+      sourceCanvas.height,
+      magnifierSize * sourceCanvas.height / sourceBounds.height / magnifierScale,
+    );
+    const cropX = Math.max(0, Math.min(sourceCanvas.width - cropWidth, sourceX - cropWidth / 2));
+    const cropY = Math.max(0, Math.min(sourceCanvas.height - cropHeight, sourceY - cropHeight / 2));
+    context.clearRect(0, 0, outputSize, outputSize);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      sourceCanvas,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      outputSize,
+      outputSize,
+    );
+    const wrapperBounds = wrapper.getBoundingClientRect();
+    const pointerX = pointer.clientX - wrapperBounds.left;
+    const pointerY = pointer.clientY - wrapperBounds.top;
+    const gap = 18;
+    const visibleWidth = wrapper.clientWidth || wrapperBounds.width;
+    const visibleHeight = wrapper.clientHeight || wrapperBounds.height;
+    const lensX = pointerX + gap + magnifierSize <= visibleWidth
+      ? pointerX + gap
+      : pointerX - gap - magnifierSize;
+    const lensY = pointerY + gap + magnifierSize <= visibleHeight
+      ? pointerY + gap
+      : pointerY - gap - magnifierSize;
+    lens.style.left = `${Math.max(0, lensX) + wrapper.scrollLeft}px`;
+    lens.style.top = `${Math.max(0, lensY) + wrapper.scrollTop}px`;
+    lens.hidden = false;
+  }, [hideMagnifier, magnifierEnabled, magnifierScale, magnifierSize]);
+
+  const queueMagnifier = useCallback((clientX: number, clientY: number) => {
+    magnifierPointerRef.current = { clientX, clientY };
+    if (!magnifierEnabled || magnifierFrameRef.current !== null) return;
+    magnifierFrameRef.current = window.requestAnimationFrame(drawMagnifier);
+  }, [drawMagnifier, magnifierEnabled]);
+
+  useEffect(() => {
+    if (!magnifierEnabled) {
+      hideMagnifier();
+      return;
+    }
+    if (magnifierPointerRef.current && magnifierFrameRef.current === null) {
+      magnifierFrameRef.current = window.requestAnimationFrame(drawMagnifier);
+    }
+  }, [drawMagnifier, hideMagnifier, magnifierEnabled, magnifierScale, magnifierSize]);
+  useEffect(() => () => hideMagnifier(), [hideMagnifier]);
 
   const rememberRelations = (relations: LayoutRelation[]) => {
     relationHistory.current.push(relations.map((relation) => ({
@@ -118,6 +299,18 @@ export function LayoutEditor({
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
   useEffect(() => {
+    if (!draftStorageKey) return;
+    try {
+      if (dirty) {
+        window.localStorage.setItem(draftStorageKey, currentSignature);
+      } else {
+        window.localStorage.removeItem(draftStorageKey);
+      }
+    } catch {
+      // The API save below remains authoritative when browser storage is unavailable.
+    }
+  }, [currentSignature, dirty, draftStorageKey]);
+  useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
   useEffect(() => {
@@ -135,6 +328,20 @@ export function LayoutEditor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undoMeaning]);
+  useEffect(() => {
+    if (!workflowStep) return;
+    setMode({
+      classify: "select",
+      meaning: "select",
+      records: "record",
+      identity: "identity",
+      review: "select",
+    }[workflowStep] as Mode);
+    dragStart.current = null;
+    linkLabelId.current = null;
+    setDraft(null);
+    setLinkPoint(null);
+  }, [workflowStep]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
   useEffect(() => {
     if (mode === "link") {
@@ -150,17 +357,44 @@ export function LayoutEditor({
   const selectedCells = layout.cells.filter((cell) => selectedIds.has(cell.id));
   const recordSections = layout.recordSections ?? [];
   const recordGroups = layout.recordGroups ?? [];
+  const ocrProtectedLabelIds = useMemo(() => {
+    const protectedIds = new Set(
+      layout.relations.flatMap((relation) => relation.labelCellIds),
+    );
+    recordSections.forEach((section) => {
+      section.recordLabelCellIds.forEach((labelId) => protectedIds.add(labelId));
+      if (section.parentLabelCellId) protectedIds.add(section.parentLabelCellId);
+    });
+    return protectedIds;
+  }, [layout.relations, recordSections]);
   const recordSectionById = useMemo(
     () => new Map(recordSections.map((section) => [section.id, section])),
     [recordSections],
   );
+  const hasIncompleteLegacyRecordSection = recordGroups.some((group) => {
+    const section = recordSectionById.get(group.sectionId);
+    return section?.recordType !== "generic" && !section?.parentLabelCellId;
+  });
   const availableTargets = useMemo(() => {
     const byPath = new Map(targets.map((target) => [target.path, target]));
-    customTargets.forEach((target) => {
-      if (!byPath.has(target.path)) byPath.set(target.path, target);
+    (layout.labelPool ?? []).forEach((entry) => {
+      const target: FieldMappingTarget = {
+        path: entry.targetPath,
+        label: entry.label,
+        section: entry.section,
+        aliases: entry.aliases,
+      };
+      const existing = byPath.get(target.path);
+      byPath.set(target.path, existing
+        ? { ...existing, aliases: [...new Set([...(existing.aliases ?? []), ...entry.aliases])] }
+        : target);
     });
     return [...byPath.values()];
-  }, [targets, customTargets]);
+  }, [targets, layout.labelPool]);
+  const labelPoolEntries = useMemo(
+    () => buildLabelPoolEntries(availableTargets),
+    [availableTargets],
+  );
   const targetByPath = useMemo(
     () => new Map(availableTargets.map((target) => [target.path, target])),
     [availableTargets],
@@ -169,10 +403,180 @@ export function LayoutEditor({
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
     [layout.cells],
   );
+  const recordInputIds = useMemo(
+    () => new Set(recordGroups.flatMap((group) => group.inputCellIds)),
+    [recordGroups],
+  );
+  const identityCandidates = useMemo(() => layout.relations.flatMap((relation) => {
+    const cell = cellById.get(relation.inputCellId);
+    const target = targetByPath.get(relation.targetPath);
+    if (
+      !cell
+      || cell.role !== "input"
+      || recordInputIds.has(cell.id)
+      || /^(saleCalves|calvings)\.\d+\./.test(relation.targetPath)
+    ) return [];
+    return [{
+      cell,
+      targetPath: relation.targetPath,
+      label: target?.label || cell.printedLabelText?.trim() || relation.targetPath,
+    }];
+  }), [cellById, layout.relations, recordInputIds, targetByPath]);
+  const identityCandidateByCellId = useMemo(
+    () => new Map(identityCandidates.map((candidate) => [candidate.cell.id, candidate])),
+    [identityCandidates],
+  );
+  const selectedIdentityByPath = useMemo(
+    () => new Map(documentIdentityFields.map((field) => [field.targetPath, field])),
+    [documentIdentityFields],
+  );
+  const selectedIdentityCandidates = identityCandidates.filter(
+    (candidate) => selectedIdentityByPath.has(candidate.targetPath),
+  );
+  const primaryIdentityField = documentIdentityFields.find(
+    (field) => field.matchRole === "primary",
+  ) ?? null;
+  const titleIdentityField = documentIdentityFields.find(
+    (field) => field.displayRole === "title",
+  ) ?? null;
+  const subtitleIdentityField = documentIdentityFields.find(
+    (field) => field.displayRole === "subtitle",
+  ) ?? null;
+  const primaryIdentityCount = documentIdentityFields.filter(
+    (field) => field.matchRole === "primary",
+  ).length;
+  const usesCombinedConfirmation = documentIdentityFields.length >= 2
+    && primaryIdentityCount === 0;
+  const identityConfigurationReady = documentIdentityFields.length > 0
+    && (primaryIdentityCount === 1 || usesCombinedConfirmation)
+    && documentIdentityFields.filter((field) => field.displayRole === "title").length === 1
+    && documentIdentityFields.filter((field) => field.displayRole === "subtitle").length <= 1;
+  const normalizedIdentityFields = (fields: DocumentIdentity[]) => {
+    if (fields.length === 0) return [];
+    let primaryAssigned = false;
+    let titleAssigned = false;
+    let subtitleAssigned = false;
+    return fields.map((field) => {
+      const matchRole = field.matchRole === "primary" && !primaryAssigned
+        ? (primaryAssigned = true, "primary" as const)
+        : "confirmation" as const;
+      let displayRole: DocumentIdentity["displayRole"] = "none";
+      if (field.displayRole === "title" && !titleAssigned) {
+        titleAssigned = true;
+        displayRole = "title";
+      } else if (field.displayRole === "subtitle" && !subtitleAssigned) {
+        subtitleAssigned = true;
+        displayRole = "subtitle";
+      }
+      return { ...field, matchRole, displayRole };
+    }).map((field, index) => ({
+      ...field,
+      displayRole: titleAssigned ? field.displayRole : (index === 0 ? "title" : field.displayRole),
+    }));
+  };
+  const toggleIdentityCandidate = (candidate: (typeof identityCandidates)[number]) => {
+    const existing = selectedIdentityByPath.get(candidate.targetPath);
+    const next = existing
+      ? documentIdentityFields.filter((field) => field.targetPath !== candidate.targetPath)
+      : [...documentIdentityFields, {
+          mappingId: candidate.cell.id,
+          targetPath: candidate.targetPath,
+          label: candidate.label,
+          valueType: candidate.targetPath === "document.unifiedEarTag" ? "digits" as const : "text" as const,
+          exactLength: candidate.targetPath === "document.unifiedEarTag" ? 10 : null,
+          matchRole: documentIdentityFields.length === 0 ? "primary" as const : "confirmation" as const,
+          displayRole: documentIdentityFields.length === 0 ? "title" as const : "none" as const,
+        }];
+    const normalized = normalizedIdentityFields(next);
+    onDocumentIdentityFieldsChange?.(normalized);
+    setSelectedId(candidate.cell.id);
+    setSelectedIds(new Set(normalized.flatMap((field) => {
+      const selectedCandidate = identityCandidates.find((item) => item.targetPath === field.targetPath);
+      return selectedCandidate ? [selectedCandidate.cell.id] : [];
+    })));
+    setMessage(existing
+      ? `「${candidate.label}」を書類の見分け方から外しました。`
+      : `「${candidate.label}」を書類を見分ける情報へ追加しました。`);
+  };
+  const updateIdentityField = (
+    targetPath: string,
+    property: "matchRole" | "displayRole",
+    value: DocumentIdentity[typeof property],
+  ) => {
+    const next = documentIdentityFields.map((field) => {
+      if (field.targetPath === targetPath) return { ...field, [property]: value };
+      if (property === "matchRole" && value === "primary") {
+        return { ...field, matchRole: "confirmation" as const };
+      }
+      if (property === "displayRole" && value !== "none" && field.displayRole === value) {
+        return { ...field, displayRole: "none" as const };
+      }
+      return field;
+    });
+    onDocumentIdentityFieldsChange?.(next);
+  };
+  useEffect(() => {
+    if (documentIdentityFields.length === 0) return;
+    const validFields = documentIdentityFields.filter((field) => (
+      identityCandidates.some((candidate) => candidate.targetPath === field.targetPath)
+    ));
+    if (validFields.length !== documentIdentityFields.length) {
+      onDocumentIdentityFieldsChange?.(normalizedIdentityFields(validFields));
+      return;
+    }
+    if (workflowStep === "identity") {
+      const selectedCandidateCells = identityCandidates.filter((candidate) => (
+        selectedIdentityByPath.has(candidate.targetPath)
+      ));
+      const focusCandidate = selectedCandidateCells.find((candidate) => (
+        candidate.targetPath === primaryIdentityField?.targetPath
+      )) ?? selectedCandidateCells[0];
+      setSelectedId(focusCandidate?.cell.id ?? null);
+      setSelectedIds(new Set(selectedCandidateCells.map((candidate) => candidate.cell.id)));
+    }
+  }, [
+    documentIdentityFields,
+    identityCandidates,
+    onDocumentIdentityFieldsChange,
+    primaryIdentityField?.targetPath,
+    selectedIdentityByPath,
+    workflowStep,
+  ]);
   const assignedPaths = useMemo(
     () => new Set(layout.relations.map((relation) => relation.targetPath)),
     [layout.relations],
   );
+  const meaningCatalogSections = useMemo(
+    () => [...new Set(labelPoolEntries.map((entry) => entry.section))],
+    [labelPoolEntries],
+  );
+  const filteredLabelPoolEntries = useMemo(() => {
+    const query = normalizeLabelPoolText(meaningCatalogQuery);
+    return labelPoolEntries.filter((entry) => (
+      (meaningCatalogSection === "all" || entry.section === meaningCatalogSection)
+      && (!query || [entry.label, entry.section, ...entry.aliases].some(
+        (value) => normalizeLabelPoolText(value).includes(query),
+      ))
+    ));
+  }, [labelPoolEntries, meaningCatalogQuery, meaningCatalogSection]);
+  const labelPoolUsageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    layout.relations.forEach((relation) => {
+      counts.set(relation.targetPath, (counts.get(relation.targetPath) ?? 0) + 1);
+    });
+    return new Map(labelPoolEntries.map((entry) => [
+      entry.key,
+      entry.paths.reduce((total, path) => total + (counts.get(path) ?? 0), 0),
+    ]));
+  }, [labelPoolEntries, layout.relations]);
+  const similarLabelPoolEntries = useMemo(() => {
+    const query = normalizeLabelPoolText(customLabel);
+    if (!query) return [];
+    return labelPoolEntries.filter((entry) => [entry.label, ...entry.aliases].some((value) => {
+      const candidate = normalizeLabelPoolText(value);
+      return candidate.includes(query) || query.includes(candidate);
+    })).slice(0, 5);
+  }, [customLabel, labelPoolEntries]);
   const sections = useMemo(() => {
     const result = new Map<string, FieldMappingTarget[]>();
     availableTargets.forEach((target) => result.set(
@@ -181,6 +585,23 @@ export function LayoutEditor({
     ));
     return [...result.entries()];
   }, [availableTargets]);
+  const showLabelStep = !workflowStep || workflowStep === "classify";
+  const showClassificationStep = !workflowStep || workflowStep === "classify";
+  const showMeaningStep = !workflowStep || workflowStep === "meaning";
+  const showRecordStep = !workflowStep || workflowStep === "records";
+  const showIdentityStep = workflowStep === "identity";
+  const showReviewStep = !workflowStep || workflowStep === "review";
+  const cellsVisibleInList = layout.cells.filter((cell) => {
+    if (!workflowStep || workflowStep === "classify" || workflowStep === "review") return true;
+    if (workflowStep === "identity") {
+      return identityCandidateByCellId.has(cell.id);
+    }
+    if (workflowStep === "meaning") {
+      return cell.role === "label" || cell.role === "parent_label"
+        || cell.role === "input" || cell.role === "mark";
+    }
+    return cell.role === "label" || cell.role === "parent_label";
+  });
 
   const detect = async () => {
     if (disabled || operationLockRef.current) return;
@@ -203,7 +624,7 @@ export function LayoutEditor({
       setSelectedIds(new Set());
       relationHistory.current = [];
       setHistoryDepth(0);
-      setMessage(`${detected.cells.length}個のセル候補を検出しました。色と文字を確認してください。`);
+      setMessage(`${detected.cells.length}個の枠を検出しました。種類と項目名の文字候補を確認してください。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "セルを検出できませんでした。");
     } finally {
@@ -213,8 +634,45 @@ export function LayoutEditor({
     }
   };
 
-  const save = async () => {
-    if (disabled || operationLockRef.current) return;
+  const recognizeLabels = async () => {
+    if (disabled || operationLockRef.current || !onRecognizeLabels) return;
+    const labelCount = layout.cells.filter(
+      (cell) => (cell.role === "label" || cell.role === "parent_label")
+        && !ocrProtectedLabelIds.has(cell.id),
+    ).length;
+    if (labelCount === 0) {
+      setMessage("文字候補を取得する未設定の項目名がありません。読み取る内容や繰り返し部分を設定済みの項目名は対象から除外されます。");
+      return;
+    }
+    operationLockRef.current = true;
+    setBusy(true);
+    setRecognizingLabels(true);
+    setMessage(`${labelCount}個の項目名から文字候補を取得しています…`);
+    try {
+      const recognized = normalizeLayout(await onRecognizeLabels(layout));
+      setLayout(recognized);
+      setSelectedPath("");
+      const recognizedCount = recognized.cells.filter(
+        (cell) => (cell.role === "label" || cell.role === "parent_label")
+          && !ocrProtectedLabelIds.has(cell.id)
+          && cell.text.trim().length > 0,
+      ).length;
+      setMessage(
+        `${labelCount}個の項目名を確認し、${recognizedCount}個に文字候補を反映しました。未認識の文字は右側で修正できます。`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "項目名の文字候補を取得できませんでした。");
+    } finally {
+      setRecognizingLabels(false);
+      setBusy(false);
+      operationLockRef.current = false;
+    }
+  };
+
+  const save = useCallback(async (automatic = false): Promise<boolean> => {
+    if ((!dirty && !allowUnchangedSave) || disabled || operationLockRef.current) {
+      return !dirty;
+    }
     operationLockRef.current = true;
     setBusy(true);
     try {
@@ -227,15 +685,46 @@ export function LayoutEditor({
       setMessage(
         prepared.repairedCellCount > 0
           ? `重複していた${prepared.repairedCellCount}個の選択マーク欄を繁殖履歴の行へ振り分け、テンプレートを保存しました。`
-          : `テンプレートへ${saved.cells.length}個の矩形を保存しました。`,
+          : automatic
+            ? `編集中の内容を自動保存しました（${saved.cells.length}個の矩形）。`
+            : `テンプレートへ${saved.cells.length}個の矩形を保存しました。`,
       );
+      if (draftStorageKey) {
+        try {
+          window.localStorage.removeItem(draftStorageKey);
+        } catch {
+          // The server save succeeded, so a storage cleanup failure is non-fatal.
+        }
+      }
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "レイアウトを保存できませんでした。");
+      return false;
     } finally {
       setBusy(false);
       operationLockRef.current = false;
     }
-  };
+  }, [allowUnchangedSave, disabled, dirty, draftStorageKey, layout, onSave]);
+
+  useImperativeHandle(ref, () => ({
+    saveIfNeeded: () => save(false),
+  }), [save]);
+
+  useEffect(() => {
+    if (
+      !dirty
+      || disabled
+      || busy
+      || !workflowStep
+      || !(["classify", "meaning", "records"] as LayoutWorkflowStep[]).includes(workflowStep)
+      || lastAutoSaveAttemptSignatureRef.current === currentSignature
+    ) return;
+    const timer = window.setTimeout(() => {
+      lastAutoSaveAttemptSignatureRef.current = currentSignature;
+      void save(true);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [busy, currentSignature, dirty, disabled, save, workflowStep]);
 
   const redraw = () => {
     const canvas = canvasRef.current;
@@ -246,66 +735,59 @@ export function LayoutEditor({
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-    recordGroups.forEach((group) => {
-      const section = recordSectionById.get(group.sectionId);
-      const members = group.inputCellIds
-        .map((inputId) => cellById.get(inputId))
-        .filter((cell): cell is LayoutCell => Boolean(cell))
-        .sort((first, second) => first.x - second.x || first.y - second.y);
-      if (members.length === 0) return;
-      context.save();
-      context.strokeStyle = group.source === "manual" ? "#2468a2" : "#7a8792";
-      context.fillStyle = context.strokeStyle;
-      context.lineWidth = 7;
-      if (group.source === "inferred") context.setLineDash([12, 7]);
-      context.beginPath();
-      members.forEach((member, index) => {
-        const centerX = member.x + member.width / 2;
-        const centerY = member.y + member.height / 2;
-        if (index === 0) context.moveTo(centerX, centerY);
-        else context.lineTo(centerX, centerY);
-      });
-      context.stroke();
-      context.setLineDash([]);
-      members.forEach((member) => {
-        context.beginPath();
-        context.arc(
-          member.x + member.width / 2,
-          member.y + member.height / 2,
-          7,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-      });
-      context.fillStyle = "#2468a2";
-      context.font = `700 ${Math.max(14, layout.canonicalWidth / 90)}px sans-serif`;
-      context.fillText(
-        `${section?.title ?? "レコード"} · ${group.recordKeyValue ?? group.order}`,
-        members[0].x,
-        Math.max(18, members[0].y - 7),
-      );
-      context.restore();
-    });
-
-    recordSections.forEach((section) => {
-      if (!section.parentLabelCellId) return;
-      const parent = cellById.get(section.parentLabelCellId);
-      if (!parent) return;
-      recordGroups
-        .filter((group) => group.sectionId === section.id)
-        .forEach((group) => {
-          context.save();
-          context.strokeStyle = "#16805d";
-          context.lineWidth = 5;
-          context.setLineDash([13, 7]);
-          context.beginPath();
-          context.moveTo(parent.x + parent.width / 2, parent.y + parent.height / 2);
-          context.lineTo(group.x + group.width / 2, group.y + group.height / 2);
-          context.stroke();
+    if (mode === "identity") {
+      layout.cells.forEach((cell) => {
+        const candidate = identityCandidateByCellId.get(cell.id);
+        const selectedIdentity = candidate
+          ? selectedIdentityByPath.get(candidate.targetPath)
+          : null;
+        const isSelected = Boolean(selectedIdentity);
+        const isPrimary = selectedIdentity?.matchRole === "primary";
+        context.save();
+        if (!candidate) {
+          context.fillStyle = "rgba(239, 242, 243, 0.68)";
+          context.fillRect(cell.x, cell.y, cell.width, cell.height);
+          context.strokeStyle = "rgba(91, 108, 112, 0.38)";
+          context.lineWidth = 2;
+          context.setLineDash([8, 6]);
+          context.strokeRect(cell.x, cell.y, cell.width, cell.height);
           context.restore();
-        });
-    });
+          return;
+        }
+        context.fillStyle = isPrimary
+          ? "rgba(30, 105, 154, 0.22)"
+          : isSelected
+            ? "rgba(177, 111, 0, 0.19)"
+            : "rgba(0, 119, 125, 0.12)";
+        context.strokeStyle = isPrimary ? "#1e699a" : isSelected ? "#a46400" : "#00777d";
+        context.lineWidth = isSelected ? 8 : 4;
+        context.fillRect(cell.x, cell.y, cell.width, cell.height);
+        context.strokeRect(cell.x, cell.y, cell.width, cell.height);
+
+        const fontSize = Math.max(11, Math.min(22, layout.canonicalWidth / 75));
+        const badgeHeight = fontSize + 12;
+        context.font = `800 ${fontSize}px sans-serif`;
+        const badgeWidth = Math.min(
+          Math.max(56, context.measureText(candidate.label).width + (isSelected ? 64 : 24)),
+          Math.max(56, cell.width),
+        );
+        const badgeX = cell.x;
+        const badgeY = Math.max(0, cell.y - badgeHeight);
+        context.fillStyle = isPrimary ? "#1e699a" : isSelected ? "#a46400" : "rgba(0, 92, 97, 0.92)";
+        context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+        context.fillStyle = "#ffffff";
+        context.textBaseline = "middle";
+        context.textAlign = "left";
+        context.fillText(
+          `${isPrimary ? "基準 " : isSelected ? "確認 " : ""}${candidate.label}`,
+          badgeX + 8,
+          badgeY + badgeHeight / 2,
+          Math.max(1, badgeWidth - 16),
+        );
+        context.restore();
+      });
+      return;
+    }
 
     layout.cells.forEach((cell) => {
       const color = ROLE_COLOR[cell.role];
@@ -334,16 +816,61 @@ export function LayoutEditor({
         }
         context.setLineDash([]);
       }
-      if (cell.role === "label" && cell.text) {
-        const fontSize = Math.max(14, layout.canonicalWidth / 85);
-        context.font = `700 ${fontSize}px sans-serif`;
-        const label = cell.text.slice(0, 28);
-        const width = Math.min(context.measureText(label).width + 12, cell.width);
-        context.fillStyle = color;
-        context.fillRect(cell.x, cell.y, width, fontSize + 8);
-        context.fillStyle = "white";
-        context.fillText(label, cell.x + 6, cell.y + fontSize + 1);
+      drawOcrLabelText(context, cell, layout.canonicalWidth, ocrLabelAlignment);
+      context.restore();
+    });
+
+    recordSections.forEach((section) => {
+      const anchors = section.recordLabelCellIds
+        .map((labelId) => cellById.get(labelId))
+        .filter((cell): cell is LayoutCell => Boolean(cell))
+        .sort((first, second) => first.x - second.x || first.y - second.y);
+      if (anchors.length === 0) return;
+      const groupCount = recordGroups.filter((group) => group.sectionId === section.id).length;
+      context.save();
+      const bandY = anchors.reduce(
+        (total, anchor) => total + anchor.y + anchor.height / 2,
+        0,
+      ) / anchors.length;
+      const firstAnchor = anchors[0];
+      const lastAnchor = anchors[anchors.length - 1];
+      const bandStartX = firstAnchor.x + firstAnchor.width / 2;
+      const bandEndX = lastAnchor.x + lastAnchor.width / 2;
+      const parent = cellById.get(section.parentLabelCellId ?? "");
+      if (parent) {
+        context.strokeStyle = "#16805d";
+        context.lineWidth = 5;
+        context.setLineDash([13, 7]);
+        context.beginPath();
+        context.moveTo(parent.x + parent.width / 2, parent.y + parent.height / 2);
+        context.lineTo((bandStartX + bandEndX) / 2, bandY);
+        context.stroke();
       }
+      context.strokeStyle = "#2468a2";
+      context.lineWidth = 5;
+      context.setLineDash([10, 6]);
+      context.beginPath();
+      context.moveTo(bandStartX, bandY);
+      context.lineTo(bandEndX, bandY);
+      context.stroke();
+      anchors.forEach((anchor) => {
+        context.strokeRect(anchor.x, anchor.y, anchor.width, anchor.height);
+      });
+      context.setLineDash([]);
+      const badgeHeight = Math.max(16, Math.min(24, layout.canonicalWidth / 65));
+      const badgeWidth = Math.max(
+        1,
+        Math.min(Math.max(38, badgeHeight * 3.3), Math.max(1, lastAnchor.width - 4)),
+      );
+      const badgeX = lastAnchor.x + lastAnchor.width - badgeWidth - 2;
+      const badgeY = lastAnchor.y + lastAnchor.height - badgeHeight - 2;
+      context.fillStyle = "rgba(36, 104, 162, 0.94)";
+      context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+      context.fillStyle = "#ffffff";
+      context.font = `800 ${Math.max(10, badgeHeight * 0.58)}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(`R ${groupCount}`, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2);
       context.restore();
     });
 
@@ -375,27 +902,6 @@ export function LayoutEditor({
       context.strokeRect(draft.x, draft.y, draft.width, draft.height);
       context.setLineDash([]);
     }
-    if (mode === "record" && linkPoint && dragStart.current) {
-      const start = dragStart.current;
-      const highlighted = linkLaneCells(
-        start,
-        linkPoint,
-        layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
-      );
-      context.save();
-      context.strokeStyle = "#2468a2";
-      context.fillStyle = "#2468a230";
-      context.lineWidth = 7;
-      context.beginPath();
-      context.moveTo(start.x, start.y);
-      context.lineTo(linkPoint.x, linkPoint.y);
-      context.stroke();
-      highlighted.forEach((cell) => {
-        context.fillRect(cell.x, cell.y, cell.width, cell.height);
-        context.strokeRect(cell.x, cell.y, cell.width, cell.height);
-      });
-      context.restore();
-    }
     if (linkPoint && linkLabelId.current) {
       const label = cellById.get(linkLabelId.current);
       if (label) {
@@ -404,16 +910,23 @@ export function LayoutEditor({
           y: label.y + label.height / 2,
         };
         const highlightedCells = mode === "parent"
-          ? recordGroups
-            .filter((group) => pointInsideRect(linkPoint, group))
-            .flatMap((group) => group.inputCellIds)
-            .map((inputId) => cellById.get(inputId))
-            .filter((cell): cell is LayoutCell => Boolean(cell))
-          : linkLaneCells(
-            start,
-            linkPoint,
-            layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
-          );
+          ? recordSections.flatMap((section) => {
+            const anchors = section.recordLabelCellIds
+              .map((labelId) => cellById.get(labelId))
+              .filter((cell): cell is LayoutCell => Boolean(cell));
+            return anchors.some((anchor) => pointInsideRect(linkPoint, anchor)) ? anchors : [];
+          })
+          : mode === "record"
+            ? recordLabelCellsCrossedByLine(
+              start,
+              linkPoint,
+              layout.cells.filter((cell) => cell.role === "label"),
+            )
+            : linkLaneCells(
+              start,
+              linkPoint,
+              layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
+            );
         highlightedCells.forEach((cell) => {
           context.save();
           context.fillStyle = "#6b3fc530";
@@ -447,6 +960,9 @@ export function LayoutEditor({
     recordGroups,
     recordSections,
     recordSectionById,
+    ocrLabelAlignment,
+    identityCandidateByCellId,
+    selectedIdentityByPath,
   ]);
   useEffect(() => {
     const image = new Image();
@@ -462,7 +978,9 @@ export function LayoutEditor({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
-  const point = (event: React.PointerEvent<HTMLCanvasElement>): Point => {
+  const point = (
+    event: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>,
+  ): Point => {
     const bounds = event.currentTarget.getBoundingClientRect();
     return {
       x: Math.round(Math.max(0, Math.min(
@@ -521,14 +1039,43 @@ export function LayoutEditor({
           labelCellIds: relation.labelCellIds.filter((labelId) => !idSet.has(labelId)),
         }));
       }
-      const recordGroups = role === "input" || role === "mark"
+      const invalidatedSectionIds = new Set(
+        (current.recordSections ?? [])
+          .filter((section) => (
+            role !== "label"
+            && section.recordLabelCellIds.some((labelId) => idSet.has(labelId))
+          ))
+          .map((section) => section.id),
+      );
+      const recordSections = (current.recordSections ?? []).map((section) => ({
+        ...section,
+        recordLabelCellIds: invalidatedSectionIds.has(section.id)
+          ? []
+          : section.recordLabelCellIds,
+        parentLabelCellId: (
+          role !== "label"
+          && role !== "parent_label"
+          && section.parentLabelCellId
+          && idSet.has(section.parentLabelCellId)
+        )
+          ? null
+          : section.parentLabelCellId,
+      }));
+      const recordGroups = (role === "input" || role === "mark"
         ? current.recordGroups
         : (current.recordGroups ?? [])
           .map((group) => ({
             ...group,
             inputCellIds: group.inputCellIds.filter((inputId) => !idSet.has(inputId)),
           }))
-          .filter((group) => group.inputCellIds.length > 0);
+          .filter((group) => group.inputCellIds.length > 0))
+        ?.filter((group) => !invalidatedSectionIds.has(group.sectionId));
+      const structureChanged = invalidatedSectionIds.size > 0
+        || (recordGroups?.length ?? 0) !== (current.recordGroups?.length ?? 0)
+        || recordSections.some((section, index) => (
+          section.parentLabelCellId
+          !== (current.recordSections ?? [])[index]?.parentLabelCellId
+        ));
       return {
         ...current,
         cells: current.cells.map((cell) => {
@@ -559,11 +1106,25 @@ export function LayoutEditor({
           };
         }),
         relations,
+        recordSections,
         recordGroups,
+        recordStructureVerified: structureChanged
+          ? false
+          : current.recordStructureVerified,
       };
     });
   };
   const setRole = (id: string, role: LayoutCell["role"]) => setRoles([id], role);
+  const ensureAutoLabelPoolEntry = (labelText: string): LayoutLabelPoolEntry | null => {
+    const entry = createAutoLabelPoolEntry(labelText, availableTargets);
+    if (!entry) return null;
+    setLayout((current) => (
+      (current.labelPool ?? []).some((candidate) => candidate.targetPath === entry.targetPath)
+        ? current
+        : { ...current, labelPool: [...(current.labelPool ?? []), entry] }
+    ));
+    return entry;
+  };
   const assignSelectedInputDirectly = (requestedPath = selectedPath) => {
     if (!selected || selected.role !== "input" || !requestedPath) return;
     if (!targetByPath.has(requestedPath)) {
@@ -574,6 +1135,7 @@ export function LayoutEditor({
     const existing = layout.relations.filter(
       (relation) => relation.inputCellId === selected.id,
     );
+    setSelectedPath(requestedPath);
     setLayout((current) => ({
       ...current,
       relations: existing.length > 0
@@ -598,125 +1160,117 @@ export function LayoutEditor({
       `${selected.id} を ${targetByPath.get(requestedPath)?.label ?? requestedPath} として設定しました。`,
     );
   };
-  const addManualCell = () => {
-    const width = Math.max(8, Math.min(manualRect.width, layout.canonicalWidth));
-    const height = Math.max(8, Math.min(manualRect.height, layout.canonicalHeight));
-    const x = Math.max(0, Math.min(manualRect.x, layout.canonicalWidth - width));
-    const y = Math.max(0, Math.min(manualRect.y, layout.canonicalHeight - height));
-    const id = `manual_${Date.now()}`;
-    setLayout((current) => ({
-      ...current,
-      cells: [...current.cells, {
-        id,
-        role: "input",
-        x,
-        y,
-        width,
-        height,
-        confidence: 1,
-        text: "",
-        textConfidence: null,
-        source: "manual",
-      }],
-    }));
-    setSelectedId(id);
-    setSelectedIds(new Set([id]));
-    setMessage(`${id} を手書き文字欄として追加しました。`);
-  };
-  const addAccessibleRelation = () => {
-    const label = cellById.get(accessibleLabelId);
-    const input = cellById.get(accessibleInputId);
-    if (
-      !label
-      || label.role !== "label"
-      || !input
-      || (input.role !== "input" && input.role !== "mark")
-    ) return;
-    const targetPath = input.role === "mark"
-      ? input.markSets?.[0]?.targetPath
-      : selectedPath
-      || inferTargetPath(label.text, 1, availableTargets, assignedPaths);
-    if (!targetPath || !targetByPath.has(targetPath)) {
-      setMessage("先に「JSON項目」で保存先を選択してください。");
+  const addCustomTarget = () => {
+    const label = customLabel.normalize("NFKC").trim();
+    if (!label) return;
+    const existing = findLabelPoolMatch(label, labelPoolEntries);
+    if (existing?.paths[0]) {
+      setSelectedPath(existing.paths[0]);
+      if (selected?.role === "input") assignSelectedInputDirectly(existing.paths[0]);
+      setCustomLabel("");
+      setCustomTargetPlacement(null);
+      setMessage(`「${existing.label}」は保存する項目に登録済みです。`);
       return;
     }
-    const labelCenter = {
-      x: label.x + label.width / 2,
-      y: label.y + label.height / 2,
-    };
-    const inputCenter = {
-      x: input.x + input.width / 2,
-      y: input.y + input.height / 2,
-    };
-    const axis: LayoutRelation["axis"] = (
-      Math.abs(inputCenter.x - labelCenter.x)
-      >= Math.abs(inputCenter.y - labelCenter.y)
-    ) ? "horizontal" : "vertical";
-    rememberRelations(layout.relations);
-    setLayout((current) => ({
-      ...current,
-      relations: mergeLabelRelations(
-        current.relations,
-        [input],
-        label.id,
-        axis,
-        [targetPath],
-      ),
-    }));
-    setSelectedId(input.id);
-    setSelectedIds(new Set([input.id]));
-    setMessage(`${label.text || label.id} と ${input.id} を ${targetByPath.get(targetPath)?.label ?? targetPath} へ意味づけしました。`);
-  };
-  const addAccessibleRecordGroup = () => {
-    const section = recordSectionById.get(selectedRecordSectionId);
-    const inputs = layout.cells.filter(
-      (cell) => (cell.role === "input" || cell.role === "mark")
-        && accessibleRecordInputIds.has(cell.id),
-    );
-    if (!section || inputs.length === 0) return;
-    const order = Math.max(
-      0,
-      ...recordGroups
-        .filter((group) => group.sectionId === section.id)
-        .map((group) => group.order),
-    ) + 1;
-    const inputIds = new Set(inputs.map((input) => input.id));
-    const group: LayoutRecordGroup = {
-      id: `record_${section.collectionPath}_${Date.now()}`,
-      sectionId: section.id,
-      order,
-      ...boundingRect(inputs, layout.canonicalWidth, layout.canonicalHeight),
-      inputCellIds: inputs.map((input) => input.id),
-      recordKeyField: "parity",
-      recordKeyValue: String(order),
+    const generated = createAutoLabelPoolEntry(label, availableTargets);
+    if (!generated) {
+      setMessage("保存する項目を追加できませんでした。項目名を確認してください。");
+      return;
+    }
+    const entry: LayoutLabelPoolEntry = {
+      ...generated,
+      id: `label_pool_${Date.now()}`,
+      section: "追加項目",
+      aliases: [],
       source: "manual",
     };
-    setLayout((current) => ({
-      ...current,
-      layoutSchemaVersion: 3,
-      recordGroups: [
-        ...(current.recordGroups ?? [])
-          .map((item) => ({
-            ...item,
-            inputCellIds: item.inputCellIds.filter((id) => !inputIds.has(id)),
-          }))
-          .filter((item) => item.inputCellIds.length > 0),
-        group,
-      ],
-      relations: current.relations.map((relation) => {
-        if (!inputIds.has(relation.inputCellId)) return relation;
-        const fieldKey = relation.targetPath.split(".").at(-1);
-        const targetPath = fieldKey
-          ? `${section.collectionPath}.${order - 1}.${fieldKey}`
-          : relation.targetPath;
-        return targetByPath.has(targetPath)
-          ? { ...relation, targetPath, order }
-          : relation;
-      }),
-      recordStructureVerified: false,
-    }));
-    setAccessibleRecordInputIds(new Set());
-    setMessage(`${section.title}の${order}番目のレコードへ${inputs.length}セルをまとめました。内容を確認してください。`);
+    if (selected?.role === "input") rememberRelations(layout.relations);
+    setLayout((current) => {
+      const relations = selected?.role === "input"
+        ? current.relations.some((relation) => relation.inputCellId === selected.id)
+          ? current.relations.map((relation) => (
+              relation.inputCellId === selected.id
+                ? { ...relation, targetPath: entry.targetPath }
+                : relation
+            ))
+          : [...current.relations, {
+              id: `direct_${selected.id}`,
+              inputCellId: selected.id,
+              labelCellIds: [],
+              axis: "horizontal" as const,
+              order: 1,
+              targetPath: entry.targetPath,
+            }]
+        : current.relations;
+      return {
+        ...current,
+        labelPool: [...(current.labelPool ?? []), entry],
+        relations,
+      };
+    });
+    setSelectedPath(entry.targetPath);
+    setCustomLabel("");
+    setCustomTargetPlacement(null);
+    setMessage(selected?.role === "input"
+      ? `「${label}」を保存する項目へ追加し、選択中の記入欄へ設定しました。`
+      : `「${label}」を保存する項目へ追加しました。`);
+  };
+  const customTargetAddition = (
+    placement: "sidebar" | "catalog",
+    buttonLabel: string,
+  ) => {
+    const open = customTargetPlacement === placement;
+    return (
+      <div className={`meaning-target-addition ${placement === "sidebar" ? "compact-addition" : ""}`}>
+        <button
+          type="button"
+          className="secondary"
+          aria-expanded={open}
+          onClick={() => setCustomTargetPlacement((current) => (
+            current === placement ? null : placement
+          ))}
+        >
+          {open ? "追加を閉じる" : buttonLabel}
+        </button>
+        {open && (
+          <div className={`meaning-target-creator ${placement === "sidebar" ? "compact-creator" : ""}`}>
+            <label>
+              新しい項目名
+              <input
+                value={customLabel}
+                maxLength={100}
+                placeholder="例: 治療歴"
+                onChange={(event) => setCustomLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && customLabel.trim()) {
+                    event.preventDefault();
+                    addCustomTarget();
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="primary"
+              disabled={!customLabel.trim()}
+              onClick={addCustomTarget}
+            >
+              この項目を追加
+            </button>
+            <small>
+              {placement === "sidebar"
+                ? "追加した項目を、選択中の記入欄へ設定します。"
+                : "内部の識別子はシステムが自動生成します。"}
+            </small>
+            {similarLabelPoolEntries.length > 0 && (
+              <p className="meaning-target-similar" role="status">
+                類似する登録済み項目: {similarLabelPoolEntries.map((entry) => entry.label).join("、")}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
   const finishLink = (end: Point) => {
     const labelId = linkLabelId.current;
@@ -752,7 +1306,7 @@ export function LayoutEditor({
     const completeMarkTargetPaths = markTargetPaths?.every(Boolean)
       ? markTargetPaths
       : null;
-    const targetPath = completeMarkTargetPaths?.[0]
+    const inferredTargetPath = completeMarkTargetPaths?.[0]
       || selectedPath
       || inferTargetPath(label.text, inputs.length, availableTargets, assignedPaths)
       || inferRecordTargetPath(
@@ -768,6 +1322,19 @@ export function LayoutEditor({
         recordSectionById.get(selectedRecordSectionId),
         availableTargets,
       );
+    const autoEntries = !inferredTargetPath
+      && !existingTargetPaths
+      && inputs.every((input) => input.role === "input")
+      ? inputs.length === 1
+        ? [createAutoLabelPoolEntry(label.text, availableTargets)].filter(
+          (entry): entry is LayoutLabelPoolEntry => Boolean(entry),
+        )
+        : createAutoRepeatedLabelPoolEntries(label.text, inputs.length, availableTargets) ?? []
+      : [];
+    const autoEntry = autoEntries.length === 1
+      ? autoEntries[0]
+      : null;
+    const targetPath = inferredTargetPath ?? autoEntry?.targetPath;
     const groupedTargetPaths = targetPath
       ? targetPathsFromRecordGroups(
         targetPath,
@@ -777,19 +1344,37 @@ export function LayoutEditor({
         availableTargets,
       )
       : null;
-    const targetPaths = completeMarkTargetPaths
+    const requestedTargetPaths = autoEntries.length > 0
+      ? autoEntries.map((entry) => entry.targetPath)
+      : completeMarkTargetPaths
       ?? (selectedPath
       ? groupedTargetPaths
         ?? expandTargetPaths(selectedPath, inputs.length, availableTargets)
       : existingTargetPaths
         ?? groupedTargetPaths
         ?? (targetPath ? expandTargetPaths(targetPath, inputs.length, availableTargets) : null));
+    const targetPaths = requestedTargetPaths && inputs.every((input) => input.role === "input")
+      ? resolveAvailableLinkTargetPaths(
+        requestedTargetPaths,
+        inputs,
+        layout.relations,
+        availableTargets,
+      )
+      : requestedTargetPaths;
     if (!targetPaths) {
+      const requestedTargetConflict = requestedTargetPaths?.some((path) => (
+        layout.relations.some((relation) => (
+          relation.targetPath === path
+          && !inputs.some((input) => input.id === relation.inputCellId)
+        ))
+      ));
       const capacity = targetPath
         ? sequentialTargetCapacity(targetPath, availableTargets)
         : null;
       setMessage(
-        !targetPath
+        requestedTargetConflict
+          ? "選択した保存先は別の記入欄で使用中です。同じ項目名から別の記入欄へ接続する場合は、別の保存先を選択してください。"
+        : !targetPath
           ? "保存先を自動推定できませんでした。右側のJSON項目を選択してからもう一度ドラッグしてください。"
           : capacity !== null && inputs.length > capacity
           ? `この列は最大${capacity}欄です。現在${inputs.length}欄が選択されています。隣の列を巻き込んでいないか確認してください。`
@@ -809,7 +1394,21 @@ export function LayoutEditor({
         targetPaths,
       );
       relations = renumberRelations(relations, current.cells);
-      return { ...current, relations, allowCrossAxisLabels: true };
+      return {
+        ...current,
+        labelPool: autoEntries.length > 0
+          ? [
+            ...(current.labelPool ?? []),
+            ...autoEntries.filter((entry) => (
+              !(current.labelPool ?? []).some(
+                (candidate) => candidate.targetPath === entry.targetPath,
+              )
+            )),
+          ]
+          : current.labelPool,
+        relations,
+        allowCrossAxisLabels: true,
+      };
     });
     setSelectedId(inputs[0].id);
     setSelectedIds(new Set(inputs.map((input) => input.id)));
@@ -817,106 +1416,210 @@ export function LayoutEditor({
     setMessage(
       `${label.text || label.id}から${inputs.length}個の手書き文字欄へ、`
       + `${axis === "horizontal" ? "横方向" : "縦方向"}にまとめて意味づけしました。`
-      + ` 保存先: ${targetByPath.get(targetPaths[0])?.label ?? targetPaths[0]}`,
+      + ` 保存先: ${autoEntries.length > 1
+        ? `${label.text || label.id} ${autoEntries.length}行分`
+        : autoEntry?.label ?? targetByPath.get(targetPaths[0])?.label ?? targetPaths[0]}`
+      + `${autoEntries.length > 0 ? "（保存する情報へ自動追加）" : ""}`,
     );
   };
 
-  const finishRecordLine = (start: Point, end: Point) => {
-    const inputs = linkLaneCells(
-      start,
-      end,
-      layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
-    );
-    if (inputs.length === 0) {
-      setMessage("線が通過した手書き文字欄がありません。1行目のセルから最終セルまで線を引いてください。");
+  const createRecordsFromColumnLabels = (labelIds: string[]) => {
+    const rows = recordRowsFromColumnLabels(labelIds, layout.cells, layout.relations);
+    const labels = labelIds
+      .map((labelId) => cellById.get(labelId))
+      .filter((cell): cell is LayoutCell => Boolean(cell));
+    if (!rows || labels.length !== labelIds.length) {
+      setMessage("選択した列の一部に読み取る内容が設定されていないか、列ごとの行数が一致しません。ステップ2の縦方向の意味づけを確認してください。");
       return;
     }
-    const inferredCollectionPath = inferRecordCollectionPath(
-      inputs,
-      layout.relations,
-    );
     const selectedSection = recordSectionById.get(selectedRecordSectionId);
-    const matchingSection = inferredCollectionPath
-      ? recordSections.find(
-        (candidate) => candidate.collectionPath === inferredCollectionPath,
-      )
-      : undefined;
-    const existingSection = selectedSection && (
-      !inferredCollectionPath
-      || selectedSection.collectionPath === inferredCollectionPath
-    )
+    const genericRows = rows.collectionPath === null;
+    const reusableGenericSection = genericRows && selectedSection?.recordType === "generic"
       ? selectedSection
-      : matchingSection;
-    const collectionPath = existingSection?.collectionPath
-      ?? inferredCollectionPath
-      ?? recordCollectionPath;
+      : undefined;
+    const genericCollectionPath = reusableGenericSection?.collectionPath
+      ?? `genericRecords.${genericRecordCollectionKey(recordSectionTitle, recordSections)}`;
+    const collectionPath = rows.collectionPath ?? genericCollectionPath;
+    const sameLabelBand = (candidate: LayoutRecordSection) => (
+      candidate.recordLabelCellIds.length === labelIds.length
+      && labelIds.every((labelId) => candidate.recordLabelCellIds.includes(labelId))
+    );
+    const matchingSection = recordSections.find(
+      (candidate) => candidate.collectionPath === collectionPath
+        && sameLabelBand(candidate),
+    );
+    const reusableSelectedSection = selectedSection?.collectionPath === collectionPath
+      && (
+        selectedSection.recordLabelCellIds.length === 0
+        || sameLabelBand(selectedSection)
+      )
+      ? selectedSection
+      : undefined;
+    const existingSection = reusableSelectedSection ?? matchingSection;
+    const inheritedParentLabelCellId = recordSections.find(
+      (candidate) => candidate.collectionPath === collectionPath
+        && candidate.parentLabelCellId,
+    )?.parentLabelCellId ?? null;
+    const effectiveRowKeyStrategy = existingSection?.rowKeyStrategy
+      ?? (genericRows ? rowKeyStrategy : "position");
+    const matchedRowKeys = effectiveRowKeyStrategy === "printed"
+      ? matchRowKeyCells(rows.rows, layout.cells)
+      : rows.rows.map(() => null);
+    if (effectiveRowKeyStrategy === "printed" && !matchedRowKeys) {
+      setMessage("行番号の数または位置が表の行と一致しません。ステップ1で1～9などの番号セルを「行番号」にするか、行の決め方を「上から順番」に変更してください。");
+      return;
+    }
     const section: LayoutRecordSection = existingSection ?? {
-      id: `section_${collectionPath}_${Date.now()}`,
-      title: collectionPath === "saleCalves" ? "売却子牛一覧" : "繁殖履歴",
+      id: `section_${collectionPath.replace(/[^A-Za-z0-9_]/g, "_")}_${Date.now()}_${recordSections.length + 1}`,
+      title: genericRows
+        ? recordSectionTitle.trim() || "明細"
+        : collectionPath === "saleCalves" ? "売却子牛一覧" : "繁殖履歴",
       collectionPath,
-      recordType: collectionPath === "saleCalves" ? "saleCalf" : "calving",
-      parentLabelCellId: null,
+      recordType: genericRows
+        ? "generic"
+        : collectionPath === "saleCalves" ? "saleCalf" : "calving",
+      recordLabelCellIds: labelIds,
+      parentLabelCellId: genericRows ? null : inheritedParentLabelCellId,
+      rowKeyStrategy: effectiveRowKeyStrategy,
+      rowKeyCellIds: (matchedRowKeys ?? []).flatMap((cell) => cell ? [cell.id] : []),
+      includeEmptyRows: false,
       source: "manual",
     };
-    const inputIds = new Set(inputs.map((input) => input.id));
-    const previousGroup = recordGroups.find((group) => (
-      group.sectionId === section.id
-      && group.inputCellIds.some((inputId) => inputIds.has(inputId))
-    ));
-    const order = previousGroup?.order ?? Math.max(
-      0,
-      ...recordGroups
+    const previousByOrder = new Map(
+      recordGroups
         .filter((group) => group.sectionId === section.id)
-        .map((group) => group.order),
-    ) + 1;
-    const group: LayoutRecordGroup = {
-      id: previousGroup?.id ?? `record_${section.collectionPath}_${Date.now()}`,
-      sectionId: section.id,
-      order,
-      ...boundingRect(inputs, layout.canonicalWidth, layout.canonicalHeight),
-      inputCellIds: inputs.map((input) => input.id),
-      recordKeyField: "parity",
-      recordKeyValue: previousGroup?.recordKeyValue ?? String(order),
-      source: "manual",
+        .map((group) => [group.order, group]),
+    );
+    const groups: LayoutRecordGroup[] = rows.rows.map((row, index) => {
+      const inputs = row.inputCellIds
+        .map((inputId) => cellById.get(inputId))
+        .filter((cell): cell is LayoutCell => Boolean(cell));
+      const previous = previousByOrder.get(row.order);
+      const rowKeyCell = matchedRowKeys?.[index] ?? null;
+      return {
+        id: previous?.id ?? `record_${section.id}_${row.order}`,
+        sectionId: section.id,
+        order: row.order,
+        ...boundingRect(inputs, layout.canonicalWidth, layout.canonicalHeight),
+        inputCellIds: row.inputCellIds,
+        recordKeyField: genericRows ? "rowNumber" : "parity",
+        recordKeyValue: rowKeyCell?.text.trim()
+          || previous?.recordKeyValue
+          || String(row.order),
+        recordKeyCellId: rowKeyCell?.id ?? null,
+        source: "manual",
+      };
+    });
+    const nextSection = {
+      ...section,
+      recordLabelCellIds: labelIds,
+      parentLabelCellId: labelIds.includes(section.parentLabelCellId ?? "")
+        ? null
+        : section.parentLabelCellId,
+      rowKeyStrategy: effectiveRowKeyStrategy,
+      rowKeyCellIds: (matchedRowKeys ?? []).flatMap((cell) => cell ? [cell.id] : []),
+      includeEmptyRows: section.includeEmptyRows ?? false,
+      source: "manual" as const,
     };
-    setLayout((current) => ({
-      ...current,
-      layoutSchemaVersion: 3,
-      recordSections: (current.recordSections ?? []).some(
+    const genericEntriesByInput = new Map<string, LayoutLabelPoolEntry>();
+    if (genericRows) {
+      labels.forEach((label) => {
+        const columnInputs = layout.relations
+          .filter((relation) => relation.labelCellIds.includes(label.id))
+          .flatMap((relation) => {
+            const input = cellById.get(relation.inputCellId);
+            return input ? [input] : [];
+          })
+          .filter((cell, index, items) => items.findIndex((item) => item.id === cell.id) === index)
+          .sort((first, second) => (
+            first.y + first.height / 2 - (second.y + second.height / 2)
+          ));
+        const entries = createAutoRepeatedLabelPoolEntries(
+          label.text,
+          columnInputs.length,
+          availableTargets,
+        ) ?? [];
+        columnInputs.forEach((input, index) => {
+          const entry = entries[index];
+          if (entry) genericEntriesByInput.set(input.id, entry);
+        });
+      });
+    }
+    setLayout((current) => {
+      const sections = (current.recordSections ?? []).some(
         (candidate) => candidate.id === section.id,
       )
-        ? current.recordSections
-        : [...(current.recordSections ?? []), section],
-      recordGroups: [
-        ...(current.recordGroups ?? [])
-          .filter((item) => item.id !== group.id)
-          .map((item) => ({
-            ...item,
-            inputCellIds: item.inputCellIds.filter((id) => !inputIds.has(id)),
-          }))
-          .filter((item) => item.inputCellIds.length > 0),
-        group,
-      ],
-      relations: current.relations.map((relation) => {
-        if (!inputIds.has(relation.inputCellId)) return relation;
-        const fieldKey = relation.targetPath.split(".").at(-1);
-        const targetPath = fieldKey
-          ? `${section.collectionPath}.${order - 1}.${fieldKey}`
-          : relation.targetPath;
-        return targetByPath.has(targetPath)
-          ? { ...relation, targetPath, order }
-          : relation;
-      }),
-      recordStructureVerified: true,
-    }));
+        ? (current.recordSections ?? []).map((candidate) => (
+          candidate.id === section.id ? nextSection : candidate
+        ))
+        : [...(current.recordSections ?? []), nextSection];
+      const nextInputIds = new Set(groups.flatMap((group) => group.inputCellIds));
+      const nextGroups = [
+        ...(current.recordGroups ?? []).filter((group) => (
+          group.sectionId !== section.id
+          && !group.inputCellIds.some((inputId) => nextInputIds.has(inputId))
+        )),
+        ...groups,
+      ];
+      const relations = genericRows
+        ? renumberRelations(current.relations.map((relation) => {
+          const entry = genericEntriesByInput.get(relation.inputCellId);
+          return entry ? { ...relation, targetPath: entry.targetPath } : relation;
+        }), current.cells)
+        : current.relations;
+      const nextLabelPool = genericRows
+        ? [
+          ...(current.labelPool ?? []),
+          ...[...genericEntriesByInput.values()].filter((entry, index, entries) => (
+            entries.findIndex((candidate) => candidate.targetPath === entry.targetPath) === index
+            && !(current.labelPool ?? []).some(
+              (candidate) => candidate.targetPath === entry.targetPath,
+            )
+          )),
+        ]
+        : current.labelPool;
+      return {
+        ...current,
+        layoutSchemaVersion: 3,
+        recordSections: sections,
+        recordGroups: nextGroups,
+        relations,
+        labelPool: nextLabelPool,
+        recordStructureVerified: recordStructureIsLinked(sections, nextGroups),
+      };
+    });
     setSelectedRecordSectionId(section.id);
-    setSelectedIds(inputIds);
-    setSelectedId(inputs[0].id);
+    setSelectedId(labelIds[0] ?? null);
+    setSelectedIds(new Set(labelIds));
+    const labelNames = labels.map((label) => label.text.trim() || label.id).join(" / ");
     setMessage(
-      `${existingSection ? "" : `${section.title}を自動作成し、`}`
-      + `${section.title}の${order}番目のレコードとして、`
-      + `${inputs.length}個の記入欄をまとめました。`,
+      `${labelNames}を「${nextSection.title}」の列として指定し、${groups.length}行・`
+      + `${groups.reduce((total, group) => total + group.inputCellIds.length, 0)}個の記入欄を自動編成しました。`
+      + `${nextSection.rowKeyStrategy === "printed" ? `${nextSection.rowKeyCellIds?.length ?? 0}個の行番号を使用します。` : "上からの順番を行番号として使用します。"}`
+      + `${nextSection.recordType === "generic" ? "帳票上の見出しはなくても保存できます。" : nextSection.parentLabelCellId ? "親ラベルとの定義も維持されています。" : "次に親ラベルへ接続してください。"}`,
     );
+  };
+
+  const finishRecordLabelBand = (end: Point) => {
+    const startLabelId = linkLabelId.current;
+    linkLabelId.current = null;
+    setLinkPoint(null);
+    if (!startLabelId) return;
+    const startLabel = cellById.get(startLabelId);
+    if (!startLabel) return;
+    const labels = recordLabelCellsCrossedByLine(
+      {
+        x: startLabel.x + startLabel.width / 2,
+        y: startLabel.y + startLabel.height / 2,
+      },
+      end,
+      layout.cells.filter((cell) => cell.role === "label"),
+    );
+    if (labels.length < 2) {
+      setMessage("レコード作成では、最初の列ラベルから最後の列ラベルまで横方向にドラッグし、2個以上をまとめて選択してください。");
+      return;
+    }
+    createRecordsFromColumnLabels(labels.map((label) => label.id));
   };
 
   const finishParentLink = (end: Point) => {
@@ -924,35 +1627,48 @@ export function LayoutEditor({
     linkLabelId.current = null;
     setLinkPoint(null);
     if (!labelId) return;
-    const group = [...recordGroups].reverse().find((item) => pointInsideRect(end, item));
-    if (!group) {
-      setMessage("親ラベルから、青いレコード線上のセルまで線を引いてください。");
+    const recordLabel = [...layout.cells].reverse().find((cell) => (
+      cell.role === "label" && pointInsideRect(end, cell)
+    ));
+    const section = recordLabel
+      ? recordSections.find((item) => item.recordLabelCellIds.includes(recordLabel.id))
+      : undefined;
+    if (!recordLabel || !section) {
+      setMessage("親ラベルから、青線でまとめたレコード列ラベルのいずれかまで線を引いてください。");
       return;
     }
     const label = cellById.get(labelId);
-    setLayout((current) => ({
-      ...current,
-      recordSections: (current.recordSections ?? []).map((section) => (
-        section.id === group.sectionId
+    if (section.recordLabelCellIds.includes(labelId)) {
+      setMessage("レコード列ラベルとは別の、表全体を表す親ラベルから接続してください。");
+      return;
+    }
+    setLayout((current) => {
+      const sections = (current.recordSections ?? []).map((item) => (
+        item.collectionPath === section.collectionPath
           ? {
-            ...section,
+            ...item,
             parentLabelCellId: labelId,
-            title: section.title.trim() || label?.text.trim() || section.title,
-            source: "manual",
+            title: item.title.trim() || label?.text.trim() || item.title,
+            source: "manual" as const,
           }
-          : section
-      )),
-      recordStructureVerified: true,
-    }));
-    setSelectedRecordSectionId(group.sectionId);
-    setMessage(
-      `${label?.text || labelId}を`
-      + `${recordSectionById.get(group.sectionId)?.title ?? "レコード一覧"}の親ラベルに設定しました。`,
-    );
+          : item
+      ));
+      return {
+        ...current,
+        recordSections: sections,
+        recordStructureVerified: recordStructureIsLinked(
+          sections,
+          current.recordGroups ?? [],
+        ),
+      };
+    });
+    setSelectedRecordSectionId(section.id);
+    setMessage(`${label?.text || labelId}を${section.title}の帳票上の見出しに設定しました。`);
   };
 
   const roleCounts = {
     label: layout.cells.filter((cell) => cell.role === "label").length,
+    parentLabel: layout.cells.filter((cell) => cell.role === "parent_label").length,
     input: layout.cells.filter((cell) => cell.role === "input").length,
     mark: layout.cells.filter((cell) => cell.role === "mark").length,
     ignored: layout.cells.filter((cell) => cell.role === "ignored").length,
@@ -966,12 +1682,23 @@ export function LayoutEditor({
         && (cell.markSets ?? []).some((markSet) => /^(saleCalves|calvings)\.\d+\./.test(markSet.targetPath)))
       .map((cell) => cell.id),
   ]);
+  const genericSectionIds = new Set(
+    recordSections
+      .filter((section) => section.recordType === "generic")
+      .map((section) => section.id),
+  );
+  const genericRecordInputIds = new Set(
+    recordGroups
+      .filter((group) => genericSectionIds.has(group.sectionId))
+      .flatMap((group) => group.inputCellIds),
+  );
+  const structuredInputIds = new Set([...arrayInputIds, ...genericRecordInputIds]);
   const groupedInputIds = new Set(
     recordGroups.flatMap((group) => group.inputCellIds),
   );
-  const recordStructureReady = arrayInputIds.size === 0 || (
+  const recordStructureReady = structuredInputIds.size === 0 || (
     layout.recordStructureVerified === true
-    && [...arrayInputIds].every((inputId) => groupedInputIds.has(inputId))
+    && [...structuredInputIds].every((inputId) => groupedInputIds.has(inputId))
   );
   const hasMeaningAssignments = layout.relations.length > 0 || layout.cells.some(
     (cell) => cell.role === "mark" && (cell.markSets?.length ?? 0) > 0,
@@ -989,68 +1716,196 @@ export function LayoutEditor({
   const layoutReadyForOcr = hasMeaningAssignments
     && recordStructureReady
     && !hasUnassignedFields;
+  const templateReadyForOcr = layoutReadyForOcr && identityConfigurationReady;
 
   return (
     <div className="layout-editor" aria-busy={busy}>
       <fieldset className="layout-editor-fields" disabled={busy || disabled}>
       <div className="layout-commandbar" role="toolbar" aria-label="レイアウト編集">
-        <button type="button" onClick={() => void detect()} disabled={busy}>
-          {busy ? "検出中…" : "枠と文字を再検出"}
-        </button>
-        <span className="command-separator" />
-        <ModeButton current={mode} mode="select" label="選択" onChange={setMode} />
-        <ModeButton current={mode} mode="classify" label="区分変更" onChange={setMode} />
-        <ModeButton current={mode} mode="draw" label="矩形追加" onChange={setMode} />
-        <ModeButton current={mode} mode="link" label="意味づけ" onChange={setMode} />
-        <ModeButton current={mode} mode="record" label="レコード作成" onChange={setMode} />
-        <ModeButton current={mode} mode="parent" label="親ラベル接続" onChange={setMode} />
-        <button
+        {workflowStep && (
+          <strong className="layout-step-kicker">
+            {{ classify: "欄の種類", meaning: "読み取る内容", records: "繰り返し部分", identity: "書類の見分け方", review: "確認・保存" }[workflowStep]}
+          </strong>
+        )}
+        {showClassificationStep && (
+          <button type="button" onClick={() => void detect()} disabled={busy}>
+            {detecting ? "検出中…" : "枠を再検出"}
+          </button>
+        )}
+        {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <button
           type="button"
-          disabled={historyDepth === 0}
-          title="Ctrl+Z"
-          onClick={undoMeaning}
+          className="primary label-ocr-command"
+          onClick={() => void recognizeLabels()}
+          disabled={busy || !onRecognizeLabels}
         >
-          ↶ 意味づけを戻す
-        </button>
-        <span className="command-hint">同じ記入欄への複数ラベル対応</span>
+          {recognizingLabels ? "文字候補を取得中…" : "項目名の文字候補を取得"}
+        </button>}
+        {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <div className="ocr-alignment-switch" role="group" aria-label="OCR文字の配置">
+          <span>文字位置</span>
+          {([
+            ["left", "左", "左揃え"],
+            ["center", "中央", "中央揃え"],
+            ["right", "右", "右揃え"],
+          ] as const).map(([value, label, accessibleLabel]) => (
+            <button
+              key={value}
+              type="button"
+              className={ocrLabelAlignment === value ? "active" : ""}
+              aria-label={accessibleLabel}
+              aria-pressed={ocrLabelAlignment === value}
+              onClick={() => setOcrLabelAlignment(value)}
+            >
+                {label}
+              </button>
+            ))}
+          </div>}
+        {(showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && (
+          <span className="command-separator" />
+        )}
+        {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep) && (
+          <ModeButton current={mode} mode="select" label="選択" onChange={setMode} />
+        )}
+        {showClassificationStep && <ModeButton current={mode} mode="classify" label="区分変更" onChange={setMode} />}
+        {showClassificationStep && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
+        {showMeaningStep && (
+          <ModeButton
+            current={mode}
+            mode="link"
+            label="意味付け"
+            icon={<MeaningLinkIcon />}
+            onChange={setMode}
+          />
+        )}
+        {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
+        {showRecordStep && <ModeButton current={mode} mode="parent" label="見出しへ接続" onChange={setMode} />}
+        {showMeaningStep && (
+          <button
+            type="button"
+            disabled={historyDepth === 0}
+            title="Ctrl+Z"
+            onClick={undoMeaning}
+          >
+            ↶ 意味づけを戻す
+          </button>
+        )}
+        {showMeaningStep && <span className="command-hint">1つの項目名から複数の記入欄へ接続可能</span>}
+        <span className="command-separator" />
+        <div className="layout-magnifier-control" role="group" aria-label="拡大鏡">
+          <button
+            type="button"
+            className={magnifierEnabled ? "magnifier-toggle active" : "magnifier-toggle"}
+            aria-pressed={magnifierEnabled}
+            aria-label={magnifierEnabled ? "拡大鏡をオフにする" : "拡大鏡をオンにする"}
+            onClick={() => setMagnifierEnabled((current) => !current)}
+          >
+            <span className="mode-button-icon" aria-hidden="true"><MagnifierIcon /></span>
+            拡大鏡
+          </button>
+          <label className="layout-magnifier-slider">
+            <span>倍率</span>
+            <input
+              type="range"
+              aria-label="拡大率"
+              min="1.5"
+              max="6"
+              step="0.25"
+              value={magnifierScale}
+              disabled={!magnifierEnabled}
+              onChange={(event) => setMagnifierScale(Number(event.target.value))}
+            />
+            <span className="layout-magnifier-value">{formatMagnifierScale(magnifierScale)}倍</span>
+          </label>
+          <label className="layout-magnifier-slider">
+            <span>窓</span>
+            <input
+              type="range"
+              aria-label="拡大窓の大きさ"
+              min="140"
+              max="360"
+              step="20"
+              value={magnifierSize}
+              disabled={!magnifierEnabled}
+              onChange={(event) => setMagnifierSize(Number(event.target.value))}
+            />
+            <span className="layout-magnifier-value">{magnifierSize}px</span>
+          </label>
+        </div>
       </div>
 
       <div className="layout-instructions">
-        {mode === "select" && "クリックで1セル、Ctrl（MacはCmd）+クリックで複数セルを追加・解除できます。ドラッグで矩形範囲をまとめて選択することもできます。"}
-        {mode === "classify" && "クリックで「ラベル → 手書き文字欄 → 選択マーク欄 → 除外」を切替。Ctrl（MacはCmd）+クリック、またはドラッグで複数セルを選び、右側で一括指定できます。"}
-        {mode === "draw" && "検出されなかった手書き文字欄をドラッグして追加します。"}
-        {mode === "link" && "ラベルセルから手書き文字欄を通過するようにドラッグします。経路上の全記入欄へ、選択した保存先から行番号を進めて一括設定します。"}
-        {mode === "record" && "同じ行の端にある記入欄から反対端まで線を引きます。線が通過した価格・種雄牛名などが同じ産次として固定されます。"}
-        {mode === "parent" && "「売却子牛一覧」などの親ラベルセルから、所属させるレコード線上のセルまで線を引きます。"}
+        {workflowStep === "classify" && mode === "select" && "検出された枠を選び、右側で種類と項目名の文字候補を確認してください。"}
+        {workflowStep === "identity" && "帳票上で強調されている欄を複数選択できます。選択後、同じ書類と判断する基準とカードの見出しを指定してください。薄く表示された矩形は選択できません。"}
+        {workflowStep === "review" && "分類数、未割当、レコード構造を確認し、問題がなければ保存してください。"}
+        {workflowStep !== "identity" && workflowStep !== "review" && mode === "select" && "クリックで1つの枠、Ctrl（MacはCmd）+クリックで複数の枠を追加・解除できます。ドラッグで範囲をまとめて選択することもできます。"}
+        {workflowStep !== "review" && mode === "classify" && "変更する枠をクリックまたはドラッグで選び、右側で区分を明示的に指定してください。選択しただけでは区分は変わりません。"}
+        {workflowStep !== "review" && mode === "draw" && "検出されなかった記入欄をドラッグして追加します。"}
+        {workflowStep !== "review" && mode === "link" && "項目名から記入欄を通過するようにドラッグします。項目名がない記入欄は右側から保存する情報を直接指定できます。"}
+        {workflowStep !== "review" && mode === "record" && "車種名から備考など、同じ繰り返し表に含める複数の列見出しを横方向の1本の線で横断します。"}
+        {workflowStep !== "review" && mode === "parent" && "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。"}
       </div>
+      {message && !showReviewStep && (
+        <p className="layout-status" aria-live="polite">{message}</p>
+      )}
 
       <div className="layout-workbench">
-        <div className="mapping-canvas-wrap" aria-busy={detecting}>
+        <div ref={canvasWrapRef} className="mapping-canvas-wrap" aria-busy={detecting}>
           <canvas
             ref={canvasRef}
             width={layout.canonicalWidth}
             height={layout.canonicalHeight}
             tabIndex={0}
-            aria-label="帳票レイアウト編集キャンバス"
+            aria-label={showIdentityStep ? "書類を見分ける欄を選択する帳票プレビュー" : "帳票レイアウト編集キャンバス"}
             aria-describedby="layout-keyboard-help"
             className={`layout-mode-${mode}`}
+            onPointerEnter={(event) => queueMagnifier(event.clientX, event.clientY)}
+            onPointerLeave={() => {
+              magnifierPointerRef.current = null;
+              hideMagnifier();
+            }}
+            onClick={(event) => {
+              if (busy || disabled || mode !== "identity") return;
+              const hit = cellAt(point(event));
+              const candidate = hit ? identityCandidateByCellId.get(hit.id) : null;
+              if (!candidate) {
+                setMessage("この矩形は書類を見分ける欄には使用できません。単独の文字項目を選択してください。");
+                return;
+              }
+              setSelectedId(candidate.cell.id);
+              toggleIdentityCandidate(candidate);
+            }}
             onKeyDown={(event) => {
               if (busy || disabled || layout.cells.length === 0) return;
+              if (mode === "identity" && (event.key === "Enter" || event.key === " ")) {
+                const candidate = selectedId ? identityCandidateByCellId.get(selectedId) : null;
+                if (!candidate) return;
+                event.preventDefault();
+                toggleIdentityCandidate(candidate);
+                return;
+              }
               if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) return;
               event.preventDefault();
-              const currentIndex = layout.cells.findIndex((cell) => cell.id === selectedId);
+              const navigableCells = mode === "identity"
+                ? identityCandidates.map((candidate) => candidate.cell)
+                : layout.cells;
+              if (navigableCells.length === 0) return;
+              const currentIndex = navigableCells.findIndex((cell) => cell.id === selectedId);
               const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
               const nextIndex = currentIndex < 0
                 ? 0
-                : (currentIndex + delta + layout.cells.length) % layout.cells.length;
-              const nextId = layout.cells[nextIndex].id;
+                : (currentIndex + delta + navigableCells.length) % navigableCells.length;
+              const nextId = navigableCells[nextIndex].id;
               setSelectedId(nextId);
-              setSelectedIds(new Set([nextId]));
+              setSelectedIds(mode === "identity"
+                ? new Set(selectedIdentityCandidates.map((candidate) => candidate.cell.id))
+                : new Set([nextId]));
             }}
             onPointerDown={(event) => {
               if (busy || disabled) return;
               const location = point(event);
               const hit = cellAt(location);
+              if (mode === "identity") {
+                return;
+              }
               if (mode === "select" || mode === "classify") {
                 event.currentTarget.setPointerCapture?.(event.pointerId);
                 dragStart.current = location;
@@ -1059,21 +1914,18 @@ export function LayoutEditor({
                 return;
               }
               if (mode === "record") {
-                if (!hit || (hit.role !== "input" && hit.role !== "mark")) {
-                  setMessage("レコード作成は、行の端にある手書き文字欄または選択マーク欄から線を引き始めてください。");
+                if (!hit || hit.role !== "label") {
+                  setMessage("レコード作成では、最初の列ラベルから最後の列ラベルまで横方向にドラッグしてください。");
                   return;
                 }
                 event.currentTarget.setPointerCapture?.(event.pointerId);
-                dragStart.current = {
-                  x: hit.x + hit.width / 2,
-                  y: hit.y + hit.height / 2,
-                };
+                linkLabelId.current = hit.id;
                 setLinkPoint(location);
                 return;
               }
               if (mode === "link" || mode === "parent") {
                 const labelHit = [...layout.cells].reverse().find((cell) => (
-                  cell.role === "label"
+                  (cell.role === "label" || (mode === "parent" && cell.role === "parent_label"))
                   && location.x >= cell.x
                   && location.x <= cell.x + cell.width
                   && location.y >= cell.y
@@ -1097,6 +1949,7 @@ export function LayoutEditor({
               setDraft({ ...location, width: 0, height: 0 });
             }}
             onPointerMove={(event) => {
+              queueMagnifier(event.clientX, event.clientY);
               const location = point(event);
               if (
                 (mode === "draw" || mode === "select" || mode === "classify")
@@ -1104,8 +1957,9 @@ export function LayoutEditor({
               ) {
                 setDraft(rectFrom(dragStart.current, location));
               }
-              if (mode === "record" && dragStart.current) setLinkPoint(location);
-              if ((mode === "link" || mode === "parent") && linkLabelId.current) setLinkPoint(location);
+              if ((mode === "link" || mode === "record" || mode === "parent") && linkLabelId.current) {
+                setLinkPoint(location);
+              }
             }}
             onPointerUp={(event) => {
               const location = point(event);
@@ -1116,24 +1970,12 @@ export function LayoutEditor({
                 finishLink(location);
                 return;
               }
-              if (mode === "parent") {
-                finishParentLink(location);
+              if (mode === "record") {
+                finishRecordLabelBand(location);
                 return;
               }
-              if (mode === "record" && dragStart.current) {
-                const start = dragStart.current;
-                const endCell = cellAt(location);
-                const end = endCell?.role === "input" || endCell?.role === "mark"
-                  ? {
-                    x: endCell.x + endCell.width / 2,
-                    y: endCell.y + endCell.height / 2,
-                  }
-                  : location;
-                dragStart.current = null;
-                setLinkPoint(null);
-                if (Math.hypot(end.x - start.x, end.y - start.y) >= 8) {
-                  finishRecordLine(start, end);
-                }
+              if (mode === "parent") {
+                finishParentLink(location);
                 return;
               }
               if ((mode === "select" || mode === "classify") && dragStart.current) {
@@ -1151,16 +1993,6 @@ export function LayoutEditor({
                       setSelectedIds(new Set());
                     }
                     return;
-                  }
-                  if (mode === "classify" && !additive) {
-                    const role = hit.role === "label"
-                      ? "input"
-                      : hit.role === "input"
-                        ? "mark"
-                        : hit.role === "mark"
-                          ? "ignored"
-                          : "label";
-                    setRole(hit.id, role);
                   }
                   if (additive) {
                     const ids = new Set(selectedIds);
@@ -1220,8 +2052,24 @@ export function LayoutEditor({
               setLinkPoint(null);
             }}
           />
+          <div
+            ref={magnifierRef}
+            className="layout-magnifier"
+            aria-hidden="true"
+            style={{ width: magnifierSize, height: magnifierSize }}
+            hidden
+          >
+            <canvas
+              ref={magnifierCanvasRef}
+              className="layout-magnifier-canvas"
+              style={{ width: magnifierSize, height: magnifierSize }}
+            />
+            <span>{formatMagnifierScale(magnifierScale)}×</span>
+          </div>
           <span id="layout-keyboard-help" className="sr-only">
-            矢印キーでセルを順番に選択できます。右側のセル一覧、座標入力、意味づけ一覧からも全操作を行えます。
+            {showIdentityStep
+            ? "矢印キーで候補を移動し、Enterまたはスペースキーで書類を見分ける欄を追加または解除できます。"
+              : "矢印キーでセルを順番に選択できます。"}
           </span>
           {detecting && (
             <div className="layout-loading-overlay" role="status" aria-live="assertive">
@@ -1233,47 +2081,68 @@ export function LayoutEditor({
         </div>
 
         <aside className="layout-properties">
-          <h3>セル情報</h3>
-          <div className="cell-counts">
-            <span className="count-label">ラベル {roleCounts.label}</span>
-            <span className="count-input">手書き文字欄 {roleCounts.input}</span>
-            <span className="count-mark">選択マーク欄 {roleCounts.mark}</span>
-            <span>除外 {roleCounts.ignored}</span>
-          </div>
-          <label className="accessible-cell-select">
-            セル一覧から選択
-            <select
-              value={selectedId ?? ""}
-              onChange={(event) => {
-                const id = event.target.value || null;
-                setSelectedId(id);
-                setSelectedIds(id ? new Set([id]) : new Set());
-              }}
-            >
-              <option value="">セルを選択</option>
-              {layout.cells.map((cell, index) => (
-                <option key={cell.id} value={cell.id}>
-                  {index + 1}. {cell.role === "label"
-                    ? "ラベル"
-                    : cell.role === "input"
-                      ? "記入欄"
-                      : cell.role === "mark"
-                        ? "選択マーク欄"
-                        : "除外"} · {cell.text || cell.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          {!selected && <p className="empty-property">帳票上の矩形を選択してください。</p>}
-          {selectedCells.length > 1 && (
+          <h3>{workflowStep
+            ? { classify: "欄の種類", meaning: "読み取る内容", records: "繰り返し部分", identity: "書類の見分け方", review: "確認・保存" }[workflowStep]
+            : "選択セル"}</h3>
+          {!showIdentityStep && (
+            <label className="accessible-cell-select sr-only">
+              セル一覧から選択
+              <select
+                value={selectedId ?? ""}
+                onChange={(event) => {
+                  const id = event.target.value || null;
+                  setSelectedId(id);
+                  setSelectedIds(id ? new Set([id]) : new Set());
+                }}
+              >
+                <option value="">セルを選択</option>
+                {cellsVisibleInList.map((cell, index) => (
+                  <option key={cell.id} value={cell.id}>
+                    {index + 1}. {cell.role === "label"
+                      ? "項目名"
+                      : cell.role === "parent_label"
+                        ? "見出し"
+                      : cell.role === "input"
+                        ? "記入欄"
+                          : cell.role === "mark"
+                            ? "選択欄"
+                          : cell.role === "record_key_cell"
+                            ? "行番号"
+                            : cell.role === "column_key_cell"
+                              ? "列番号"
+                            : "読み取らない"} · {cell.text || cell.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!selected && workflowStep !== "identity" && workflowStep !== "review" && <p className="empty-property">帳票上の矩形を選択してください。</p>}
+          {showClassificationStep && selectedCells.length > 1 && (
             <section className="bulk-selection">
               <h3>範囲選択: {selectedCells.length} セル</h3>
               <p>区分変更モードでドラッグしたセルです。区分を一括で指定できます。</p>
               <div className="role-buttons">
-                <button type="button" className="label-role" onClick={() => setRoles(selectedIds, "label")}>ラベルにする</button>
+                <button type="button" className="label-role" onClick={() => setRoles(selectedIds, "label")}>項目名にする</button>
+                <button type="button" className="parent-label-role" onClick={() => setRoles(selectedIds, "parent_label")}>見出しにする</button>
                 <button type="button" className="input-role" onClick={() => setRoles(selectedIds, "input")}>記入欄にする</button>
-                <button type="button" className="mark-role" onClick={() => setRoles(selectedIds, "mark")}>選択マーク欄にする</button>
-                <button type="button" onClick={() => setRoles(selectedIds, "ignored")}>無視する</button>
+                <button type="button" className="mark-role" onClick={() => setRoles(selectedIds, "mark")}>選択欄にする</button>
+                <button
+                  type="button"
+                  className="record-key-role"
+                  title="表の各行を識別する「1、2、3…」などの印刷済みセル"
+                  onClick={() => setRoles(selectedIds, "record_key_cell")}
+                >
+                  行番号にする
+                </button>
+                <button
+                  type="button"
+                  className="record-key-role"
+                  title="表の各列を識別する印刷済みセル"
+                  onClick={() => setRoles(selectedIds, "column_key_cell")}
+                >
+                  列番号にする
+                </button>
+                <button type="button" onClick={() => setRoles(selectedIds, "ignored")}>選択した枠を読み取らない</button>
               </div>
               <button
                 type="button"
@@ -1287,27 +2156,51 @@ export function LayoutEditor({
               </button>
             </section>
           )}
-          {selected && (
+          {selected && (showLabelStep || showClassificationStep || showMeaningStep) && (
             <div className="property-form">
-              <label>セルID<input value={selected.id} disabled /></label>
-              <fieldset>
-                <legend>区分</legend>
-                <div className="role-buttons">
-                  <button className={selected.role === "label" ? "active label-role" : ""} onClick={() => setRole(selected.id, "label")}>ラベル</button>
-                  <button className={selected.role === "input" ? "active input-role" : ""} onClick={() => setRole(selected.id, "input")}>手書き文字欄</button>
-                  <button className={selected.role === "mark" ? "active mark-role" : ""} onClick={() => setRole(selected.id, "mark")}>選択マーク欄</button>
-                  <button className={selected.role === "ignored" ? "active" : ""} onClick={() => setRole(selected.id, "ignored")}>除外</button>
-                </div>
-              </fieldset>
-              <label>OCRラベル文字
-                <input
-                  value={selected.text}
-                  disabled={selected.role !== "label"}
-                  placeholder="自動検出した文字を修正"
-                  onChange={(event) => patchCell(selected.id, { text: event.target.value })}
-                />
-              </label>
-              {selected.role === "input" && (
+              {showClassificationStep && (
+                <fieldset>
+                  <legend>区分</legend>
+                  <div className="role-buttons">
+                    <button className={selected.role === "label" ? "active label-role" : ""} onClick={() => setRole(selected.id, "label")}>項目名</button>
+                    <button className={selected.role === "parent_label" ? "active parent-label-role" : ""} onClick={() => setRole(selected.id, "parent_label")}>見出し</button>
+                    <button className={selected.role === "input" ? "active input-role" : ""} onClick={() => setRole(selected.id, "input")}>記入欄</button>
+                    <button className={selected.role === "mark" ? "active mark-role" : ""} onClick={() => setRole(selected.id, "mark")}>選択欄</button>
+                    <button
+                      className={selected.role === "record_key_cell" ? "active record-key-role" : "record-key-role"}
+                      title="表の各行を識別する「1、2、3…」などの印刷済みセル"
+                      onClick={() => setRole(selected.id, "record_key_cell")}
+                    >
+                      行番号
+                    </button>
+                    <button
+                      className={selected.role === "column_key_cell" ? "active record-key-role" : "record-key-role"}
+                      title="表の各列を識別する印刷済みセル"
+                      onClick={() => setRole(selected.id, "column_key_cell")}
+                    >
+                      列番号
+                    </button>
+                    <button className={selected.role === "ignored" ? "active" : ""} onClick={() => setRole(selected.id, "ignored")}>読み取らない</button>
+                  </div>
+                </fieldset>
+              )}
+              {showLabelStep && (selected.role === "label" || selected.role === "parent_label") && (
+                <label>項目名の文字候補
+                  <input
+                    value={selected.text}
+                    placeholder="未認識の場合は入力"
+                    onChange={(event) => patchCell(selected.id, { text: event.target.value })}
+                    onBlur={() => {
+                      if (findLabelPoolMatch(selected.text, labelPoolEntries)) return;
+                      const entry = ensureAutoLabelPoolEntry(selected.text);
+                      if (entry) {
+                        setMessage(`未登録ラベル「${entry.label}」を候補プールへ自動追加しました。`);
+                      }
+                    }}
+                  />
+                </label>
+              )}
+              {showClassificationStep && selected.role === "input" && (
                 <label>
                   矩形内の印刷ラベル（読み取りから除外）
                   <input
@@ -1323,7 +2216,7 @@ export function LayoutEditor({
                   </small>
                 </label>
               )}
-              {selected.role === "mark" && (
+              {showMeaningStep && selected.role === "mark" && (
                 <MarkCellEditor
                   cell={selected}
                   batchCells={selectedCells.filter((cell) => cell.role === "mark")}
@@ -1345,57 +2238,42 @@ export function LayoutEditor({
                   onBatchChange={patchMarkCells}
                 />
               )}
-              <fieldset className="geometry-editor">
-                <legend>位置と大きさ</legend>
-                {([
-                  ["x", "X", layout.canonicalWidth - selected.width],
-                  ["y", "Y", layout.canonicalHeight - selected.height],
-                  ["width", "幅", layout.canonicalWidth - selected.x],
-                  ["height", "高さ", layout.canonicalHeight - selected.y],
-                ] as const).map(([key, label, maximum]) => (
-                  <label key={key}>
-                    {label}
-                    <input
-                      type="number"
-                      min={key === "width" || key === "height" ? 8 : 0}
-                      max={Math.max(key === "width" || key === "height" ? 8 : 0, maximum)}
-                      value={selected[key]}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (!Number.isFinite(value)) return;
-                        const minimum = key === "width" || key === "height" ? 8 : 0;
-                        patchCell(selected.id, {
-                          [key]: Math.round(Math.max(minimum, Math.min(value, maximum))),
-                        });
-                      }}
-                    />
-                  </label>
-                ))}
-                <small>検出確度 {Math.round(selected.confidence * 100)}%</small>
-              </fieldset>
-              <button
+              {showClassificationStep && <button
                 className="danger-button compact"
                 type="button"
                 onClick={() => {
-                  setLayout((current) => ({
-                    ...current,
-                    cells: current.cells.filter((cell) => cell.id !== selected.id),
-                    relations: current.relations.filter((relation) => (
-                      relation.inputCellId !== selected.id
-                      && !relation.labelCellIds.includes(selected.id)
-                    )),
-                    recordGroups: (current.recordGroups ?? [])
-                      .map((group) => ({
-                        ...group,
-                        inputCellIds: group.inputCellIds.filter((id) => id !== selected.id),
-                      }))
-                      .filter((group) => group.inputCellIds.length > 0),
-                    recordSections: (current.recordSections ?? []).map((section) => (
-                      section.parentLabelCellId === selected.id
-                        ? { ...section, parentLabelCellId: null }
-                        : section
-                    )),
-                  }));
+                  setLayout((current) => {
+                    const invalidatedSectionIds = new Set(
+                      (current.recordSections ?? [])
+                        .filter((section) => section.recordLabelCellIds.includes(selected.id))
+                        .map((section) => section.id),
+                    );
+                    return {
+                      ...current,
+                      cells: current.cells.filter((cell) => cell.id !== selected.id),
+                      relations: current.relations.filter((relation) => (
+                        relation.inputCellId !== selected.id
+                        && !relation.labelCellIds.includes(selected.id)
+                      )),
+                      recordGroups: (current.recordGroups ?? [])
+                        .filter((group) => !invalidatedSectionIds.has(group.sectionId))
+                        .map((group) => ({
+                          ...group,
+                          inputCellIds: group.inputCellIds.filter((id) => id !== selected.id),
+                        }))
+                        .filter((group) => group.inputCellIds.length > 0),
+                      recordSections: (current.recordSections ?? []).map((section) => ({
+                        ...section,
+                        recordLabelCellIds: section.recordLabelCellIds.includes(selected.id)
+                          ? []
+                          : section.recordLabelCellIds,
+                        parentLabelCellId: section.parentLabelCellId === selected.id
+                          ? null
+                          : section.parentLabelCellId,
+                      })),
+                      recordStructureVerified: false,
+                    };
+                  });
                   setSelectedId(null);
                   setSelectedIds((current) => {
                     const next = new Set(current);
@@ -1405,37 +2283,14 @@ export function LayoutEditor({
                 }}
               >
                 矩形を完全に削除
-              </button>
+              </button>}
             </div>
           )}
 
-          <div className="accessible-layout-adder">
-            <strong>座標を指定して記入欄を追加</strong>
-            <div>
-              {(["x", "y", "width", "height"] as const).map((key) => (
-                <label key={key}>
-                  {{ x: "X", y: "Y", width: "幅", height: "高さ" }[key]}
-                  <input
-                    type="number"
-                    min={key === "width" || key === "height" ? 8 : 0}
-                    max={key === "x" || key === "width" ? layout.canonicalWidth : layout.canonicalHeight}
-                    value={manualRect[key]}
-                    onChange={(event) => setManualRect((current) => ({
-                      ...current,
-                      [key]: Math.max(0, Number(event.target.value) || 0),
-                    }))}
-                  />
-                </label>
-              ))}
-            </div>
-            <button type="button" className="secondary compact" onClick={addManualCell}>
-              記入欄を追加
-            </button>
-          </div>
-
-          <h3>意味づけの保存先</h3>
+          {showMeaningStep && <>
+          <h3>読み取る内容の保存先</h3>
           <label className="property-select">
-            JSON項目
+            保存する情報
             <select
               value={selectedPath}
               onChange={(event) => {
@@ -1446,7 +2301,11 @@ export function LayoutEditor({
                 }
               }}
             >
-              <option value="">ラベル文字から自動推定</option>
+              <option value="">
+                {selected && (selected.role === "label" || selected.role === "parent_label")
+                  ? `${selected.text.trim() || "未認識"}（文字候補）`
+                  : "項目名を選択"}
+              </option>
               {sections.map(([section, items]) => (
                 <optgroup key={section} label={section}>
                   {items.map((target) => (
@@ -1459,158 +2318,260 @@ export function LayoutEditor({
             </select>
           </label>
           <p className="property-note">
-            {targetByPath.get(selectedPath)?.label ?? "ラベル文字から保存先を自動推定"}して、次に意味づけした記入欄を保存します。
+            {targetByPath.get(selectedPath)?.label
+              ? `${targetByPath.get(selectedPath)?.label}として、次に意味づけした記入欄を保存します。`
+              : selected && (selected.role === "label" || selected.role === "parent_label")
+                ? `文字候補「${selected.text.trim() || "未認識"}」から保存先を自動推定します。`
+                : "項目名を選択すると、文字候補をここに表示します。"}
           </p>
-          {selected?.role === "input" && (
-            <div className="direct-meaning-editor">
-              <strong>選択中の矩形へ直接意味づけ</strong>
-              <span>
-                別のラベル矩形がない欄や、ラベルと手書き欄が一つの矩形に混在する場合に使用します。
-              </span>
-              <button
-                type="button"
-                className="secondary compact"
-                disabled={!selectedPath}
-                onClick={() => assignSelectedInputDirectly()}
-              >
-                選択した保存先をこの矩形に設定
-              </button>
+          {selected?.role === "input" && customTargetAddition("sidebar", "新しい保存項目を追加")}
+          </>}
+
+          {workflowStep === "records" && (
+            <div className="wizard-side-summary">
+              <strong>列ラベルをまとめる</strong>
+              <p>複数の列見出しを横断すると、行番号または上からの順番で各行を自動編成します。帳票上の見出しは任意です。</p>
+              <span>{recordGroups.length}レコードを定義済み</span>
             </div>
           )}
-          <div className="accessible-link-editor">
-            <strong>一覧から意味づけ</strong>
-            <label>
-              ラベルセル
-              <select value={accessibleLabelId} onChange={(event) => setAccessibleLabelId(event.target.value)}>
-                <option value="">選択してください</option>
-                {layout.cells.filter((cell) => cell.role === "label").map((cell) => (
-                  <option key={cell.id} value={cell.id}>{cell.text || cell.id}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              接続先セル
-              <select value={accessibleInputId} onChange={(event) => setAccessibleInputId(event.target.value)}>
-                <option value="">選択してください</option>
-                {layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").map((cell) => (
-                  <option key={cell.id} value={cell.id}>
-                    {cell.id}{cell.role === "mark" ? "（選択マーク欄）" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="secondary compact"
-              disabled={!accessibleLabelId || !accessibleInputId}
-              onClick={addAccessibleRelation}
-            >
-              選んだ2セルを意味づけ
-            </button>
-          </div>
-          <div className="custom-target-adder">
-            <strong>JSON項目にないラベルを追加</strong>
-            <label>
-              表示名
-              <input
-                value={customLabel}
-                maxLength={100}
-                placeholder="例: 治療歴"
-                onChange={(event) => setCustomLabel(event.target.value)}
-              />
-            </label>
-            <label>
-              JSONキー
-              <input
-                value={customKey}
-                maxLength={100}
-                placeholder="例: treatmentHistory"
-                onChange={(event) => setCustomKey(event.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="secondary compact"
-              disabled={!customLabel.trim() || !customKey.trim()}
-              onClick={() => {
-                const key = normalizeCustomKey(customKey);
-                if (!key) {
-                  setMessage("JSONキーには空白、ピリオド、角括弧を使用できません。");
-                  return;
-                }
-                const path = `customFields.${key}`;
-                if (targetByPath.has(path)) {
-                  setSelectedPath(path);
-                  setMessage(`${path} は追加済みです。`);
-                  return;
-                }
-                const target = {
-                  path,
-                  label: customLabel.trim(),
-                  section: "追加項目",
-                };
-                setCustomTargets((current) => [...current, target]);
-                setSelectedPath(path);
-                setCustomLabel("");
-                setCustomKey("");
-                setMessage(`${target.label} を ${path} として追加しました。ラベルから記入欄へ意味づけしてください。`);
-              }}
-            >
-              項目を追加
-            </button>
-            <small>追加項目は結果JSONの customFields 配下へ保存されます。</small>
-          </div>
+          {showIdentityStep && (
+            <div className="document-identity-canvas-setting">
+              <span className="panel-kicker">DOCUMENT MATCHING</span>
+              <strong>帳票上の欄を複数選択</strong>
+              <p>
+                同じ書類か判断する基準と、違いを確認する情報を選択します。選択済みの矩形をもう一度クリックすると解除できます。
+              </p>
+              <dl>
+                <div><dt>選択できる欄</dt><dd>{identityCandidates.length}件</dd></div>
+                <div><dt>選択中</dt><dd>{selectedIdentityCandidates.length}件</dd></div>
+              </dl>
+              {selectedIdentityCandidates.length > 0 ? (
+                <div className="identity-field-list" aria-live="polite">
+                  {selectedIdentityCandidates.map((candidate) => {
+                    const field = selectedIdentityByPath.get(candidate.targetPath)!;
+                    return (
+                      <section className={field.matchRole === "primary" ? "primary-match" : "confirmation-match"} key={candidate.targetPath}>
+                        <header>
+                          <div>
+                            <strong>{candidate.label}</strong>
+                            <small>{field.matchRole === "primary" ? "同じ書類と判断する基準" : "違っていたら確認する情報"}</small>
+                          </div>
+                          <button type="button" className="ghost compact" onClick={() => toggleIdentityCandidate(candidate)}>解除</button>
+                        </header>
+                        <label>
+                          照合での役割
+                          <select
+                            aria-label={`${candidate.label}の照合での役割`}
+                            value={field.matchRole}
+                            onChange={(event) => updateIdentityField(
+                              candidate.targetPath,
+                              "matchRole",
+                              event.target.value as DocumentIdentity["matchRole"],
+                            )}
+                          >
+                            <option value="primary">同じ書類と判断する基準</option>
+                            <option value="confirmation">違っていたら確認</option>
+                          </select>
+                        </label>
+                        <label>
+                          カードでの表示
+                          <select
+                            aria-label={`${candidate.label}のカードでの表示`}
+                            value={field.displayRole}
+                            onChange={(event) => updateIdentityField(
+                              candidate.targetPath,
+                              "displayRole",
+                              event.target.value as DocumentIdentity["displayRole"],
+                            )}
+                          >
+                            <option value="title">一覧で大きく表示</option>
+                            <option value="subtitle">見出しの下に表示</option>
+                            <option value="none">カードには表示しない</option>
+                          </select>
+                        </label>
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="inline-warning">強調された矩形をクリックし、書類を見分ける情報を選択してください。</p>
+              )}
+              {selectedIdentityCandidates.length > 0 && (
+                <div className="identity-card-preview" aria-label="書類カードの表示プレビュー">
+                  <span>カード表示プレビュー</span>
+                  <strong>{titleIdentityField?.label ?? "見出しを選択"}</strong>
+                  <small>{subtitleIdentityField?.label ?? (
+                    primaryIdentityField?.targetPath !== titleIdentityField?.targetPath
+                      ? primaryIdentityField?.label
+                      : "補足表示なし"
+                  )}</small>
+                </div>
+              )}
+              {!identityConfigurationReady && selectedIdentityCandidates.length > 0 && (
+                <p className="inline-warning">
+                  同じ書類と判断する基準を1つ指定するか、2項目以上をすべて「違っていたら確認」にしてください。カードの見出しは1つ指定してください。
+                </p>
+              )}
+              {usesCombinedConfirmation && (
+                <p className="identity-combination-note">
+                  選択した項目がすべて以前の読み取りと違う場合に確認します。
+                </p>
+              )}
+              {identityCandidates.length === 0 && (
+                <p className="inline-warning">
+                  選択できる欄がありません。意味づけ工程で、繰り返し行ではない文字欄へ項目を割り当ててください。
+                </p>
+              )}
+            </div>
+          )}
+          {workflowStep === "review" && (
+            <div className="wizard-review-summary">
+              <dl>
+                <div><dt>項目名・見出し</dt><dd>{roleCounts.label + roleCounts.parentLabel}</dd></div>
+                <div><dt>記入欄</dt><dd>{roleCounts.input + roleCounts.mark}</dd></div>
+                <div><dt>内容設定済み</dt><dd>{meaningAssignedCellIds.size}</dd></div>
+                <div><dt>未割当</dt><dd>{hasUnassignedFields ? "あり" : "なし"}</dd></div>
+                <div><dt>繰り返し部分</dt><dd>{recordGroups.length}</dd></div>
+                <div><dt>照合条件</dt><dd>{usesCombinedConfirmation ? "選択項目がすべて違うとき確認" : primaryIdentityField?.label ?? "未選択"}</dd></div>
+                <div><dt>確認する情報</dt><dd>{documentIdentityFields.filter((field) => field.matchRole === "confirmation").map((field) => field.label).join("、") || "なし"}</dd></div>
+                <div><dt>カードの見出し</dt><dd>{titleIdentityField?.label ?? "未選択"}</dd></div>
+                <div><dt>保存判定</dt><dd>{layoutReadyForOcr && identityConfigurationReady ? "保存可能" : "要修正"}</dd></div>
+              </dl>
+            </div>
+          )}
         </aside>
       </div>
 
-      <section className="record-structure-editor">
+      {showMeaningStep && (
+        <section className="meaning-target-manager" aria-label="保存する情報を直接指定">
+          <header>
+            <div>
+              <span className="panel-kicker">保存する情報</span>
+              <h3>登録済みの項目から保存先を選ぶ</h3>
+              <p>
+                登録済みの項目を確認してから、プレビューで選択した記入欄へ割り当てます。
+              </p>
+            </div>
+            <span className="meaning-target-count">
+              登録済み {labelPoolEntries.length}項目
+            </span>
+          </header>
+          <div className={`meaning-target-selection ${selected?.role === "input" ? "ready" : "waiting"}`}>
+            <strong>{selected?.role === "input" ? "選択中の記入欄" : "記入欄を選択してください"}</strong>
+            <span>{selected?.role === "input"
+              ? selected.id
+              : "先にプレビュー上の記入欄を選択すると、項目をクリックして割り当てられます。"}</span>
+          </div>
+          {customTargetAddition("catalog", "一覧にない項目を追加")}
+          {labelPoolEntries.length > 0 ? <>
+            <div className="meaning-target-filters">
+              <label>
+                登録済み項目を検索
+                <input
+                  type="search"
+                  value={meaningCatalogQuery}
+                  placeholder="項目名で検索"
+                  onChange={(event) => setMeaningCatalogQuery(event.target.value)}
+                />
+              </label>
+              <label>
+                分類
+                <select
+                  value={meaningCatalogSection}
+                  onChange={(event) => setMeaningCatalogSection(event.target.value)}
+                >
+                  <option value="all">すべての分類</option>
+                  {meaningCatalogSections.map((section) => (
+                    <option key={section} value={section}>{section}</option>
+                  ))}
+                </select>
+              </label>
+              <span>{filteredLabelPoolEntries.length}項目を表示</span>
+            </div>
+            <div className="meaning-pool-list" aria-label="登録済みの保存項目">
+              {filteredLabelPoolEntries.map((entry) => {
+              const inputCellId = selected?.role === "input" ? selected.id : null;
+              const targetPath = inputCellId
+                ? resolveLabelPoolTargetPath(
+                  entry,
+                  inputCellId,
+                  recordGroups,
+                  recordSections,
+                  assignedPaths,
+                )
+                : null;
+              const active = inputCellId !== null && layout.relations.some((relation) => (
+                relation.inputCellId === inputCellId
+                && entry.paths.includes(relation.targetPath)
+              ));
+              const usageCount = labelPoolUsageCounts.get(entry.key) ?? 0;
+              const canAssign = inputCellId !== null && targetPath !== null;
+              return (
+                <button
+                  type="button"
+                  key={entry.key}
+                  className={active ? "active" : ""}
+                  aria-disabled={!canAssign}
+                  aria-label={`${entry.section}・${entry.label}${canAssign ? "をこの欄に設定" : ""}`}
+                  onClick={() => {
+                    if (inputCellId && targetPath) {
+                      assignSelectedInputDirectly(targetPath);
+                      return;
+                    }
+                    setMessage("先にプレビュー上の記入欄を選択してください。");
+                  }}
+                >
+                  <span>{entry.label}</span>
+                  <small>{entry.section} · {usageCount > 0 ? `${usageCount}か所で使用` : "未使用"}</small>
+                </button>
+              );
+              })}
+              {filteredLabelPoolEntries.length === 0 && (
+                <p className="meaning-pool-empty">条件に一致する登録済み項目はありません。</p>
+              )}
+            </div>
+          </> : (
+            <div className="meaning-pool-empty-state">
+              <strong>このテンプレートには保存する項目が登録されていません</strong>
+              <span>必要な項目を追加すると、このテンプレートだけの候補として表示されます。</span>
+            </div>
+          )}
+        </section>
+      )}
+
+      {showRecordStep && <section className="record-structure-editor">
         <div className="record-structure-head">
           <div>
             <span className="eyebrow">RECORD STRUCTURE</span>
-            <h3>親セクションと行レコード</h3>
-            <p>同じ行の価格・種雄牛名などを1レコードとして束ね、さらに親の一覧名へ接続します。</p>
+            <h3>繰り返し表の行と列</h3>
+            <p>車種名・車台番号などの列をまとめ、印刷された行番号または上からの順番で各行を編成します。帳票上の見出しは任意です。</p>
           </div>
           <div className="record-structure-status">
             <span className={layout.recordStructureVerified ? "structure-verified" : "structure-unverified"}>
-              {layout.recordStructureVerified ? "構造確認済み" : "構造未確認"}
+              {layout.recordStructureVerified
+                ? "繰り返し表を定義済み"
+                : hasIncompleteLegacyRecordSection
+                  ? "帳票上の見出しが未設定"
+                  : "表の列が未設定"}
             </span>
-            {!layout.recordStructureVerified && recordGroups.length > 0 && (
-              <button
-                type="button"
-                className="secondary compact"
-                onClick={() => {
-                  setLayout((current) => ({
-                    ...current,
-                    recordStructureVerified: true,
-                  }));
-                  setMessage("表示されている親セクション・行順・産次キーを確認済みにしました。");
-                }}
-              >
-                このレコード構造を確認
-              </button>
-            )}
           </div>
         </div>
         <div className="record-section-adder">
-          <label>親セクション名
+          <label>繰り返し表の名前
             <input
               value={recordSectionTitle}
               maxLength={200}
-              placeholder="例: 売却子牛一覧"
+              placeholder="例: 車両明細"
               onChange={(event) => setRecordSectionTitle(event.target.value)}
             />
           </label>
-          <label>レコードの保存先
+          <label>行の決め方
             <select
-              value={recordCollectionPath}
-              onChange={(event) => {
-                const collection = event.target.value as "saleCalves" | "calvings";
-                setRecordCollectionPath(collection);
-                setRecordSectionTitle(collection === "saleCalves" ? "売却子牛一覧" : "繁殖履歴");
-              }}
+              value={rowKeyStrategy}
+              onChange={(event) => setRowKeyStrategy(event.target.value as "printed" | "position")}
             >
-              <option value="saleCalves">売却子牛レコード</option>
-              <option value="calvings">繁殖履歴レコード</option>
+              <option value="printed">印刷された行番号を使う</option>
+              <option value="position">上から順番に行を作る</option>
             </select>
           </label>
           <button
@@ -1618,8 +2579,9 @@ export function LayoutEditor({
             className="secondary"
             disabled={!recordSectionTitle.trim()}
             onClick={() => {
+              const collectionPath = `genericRecords.${genericRecordCollectionKey(recordSectionTitle, recordSections)}`;
               const existing = recordSections.find(
-                (section) => section.collectionPath === recordCollectionPath,
+                (section) => section.recordType === "generic" && section.title === recordSectionTitle.trim(),
               );
               if (existing) {
                 setSelectedRecordSectionId(existing.id);
@@ -1627,11 +2589,15 @@ export function LayoutEditor({
                 return;
               }
               const section: LayoutRecordSection = {
-                id: `section_${recordCollectionPath}_${Date.now()}`,
+                id: `section_${collectionPath.replace(/[^A-Za-z0-9_]/g, "_")}_${Date.now()}`,
                 title: recordSectionTitle.trim(),
-                collectionPath: recordCollectionPath,
-                recordType: recordCollectionPath === "saleCalves" ? "saleCalf" : "calving",
+                collectionPath,
+                recordType: "generic",
+                recordLabelCellIds: [],
                 parentLabelCellId: null,
+                rowKeyStrategy,
+                rowKeyCellIds: [],
+                includeEmptyRows: false,
                 source: "manual",
               };
               setLayout((current) => ({
@@ -1641,15 +2607,15 @@ export function LayoutEditor({
                 recordStructureVerified: false,
               }));
               setSelectedRecordSectionId(section.id);
-              setMessage(`${section.title}を作成しました。次に「レコード作成」で各行を線でつないでください。`);
+              setMessage(`${section.title}を作成しました。次に「繰り返し部分をまとめる」で、表に含める列ラベルを横方向に横断してください。`);
             }}
           >
-            親セクションを追加
+            繰り返し表を追加
           </button>
         </div>
 
         {recordSections.length > 0 && (
-          <div className="record-section-tabs" role="tablist" aria-label="親セクション">
+          <div className="record-section-tabs" role="tablist" aria-label="繰り返し表">
             {recordSections.map((section) => (
               <button
                 type="button"
@@ -1669,7 +2635,7 @@ export function LayoutEditor({
           .map((section) => (
             <div className="record-section-panel" key={section.id}>
               <div className="record-section-properties">
-                <label>親セクション表示名
+                <label>表の表示名
                   <input
                     value={section.title}
                     maxLength={200}
@@ -1680,36 +2646,83 @@ export function LayoutEditor({
                           ? { ...item, title: event.target.value, source: "manual" }
                           : item
                       )),
-                      recordStructureVerified: true,
+                      recordStructureVerified: current.recordStructureVerified,
                     }))}
                   />
                 </label>
-                <label>親ラベルセル
+                <label>行の決め方
                   <select
-                    value={section.parentLabelCellId ?? ""}
+                    value={section.rowKeyStrategy ?? "position"}
                     onChange={(event) => setLayout((current) => ({
                       ...current,
                       recordSections: (current.recordSections ?? []).map((item) => (
                         item.id === section.id
                           ? {
                             ...item,
-                            parentLabelCellId: event.target.value || null,
-                            source: "manual",
+                            rowKeyStrategy: event.target.value as "printed" | "position",
+                            rowKeyCellIds: event.target.value === "position"
+                              ? []
+                              : item.rowKeyCellIds ?? [],
+                            source: "manual" as const,
                           }
                           : item
                       )),
-                      recordStructureVerified: true,
                     }))}
                   >
-                    <option value="">線を引く、またはここで選択</option>
+                    <option value="printed">印刷された行番号を使う</option>
+                    <option value="position">上から順番に行を作る</option>
+                  </select>
+                </label>
+                <label>帳票上の見出し（任意）
+                  <select
+                    value={section.parentLabelCellId ?? ""}
+                    onChange={(event) => setLayout((current) => {
+                      const sections = (current.recordSections ?? []).map((item) => (
+                        item.id === section.id
+                          ? {
+                            ...item,
+                            parentLabelCellId: event.target.value || null,
+                            source: "manual" as const,
+                          }
+                          : item
+                      ));
+                      return {
+                        ...current,
+                        recordSections: sections,
+                        recordStructureVerified: recordStructureIsLinked(
+                          sections,
+                          current.recordGroups ?? [],
+                        ),
+                      };
+                    })}
+                  >
+                    <option value="">見出しなし</option>
                     {layout.cells
-                      .filter((cell) => cell.role === "label")
+                      .filter((cell) => (
+                        (cell.role === "label" || cell.role === "parent_label")
+                        && !section.recordLabelCellIds.includes(cell.id)
+                      ))
                       .map((cell) => (
                         <option value={cell.id} key={cell.id}>
                           {cell.text || cell.id}
                         </option>
                       ))}
                   </select>
+                </label>
+                <label className="record-empty-row-option">
+                  <input
+                    type="checkbox"
+                    checked={section.includeEmptyRows ?? false}
+                    onChange={(event) => setLayout((current) => ({
+                      ...current,
+                      recordSections: (current.recordSections ?? []).map((item) => (
+                        item.id === section.id
+                          ? { ...item, includeEmptyRows: event.target.checked, source: "manual" as const }
+                          : item
+                      )),
+                    }))}
+                  />
+                  空行も読み取り結果に含める
                 </label>
                 <button
                   type="button"
@@ -1728,156 +2741,121 @@ export function LayoutEditor({
                     setSelectedRecordSectionId("");
                   }}
                 >
-                  親セクションを削除
+                  この表を削除
                 </button>
               </div>
-              <div className="accessible-record-adder">
-                <strong>一覧から同じ行の記入欄をまとめる</strong>
-                <label>
-                  このレコードに含める記入欄
-                  <select
-                    multiple
-                    size={Math.min(8, Math.max(3, layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").length))}
-                    value={[...accessibleRecordInputIds]}
-                    onChange={(event) => setAccessibleRecordInputIds(new Set(
-                      [...event.currentTarget.selectedOptions].map((option) => option.value),
-                    ))}
-                  >
-                    {layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark").map((cell) => (
-                      <option key={cell.id} value={cell.id}>{cell.id}</option>
-                    ))}
-                  </select>
-                </label>
-                <small>CtrlキーまたはCommandキーを押しながら複数選択できます。</small>
+              <div className="record-column-summary">
+                <div>
+                  <strong>1レコードに含める列ラベル</strong>
+                  <span>
+                    {section.recordLabelCellIds.length > 0
+                      ? section.recordLabelCellIds
+                        .map((labelId) => cellById.get(labelId)?.text.trim() || labelId)
+                        .join(" / ")
+                      : "未指定"}
+                  </span>
+                </div>
+                <dl>
+                  <div>
+                    <dt>自動編成</dt>
+                    <dd>{recordGroups.filter((group) => group.sectionId === section.id).length}行</dd>
+                  </div>
+                  <div>
+                    <dt>記入欄</dt>
+                    <dd>{new Set(recordGroups
+                      .filter((group) => group.sectionId === section.id)
+                      .flatMap((group) => group.inputCellIds)).size}個</dd>
+                  </div>
+                  <div>
+                    <dt>設定状態</dt>
+                    <dd>{section.recordType === "generic" ? "設定済み" : section.parentLabelCellId ? "帳票上の見出し設定済み" : "未確定"}</dd>
+                  </div>
+                </dl>
+                <p>
+                  {section.recordLabelCellIds.length > 0
+                    ? section.recordType === "generic"
+                      ? `${section.rowKeyStrategy === "printed" ? `${section.rowKeyCellIds?.length ?? 0}個の行番号` : "上からの順番"}で各行を定義しています。帳票上の見出しは任意です。`
+                    : section.parentLabelCellId
+                      ? "選択した複数列が1レコードとして定義されています。行ごとの紐は表示しません。"
+                      : "次に「親ラベル接続」で、親ラベルから青線でまとめた列ラベルのいずれかへ線を引いてください。"
+                    : "「繰り返し部分をまとめる」を選び、1行に含める複数の列見出しを横方向に横断してください。"}
+                </p>
                 <button
                   type="button"
-                  className="secondary compact"
-                  disabled={accessibleRecordInputIds.size === 0}
-                  onClick={addAccessibleRecordGroup}
+                  className="danger-button compact"
+                  disabled={section.recordLabelCellIds.length === 0}
+                  onClick={() => setLayout((current) => ({
+                    ...current,
+                    recordSections: (current.recordSections ?? []).map((item) => (
+                      item.id === section.id
+                        ? {
+                          ...item,
+                          recordLabelCellIds: [],
+                          parentLabelCellId: null,
+                          source: "manual",
+                        }
+                        : item
+                    )),
+                    recordGroups: (current.recordGroups ?? []).filter(
+                      (group) => group.sectionId !== section.id,
+                    ),
+                    recordStructureVerified: false,
+                  }))}
                 >
-                  選択した記入欄を次のレコードにする
+                  このレコード定義を解除
                 </button>
-              </div>
-              <div className="record-group-list">
-                {recordGroups
-                  .filter((group) => group.sectionId === section.id)
-                  .sort((first, second) => first.order - second.order)
-                  .map((group) => (
-                    <article className="record-group-row" key={group.id}>
-                      <div>
-                        <strong>{group.recordKeyValue || group.order}産次のレコード</strong>
-                        <small>{group.inputCellIds.length}セル · {group.id}</small>
-                      </div>
-                      <label>順番
-                        <input
-                          type="number"
-                          min={1}
-                          max={section.collectionPath === "saleCalves" ? 10 : 20}
-                          value={group.order}
-                          onChange={(event) => {
-                            const order = Number(event.target.value);
-                            if (!Number.isInteger(order) || order < 1) return;
-                            const inputIds = new Set(group.inputCellIds);
-                            setLayout((current) => ({
-                              ...current,
-                              recordGroups: (current.recordGroups ?? []).map((item) => (
-                                item.id === group.id ? { ...item, order, source: "manual" } : item
-                              )),
-                              relations: current.relations.map((relation) => {
-                                if (!inputIds.has(relation.inputCellId)) return relation;
-                                const fieldKey = relation.targetPath.split(".").at(-1);
-                                const targetPath = `${section.collectionPath}.${order - 1}.${fieldKey}`;
-                                return targetByPath.has(targetPath)
-                                  ? { ...relation, targetPath, order }
-                                  : relation;
-                              }),
-                              recordStructureVerified: true,
-                            }));
-                          }}
-                        />
-                      </label>
-                      <label>産次キー
-                        <input
-                          value={group.recordKeyValue ?? ""}
-                          maxLength={100}
-                          onChange={(event) => setLayout((current) => ({
-                            ...current,
-                            recordGroups: (current.recordGroups ?? []).map((item) => (
-                              item.id === group.id
-                                ? {
-                                  ...item,
-                                  recordKeyValue: event.target.value || null,
-                                  source: "manual",
-                                }
-                                : item
-                            )),
-                            recordStructureVerified: true,
-                          }))}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        className="danger-button compact"
-                        onClick={() => setLayout((current) => ({
-                          ...current,
-                          recordGroups: (current.recordGroups ?? []).filter(
-                            (item) => item.id !== group.id,
-                          ),
-                          recordStructureVerified: false,
-                        }))}
-                      >
-                        レコード解除
-                      </button>
-                    </article>
-                  ))}
-                {recordGroups.every((group) => group.sectionId !== section.id) && (
-                  <p className="empty-property">
-                    「レコード作成」モードで、同じ産次に属する行の端から端まで線を引いてください。
-                  </p>
-                )}
               </div>
             </div>
           ))}
-      </section>
+      </section>}
 
-      <div className="relation-table-wrap">
-        <table className="relation-table">
-          <thead><tr><th>順番</th><th>方向</th><th>ラベル</th><th>手書き文字欄</th><th>保存先</th><th /></tr></thead>
-          <tbody>
-            {layout.relations.map((relation) => {
-              const invalidTarget = !targetByPath.has(relation.targetPath);
-              return (
-              <tr key={relation.id} className={invalidTarget ? "invalid-relation" : ""}>
-                <td>{relation.order}行目</td>
-                <td>{relation.axis === "horizontal" ? "横積み" : "縦積み"}</td>
-                <td>
-                  {relation.labelCellIds.length > 0
-                    ? relation.labelCellIds.map((id) => cellById.get(id)?.text || id).join(" / ")
-                    : cellById.get(relation.inputCellId)?.printedLabelText || "矩形へ直接設定"}
-                </td>
-                <td>{relation.inputCellId}</td>
-                <td>{targetByPath.get(relation.targetPath)?.label ?? `範囲外: ${relation.targetPath}`}</td>
-                <td><button className="danger-button compact" onClick={() => {
-                  rememberRelations(layout.relations);
-                  setLayout((current) => ({
-                    ...current,
-                    relations: current.relations.filter((item) => item.id !== relation.id),
-                  }));
-                }}>解除</button></td>
-              </tr>
-              );
-            })}
-            {layout.relations.length === 0 && (
-              <tr><td colSpan={6}>まだ意味づけされていません。「意味づけ」モードでラベルから記入欄へドラッグしてください。</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {showMeaningStep && (
+        <details className="relation-table-disclosure">
+          <summary>
+            <span>設定済みのセル対応を確認</span>
+            <small>{layout.relations.length}件</small>
+          </summary>
+          <div className="relation-table-wrap">
+            <table className="relation-table">
+              <thead><tr><th>順番</th><th>方向</th><th>ラベル</th><th>手書き文字欄</th><th>保存先</th><th /></tr></thead>
+              <tbody>
+                {layout.relations.map((relation) => {
+                  const invalidTarget = !targetByPath.has(relation.targetPath);
+                  return (
+                  <tr key={relation.id} className={invalidTarget ? "invalid-relation" : ""}>
+                    <td>{relation.order}行目</td>
+                    <td>{relation.axis === "horizontal" ? "横積み" : "縦積み"}</td>
+                    <td>
+                      {relation.labelCellIds.length > 0
+                        ? relation.labelCellIds.map((id) => cellById.get(id)?.text || id).join(" / ")
+                        : cellById.get(relation.inputCellId)?.printedLabelText || "矩形へ直接設定"}
+                    </td>
+                    <td>{relation.inputCellId}</td>
+                    <td>{targetByPath.get(relation.targetPath)?.label ?? `範囲外: ${relation.targetPath}`}</td>
+                    <td><button className="danger-button compact" onClick={() => {
+                      rememberRelations(layout.relations);
+                      setLayout((current) => ({
+                        ...current,
+                        relations: current.relations.filter((item) => item.id !== relation.id),
+                      }));
+                    }}>解除</button></td>
+                  </tr>
+                  );
+                })}
+                {layout.relations.length === 0 && (
+                  <tr><td colSpan={6}>まだ意味づけされていません。「意味づけ」モードでラベルから記入欄へドラッグしてください。</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
 
+      {showReviewStep && <>
       {layout.warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
       {!recordStructureReady && (
         <p className="inline-warning">
-          途中保存できます。OCRへ進むには、配列項目の記入欄をすべて行レコードへまとめ、レコード構造を確認してください。
+          途中保存できます。OCRへ進むには、複数の列見出しを横断して各行を自動編成してください。既存の繁殖台帳形式だけは親ラベル接続も必要です。
         </p>
       )}
       {!hasMeaningAssignments && (
@@ -1888,6 +2866,11 @@ export function LayoutEditor({
       {hasMeaningAssignments && hasUnassignedFields && (
         <p className="inline-warning">
           途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。
+        </p>
+      )}
+      {!identityConfigurationReady && (
+        <p className="inline-warning">
+          途中保存できます。OCRへ進むには、「書類の見分け方」で照合基準とカードの見出しを指定してください。
         </p>
       )}
       <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
@@ -1910,28 +2893,68 @@ export function LayoutEditor({
         {busy
           ? "処理中…"
           : dirty || allowUnchangedSave
-          ? layoutReadyForOcr
-            ? "レイアウトと意味づけをDBへ保存"
+          ? templateReadyForOcr
+            ? "テンプレート設定をDBへ保存"
             : "レイアウトを途中保存"
           : "レイアウトは保存済み"}
       </button>
+      </>}
       </fieldset>
     </div>
   );
-}
+});
 
 function ModeButton({
   current,
   mode,
   label,
+  icon,
   onChange,
 }: {
   current: Mode;
   mode: Mode;
   label: string;
+  icon?: ReactNode;
   onChange: (mode: Mode) => void;
 }) {
-  return <button type="button" className={current === mode ? "active" : ""} onClick={() => onChange(mode)}>{label}</button>;
+  return (
+    <button
+      type="button"
+      className={[
+        current === mode ? "active" : "",
+        icon ? "mode-button-with-icon" : "",
+      ].filter(Boolean).join(" ")}
+      onClick={() => onChange(mode)}
+    >
+      {icon && <span className="mode-button-icon" aria-hidden="true">{icon}</span>}
+      {label}
+    </button>
+  );
+}
+
+function MeaningLinkIcon() {
+  return (
+    <svg viewBox="0 0 20 20" focusable="false">
+      <rect x="1.5" y="3" width="6" height="5" rx="1" />
+      <rect x="12.5" y="12" width="6" height="5" rx="1" />
+      <path d="M7.5 5.5h2.2c2.1 0 2.8 1.1 2.8 3v3.5" />
+      <path d="m10.5 10 2 2 2-2" />
+    </svg>
+  );
+}
+
+function MagnifierIcon() {
+  return (
+    <svg viewBox="0 0 20 20" focusable="false">
+      <circle cx="8.5" cy="8.5" r="5.5" />
+      <path d="m12.6 12.6 4.2 4.2" />
+      <path d="M8.5 5.8v5.4M5.8 8.5h5.4" />
+    </svg>
+  );
+}
+
+function formatMagnifierScale(scale: number) {
+  return Number.isInteger(scale) ? String(scale) : scale.toFixed(2).replace(/0$/, "");
 }
 
 export function cellsSelectedByRect(
@@ -2663,19 +3686,223 @@ export function detectCalvingChoiceArea(
   };
 }
 
+type LabelPoolEntry = {
+  key: string;
+  label: string;
+  section: string;
+  paths: string[];
+  aliases: string[];
+};
+
+export function createAutoLabelPoolEntry(
+  labelText: string,
+  targets: FieldMappingTarget[],
+): LayoutLabelPoolEntry | null {
+  const label = labelText.normalize("NFKC").trim();
+  if (!label) return null;
+  const normalizedLabel = normalizeLabelPoolText(label);
+  if (targets.some((target) => (
+    [target.label, ...(target.aliases ?? [])].some(
+      (candidate) => normalizeLabelPoolText(candidate) === normalizedLabel,
+    )
+  ))) return null;
+  const baseKey = label
+    .replace(/[\s　.。・:：／/()（）［］\[\]【】]+/g, "")
+    .slice(0, 100);
+  if (!baseKey) return null;
+  const byPath = new Map(targets.map((target) => [target.path, target]));
+  let key = baseKey;
+  let suffix = 2;
+  while (
+    byPath.has(`customFields.${key}`)
+    && normalizeLabelPoolText(byPath.get(`customFields.${key}`)?.label ?? "")
+      !== normalizeLabelPoolText(label)
+  ) {
+    const suffixText = `_${suffix}`;
+    key = `${baseKey.slice(0, Math.max(1, 100 - suffixText.length))}${suffixText}`;
+    suffix += 1;
+  }
+  const targetPath = `customFields.${key}`;
+  if (byPath.has(targetPath)) return null;
+  return {
+    id: `label_auto_${key}`.slice(0, 120),
+    label,
+    targetPath,
+    section: "自動追加",
+    aliases: [],
+    source: "ocr",
+  };
+}
+
+export function createAutoRepeatedLabelPoolEntries(
+  labelText: string,
+  inputCount: number,
+  targets: FieldMappingTarget[],
+): LayoutLabelPoolEntry[] | null {
+  if (inputCount < 2) return null;
+  const label = labelText.normalize("NFKC").trim();
+  if (!label) return null;
+  const rawBaseKey = label
+    .replace(/[\s　.。・:：／/()（）［］\[\]【】]+/g, "")
+    .slice(0, 92);
+  if (!rawBaseKey) return null;
+  const byPath = new Map(targets.map((target) => [target.path, target]));
+  const normalizedLabel = normalizeLabelPoolText(label);
+  let baseKey = rawBaseKey;
+  let suffix = 2;
+  while (true) {
+    const conflicting = Array.from({ length: inputCount }, (_, index) => {
+      const existing = byPath.get(`customFields.${baseKey}_${index + 1}`);
+      if (!existing) return false;
+      return ![existing.label, ...(existing.aliases ?? [])].some((candidate) => (
+        normalizeLabelPoolText(candidate).includes(normalizedLabel)
+      ));
+    }).some(Boolean);
+    if (!conflicting) break;
+    const suffixText = `_${suffix}`;
+    baseKey = `${rawBaseKey.slice(0, Math.max(1, 92 - suffixText.length))}${suffixText}`;
+    suffix += 1;
+  }
+  return Array.from({ length: inputCount }, (_, index) => {
+    const rowNumber = index + 1;
+    const key = `${baseKey}_${rowNumber}`;
+    return {
+      id: `label_auto_${key}`.slice(0, 120),
+      label: `${label} ${rowNumber}行目`,
+      targetPath: `customFields.${key}`,
+      section: "自動追加",
+      aliases: [label],
+      source: "ocr" as const,
+    };
+  });
+}
+
+export function resolveLabelPoolTargetPath(
+  entry: LabelPoolEntry,
+  inputCellId: string,
+  groups: LayoutRecordGroup[],
+  sections: LayoutRecordSection[],
+  assignedPaths: ReadonlySet<string>,
+): string | null {
+  const repeated = /^(saleCalves|calvings)\[\]\.([^.]+)$/.exec(entry.key);
+  if (repeated) {
+    const group = groups.find((candidate) => candidate.inputCellIds.includes(inputCellId));
+    const section = group
+      ? sections.find((candidate) => candidate.id === group.sectionId)
+      : undefined;
+    if (group && section?.collectionPath === repeated[1]) {
+      const groupedPath = `${section.collectionPath}.${group.order - 1}.${repeated[2]}`;
+      if (entry.paths.includes(groupedPath)) return groupedPath;
+    }
+    return entry.paths.find((path) => !assignedPaths.has(path)) ?? entry.paths[0] ?? null;
+  }
+  return entry.paths[0] ?? null;
+}
+
+export function buildLabelPoolEntries(targets: FieldMappingTarget[]): LabelPoolEntry[] {
+  const entries = new Map<string, LabelPoolEntry>();
+  targets.forEach((target) => {
+    const arrayMatch = /^(saleCalves|calvings)\.\d+\.([^.]+)$/.exec(target.path);
+    const key = arrayMatch ? `${arrayMatch[1]}[].${arrayMatch[2]}` : target.path;
+    const label = arrayMatch
+      ? target.label.split("・").at(-1)?.trim() || target.label
+      : target.label.trim();
+    const existing = entries.get(key);
+    if (existing) {
+      if (!existing.paths.includes(target.path)) existing.paths.push(target.path);
+      target.aliases?.forEach((alias) => {
+        if (!existing.aliases.includes(alias)) existing.aliases.push(alias);
+      });
+      return;
+    }
+    entries.set(key, {
+      key,
+      label,
+      section: target.section,
+      paths: [target.path],
+      aliases: [...(target.aliases ?? [])],
+    });
+  });
+  return [...entries.values()].sort((first, second) => (
+    first.section.localeCompare(second.section, "ja")
+    || first.label.localeCompare(second.label, "ja")
+  ));
+}
+
+function findLabelPoolMatch(text: string, entries: LabelPoolEntry[]): LabelPoolEntry | null {
+  const normalized = normalizeLabelPoolText(text);
+  if (!normalized) return null;
+  return entries.find((entry) => {
+    return [entry.label, ...entry.aliases].some((label) => {
+      const candidate = normalizeLabelPoolText(label);
+      return normalized === candidate
+        || (candidate.length >= 2 && normalized.includes(candidate))
+        || (normalized.length >= 2 && candidate.includes(normalized));
+    });
+  }) ?? null;
+}
+
+function normalizeLabelPoolText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[壳殻]/g, "売")
+    .replace(/[歷暦]/g, "歴")
+    .replace(/曰/g, "日")
+    .replace(/令/g, "齢")
+    .replace(/[\s　・:：()（）［］\[\]【】]/g, "");
+}
+
 function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
+  const recordSections = (layout.recordSections ?? []).map((section) => {
+    const { recordLabelCellId, ...current } = section;
+    return {
+      ...current,
+      recordLabelCellIds: [...new Set(
+        section.recordLabelCellIds
+        ?? (recordLabelCellId ? [recordLabelCellId] : []),
+      )],
+      rowKeyStrategy: section.rowKeyStrategy ?? "position",
+      rowKeyCellIds: [...new Set(section.rowKeyCellIds ?? [])],
+      includeEmptyRows: section.includeEmptyRows ?? false,
+    };
+  });
+  const recordGroups = layout.recordGroups ?? [];
   return {
     ...layout,
     layoutSchemaVersion: layout.layoutSchemaVersion ?? 3,
-    recordSections: layout.recordSections ?? [],
-    recordGroups: layout.recordGroups ?? [],
-    recordStructureVerified: layout.recordStructureVerified ?? false,
+    recordSections,
+    recordGroups,
+    labelPool: layout.labelPool ?? [],
+    // Older drafts can retain false even after every record band has been
+    // connected to its parent label. Derive the UI state from the saved
+    // structure so the user can save and continue to verification.
+    recordStructureVerified: recordStructureIsLinked(recordSections, recordGroups),
     cells: layout.cells.map((cell) => ({
       ...cell,
       printedLabelText: cell.printedLabelText ?? "",
       markSets: cell.markSets ?? [],
     })),
   };
+}
+
+function restoreLayoutDraft(
+  initialLayout: LayoutDefinition,
+  draftStorageKey?: string,
+): LayoutDefinition {
+  if (!draftStorageKey) return normalizeLayout(initialLayout);
+  try {
+    const stored = window.localStorage.getItem(draftStorageKey);
+    if (!stored) return normalizeLayout(initialLayout);
+    return normalizeLayout(JSON.parse(stored) as LayoutDefinition);
+  } catch {
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch {
+      // Ignore storage failures and continue with the server-backed layout.
+    }
+    return normalizeLayout(initialLayout);
+  }
 }
 
 function layoutSignature(layout: LayoutDefinition): string {
@@ -2885,6 +4112,199 @@ export function inferRecordCollectionPath(
   return collections.size === 1 ? [...collections][0] ?? null : null;
 }
 
+export function recordRowsFromColumnLabels(
+  labelIds: string[],
+  cells: LayoutCell[],
+  relations: LayoutRelation[],
+): {
+  collectionPath: "saleCalves" | "calvings" | null;
+  rows: Array<{ order: number; inputCellIds: string[] }>;
+} | null {
+  const cellById = new Map(cells.map((cell) => [cell.id, cell]));
+  const genericRows = (): {
+    collectionPath: null;
+    rows: Array<{ order: number; inputCellIds: string[] }>;
+  } | null => {
+    const columns = [...new Set(labelIds)].map((labelId) => relations
+      .filter((relation) => relation.labelCellIds.includes(labelId))
+      .flatMap((relation) => {
+        const input = cellById.get(relation.inputCellId);
+        return input && (input.role === "input" || input.role === "mark")
+          ? [input]
+          : [];
+      })
+      .filter((cell, index, items) => items.findIndex((item) => item.id === cell.id) === index)
+      .sort((first, second) => (
+        first.y + first.height / 2 - (second.y + second.height / 2)
+        || first.x - second.x
+      )));
+    const counts = new Set(columns.map((column) => column.length));
+    if (columns.length < 2 || counts.size !== 1 || columns[0].length === 0) return null;
+    return {
+      collectionPath: null,
+      rows: Array.from({ length: columns[0].length }, (_, index) => ({
+        order: index + 1,
+        inputCellIds: columns.map((column) => column[index].id),
+      })),
+    };
+  };
+  const parse = (targetPath: string): {
+    collectionPath: "saleCalves" | "calvings";
+    rowIndex: number;
+    field: string;
+  } | null => {
+    const match = /^(saleCalves|calvings)\.(\d+)\.([^.]+)$/.exec(targetPath);
+    return match && (match[1] === "saleCalves" || match[1] === "calvings")
+      ? {
+        collectionPath: match[1] as "saleCalves" | "calvings",
+        rowIndex: Number(match[2]),
+        field: match[3],
+      }
+      : null;
+  };
+  const uniqueLabelIds = [...new Set(labelIds)];
+  if (uniqueLabelIds.length < 2) return null;
+  const descriptors = uniqueLabelIds.flatMap((labelId) => {
+    const matches = relations.flatMap((relation) => {
+      if (!relation.labelCellIds.includes(labelId)) return [];
+      const parsed = parse(relation.targetPath);
+      return parsed ? [parsed] : [];
+    });
+    const targets = new Set(matches.map((match) => `${match.collectionPath}.${match.field}`));
+    if (matches.length === 0 || targets.size !== 1) return [];
+    const first = matches[0];
+    return [{
+      labelId,
+      collectionPath: first.collectionPath,
+      field: first.field,
+      rowIndexes: matches.map((match) => match.rowIndex),
+    }];
+  });
+  if (descriptors.length !== uniqueLabelIds.length) return genericRows();
+  const collections = new Set(descriptors.map((descriptor) => descriptor.collectionPath));
+  const fields = new Set(descriptors.map((descriptor) => descriptor.field));
+  if (collections.size !== 1 || fields.size !== descriptors.length) return genericRows();
+  const collectionPath = [...collections][0];
+  const rowIndexes = [...new Set(
+    descriptors.flatMap((descriptor) => descriptor.rowIndexes),
+  )].sort((first, second) => first - second);
+  const rows: Array<{ order: number; inputCellIds: string[] }> = [];
+  for (const rowIndex of rowIndexes) {
+    const inputIds = new Set<string>();
+    for (const descriptor of descriptors) {
+      const fieldInputIds = new Set<string>();
+      relations.forEach((relation) => {
+        const parsed = parse(relation.targetPath);
+        if (
+          relation.labelCellIds.includes(descriptor.labelId)
+          && parsed?.collectionPath === collectionPath
+          && parsed.rowIndex === rowIndex
+          && parsed.field === descriptor.field
+          && cellById.has(relation.inputCellId)
+        ) fieldInputIds.add(relation.inputCellId);
+      });
+      cells.forEach((cell) => {
+        if (cell.role !== "mark") return;
+        if ((cell.markSets ?? []).some((markSet) => {
+          const parsed = parse(markSet.targetPath);
+          return parsed?.collectionPath === collectionPath
+            && parsed.rowIndex === rowIndex
+            && parsed.field === descriptor.field;
+        })) fieldInputIds.add(cell.id);
+      });
+      if (fieldInputIds.size === 0) return genericRows();
+      fieldInputIds.forEach((inputId) => inputIds.add(inputId));
+    }
+    const orderedIds = [...inputIds].sort((firstId, secondId) => {
+      const first = cellById.get(firstId);
+      const second = cellById.get(secondId);
+      if (!first || !second) return 0;
+      return first.x - second.x || first.y - second.y;
+    });
+    if (orderedIds.length === 0) return genericRows();
+    rows.push({ order: rowIndex + 1, inputCellIds: orderedIds });
+  }
+  return rows.length > 0 ? { collectionPath, rows } : null;
+}
+
+export function matchRowKeyCells(
+  rows: Array<{ order: number; inputCellIds: string[] }>,
+  cells: LayoutCell[],
+): Array<LayoutCell | null> | null {
+  const cellById = new Map(cells.map((cell) => [cell.id, cell]));
+  const rowKeys = cells
+    .filter((cell) => cell.role === "record_key_cell")
+    .sort((first, second) => first.y - second.y || first.x - second.x);
+  if (rowKeys.length < rows.length) return null;
+  const unused = new Set(rowKeys.map((cell) => cell.id));
+  const matches: Array<LayoutCell | null> = [];
+  for (const row of rows) {
+    const inputs = row.inputCellIds
+      .map((inputId) => cellById.get(inputId))
+      .filter((cell): cell is LayoutCell => Boolean(cell));
+    if (inputs.length === 0) return null;
+    const rowCenter = inputs.reduce(
+      (total, cell) => total + cell.y + cell.height / 2,
+      0,
+    ) / inputs.length;
+    const candidate = rowKeys
+      .filter((cell) => unused.has(cell.id))
+      .sort((first, second) => (
+        Math.abs(first.y + first.height / 2 - rowCenter)
+        - Math.abs(second.y + second.height / 2 - rowCenter)
+      ))[0];
+    if (!candidate) return null;
+    const rowHeight = Math.max(...inputs.map((cell) => cell.height));
+    const distance = Math.abs(candidate.y + candidate.height / 2 - rowCenter);
+    if (distance > Math.max(rowHeight, candidate.height) * 1.5) return null;
+    unused.delete(candidate.id);
+    matches.push(candidate);
+  }
+  return matches;
+}
+
+function genericRecordCollectionKey(
+  title: string,
+  sections: LayoutRecordSection[],
+): string {
+  const base = `section_${Array.from(title.normalize("NFKC"))
+    .reduce((hash, character) => ((hash * 31) + (character.codePointAt(0) ?? 0)) >>> 0, 2166136261)
+    .toString(36)}`;
+  const used = new Set(sections.map((section) => section.collectionPath));
+  let key = base;
+  let suffix = 2;
+  while (used.has(`genericRecords.${key}`)) {
+    key = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return key;
+}
+
+export function recordLabelCellsCrossedByLine(
+  start: Point,
+  end: Point,
+  labelCells: LayoutCell[],
+): LayoutCell[] {
+  return labelCells
+    .filter((cell) => segmentIntersectsRect(start, end, cell, 8))
+    .sort((first, second) => first.x - second.x || first.y - second.y);
+}
+
+function recordStructureIsLinked(
+  sections: LayoutRecordSection[],
+  groups: LayoutRecordGroup[],
+): boolean {
+  if (groups.length === 0) return false;
+  const groupedSectionIds = new Set(groups.map((group) => group.sectionId));
+  return [...groupedSectionIds].every((sectionId) => (
+    Boolean((() => {
+      const section = sections.find((candidate) => candidate.id === sectionId);
+      if (!section || section.recordLabelCellIds.length === 0) return false;
+      return section.recordType === "generic" || section.parentLabelCellId;
+    })())
+  ));
+}
+
 export function linkLaneCells(
   start: Point,
   end: Point,
@@ -2961,6 +4381,40 @@ export function targetPathsForInputs(
   return paths.every((path): path is string => Boolean(path)) ? paths : null;
 }
 
+export function resolveAvailableLinkTargetPaths(
+  requestedPaths: string[],
+  inputs: LayoutCell[],
+  relations: LayoutRelation[],
+  targets: FieldMappingTarget[],
+): string[] | null {
+  const inputIds = new Set(inputs.map((input) => input.id));
+  const occupiedPaths = new Set(
+    relations
+      .filter((relation) => !inputIds.has(relation.inputCellId))
+      .map((relation) => relation.targetPath),
+  );
+  if (requestedPaths.every((path) => !occupiedPaths.has(path))) return requestedPaths;
+  if (requestedPaths.length !== 1) return null;
+
+  const requested = /^(saleCalves|calvings)\.(\d+)\.([^.]+)$/.exec(requestedPaths[0]);
+  if (!requested) return null;
+  const [, collection, requestedIndexText, field] = requested;
+  const requestedIndex = Number(requestedIndexText);
+  const candidates = targets
+    .flatMap((target) => {
+      const match = /^(saleCalves|calvings)\.(\d+)\.([^.]+)$/.exec(target.path);
+      return match && match[1] === collection && match[3] === field
+        ? [{ path: target.path, index: Number(match[2]) }]
+        : [];
+    })
+    .filter((candidate) => !occupiedPaths.has(candidate.path))
+    .sort((first, second) => (
+      (first.index < requestedIndex ? 1 : 0) - (second.index < requestedIndex ? 1 : 0)
+      || first.index - second.index
+    ));
+  return candidates[0] ? [candidates[0].path] : null;
+}
+
 export function inferTargetPath(
   labelText: string,
   inputCount: number,
@@ -2971,14 +4425,17 @@ export function inferTargetPath(
   if (!normalizedLabel) return null;
   const exactCandidates = targets.filter((target) => {
     const fieldLabel = target.label.split("・").at(-1) ?? target.label;
-    const normalizedField = normalizeLabel(fieldLabel);
-    return normalizedField === normalizedLabel;
+    return [fieldLabel, ...(target.aliases ?? [])].some(
+      (candidate) => normalizeLabel(candidate) === normalizedLabel,
+    );
   });
   const partialCandidates = targets.filter((target) => {
     const fieldLabel = target.label.split("・").at(-1) ?? target.label;
-    const normalizedField = normalizeLabel(fieldLabel);
-    return normalizedLabel.includes(normalizedField)
-      || normalizedField.includes(normalizedLabel);
+    return [fieldLabel, ...(target.aliases ?? [])].some((candidate) => {
+      const normalizedField = normalizeLabel(candidate);
+      return normalizedLabel.includes(normalizedField)
+        || normalizedField.includes(normalizedLabel);
+    });
   });
   const candidates = exactCandidates.length > 0 ? exactCandidates : partialCandidates;
   if (
@@ -3083,11 +4540,6 @@ function normalizeLabel(value: string) {
     .replace(/令/g, "齢")
     .replace(/[\s:：・／/()（）［\]\-―ー]/g, "")
     .toLowerCase();
-}
-
-function normalizeCustomKey(value: string) {
-  const key = value.normalize("NFKC").trim();
-  return key && !/[\s.\[\]]/.test(key) ? key : "";
 }
 
 function renumberRelations(relations: LayoutRelation[], cells: LayoutCell[]) {

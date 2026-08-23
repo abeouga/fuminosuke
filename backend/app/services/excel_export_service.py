@@ -84,8 +84,15 @@ class ExcelExportService:
         individual_id: str | None = None,
         confirmed_at: datetime | None = None,
     ) -> ExcelTable:
+        generic_data = self._mapping(document.get("genericData"))
+        generic_title = generic_data.get("templateName")
+        title = (
+            str(generic_title)
+            if isinstance(generic_title, str) and generic_title.strip()
+            else "帳票読み取り結果"
+        )
         rows: list[ExcelRow] = [
-            ExcelRow("title", (ExcelCell("帳票読み取り結果", "帳票読み取り結果"),)),
+            ExcelRow("title", (ExcelCell(title, title),)),
             ExcelRow("blank"),
         ]
         identity = self._mapping(document.get("document"))
@@ -94,28 +101,32 @@ class ExcelExportService:
         calvings = self._records(document.get("calvings"))
         custom_fields = self._mapping(document.get("customFields"))
 
-        self._append_key_value_section(rows, "基本情報", DOCUMENT_FIELDS, identity)
-        self._append_key_value_section(rows, "血統", PEDIGREE_FIELDS, pedigree)
-        self._append_record_section(
-            rows,
-            self._section_title(config_snapshot, "saleCalves", "売却子牛一覧"),
-            SALE_CALF_FIELDS,
-            sale_calves,
-            collection="saleCalves",
-        )
-        self._append_record_section(
-            rows,
-            self._section_title(config_snapshot, "calvings", "繁殖履歴"),
-            CALVING_FIELDS,
-            calvings,
-            collection="calvings",
-        )
-        if custom_fields:
-            custom_labels = self._custom_labels(config_snapshot)
-            labels = {
-                key: custom_labels.get(key) or self._humanize_key(key) for key in custom_fields
-            }
-            self._append_key_value_section(rows, "追加項目", labels, custom_fields)
+        if generic_data:
+            self._append_generic_data(rows, generic_data)
+        else:
+            self._append_key_value_section(rows, "基本情報", DOCUMENT_FIELDS, identity)
+            self._append_key_value_section(rows, "血統", PEDIGREE_FIELDS, pedigree)
+            self._append_record_section(
+                rows,
+                self._section_title(config_snapshot, "saleCalves", "売却子牛一覧"),
+                SALE_CALF_FIELDS,
+                sale_calves,
+                collection="saleCalves",
+            )
+            self._append_record_section(
+                rows,
+                self._section_title(config_snapshot, "calvings", "繁殖履歴"),
+                CALVING_FIELDS,
+                calvings,
+                collection="calvings",
+            )
+            if custom_fields:
+                custom_labels = self._custom_labels(config_snapshot)
+                labels = {
+                    key: custom_labels.get(key) or self._humanize_key(key)
+                    for key in custom_fields
+                }
+                self._append_key_value_section(rows, "追加項目", labels, custom_fields)
 
         review_items = document.get("reviewItems")
         if isinstance(review_items, list) and review_items:
@@ -152,7 +163,9 @@ class ExcelExportService:
         cattle_name = self._reading_text(identity.get("cattleName")) or "牛名未入力"
         stamp = (confirmed_at or datetime.now()).strftime("%Y%m%d")
         file_stem = self._safe_file_component(
-            f"繁殖台帳_{resolved_id or '個体番号未入力'}_{cattle_name}_{stamp}"
+            f"{title}_{stamp}"
+            if generic_data
+            else f"繁殖台帳_{resolved_id or '個体番号未入力'}_{cattle_name}_{stamp}"
         )
         max_columns = max((len(row.cells) for row in rows), default=1)
         return ExcelTable(
@@ -161,6 +174,39 @@ class ExcelExportService:
             rows=tuple(rows),
             max_columns=max_columns,
         )
+
+    def _append_generic_data(
+        self, rows: list[ExcelRow], generic_data: dict[str, Any]
+    ) -> None:
+        standalone = self._records(generic_data.get("standaloneFields"))
+        if standalone:
+            standalone_labels = {
+                str(field.get("key")): str(field.get("name") or field.get("key"))
+                for field in standalone
+            }
+            readings = {
+                str(field.get("key")): field.get("reading") for field in standalone
+            }
+            self._append_key_value_section(rows, "基本項目", standalone_labels, readings)
+        for section in self._records(generic_data.get("sections")):
+            title = str(section.get("name") or section.get("key") or "明細")
+            labels: dict[str, str] = {}
+            records: list[dict[str, Any]] = []
+            for record in self._records(section.get("records")):
+                values: dict[str, Any] = {}
+                for field in self._records(record.get("fields")):
+                    key = str(field.get("key") or field.get("fieldId") or "field")
+                    labels.setdefault(key, str(field.get("name") or key))
+                    values[key] = field.get("reading")
+                records.append(values)
+            if labels:
+                self._append_record_section(
+                    rows,
+                    title,
+                    labels,
+                    records,
+                    collection="generic",
+                )
 
     def render_xlsx(self, table: ExcelTable) -> bytes:
         workbook = Workbook()

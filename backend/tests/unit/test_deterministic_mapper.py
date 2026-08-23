@@ -425,6 +425,36 @@ def test_sire_name_outside_the_pool_requires_review() -> None:
     assert result.review_items[0].code == "SIRE_NAME_CANDIDATE_UNRESOLVED"
 
 
+def test_template_managed_candidate_can_restrict_any_text_field() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cattle_name",
+                image_png=b"name",
+                target_path="document.cattleName",
+                candidates=("こよみ", "さくら"),
+                candidate_type="managed_text",
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="cattle_name",
+                raw="候補外の名前",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    assert result.document.cattle_name.status is ReadingStatus.UNCERTAIN
+    assert result.document.cattle_name.normalized is None
+    assert result.document.cattle_name.review_reason == "MANAGED_CANDIDATE_UNRESOLVED"
+    assert result.review_items[0].code == "MANAGED_CANDIDATE_UNRESOLVED"
+
+
 def test_ditto_marks_copy_the_value_from_the_cell_directly_above() -> None:
     candidates = ("勝忠平", "光晴重")
     request = OcrProviderRequest(
@@ -658,3 +688,36 @@ def test_a_period_in_calving_notes_copies_the_value_above(raw_mark: str) -> None
     assert reading.review_reason is None
     assert result.review_items == []
     assert "DITTO_MARK_RESOLUTION" in result.processing_metadata.notes
+
+
+def test_invalid_document_identity_text_is_never_accepted_as_readable() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="identity_cell",
+                image_png=b"identity",
+                target_path="document.unifiedEarTag",
+                is_document_identity=True,
+                identity_value_type="digits",
+                identity_exact_length=10,
+            )
+        ]
+    )
+    batch = TranscriptionBatch(
+        items=[
+            TranscriptionItem(
+                mapping_id="identity_cell",
+                raw="第2光晴",
+                status=ReadingStatus.READABLE,
+            )
+        ]
+    )
+
+    result = build_mapped_document(request, batch)
+
+    reading = result.document.unified_ear_tag
+    assert reading.raw == "第2光晴"
+    assert reading.normalized is None
+    assert reading.status is ReadingStatus.UNCERTAIN
+    assert reading.review_reason == "DOCUMENT_IDENTITY_FORMAT_INVALID"
+    assert result.review_items[0].code == "DOCUMENT_IDENTITY_FORMAT_INVALID"

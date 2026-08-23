@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from app.domain.template_candidates import canonical_managed_candidate
+
 MAX_SIRE_NAME_LENGTH = 100
 MAX_SIRE_NAME_POOL_SIZE = 500
 SIRE_NAME_ALLOWED_SUFFIXES = ("ET",)
@@ -26,17 +28,4 @@ def canonical_sire_candidate(
     candidates: tuple[str, ...],
     allowed_suffixes: tuple[str, ...] = SIRE_NAME_ALLOWED_SUFFIXES,
 ) -> str | None:
-    if value is None:
-        return None
-    try:
-        normalized_value = normalize_sire_name(value)
-    except ValueError:
-        return None
-    for candidate in candidates:
-        normalized_candidate = normalize_sire_name(candidate)
-        if normalized_value == normalized_candidate:
-            return candidate
-        for suffix in allowed_suffixes:
-            if normalized_value == normalize_sire_name(f"{candidate}{suffix}"):
-                return f"{candidate}{suffix}"
-    return None
+    return canonical_managed_candidate(value, candidates, allowed_suffixes)

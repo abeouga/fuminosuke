@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, createIdempotencyKey } from "../api";
 import { CameraCapture } from "../components/CameraCapture";
 import { FilePicker } from "../components/FilePicker";
+import { showToast } from "../components/Toast";
 import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
 import {
   navigateToSpreadsheet,
   type SpreadsheetNavigator,
 } from "../spreadsheetNavigation";
-import type { FieldMapping, Template } from "../types";
+import type { FieldMapping, OcrLibraryContext, Template } from "../types";
 
 type OcrStep = 1 | 2 | 3;
 
@@ -18,8 +19,16 @@ const OCR_STEPS = [
   { number: 3 as const, title: "確認・実行", caption: "読み取り開始" },
 ];
 
+const TEMPLATE_PREVIEW_PRIORITY = [
+  "cleanPreview",
+  "cleanTemplate",
+  "normalized",
+  "alignedSource.1",
+] as const;
+
 export function OcrPage({
   templates,
+  libraryContext,
   rememberJob,
   openReview,
   openTemplates,
@@ -27,6 +36,7 @@ export function OcrPage({
   onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   templates: Template[];
+  libraryContext?: OcrLibraryContext | null;
   rememberJob: (id: string) => void;
   openReview: (id: string) => void;
   openTemplates: () => void;
@@ -45,23 +55,30 @@ export function OcrPage({
     () => activeVersions.filter(({ version }) => version.quality.layoutVerified !== true),
     [activeVersions],
   );
-  const [versionId, setVersionId] = useState(versions[0]?.version.id ?? "");
-  const [step, setStep] = useState<OcrStep>(1);
+  const [versionId, setVersionId] = useState(libraryContext?.templateVersionId ?? versions[0]?.version.id ?? "");
+  const [step, setStep] = useState<OcrStep>(libraryContext ? 2 : 1);
   const [file, setFile] = useState<File | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [mappingPreview, setMappingPreview] = useState<FieldMapping[] | null>(null);
   const [mappingValid, setMappingValid] = useState(false);
-  const [mappingWarnings, setMappingWarnings] = useState<string[]>([]);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [mappingRetryToken, setMappingRetryToken] = useState(0);
+  const [templateQuery, setTemplateQuery] = useState("");
+  const [templatePreviews, setTemplatePreviews] = useState<Record<string, string>>({});
   const creatingRef = useRef(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
+  const visibleVersions = useMemo(() => {
+    const query = templateQuery.trim().toLocaleLowerCase("ja-JP");
+    if (!query) return versions;
+    return versions.filter(({ template }) => (
+      template.name.toLocaleLowerCase("ja-JP").includes(query)
+    ));
+  }, [templateQuery, versions]);
   const mappedReadingReady = !enabled || (
     Boolean(mappingPreview?.length)
     && mappingValid
@@ -69,9 +86,34 @@ export function OcrPage({
   useEffect(() => {
     if (!versions.some((item) => item.version.id === versionId)) {
       idempotencyKeyRef.current = null;
-      setVersionId(versions[0]?.version.id ?? "");
+      setVersionId(
+        versions.some((item) => item.version.id === libraryContext?.templateVersionId)
+          ? libraryContext?.templateVersionId ?? ""
+          : versions[0]?.version.id ?? "",
+      );
     }
-  }, [versionId, versions]);
+  }, [libraryContext?.templateVersionId, versionId, versions]);
+  useEffect(() => {
+    let cancelled = false;
+    const previewSources = versions.filter(({ version }) => version.sourceJobId);
+    void Promise.all(previewSources.map(async ({ version }) => {
+      try {
+        const response = await api.artifacts(version.sourceJobId!);
+        const preview = TEMPLATE_PREVIEW_PRIORITY
+          .map((name) => response.items.find((artifact) => artifact.name === name)?.url)
+          .find(Boolean);
+        return preview ? [version.id, preview] as const : null;
+      } catch {
+        return null;
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setTemplatePreviews(Object.fromEntries(entries.filter((entry) => entry !== null)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [versions]);
   useEffect(() => {
     const shouldWarn = (
       !jobId
@@ -90,7 +132,6 @@ export function OcrPage({
     let cancelled = false;
     setMappingPreview(null);
     setMappingValid(false);
-    setMappingWarnings([]);
     setMappingError(null);
     if (!versionId) return;
     void api.fieldMappings(versionId)
@@ -98,7 +139,6 @@ export function OcrPage({
         if (!cancelled) {
           setMappingPreview(response.mappings.filter((mapping) => mapping.enabled));
           setMappingValid(response.validForOcr);
-          setMappingWarnings(response.warnings);
         }
       })
       .catch((error) => {
@@ -130,9 +170,10 @@ export function OcrPage({
     <div className="page-stack narrow">
       <header className="page-header">
         <span className="eyebrow">NEW READING</span>
-        <h1>台帳を読み取る</h1>
-        <p>テンプレートと画像を選ぶと、帳票の個体識別番号と牛名を自動で読み取ります。</p>
+        <h1>{libraryContext?.action === "RESCAN_PAGE" ? `${libraryContext.pageNumber ?? "選択した"}ページ目を読み直す` : libraryContext?.action === "ADD_PAGE" ? "続きのページを追加" : libraryContext?.action === "NEW_DOCUMENT" ? "同じ個体の別の台帳を読み取る" : "台帳を読み取る"}</h1>
+        <p>{libraryContext ? `${libraryContext.cattleName || "牛名なし"}（${libraryContext.individualId}）の読み取りとして登録します。` : "テンプレートと画像を選ぶと、帳票の個体識別番号と牛名を自動で読み取ります。"}</p>
       </header>
+      {libraryContext && <aside className="notice compact"><strong>書類ライブラリから開始</strong><span>{libraryContext.action === "RESCAN_PAGE" ? "新しい画像を以前のページと比較し、承認後に差分を反映します。" : libraryContext.action === "ADD_PAGE" ? "この台帳の続きとして新しいページ番号を付けます。" : "現在の台帳とは別の台帳・別のスプレッドシートとして保存します。"}</span></aside>}
       {versions.length === 0 ? (
         <div className="empty-state large">
           <span>型</span>
@@ -191,75 +232,79 @@ export function OcrPage({
               <section className="ocr-step-panel" aria-labelledby="ocr-step-template">
                 <div className="ocr-step-heading">
                   <span>STEP 1</span>
-                  <h2 id="ocr-step-template">使用するテンプレートを確認</h2>
-                  <p>どの意味づけ済みテンプレートで読み取るかを選択します。</p>
+                  <h2 id="ocr-step-template">読み取る書類の種類を選ぶ</h2>
+                  <p>読み取る書類と同じ見た目のテンプレートを選択してください。</p>
                 </div>
-                <label className="field-label">
-                  使用するテンプレート
-                  <select value={versionId} onChange={(event) => {
-                    idempotencyKeyRef.current = null;
-                    setVersionId(event.target.value);
-                  }}>
-                    {versions.map(({ template, version }) => (
-                      <option key={version.id} value={version.id}>
-                        {template.name} — v{version.versionNumber} · {version.id.slice(0, 8)}
-                      </option>
-                    ))}
-                    {unverifiedVersions.length > 0 && (
-                      <optgroup label="設定確認が必要（選択できません）">
-                        {unverifiedVersions.map(({ template, version }) => (
-                          <option key={version.id} value={version.id} disabled>
-                            {template.name} — v{version.versionNumber} · 記入欄の再検出が必要
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                </label>
-                {activeSelection && (
-                  <div className="template-selection-preview">
-                    <div className="template-preview-head">
-                      <div>
-                        <span>選択中のテンプレート</span>
-                        <strong>{activeSelection.template.name} · v{activeSelection.version.versionNumber}</strong>
-                        <small>ID {activeSelection.version.id.slice(0, 8)} · {new Date(activeSelection.version.createdAt).toLocaleDateString("ja-JP")}</small>
-                      </div>
-                      <b>{mappingPreview?.length ?? "…"} 項目</b>
-                    </div>
-                    {mappingPreview === null ? mappingError ? (
-                      <div className="mapping-load-error" role="alert">
-                        <p className="inline-warning">{mappingError}</p>
-                        <button
-                          type="button"
-                          className="secondary compact"
-                          onClick={() => setMappingRetryToken((value) => value + 1)}
-                        >
-                          もう一度読み込む
-                        </button>
-                      </div>
-                    ) : (
-                      <p>セルの意味づけを読み込んでいます…</p>
-                    ) : mappingPreview.length === 0 ? (
-                      <p className="inline-warning">このテンプレートには読み取りセルの意味づけがありません。</p>
-                    ) : (
-                      <>
-                        <p className="template-mapping-policy">
-                          表示中の記入セル矩形だけをOpenAIへ送信し、mappingIdでJSON項目へ固定対応します。ラベルセルと帳票全体は送信しません。
-                        </p>
-                        <div className="template-mapping-chips">
-                          {mappingPreview.slice(0, 12).map((mapping) => (
-                            <span key={mapping.mappingId} title={mapping.targetPath}>
-                              {mapping.label}<small>{mapping.targetPath} · {mapping.mappingId}</small>
-                            </span>
-                          ))}
-                          {mappingPreview.length > 12 && <em>ほか {mappingPreview.length - 12} 項目</em>}
-                        </div>
-                        {mappingWarnings.map((warning) => (
-                          <p className="inline-warning" key={warning}>{warning}</p>
-                        ))}
-                      </>
-                    )}
+                {versions.length > 6 && (
+                  <label className="ocr-template-search">
+                    <span>テンプレートを検索</span>
+                    <input
+                      type="search"
+                      value={templateQuery}
+                      placeholder="名前で絞り込む"
+                      onChange={(event) => setTemplateQuery(event.target.value)}
+                    />
+                  </label>
+                )}
+                <div className="ocr-template-grid" aria-label="使用するテンプレート">
+                  {visibleVersions.map(({ template, version }) => {
+                    const selected = version.id === versionId;
+                    return (
+                      <button
+                        key={version.id}
+                        type="button"
+                        className={`ocr-template-card${selected ? " selected" : ""}`}
+                        aria-pressed={selected}
+                        aria-label={`${template.name} v${version.versionNumber}を選択`}
+                        onClick={() => {
+                          idempotencyKeyRef.current = null;
+                          setVersionId(version.id);
+                        }}
+                      >
+                        <span className="ocr-template-card-visual">
+                          <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>
+                          {version.sourceJobId && (
+                            <img
+                              src={templatePreviews[version.id] ?? api.templateBoundaryImageUrl(version.sourceJobId)}
+                              alt=""
+                              loading="lazy"
+                              onLoad={(event) => {
+                                event.currentTarget.hidden = false;
+                              }}
+                              onError={(event) => {
+                                event.currentTarget.hidden = true;
+                              }}
+                            />
+                          )}
+                          {selected && <span className="ocr-template-card-check" aria-hidden="true">✓</span>}
+                        </span>
+                        <span className="ocr-template-card-copy">
+                          <strong>{template.name}</strong>
+                          <small>バージョン {version.versionNumber}</small>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {visibleVersions.length === 0 && (
+                  <p className="ocr-template-empty">該当するテンプレートがありません。</p>
+                )}
+                {mappingError && (
+                  <div className="mapping-load-error" role="alert">
+                    <p className="inline-warning">テンプレート設定を確認できませんでした。</p>
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      onClick={() => setMappingRetryToken((value) => value + 1)}
+                    >
+                      もう一度読み込む
+                    </button>
                   </div>
+                )}
+                {mappingPreview !== null && !mappedReadingReady && !mappingError && (
+                  <p className="inline-warning" role="status">
+                    このテンプレートは現在読み取りに使用できません。テンプレート設定を確認してください。
+                  </p>
                 )}
                 <div className="ocr-step-actions">
                   <span />
@@ -322,7 +367,6 @@ export function OcrPage({
                   <strong>帳票上の個体識別番号と牛名も読み取ります</strong>
                   <span>処理後に専用の確認画面を表示します。間違っていた場合は、その場で修正してから結果表へ進めます。</span>
                 </aside>
-                {message && <p className="error-box">{message}</p>}
                 <div className="ocr-step-actions">
                   <button type="button" className="secondary" disabled={busy || Boolean(jobId)} onClick={() => setStep(2)}>戻る</button>
                   <button
@@ -335,19 +379,23 @@ export function OcrPage({
                         ?? createIdempotencyKey("ocr");
                       idempotencyKeyRef.current = idempotencyKey;
                       setBusy(true);
-                      setMessage(null);
                       try {
                         const created = await api.createOcr(
                           versionId,
                           file,
                           enabled,
                           idempotencyKey,
+                          libraryContext,
                         );
                         idempotencyKeyRef.current = null;
                         setJobId(created.jobId);
                         rememberJob(created.jobId);
                       } catch (error) {
-                        setMessage(error instanceof ApiError ? error.message : "開始できませんでした。");
+                        showToast({
+                          tone: "error",
+                          title: "読み取りを開始できませんでした",
+                          message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
+                        });
                       } finally {
                         creatingRef.current = false;
                         setBusy(false);

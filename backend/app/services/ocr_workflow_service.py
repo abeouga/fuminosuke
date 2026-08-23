@@ -7,10 +7,12 @@ import logging
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.session import Database
+from app.domain.generic_data import build_generic_data, build_generic_values
 from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
+from app.domain.template_candidates import normalize_candidate_target
 from app.domain.template_config import FieldMappingConfig
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.ocr.base import (
@@ -19,13 +21,14 @@ from app.ocr.base import (
     OcrProviderResponse,
     OcrRegionInput,
 )
-from app.ocr.deterministic_mapper import assign_mapped_reading
+from app.ocr.deterministic_mapper import assign_mapped_reading, get_mapped_reading
 from app.ocr.disabled_provider import DisabledOcrProvider
 from app.ocr.mock_provider import MockOcrProvider
 from app.ocr.openai_provider import OpenAIOcrProvider
 from app.ocr.text_presence import PaddleTextPresenceGate
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
+from app.services.document_reconciliation_service import DocumentReconciliationService
 from app.services.extraction_service import ExtractionOutput
 from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.storage.local_storage import LocalStorageService
@@ -48,7 +51,7 @@ class OcrWorkflowService:
         self._writer = ArtifactWriter(database, storage)
         self._validator = DeterministicValidator()
         self._presence_gate = PaddleTextPresenceGate()
-        self._google_sheets = google_sheets
+        self._documents = DocumentReconciliationService(self._validator)
 
     def process(self, extraction: ExtractionOutput) -> None:
         with self._database.session() as session:
@@ -84,6 +87,31 @@ class OcrWorkflowService:
             )
             or SALE_NOTE_SEX_SYMBOLS
         )
+        managed_pool_by_target: dict[
+            str,
+            tuple[tuple[str, ...], tuple[str, ...]],
+        ] = {}
+        raw_managed_pools = job_snapshot.get("templateCandidatePools", [])
+        if isinstance(raw_managed_pools, list):
+            for raw_pool in raw_managed_pools:
+                if not isinstance(raw_pool, dict):
+                    continue
+                target_pattern = raw_pool.get("targetPattern")
+                raw_candidates = raw_pool.get("candidates")
+                raw_suffixes = raw_pool.get("allowedSuffixes", [])
+                if not isinstance(target_pattern, str) or not isinstance(raw_candidates, list):
+                    continue
+                candidates = tuple(
+                    value for value in raw_candidates if isinstance(value, str) and value
+                )
+                suffix_source = raw_suffixes if isinstance(raw_suffixes, list) else []
+                suffixes = tuple(
+                    value
+                    for value in suffix_source
+                    if isinstance(value, str) and value
+                )
+                if candidates:
+                    managed_pool_by_target[target_pattern] = (candidates, suffixes)
         region_configs = (
             extraction.config.mapped_ocr_regions()
             if provider_name == "openai"
@@ -118,6 +146,7 @@ class OcrWorkflowService:
         preview_text_regions: list[OcrRegionInput] = []
         fixed_record_regions: list[OcrRegionInput] = []
         local_resolution_by_id: dict[str, str] = {}
+        document_identity_fields = extraction.config.effective_document_identity_fields()
         for region in region_configs:
             mapping_config = mapping_by_id.get(region.region_id)
             if mapping_config is not None and mapping_config.mapping_type == "mark":
@@ -143,7 +172,22 @@ class OcrWorkflowService:
                 and target_path.startswith("saleCalves.")
                 and target_path.endswith(".notes")
             )
+            managed_pool = (
+                managed_pool_by_target.get(normalize_candidate_target(target_path))
+                if target_path
+                else None
+            )
             transcription_format = self._transcription_format(target_path)
+            identity_for_region = next(
+                (
+                    identity_field
+                    for identity_field in document_identity_fields
+                    if identity_field.mapping_id == region.region_id
+                    and identity_field.target_path == target_path
+                ),
+                None,
+            )
+            is_document_identity = identity_for_region is not None
             crop = extraction.crops[region.region_id]
             printed_label_excluded = bool(region.printed_label_text.strip())
             ocr_region = OcrRegionInput(
@@ -158,11 +202,25 @@ class OcrWorkflowService:
                 source_region_id=(region.region_id if provider_name == "openai" else None),
                 bounding_box=extraction.crops[region.region_id].bbox,
                 candidates=(
-                    sire_name_pool if is_sire_name else sale_note_symbols if is_sale_note else ()
+                    managed_pool[0]
+                    if managed_pool is not None
+                    else sire_name_pool
+                    if is_sire_name
+                    else sale_note_symbols
+                    if is_sale_note
+                    else ()
                 ),
-                allowed_suffixes=sire_name_suffixes if is_sire_name else (),
+                allowed_suffixes=(
+                    managed_pool[1]
+                    if managed_pool is not None
+                    else sire_name_suffixes
+                    if is_sire_name
+                    else ()
+                ),
                 candidate_type=(
-                    "sire_name"
+                    "managed_text"
+                    if managed_pool is not None
+                    else "sire_name"
                     if is_sire_name
                     else "sale_calf_note_prefix"
                     if is_sale_note
@@ -171,6 +229,17 @@ class OcrWorkflowService:
                 transcription_format=transcription_format,
                 printed_label_excluded=printed_label_excluded,
                 printed_label_text=region.printed_label_text.strip(),
+                is_document_identity=is_document_identity,
+                identity_value_type=(
+                    identity_for_region.value_type
+                    if identity_for_region is not None
+                    else None
+                ),
+                identity_exact_length=(
+                    identity_for_region.exact_length
+                    if identity_for_region is not None
+                    else None
+                ),
             )
             preview_text_regions.append(ocr_region)
             if sent_to_openai:
@@ -215,7 +284,7 @@ class OcrWorkflowService:
                     ),
                 )
             self._progress(extraction.job_id, "PREPARING_MAPPED_CELLS", 72)
-            if self._presence_gate.available:
+            if self._settings.ocr.paddle_presence_audit_enabled and self._presence_gate.available:
                 presence_by_id = {
                     region.region_id: self._presence_gate.inspect(
                         extraction.crops[
@@ -288,6 +357,12 @@ class OcrWorkflowService:
             )
         request = OcrProviderRequest(
             regions=all_regions,
+            full_document_png=(
+                encode_png(extraction.aligned_rgb)
+                if provider_name == "openai"
+                and job_snapshot.get("sendFullDocumentToOpenAi") is True
+                else None
+            ),
             template_id=extraction.config.template_id,
             template_version=str(extraction.config.template_version),
             should_cancel=lambda: self._cancel_requested(extraction.job_id),
@@ -309,6 +384,36 @@ class OcrWorkflowService:
             if provider_name == "openai" and not all_regions
             else asyncio.run(provider.extract(request))
         )
+        if response.provider == "openai":
+            total_tokens = (
+                response.input_tokens + response.output_tokens
+                if response.input_tokens is not None and response.output_tokens is not None
+                else None
+            )
+            with self._database.session() as session:
+                JobRepository(session).add_event(
+                    job_id=extraction.job_id,
+                    level="INFO",
+                    event_code="OPENAI_API_USAGE",
+                    stage="CALLING_OCR",
+                    metadata={
+                        "attemptNumber": extraction.attempt_number,
+                        "modelId": response.model_id,
+                        "requestId": response.request_id,
+                        "apiCallCount": response.api_call_count,
+                        "inputTokens": response.input_tokens,
+                        "outputTokens": response.output_tokens,
+                        "totalTokens": total_tokens,
+                        "estimatedCost": (
+                            str(response.estimated_cost)
+                            if response.estimated_cost is not None
+                            else None
+                        ),
+                        "durationMs": response.duration_ms,
+                    },
+                )
+        if provider_name == "openai":
+            self._flag_local_ink_conflicts(response.document, all_regions, extraction)
         response.document.template_id = request.template_id
         response.document.template_version = request.template_version
         for fixed_region in fixed_record_regions:
@@ -356,6 +461,11 @@ class OcrWorkflowService:
                     ),
                 ),
             )
+        response.document.generic_data = build_generic_data(
+            response.document,
+            job_snapshot.get("genericTemplateDefinition"),
+        )
+        response.document.generic_values = build_generic_values(response.document.generic_data)
         mother_individual_id = job_snapshot.get("motherIndividualId")
         if isinstance(mother_individual_id, str):
             response.document.document.unified_ear_tag = FieldReading(
@@ -426,14 +536,32 @@ class OcrWorkflowService:
                 response=response,
                 report=report,
             )
+            current_job = JobRepository(session).get(extraction.job_id)
+            explicit_action = (
+                current_job.config_snapshot_json.get("documentAction")
+                if current_job is not None
+                else None
+            )
+            if current_job is not None and explicit_action in {
+                "ADD_PAGE",
+                "RESCAN_PAGE",
+                "NEW_DOCUMENT",
+            }:
+                stored = self._documents.resolve(
+                    session,
+                    job=current_job,
+                    stored=stored,
+                    action=explicit_action,
+                    target_document_id=current_job.config_snapshot_json.get("targetDocumentId"),
+                    target_job_id=None,
+                    target_page_id=current_job.config_snapshot_json.get("targetPageId"),
+                    configured_paths=configured_paths,
+                )
+                session.commit()
             revision = stored.revision
-        self._progress(extraction.job_id, "SYNCING_GOOGLE_SHEETS", 94)
-        self._google_sheets.sync(
-            job_id=extraction.job_id,
-            revision=revision,
-            document=response_document.model_dump(mode="json", by_alias=True),
-            confirmed=False,
-        )
+        # A spreadsheet file belongs to a confirmed ledger document. Draft OCR
+        # results remain in the database so an abandoned review cannot create
+        # an orphan file in Google Drive.
         self._progress(extraction.job_id, "WRITING_ARTIFACTS", 96)
         self._writer.json(
             job_id=extraction.job_id,
@@ -509,6 +637,35 @@ class OcrWorkflowService:
         if len(parts) == 3 and parts[0] in {"saleCalves", "calvings"} and parts[1].isdigit():
             return parts[0], int(parts[1])
         return None
+
+    @staticmethod
+    def _flag_local_ink_conflicts(
+        document: OcrDocument,
+        regions: list[OcrRegionInput],
+        extraction: ExtractionOutput,
+    ) -> None:
+        for region in regions:
+            if region.target_path is None:
+                continue
+            crop = extraction.crops.get(region.source_region_id or region.region_id)
+            if crop is None or crop.handwriting_only.size == 0:
+                continue
+            dark_pixels = int((crop.handwriting_only.min(axis=2) < 235).sum())
+            if dark_pixels < 4:
+                continue
+            reading = get_mapped_reading(document, region.target_path)
+            if reading is None or reading.status is not ReadingStatus.BLANK:
+                continue
+            assign_mapped_reading(
+                document,
+                region.target_path,
+                reading.model_copy(
+                    update={
+                        "status": ReadingStatus.UNCERTAIN,
+                        "review_reason": "LOCAL_INK_OCR_BLANK",
+                    }
+                ),
+            )
 
     @staticmethod
     def _transcription_format(target_path: str | None) -> str | None:

@@ -1,737 +1,452 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
-import { SalePriceChart } from "../components/SalePriceChart";
-import { normalizeJapaneseDateDisplay } from "../japaneseDates";
 import {
   navigateToSpreadsheet,
   type SpreadsheetNavigator,
 } from "../spreadsheetNavigation";
 import type {
-  FieldReading,
-  IndividualRecordCatalog,
-  IndividualRecord,
-  IndividualRecordSearch,
-  SaleCalfSireSearch,
+  DataSearchCatalog,
+  DataSearchField,
+  DataSearchFilter,
+  DataSearchItem,
+  DataSearchResponse,
 } from "../types";
 
-type RecordActionMessage = {
-  kind: "success" | "error";
-  text: string;
-  spreadsheetUrl?: string | null;
-};
+const PAGE_SIZE = 20;
 
 export function IndividualRecordsPage({
   onEditResult,
+  onOpenDocument,
   onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   onEditResult?: (jobId: string) => void;
+  onOpenDocument?: (documentId: string) => void;
   onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
+  const [catalog, setCatalog] = useState<DataSearchCatalog | null>(null);
+  const [result, setResult] = useState<DataSearchResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<IndividualRecordSearch | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [catalog, setCatalog] = useState<IndividualRecordCatalog | null>(null);
-  const [catalogBusy, setCatalogBusy] = useState(true);
-  const [sireQuery, setSireQuery] = useState("");
-  const [sireResult, setSireResult] = useState<SaleCalfSireSearch | null>(null);
-  const [sireBusy, setSireBusy] = useState(false);
+  const [templateId, setTemplateId] = useState("");
+  const [filters, setFilters] = useState<DataSearchFilter[]>([]);
+  const [busy, setBusy] = useState(true);
   const [actionJobId, setActionJobId] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<RecordActionMessage | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchMode, setSearchMode] = useState<"individual" | "sire">("individual");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void api.individualRecordCatalog()
-      .then((next) => {
-        if (!cancelled) setCatalog(next);
-      })
-      .catch((reason) => {
-        if (!cancelled) {
-          setError(
-            reason instanceof ApiError ? reason.message : "個体一覧を取得できませんでした。",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setCatalogBusy(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setBusy(true);
+    void Promise.all([
+      api.dataSearchCatalog(),
+      api.dataSearch({ pageSize: PAGE_SIZE }),
+    ]).then(([nextCatalog, nextResult]) => {
+      if (cancelled) return;
+      setCatalog(nextCatalog);
+      setResult(nextResult);
+      setError(null);
+    }).catch((reason) => {
+      if (!cancelled) {
+        setError(searchError(reason, "登録済みデータを取得できませんでした。"));
+      }
+    }).finally(() => {
+      if (!cancelled) setBusy(false);
+    });
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!searchOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy && !sireBusy) setSearchOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [busy, searchOpen, sireBusy]);
+  const selectedTemplate = useMemo(
+    () => catalog?.templates.find((item) => item.templateId === templateId) ?? null,
+    [catalog, templateId],
+  );
 
-  const showIndividual = async (individualId: string) => {
+  const executeSearch = async (
+    page = 1,
+    next: { query?: string; templateId?: string; filters?: DataSearchFilter[] } = {},
+  ) => {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.searchIndividualRecords(individualId));
-      setSireResult(null);
-      return true;
+      const selectedTemplateId = next.templateId ?? templateId;
+      setResult(await api.dataSearch({
+        query: next.query ?? query,
+        templateId: selectedTemplateId || null,
+        filters: next.filters ?? filters,
+        page,
+        pageSize: PAGE_SIZE,
+      }));
     } catch (reason) {
-      setResult(null);
-      setError(
-        reason instanceof ApiError ? reason.message : "個体データを検索できませんでした。",
-      );
-      return false;
+      setError(searchError(reason, "登録済みデータを検索できませんでした。"));
     } finally {
       setBusy(false);
     }
   };
-  const search = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (await showIndividual(query)) setSearchOpen(false);
+
+  const addFilter = () => {
+    const first = selectedTemplate?.fields[0];
+    if (!first) return;
+    setFilters((current) => [...current, emptyFilter(first)]);
   };
 
-  const searchSire = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setSireBusy(true);
+  const clearSearch = () => {
+    setQuery("");
+    setTemplateId("");
+    setFilters([]);
+    void executeSearch(1, { query: "", templateId: "", filters: [] });
+  };
+
+  const editResult = async (jobId: string) => {
+    setActionJobId(jobId);
     setError(null);
     try {
-      setSireResult(await api.searchSaleCalvesBySire(sireQuery));
-      setResult(null);
-      setSearchOpen(false);
+      await api.reopenResult(jobId);
+      onEditResult?.(jobId);
     } catch (reason) {
-      setSireResult(null);
-      setError(
-        reason instanceof ApiError ? reason.message : "種雄牛名から検索できませんでした。",
-      );
-    } finally {
-      setSireBusy(false);
-    }
-  };
-
-  const syncSpreadsheet = async (jobId: string) => {
-    setActionJobId(jobId);
-    setActionMessage(null);
-    try {
-      const synced = await api.syncSpreadsheet(jobId);
-      const sync = synced.spreadsheetSync;
-      if (sync?.status === "synced") {
-        setActionMessage({
-          kind: "success",
-          text: "この帳票をGoogleスプレッドシートへ反映しました。",
-          spreadsheetUrl: sync.spreadsheetUrl,
-        });
-        if (sync.spreadsheetUrl) {
-          onSpreadsheetNavigate(sync.spreadsheetUrl);
-        }
-      } else {
-        setActionMessage({
-          kind: "error",
-          text: sync?.lastError
-            ?? (sync?.enabled === false
-              ? "Googleスプレッドシート連携が有効ではありません。"
-              : "Googleスプレッドシートへ反映できませんでした。"),
-          spreadsheetUrl: sync?.spreadsheetUrl,
-        });
-      }
-    } catch (reason) {
-      setActionMessage({
-        kind: "error",
-        text: reason instanceof ApiError
-          ? reason.message
-          : "Googleスプレッドシートへ反映できませんでした。",
-      });
+      setError(searchError(reason, "読み取り結果の編集を開始できませんでした。"));
     } finally {
       setActionJobId(null);
     }
   };
 
-  const editResult = async (jobId: string) => {
-    setActionJobId(jobId);
-    setActionMessage(null);
+  const openSpreadsheet = async (item: DataSearchItem) => {
+    setActionJobId(item.sourceJobId);
+    setError(null);
     try {
-      await api.reopenResult(jobId);
-      onEditResult?.(jobId);
+      if (item.spreadsheetUrl) {
+        onSpreadsheetNavigate(item.spreadsheetUrl);
+        return;
+      }
+      const status = await api.spreadsheetStatus(item.sourceJobId);
+      if (!status.spreadsheetUrl) {
+        throw new Error("この書類のスプレッドシートはまだ作成されていません。");
+      }
+      onSpreadsheetNavigate(status.spreadsheetUrl);
     } catch (reason) {
-      setActionMessage({
-        kind: "error",
-        text: reason instanceof ApiError
-          ? reason.message
-          : "検出結果の編集を開始できませんでした。",
-      });
+      setError(searchError(reason, "スプレッドシートを開けませんでした。"));
     } finally {
       setActionJobId(null);
     }
   };
 
   return (
-    <div className="page-stack records-page">
+    <div className="page-stack records-page data-search-page">
       <header className="page-header">
-        <span className="eyebrow">INDIVIDUAL RECORDS</span>
-        <h1>確定済みレコードを検索</h1>
-        <p>
-          個体識別番号から帳票全体を、種雄牛名から売却子牛の産次・価格を検索できます。
-        </p>
+        <span className="eyebrow">REGISTERED DATA SEARCH</span>
+        <h1>登録済みデータを検索</h1>
+        <p>確定した読み取り結果を、書類の見出しや意味づけ済みの項目から検索します。</p>
       </header>
 
-      <section className="record-catalog" aria-labelledby="individual-catalog-title">
-        <div className="record-catalog-head">
-          <div>
-            <span className="eyebrow">REGISTERED INDIVIDUALS</span>
-            <h2 id="individual-catalog-title">登録済み個体から選ぶ</h2>
-            <p>確定保存された個体を選ぶと、その台帳を表示します。</p>
-          </div>
-          {catalog && <strong>{catalog.count}頭</strong>}
-        </div>
-        {catalogBusy ? (
-          <p className="record-catalog-message">個体一覧を読み込んでいます…</p>
-        ) : (
-          <>
-            {(!catalog || catalog.items.length === 0) && (
-              <p className="record-catalog-message">確定保存された個体はまだありません。</p>
-            )}
-            <div className="individual-catalog-list">
-              {catalog?.items.map((item) => (
-              <button
-                type="button"
-                className="individual-catalog-item"
-                key={item.individualId}
-                disabled={busy}
-                onClick={() => {
-                  setQuery(item.individualId);
-                  void showIndividual(item.individualId);
-                }}
-              >
-                <span className="individual-catalog-name">{item.cattleName || "牛名未入力"}</span>
-                <span className="individual-catalog-id">{formatIndividualId(item.individualId)}</span>
-                <span className="individual-catalog-meta">
-                  台帳 {item.recordCount}件 · {new Date(item.lastConfirmedAt).toLocaleDateString("ja-JP")}
-                </span>
-                {item.needsReview && <span className="status-pill status-needs-review">要再確認</span>}
-                <strong>表示する →</strong>
-              </button>
+      <form
+        className="data-search-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void executeSearch();
+        }}
+      >
+        <div className="data-search-primary">
+          <label>
+            <span>書類の見出しから検索</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="例：個体識別番号、牛名、帳票名"
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            <span>書類の種類</span>
+            <select
+              value={templateId}
+              onChange={(event) => {
+                setTemplateId(event.target.value);
+                setFilters([]);
+              }}
+            >
+              <option value="">すべての書類</option>
+              {catalog?.templates.map((item) => (
+                <option key={item.templateId} value={item.templateId}>
+                  {item.templateName}（{item.documentCount}件）
+                </option>
               ))}
-              <button
-                type="button"
-                className="individual-catalog-item individual-search-launch"
-                onClick={() => setSearchOpen(true)}
-              >
-                <span className="individual-search-plus" aria-hidden="true">＋</span>
-                <span>
-                  <strong>個体を検索</strong>
-                  <small>個体識別番号・種雄牛名</small>
-                </span>
-              </button>
-            </div>
-          </>
-        )}
-      </section>
-
-      {searchOpen && (
-        <div
-          className="record-search-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !busy && !sireBusy) setSearchOpen(false);
-          }}
-        >
-          <section
-            className="record-search-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="record-search-title"
-          >
-            <header>
-              <div>
-                <span className="eyebrow">OPTIONAL SEARCH</span>
-                <h2 id="record-search-title">登録データを検索</h2>
-                <p>登録済みカードにない個体や、種雄牛名から売却記録を探せます。</p>
-              </div>
-              <button
-                type="button"
-                className="ghost compact"
-                disabled={busy || sireBusy}
-                aria-label="検索画面を閉じる"
-                onClick={() => setSearchOpen(false)}
-              >
-                閉じる
-              </button>
-            </header>
-
-            <div className="record-search-tabs" role="tablist" aria-label="検索方法">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={searchMode === "individual"}
-                className={searchMode === "individual" ? "active" : ""}
-                onClick={() => setSearchMode("individual")}
-              >
-                個体識別番号
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={searchMode === "sire"}
-                className={searchMode === "sire" ? "active" : ""}
-                onClick={() => setSearchMode("sire")}
-              >
-                種雄牛名
-              </button>
-            </div>
-
-            {searchMode === "individual" ? (
-              <form className="record-search modal-search-form" onSubmit={search}>
-                <label htmlFor="individual-id-search">個体識別番号</label>
-                <div>
-                  <input
-                    id="individual-id-search"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    autoFocus
-                    maxLength={10}
-                    pattern="[0-9]{10}"
-                    placeholder="例: 1234567890"
-                    value={query}
-                    onChange={(event) => setQuery(limitIndividualId(event.target.value))}
-                  />
-                  <button className="primary" disabled={busy || query.length !== 10} type="submit">
-                    {busy ? "検索中…" : "個体を検索"}
-                  </button>
-                </div>
-                <small>数字10桁で入力してください。11桁目以降は入力されません。</small>
-              </form>
-            ) : (
-              <form className="record-search modal-search-form" onSubmit={searchSire}>
-                <label htmlFor="sire-name-search">種雄牛名</label>
-                <div>
-                  <input
-                    id="sire-name-search"
-                    autoComplete="off"
-                    autoFocus
-                    maxLength={200}
-                    placeholder="例: 福之姫"
-                    value={sireQuery}
-                    onChange={(event) => setSireQuery(event.target.value)}
-                  />
-                  <button className="primary" disabled={sireBusy || !sireQuery.trim()} type="submit">
-                    {sireBusy ? "検索中…" : "産次・価格を検索"}
-                  </button>
-                </div>
-                <small>同じ行レコードに保存された産次、価格、体重などをまとめて返します。</small>
-              </form>
-            )}
-          </section>
+            </select>
+          </label>
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? "検索中…" : "検索"}
+          </button>
         </div>
-      )}
 
-      {error && <p className="error-box">{error}</p>}
-      {actionMessage && (
-        <aside
-          className={actionMessage.kind === "error" ? "error-box action-message" : "notice compact action-message"}
-          role={actionMessage.kind === "error" ? "alert" : "status"}
-        >
-          <span>{actionMessage.text}</span>
-          {actionMessage.spreadsheetUrl && (
-            <a className="secondary compact" href={actionMessage.spreadsheetUrl} target="_blank" rel="noreferrer">
-              スプレッドシートを開く ↗
-            </a>
-          )}
-        </aside>
-      )}
-
-      {result && (
-        <section className="record-results" aria-live="polite">
-          <div className="record-result-header">
+        <section className="data-search-conditions" aria-labelledby="search-condition-title">
+          <div>
             <div>
-              <span className="eyebrow">SEARCH RESULT</span>
-              <h2>{formatIndividualId(result.individualId)}</h2>
-              <p>{result.count}件の確定済み帳票が見つかりました。</p>
+              <span className="eyebrow">FILTERS</span>
+              <h2 id="search-condition-title">項目を指定して絞り込む</h2>
             </div>
+            <button
+              type="button"
+              className="secondary compact"
+              disabled={!selectedTemplate || selectedTemplate.fields.length === 0}
+              onClick={addFilter}
+            >
+              ＋ 条件を追加
+            </button>
           </div>
-
-          {result.records.length === 0 ? (
-            <div className="empty-state large">
-              <span>個</span>
-              <h2>登録された個体データがありません</h2>
-              <p>OCR結果を確認して「内容を確定」すると、ここから検索できます。</p>
-            </div>
+          {!selectedTemplate ? (
+            <p>詳細条件を使用する場合は、先に書類の種類を一つ選択してください。</p>
+          ) : selectedTemplate.fields.length === 0 ? (
+            <p>この書類には検索できる確定済み項目がありません。</p>
+          ) : filters.length === 0 ? (
+            <p>必要な場合だけ条件を追加してください。書類を見分ける項目は上の検索欄から検索できます。</p>
           ) : (
-            <div className="record-list">
-              {result.records.map((record, index) => (
-                <RecordCard
-                  key={record.recordId}
-                  record={record}
-                  defaultOpen={index === 0}
-                  actionBusy={actionJobId === record.sourceJobId}
-                  onSyncSpreadsheet={() => void syncSpreadsheet(record.sourceJobId)}
-                  onEditResult={() => void editResult(record.sourceJobId)}
+            <div className="data-search-filter-list">
+              {filters.map((filter, index) => (
+                <SearchFilterRow
+                  key={`${index}-${filter.fieldKey}`}
+                  index={index}
+                  filter={filter}
+                  fields={selectedTemplate.fields}
+                  onChange={(next) => setFilters((current) => current.map((item, itemIndex) => (
+                    itemIndex === index ? next : item
+                  )))}
+                  onRemove={() => setFilters((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                 />
               ))}
             </div>
           )}
         </section>
-      )}
 
-      {sireResult && (
-        <section className="record-results" aria-live="polite">
-          <div className="record-result-header">
-            <div>
-              <span className="eyebrow">SALE CALF RECORD SEARCH</span>
-              <h2>{sireResult.query}</h2>
-              <p>{sireResult.count}件の売却子牛レコードが見つかりました。</p>
-            </div>
+        <div className="data-search-footer">
+          <button type="button" className="ghost" disabled={busy} onClick={clearSearch}>
+            条件をクリア
+          </button>
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? "検索中…" : "この条件で検索"}
+          </button>
+        </div>
+      </form>
+
+      {error && <p className="error-box" role="alert">{error}</p>}
+
+      <section className="data-search-results" aria-live="polite">
+        <header>
+          <div>
+            <span className="eyebrow">SEARCH RESULTS</span>
+            <h2>検索結果</h2>
           </div>
-          {sireResult.matches.length === 0 ? (
-            <div className="empty-state large">
-              <span>牛</span>
-              <h2>一致する売却子牛レコードがありません</h2>
-            </div>
-          ) : (
-            <div className="sale-calf-match-list">
-              {sireResult.matches.map((match) => (
-                <article className="record-card sale-calf-match" key={match.recordFieldId}>
-                  <div className="record-card-head">
-                    <div>
-                      <strong>{match.sectionTitle} / {readingValue(match.data.parity) || match.recordKey || match.recordOrder}産次</strong>
-                      <span>個体識別番号 {match.individualId ? formatIndividualId(match.individualId) : "未設定"}</span>
-                    </div>
-                    <span className={`status-pill ${match.reviewWarnings?.length ? "status-needs-review" : "status-confirmed"}`}>
-                      {match.reviewWarnings?.length ? "要再確認" : "MATCH"}
-                    </span>
-                  </div>
-                  {match.reviewWarnings?.map((warning) => (
-                    <p className="inline-warning" key={warning}>{warning}</p>
-                  ))}
-                  <dl className="record-summary-grid">
-                    <div><dt>種雄牛名</dt><dd>{readingValue(match.data.sireName) || match.matchedValue || "—"}</dd></div>
-                    <div><dt>産次</dt><dd>{readingValue(match.data.parity) || match.recordKey || match.recordOrder}</dd></div>
-                    <div><dt>価格</dt><dd>{formatPrice(readingValue(match.data.priceYen))}</dd></div>
-                    <div><dt>体重</dt><dd>{readingValue(match.data.weightKg) || "—"}</dd></div>
-                    <div><dt>レコード順</dt><dd>{match.recordOrder}</dd></div>
-                    <div><dt>元ジョブ</dt><dd className="mono">{match.sourceJobId}</dd></div>
-                  </dl>
-                  <RecordActions
-                    busy={actionJobId === match.sourceJobId}
-                    onSyncSpreadsheet={() => void syncSpreadsheet(match.sourceJobId)}
-                    onEditResult={() => void editResult(match.sourceJobId)}
-                  />
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+          {result && <strong>{result.count}件</strong>}
+        </header>
+        {busy && !result ? (
+          <div className="empty-state large">登録済みデータを読み込んでいます…</div>
+        ) : result?.items.length === 0 ? (
+          <div className="empty-state large">
+            <span>検</span>
+            <h2>条件に一致する書類がありません</h2>
+            <p>書類の種類または検索条件を変更してください。</p>
+          </div>
+        ) : (
+          <div className="data-search-result-list">
+            {result?.items.map((item) => (
+              <SearchResultCard
+                key={item.documentId}
+                item={item}
+                busy={actionJobId === item.sourceJobId}
+                onOpenDocument={onOpenDocument ? () => onOpenDocument(item.documentId) : undefined}
+                onEdit={() => void editResult(item.sourceJobId)}
+                onOpenSpreadsheet={() => void openSpreadsheet(item)}
+              />
+            ))}
+          </div>
+        )}
+        {result && result.count > result.pageSize && (
+          <nav className="data-search-pagination" aria-label="検索結果のページ">
+            <button
+              type="button"
+              className="secondary compact"
+              disabled={busy || result.page <= 1}
+              onClick={() => void executeSearch(result.page - 1)}
+            >
+              前へ
+            </button>
+            <span>{result.page} / {Math.ceil(result.count / result.pageSize)}ページ</span>
+            <button
+              type="button"
+              className="secondary compact"
+              disabled={busy || result.page >= Math.ceil(result.count / result.pageSize)}
+              onClick={() => void executeSearch(result.page + 1)}
+            >
+              次へ
+            </button>
+          </nav>
+        )}
+      </section>
     </div>
   );
 }
 
-function RecordCard({
-  record,
-  defaultOpen,
-  actionBusy,
-  onSyncSpreadsheet,
-  onEditResult,
+function SearchFilterRow({
+  index,
+  filter,
+  fields,
+  onChange,
+  onRemove,
 }: {
-  record: IndividualRecord;
-  defaultOpen: boolean;
-  actionBusy: boolean;
-  onSyncSpreadsheet: () => void;
-  onEditResult: () => void;
+  index: number;
+  filter: DataSearchFilter;
+  fields: DataSearchField[];
+  onChange: (filter: DataSearchFilter) => void;
+  onRemove: () => void;
 }) {
-  const [saleView, setSaleView] = useState<"table" | "chart">("table");
-  const identity = record.data.document;
-  const saleCalves = record.data.saleCalves.filter(hasRecordedValue);
-  const calvings = record.data.calvings.filter(hasRecordedValue);
-  const customFields = Object.entries(record.data.customFields ?? {})
-    .filter(([, reading]) => Boolean(readingValue(reading)));
+  const field = fields.find((item) => item.fieldKey === filter.fieldKey) ?? fields[0];
+  const operators = operatorsFor(field);
+  const listId = `data-search-suggestions-${index}`;
   return (
-    <article className="record-card">
-      <div className="record-card-head">
-        <div>
-          <strong>{readingValue(identity.cattleName) || "牛名未入力"}</strong>
-          <span>個体識別番号 {formatIndividualId(record.individualId)}</span>
-        </div>
-        <span className={`status-pill ${record.needsReview ? "status-needs-review" : "status-confirmed"}`}>
-          {record.needsReview ? "要再確認" : "CONFIRMED"}
-        </span>
-      </div>
-      {record.reviewWarnings?.map((warning) => (
-        <p className="inline-warning" key={warning}>{warning}</p>
-      ))}
-      <div className="record-overview">
-        <div><strong>{saleCalves.length}</strong><span>売却子牛</span></div>
-        <div><strong>{calvings.length}</strong><span>繁殖履歴</span></div>
-        <div><strong>{customFields.length}</strong><span>追加項目</span></div>
-      </div>
-      <div className="record-export-bar">
-        <span>この帳票の確定結果</span>
-        <RecordActions
-          busy={actionBusy}
-          onSyncSpreadsheet={onSyncSpreadsheet}
-          onEditResult={onEditResult}
+    <div className="data-search-filter-row">
+      <label>
+        <span>項目</span>
+        <select
+          aria-label={`検索項目 ${index + 1}`}
+          value={filter.fieldKey}
+          onChange={(event) => {
+            const nextField = fields.find((item) => item.fieldKey === event.target.value) ?? fields[0];
+            onChange(emptyFilter(nextField));
+          }}
+        >
+          {fields.map((item) => (
+            <option key={item.fieldKey} value={item.fieldKey}>
+              {item.sectionTitle} / {item.label}{item.repeated ? "（明細）" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>条件</span>
+        <select
+          aria-label={`検索条件 ${index + 1}`}
+          value={filter.operator}
+          onChange={(event) => onChange({
+            ...filter,
+            operator: event.target.value as DataSearchFilter["operator"],
+            valueTo: event.target.value === "between" ? filter.valueTo ?? "" : null,
+          })}
+        >
+          {operators.map((operator) => (
+            <option key={operator.value} value={operator.value}>{operator.label}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>値</span>
+        <input
+          aria-label={`検索値 ${index + 1}`}
+          type={field.valueType === "date" ? "date" : field.valueType === "number" ? "number" : "text"}
+          list={field.suggestions.length ? listId : undefined}
+          value={filter.value}
+          onChange={(event) => onChange({ ...filter, value: event.target.value })}
+          autoComplete="off"
         />
-      </div>
+        {field.suggestions.length > 0 && (
+          <datalist id={listId}>
+            {field.suggestions.map((suggestion) => <option key={suggestion} value={suggestion} />)}
+          </datalist>
+        )}
+      </label>
+      {filter.operator === "between" && (
+        <label>
+          <span>終了値</span>
+          <input
+            aria-label={`検索終了値 ${index + 1}`}
+            type={field.valueType === "number" ? "number" : field.valueType === "date" ? "date" : "text"}
+            value={filter.valueTo ?? ""}
+            onChange={(event) => onChange({ ...filter, valueTo: event.target.value })}
+          />
+        </label>
+      )}
+      <button type="button" className="ghost compact" onClick={onRemove}>解除</button>
+    </div>
+  );
+}
 
-      <details className="record-gui-details" open={defaultOpen}>
-        <summary>台帳の内容を表示</summary>
-        <div className="record-gui-body">
-          <RecordSection title="基本情報" subtitle="この繁殖台帳の個体情報">
-            <dl className="record-field-grid">
-              <RecordField label="個体識別番号" reading={identity.unifiedEarTag} fallback={record.individualId} format={formatIndividualId} />
-              <RecordField label="牛名" reading={identity.cattleName} />
-              <RecordField label="生年月日" reading={identity.birthDate} />
-              <RecordField label="登録番号" reading={identity.registrationNumber} />
-              <RecordField label="毛色" reading={identity.coatColor} />
-              <RecordField label="繁殖者" reading={identity.breeder} />
-              <RecordField label="所有者" reading={identity.owner} />
-            </dl>
-          </RecordSection>
-
-          <RecordSection title="血統" subtitle="父母・祖父母">
-            <div className="pedigree-board">
-              <div className="pedigree-person pedigree-father">
-                <span>父</span><strong>{readingValue(record.data.pedigree.father) || "—"}</strong>
-              </div>
-              <div className="pedigree-person">
-                <span>父方祖父</span><strong>{readingValue(record.data.pedigree.paternalGrandfather) || "—"}</strong>
-              </div>
-              <div className="pedigree-person">
-                <span>父方祖母</span><strong>{readingValue(record.data.pedigree.paternalGrandmother) || "—"}</strong>
-              </div>
-              <div className="pedigree-person pedigree-mother">
-                <span>母</span><strong>{readingValue(record.data.pedigree.mother) || "—"}</strong>
-              </div>
-              <div className="pedigree-person">
-                <span>母方祖父</span><strong>{readingValue(record.data.pedigree.maternalGrandfather) || "—"}</strong>
-              </div>
-              <div className="pedigree-person">
-                <span>母方祖母</span><strong>{readingValue(record.data.pedigree.maternalGrandmother) || "—"}</strong>
-              </div>
-            </div>
-          </RecordSection>
-
-          <RecordSection
-            title="売却子牛一覧"
-            subtitle={`${saleCalves.length}件の記録`}
-            actions={saleCalves.length > 0 ? (
-              <div className="record-view-switch" role="group" aria-label="売却子牛一覧の表示">
-                <button
-                  type="button"
-                  className={saleView === "table" ? "active" : ""}
-                  aria-pressed={saleView === "table"}
-                  onClick={() => setSaleView("table")}
-                >
-                  表
-                </button>
-                <button
-                  type="button"
-                  className={saleView === "chart" ? "active" : ""}
-                  aria-pressed={saleView === "chart"}
-                  onClick={() => setSaleView("chart")}
-                >
-                  グラフ
-                </button>
-              </div>
-            ) : undefined}
-          >
-            {saleCalves.length === 0 ? (
-              <p className="record-section-empty">記録はありません。</p>
-            ) : saleView === "chart" ? (
-              <SalePriceChart saleCalves={saleCalves} />
-            ) : (
-              <div className="record-table-wrap">
-                <table className="record-data-table">
-                  <thead><tr><th>産次</th><th>日齢</th><th>体重</th><th>価格</th><th>種雄牛名</th><th>売却日</th><th>備考</th></tr></thead>
-                  <tbody>{saleCalves.map((calf, index) => (
-                    <tr key={`${readingValue(calf.parity)}-${index}`}>
-                      <td>{displayReading(calf.parity, String(index + 1))}</td>
-                      <td>{formatUnit(readingValue(calf.ageDays), "日")}</td>
-                      <td>{formatUnit(readingValue(calf.weightKg), "kg")}</td>
-                      <td>{formatPrice(readingValue(calf.priceYen))}</td>
-                      <td>{displayReading(calf.sireName)}</td>
-                      <td>{displayDateReading(calf.saleDate)}</td>
-                      <td>{displayReading(calf.notes)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            )}
-          </RecordSection>
-
-          <RecordSection title="繁殖履歴" subtitle={`${calvings.length}件の記録`}>
-            {calvings.length === 0 ? (
-              <p className="record-section-empty">記録はありません。</p>
-            ) : (
-              <div className="record-table-wrap">
-                <table className="record-data-table">
-                  <thead><tr><th>産次</th><th>分娩年月日</th><th>性別</th><th>分娩状況・結果</th><th>備考</th></tr></thead>
-                  <tbody>{calvings.map((calving, index) => (
-                    <tr key={`${readingValue(calving.parity)}-${index}`}>
-                      <td>{displayReading(calving.parity, String(index + 1))}</td>
-                      <td>{displayDateReading(calving.calvingDate)}</td>
-                      <td>{displayReading(calving.sex)}</td>
-                      <td>{displayReading(calving.outcome)}</td>
-                      <td>{displayReading(calving.notes)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            )}
-          </RecordSection>
-
-          {customFields.length > 0 && (
-            <RecordSection title="追加項目" subtitle="テンプレートで追加された項目">
-              <dl className="record-field-grid custom-record-fields">
-                {customFields.map(([key, reading]) => (
-                  <RecordField key={key} label={humanizeFieldKey(key)} reading={reading} />
-                ))}
-              </dl>
-            </RecordSection>
+function SearchResultCard({
+  item,
+  busy,
+  onOpenDocument,
+  onEdit,
+  onOpenSpreadsheet,
+}: {
+  item: DataSearchItem;
+  busy: boolean;
+  onOpenDocument?: () => void;
+  onEdit: () => void;
+  onOpenSpreadsheet: () => void;
+}) {
+  return (
+    <article className="data-search-result-card">
+      <header>
+        <div>
+          <span className="eyebrow">{item.templateName}</span>
+          <small>{item.displayTitleLabel}</small>
+          <h3>{item.displayTitle}</h3>
+          {item.displaySubtitle && (
+            <p>{item.displaySubtitleLabel ? `${item.displaySubtitleLabel} ` : ""}{item.displaySubtitle}</p>
           )}
-
-          {record.data.reviewItems.length > 0 && (
-            <RecordSection title="確認メモ" subtitle="読み取り時に記録された注意事項">
-              <ul className="record-review-notes">
-                {record.data.reviewItems.map((item, index) => (
-                  <li key={`${item.code}-${item.path}-${index}`}>
-                    <strong>{item.severity === "error" ? "要確認" : "注意"}</strong>
-                    <span>{item.message}</span>
-                  </li>
-                ))}
-              </ul>
-            </RecordSection>
-          )}
-
-          <footer className="record-provenance">
-            <span>{new Date(record.confirmedAt).toLocaleString("ja-JP")} に確定</span>
-            <span>OCR revision {record.ocrResultRevision}</span>
-            <span>元ジョブ <code>{record.sourceJobId}</code></span>
-          </footer>
         </div>
-      </details>
+        <div className="data-search-result-meta">
+          <strong>{item.pageCount}ページ</strong>
+          <span>更新 {new Date(item.confirmedAt).toLocaleString("ja-JP")}</span>
+        </div>
+      </header>
+      {item.matches.length > 0 && (
+        <dl className="data-search-match-list">
+          {item.matches.map((match, index) => (
+            <div key={`${match.fieldKey}-${match.recordOrder ?? 0}-${index}`}>
+              <dt>
+                {match.sectionTitle}
+                {match.recordOrder ? ` ${match.recordKey || `${match.recordOrder}行目`}` : ""}
+                <span>{match.label}</span>
+              </dt>
+              <dd>{match.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <footer>
+        {onOpenDocument && <button type="button" className="primary compact" disabled={busy} onClick={onOpenDocument}>書類を開く</button>}
+        <button type="button" className="secondary compact" disabled={busy} onClick={onEdit}>読み取り結果を確認・修正</button>
+        <button type="button" className="secondary compact" disabled={busy} onClick={onOpenSpreadsheet}>スプレッドシートを開く ↗</button>
+      </footer>
     </article>
   );
 }
 
-function RecordActions({
-  busy,
-  onSyncSpreadsheet,
-  onEditResult,
-}: {
-  busy: boolean;
-  onSyncSpreadsheet: () => void;
-  onEditResult: () => void;
-}) {
-  return (
-    <div className="record-card-actions">
-      <button type="button" className="secondary compact" disabled={busy} onClick={onSyncSpreadsheet}>
-        {busy ? "処理中…" : "スプレッドシートへ出力"}
-      </button>
-      <button type="button" className="primary compact" disabled={busy} onClick={onEditResult}>
-        検出結果を編集
-      </button>
-    </div>
-  );
+function emptyFilter(field: DataSearchField): DataSearchFilter {
+  return {
+    fieldKey: field.fieldKey,
+    operator: field.valueType === "number" ? "exact" : field.valueType === "date" ? "on" : "contains",
+    value: "",
+  };
 }
 
-function RecordSection({
-  title,
-  subtitle,
-  actions,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  actions?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="record-gui-section">
-      <div className="record-gui-section-head">
-        <h3>{title}</h3>
-        <div className="record-gui-section-meta">
-          <span>{subtitle}</span>
-          {actions}
-        </div>
-      </div>
-      {children}
-    </section>
-  );
+function operatorsFor(field: DataSearchField) {
+  if (field.valueType === "number") {
+    return [
+      { value: "exact", label: "一致" },
+      { value: "gte", label: "以上" },
+      { value: "lte", label: "以下" },
+      { value: "between", label: "範囲" },
+    ] as const;
+  }
+  if (field.valueType === "date") {
+    return [
+      { value: "on", label: "当日" },
+      { value: "before", label: "以前" },
+      { value: "after", label: "以後" },
+      { value: "between", label: "期間" },
+    ] as const;
+  }
+  return [
+    { value: "exact", label: "一致" },
+    { value: "contains", label: "含む" },
+    { value: "startsWith", label: "前方一致" },
+  ] as const;
 }
 
-function RecordField({
-  label,
-  reading,
-  fallback = "",
-  format,
-}: {
-  label: string;
-  reading?: FieldReading;
-  fallback?: string;
-  format?: (value: string) => string;
-}) {
-  const rawValue = readingValue(reading) || fallback;
-  const value = rawValue && format ? format(rawValue) : rawValue;
-  return (
-    <div className={`record-field-value ${reading?.status === "uncertain" ? "is-uncertain" : ""}`}>
-      <dt>{label}</dt>
-      <dd>
-        <span>{value || "—"}</span>
-        {reading?.status === "uncertain" && <em>要確認</em>}
-      </dd>
-    </div>
-  );
-}
-
-function readingValue(reading?: FieldReading) {
-  return reading?.normalized ?? reading?.raw ?? "";
-}
-
-function hasRecordedValue(record: Record<string, FieldReading>) {
-  return Object.values(record).some((reading) => Boolean(readingValue(reading)));
-}
-
-function displayReading(reading?: FieldReading, fallback = "—") {
-  return readingValue(reading) || fallback;
-}
-
-function displayDateReading(reading?: FieldReading, fallback = "—") {
-  return normalizeJapaneseDateDisplay(reading?.raw, reading?.normalized)
-    || readingValue(reading)
-    || fallback;
-}
-
-function formatUnit(value: string, unit: string) {
-  return value ? `${value}${unit}` : "—";
-}
-
-function humanizeFieldKey(key: string) {
-  const lastSegment = key.split(".").at(-1) ?? key;
-  return lastSegment
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim() || key;
-}
-
-function formatIndividualId(value: string) {
-  return value.length === 10
-    ? `${value.slice(0, 3)}-${value.slice(3, 7)}-${value.slice(7)}`
-    : value;
-}
-
-function limitIndividualId(value: string) {
-  return value.normalize("NFKC").replace(/\D/g, "").slice(0, 10);
-}
-
-function formatPrice(value: string) {
-  const compact = value.normalize("NFKC").replace(/\s+/g, "").replace(/円$/, "");
-  const grouped = /^\d{1,3}(?:,\d{3})+$/.test(compact)
-    || /^\d{1,3}(?:\.\d{3})+$/.test(compact);
-  const canonical = grouped ? compact.replace(/[,.]/g, "") : compact.replace(/,/g, "");
-  const numeric = Number(canonical);
-  return value && Number.isFinite(numeric)
-    ? `${numeric.toLocaleString("ja-JP")}円`
-    : value || "—";
+function searchError(reason: unknown, fallback: string) {
+  return reason instanceof ApiError || reason instanceof Error ? reason.message : fallback;
 }

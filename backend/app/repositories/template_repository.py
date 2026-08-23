@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.db.models import ProcessingJob, Template, TemplateVersion
 from app.domain.enums import JobStatus, TemplateMode, TemplateVersionStatus
-from app.domain.template_quality import has_full_image_boundary_fallback
+from app.domain.template_quality import (
+    has_approved_generic_definition,
+    has_full_image_boundary_fallback,
+)
 
 
 class TemplateRepository:
@@ -114,7 +117,8 @@ class TemplateRepository:
                 ),
             )
         relations = version.layout_json.get("relations")
-        if (
+        generic_approved = has_approved_generic_definition(version.quality_json)
+        if not generic_approved and (
             not isinstance(relations, list)
             or not relations
             or version.quality_json.get("layoutFinalized") is not True

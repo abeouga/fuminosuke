@@ -40,7 +40,7 @@ def test_openai_payload_contains_only_opaque_ids_and_mapped_cell_images() -> Non
         base64.b64decode(str(item["image_url"]).split(",", maxsplit=1)[1])
         for item in image_items
     ]
-    assert decoded == [b"exact-input-cell", b"handwriting-hint"]
+    assert decoded == [b"exact-input-cell"]
 
 
 def test_openai_payload_rejects_unmapped_regions() -> None:
@@ -52,6 +52,32 @@ def test_openai_payload_rejects_unmapped_regions() -> None:
         build_mapped_input_content(request, image_detail="high")
 
     assert exc_info.value.code == "TEMPLATE_FIELD_MAPPING_REQUIRED"
+
+
+def test_document_identity_payload_has_strict_digit_constraints() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="identity_cell",
+                image_png=b"identity-crop",
+                target_path="document.unifiedEarTag",
+                is_document_identity=True,
+                identity_value_type="digits",
+                identity_exact_length=10,
+            )
+        ]
+    )
+
+    content = build_mapped_input_content(request, image_detail="high")
+    text = "\n".join(
+        str(item["text"]) for item in content if item["type"] == "input_text"
+    )
+
+    assert "documentIdentity:true" in text
+    assert "valueType:digits" in text
+    assert "exactLength:10" in text
+    assert "do_not_copy_text_from_other_images" in text
+    assert "document.unifiedEarTag" not in text
 
 
 def test_openai_payload_scopes_sire_candidates_to_the_mapped_cell() -> None:
@@ -84,6 +110,59 @@ def test_openai_payload_scopes_sire_candidates_to_the_mapped_cell() -> None:
     assert '"ET"' in text
     assert text.index("candidateSireNames") < text.index("cell_0002")
     assert "saleCalves.0.sireName" not in text
+
+
+def test_reused_candidate_pool_is_serialized_once_per_batch() -> None:
+    candidates = ("勝忠平", "光晴重", "重波平", "百合茂")
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id=f"cell_{index:04d}",
+                image_png=b"sire-cell",
+                target_path=f"saleCalves.{index}.sireName",
+                candidates=candidates,
+                allowed_suffixes=("ET",),
+            )
+            for index in range(3)
+        ]
+    )
+
+    content = build_mapped_input_content(request, image_detail="low")
+    text = "\n".join(
+        str(item["text"]) for item in content if item["type"] == "input_text"
+    )
+
+    assert text.count("candidateSireNames") == 1
+    assert text.count("pool:p0") == 3
+    assert all(
+        item.get("detail") == "low"
+        for item in content
+        if item["type"] == "input_image"
+    )
+
+
+def test_template_managed_candidate_pool_uses_generic_prompt_metadata() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cattle_name",
+                image_png=b"name-cell",
+                target_path="document.cattleName",
+                candidates=("こよみ", "さくら"),
+                candidate_type="managed_text",
+            )
+        ]
+    )
+
+    content = build_mapped_input_content(request, image_detail="high")
+    text = "\n".join(
+        str(item["text"]) for item in content if item["type"] == "input_text"
+    )
+
+    assert "candidateType:managed_text" in text
+    assert 'allowedValues:["こよみ", "さくら"]' in text
+    assert "candidateSireNames" not in text
+    assert "document.cattleName" not in text
 
 
 def test_locally_excluded_printed_label_is_sent_only_as_an_exclusion_rule() -> None:
@@ -142,3 +221,29 @@ def test_birth_date_and_sale_note_receive_cell_specific_constraints() -> None:
     assert '"♀"' in text
     assert "document.birthDate" not in text
     assert "saleCalves.0.notes" not in text
+
+
+def test_full_document_context_is_sent_only_when_explicitly_attached() -> None:
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="cell_0001",
+                image_png=b"cell",
+                target_path="customFields.value",
+            )
+        ],
+        full_document_png=b"full-document",
+    )
+
+    content = build_mapped_input_content(request, image_detail="high")
+    text = "\n".join(
+        str(item["text"]) for item in content if item["type"] == "input_text"
+    )
+    decoded = [
+        base64.b64decode(str(item["image_url"]).split(",", maxsplit=1)[1])
+        for item in content
+        if item["type"] == "input_image"
+    ]
+
+    assert "view: full_document_context" in text
+    assert decoded == [b"full-document", b"cell"]

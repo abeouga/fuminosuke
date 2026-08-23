@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from app.domain.text_encoding import repair_utf8_mojibake
+from app.domain.text_encoding import normalize_paddle_japanese_text
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
 
 
@@ -109,7 +109,7 @@ def _parse_paddle_result(raw: Any) -> list[TextRegion]:
     def add(points: Any, text: Any, confidence: Any) -> None:
         if not isinstance(text, str) or not text.strip():
             return
-        text = repair_utf8_mojibake(text)
+        text = normalize_paddle_japanese_text(text)
         try:
             normalized = tuple((float(point[0]), float(point[1])) for point in points)
             score = float(confidence)

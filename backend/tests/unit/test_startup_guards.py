@@ -8,6 +8,23 @@ from pathlib import Path
 import pytest
 
 
+def test_start_bat_clears_inherited_storage_overrides() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    content = (repository_root / "start.bat").read_text(encoding="utf-8")
+
+    assert "for %%V in (" in content
+    for setting in (
+        "DATA_DIR",
+        "DATABASE_URL",
+        "LOG_FILE",
+        "OCR_PROVIDER",
+        "GOOGLE_SHEETS_EDIT_POLL_INTERVAL_SECONDS",
+    ):
+        assert setting in content
+    assert 'do set "%%V="' in content
+    assert '".venv\\Scripts\\python.exe" -c "import app.main"' in content
+
+
 @pytest.mark.skipif(os.name != "nt", reason="start.bat is Windows-only")
 def test_start_bat_runs_setup_when_existing_install_has_no_env(
     tmp_path: Path,

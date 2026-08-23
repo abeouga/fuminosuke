@@ -23,6 +23,7 @@ from app.domain.ocr_models import (
 )
 from app.domain.sale_notes import canonical_sale_note
 from app.domain.sire_names import canonical_sire_candidate
+from app.domain.template_candidates import canonical_managed_candidate
 from app.ocr.base import OcrProviderRequest
 from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
 
@@ -104,6 +105,8 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
             allowed_suffixes=region.allowed_suffixes,
             candidate_type=region.candidate_type,
             transcription_format=region.transcription_format,
+            identity_value_type=region.identity_value_type,
+            identity_exact_length=region.identity_exact_length,
         )
         _assign(document, region.target_path, reading)
         if is_ditto:
@@ -123,6 +126,9 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
                 "SIRE_NAME_CANDIDATE_UNRESOLVED": (
                     "種雄牛名を登録済み候補へ確実に照合できないため確認してください。"
                 ),
+                "MANAGED_CANDIDATE_UNRESOLVED": (
+                    "登録済みの読み取り候補と一致しないため確認してください。"
+                ),
                 "SALE_NOTE_SEX_SYMBOL_UNRESOLVED": (
                     "備考の先頭を♂または♀として確定できないため確認してください。"
                 ),
@@ -132,6 +138,9 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
                 ),
                 "MARK_CHOICE_UNRESOLVED": (
                     "選択マークを確定できないため、丸の付いた項目を確認してください。"
+                ),
+                "DOCUMENT_IDENTITY_FORMAT_INVALID": (
+                    "書類を見分ける番号の形式が設定と一致しないため確認してください。"
                 ),
             }.get(issue_code, "読み取り結果を確認してください。")
             document.review_items.append(
@@ -167,6 +176,8 @@ def _reading(
     allowed_suffixes: tuple[str, ...] = (),
     candidate_type: str | None = None,
     transcription_format: str | None = None,
+    identity_value_type: str | None = None,
+    identity_exact_length: int | None = None,
 ) -> tuple[FieldReading, str | None, bool]:
     if item is None:
         return _missing_mapped_reading(mapping_id, box), None, False
@@ -192,7 +203,23 @@ def _reading(
     alternatives = item.alternatives
     issue_code: str | None = None
     normalized = _normalize(target_path, raw) if status is ReadingStatus.READABLE else None
-    if transcription_format == "japanese_era_date_numbers" and status is not ReadingStatus.BLANK:
+    if identity_value_type == "digits" and status is not ReadingStatus.BLANK:
+        compact = re.sub(
+            r"[\s\-\u2010\u2011\u2012\u2013\u2014\u2015\u30fc\uff0d]",
+            "",
+            unicodedata.normalize("NFKC", raw or ""),
+        )
+        valid_length = identity_exact_length is None or len(compact) == identity_exact_length
+        if compact.isdigit() and valid_length:
+            normalized = compact
+            if status is ReadingStatus.READABLE:
+                review_reason = None
+        else:
+            status = ReadingStatus.UNCERTAIN
+            normalized = None
+            review_reason = "DOCUMENT_IDENTITY_FORMAT_INVALID"
+            issue_code = review_reason
+    elif transcription_format == "japanese_era_date_numbers" and status is not ReadingStatus.BLANK:
         numeric_raw, canonical_normalized, reason = canonical_japanese_birth_date(raw, None)
         raw = numeric_raw
         normalized = canonical_normalized
@@ -238,18 +265,23 @@ def _reading(
             review_reason = "MARK_CHOICE_UNRESOLVED"
             issue_code = review_reason
     elif candidates and status is not ReadingStatus.BLANK:
-        matched = canonical_sire_candidate(
+        candidate_matcher = (
+            canonical_managed_candidate
+            if candidate_type == "managed_text"
+            else canonical_sire_candidate
+        )
+        matched = candidate_matcher(
             item.matched_candidate,
             candidates,
             allowed_suffixes,
         )
         if matched is None:
-            matched = canonical_sire_candidate(raw, candidates, allowed_suffixes)
+            matched = candidate_matcher(raw, candidates, allowed_suffixes)
         alternatives = [
             candidate
             for value in item.alternatives
             if (
-                candidate := canonical_sire_candidate(
+                candidate := candidate_matcher(
                     value,
                     candidates,
                     allowed_suffixes,
@@ -262,7 +294,11 @@ def _reading(
         else:
             status = ReadingStatus.UNCERTAIN
             normalized = None
-            review_reason = review_reason or "SIRE_NAME_CANDIDATE_UNRESOLVED"
+            review_reason = review_reason or (
+                "MANAGED_CANDIDATE_UNRESOLVED"
+                if candidate_type == "managed_text"
+                else "SIRE_NAME_CANDIDATE_UNRESOLVED"
+            )
             issue_code = review_reason
     return (
         FieldReading(
@@ -476,6 +512,18 @@ def assign_mapped_reading(
 ) -> None:
     """Assign a local detector result through the normal field-mapping rules."""
     _assign(document, target_path, reading)
+
+
+def get_mapped_reading(document: OcrDocument, target_path: str) -> FieldReading | None:
+    parts = target_path.split(".")
+    custom_key = custom_field_key(target_path)
+    if custom_key is not None:
+        return document.custom_fields.get(custom_key)
+    if len(parts) == 2 and parts[0] == "document" and parts[1] in DOCUMENT_ATTRIBUTES:
+        return cast(FieldReading, getattr(document.document, DOCUMENT_ATTRIBUTES[parts[1]]))
+    if len(parts) == 2 and parts[0] == "pedigree" and parts[1] in PEDIGREE_ATTRIBUTES:
+        return cast(FieldReading, getattr(document.pedigree, PEDIGREE_ATTRIBUTES[parts[1]]))
+    return _get_record_reading(document, target_path)
 
 
 def _blank_sale_calf() -> SaleCalf:

@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import JobArtifact, TemplateVersion
+from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.ocr_models import ReadingStatus
 from app.main import create_app
@@ -19,6 +19,7 @@ from app.ocr.base import OcrProviderRequest, OcrProviderResponse
 from app.ocr.deterministic_mapper import build_mapped_document
 from app.ocr.openai_provider import OpenAIOcrProvider
 from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
+from app.repositories.job_repository import JobRepository
 from tests.synthetic.image_factory import encode_png, ledger_image
 
 
@@ -95,6 +96,24 @@ def _active_template(client: TestClient) -> str:
         },
     )
     assert saved_layout.status_code == 200
+    mapping_config = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
+    identity_mapping = mapping_config["mappings"][0]
+    identity_saved = client.put(
+        f"/api/v1/template-versions/{version_id}/field-mappings",
+        json={
+            "mappings": mapping_config["mappings"],
+            "documentIdentity": {
+                "mappingId": identity_mapping["mappingId"],
+                "targetPath": identity_mapping["targetPath"],
+                "label": identity_mapping["label"],
+                "valueType": "text",
+                "exactLength": None,
+            },
+        },
+    )
+    assert identity_saved.status_code == 200
     verified = client.post(f"/api/v1/template-versions/{version_id}/layout/verify")
     assert verified.status_code == 200
     approved = client.post(f"/api/v1/template-versions/{version_id}/approve")
@@ -492,11 +511,26 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
                 == 201
             )
         version_id = _active_template(openai_client)
+        template_id = openai_client.get("/api/v1/templates").json()[0]["id"]
         mappings = openai_client.get(
             f"/api/v1/template-versions/{version_id}/field-mappings"
         ).json()["mappings"]
         assert len(mappings) == 1
         mapping_id = mappings[0]["mappingId"]
+        candidate_settings = openai_client.put(
+            f"/api/v1/templates/{template_id}/candidate-settings",
+            json={
+                "templateVersionId": version_id,
+                "sets": [
+                    {
+                        "name": "牛名",
+                        "values": ["こよみ", "さくら"],
+                        "targetPatterns": ["document.cattleName"],
+                    }
+                ],
+            },
+        )
+        assert candidate_settings.status_code == 200, candidate_settings.text
 
         image = encode_png(ledger_image(handwriting_seed=7))
         created = openai_client.post(
@@ -519,6 +553,8 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         assert request.regions[0].target_path == "document.cattleName"
         assert request.regions[0].bounding_box == (120, 20, 240, 80)
         assert request.regions[0].handwriting_png is not None
+        assert request.regions[0].candidates == ("こよみ", "さくら")
+        assert request.regions[0].candidate_type == "managed_text"
 
         job = openai_client.app.state.job_service.get(job_id)
         snapshot = job.config_snapshot_json
@@ -530,6 +566,16 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         assert snapshot["sireNamePool"] == ["勝忠平", "光晴重", "重波平", "百合茂"]
         assert snapshot["sireNameAllowedSuffixes"] == ["ET"]
         assert len(snapshot["sireNamePoolHash"]) == 64
+        assert snapshot["templateCandidatePools"] == [
+            {
+                "candidateSetId": candidate_settings.json()["sets"][0]["id"],
+                "name": "牛名",
+                "targetPattern": "document.cattleName",
+                "candidates": ["こよみ", "さくら"],
+                "allowedSuffixes": [],
+            }
+        ]
+        assert len(snapshot["templateCandidatePoolsHash"]) == 64
         assert snapshot["saleNoteSexSymbolPool"] == ["♂", "♀"]
 
         mapped_cells = openai_client.get(f"/api/v1/jobs/{job_id}/artifacts/mappedCells").json()
@@ -676,6 +722,13 @@ def test_ocr_uses_the_template_snapshot_captured_at_acceptance(
     assert len(snapshot["configSha256"]) == 64
     assert snapshot["cleanTemplatePath"].startswith(f"uploads/{job_id}/template_snapshot/")
     assert isinstance(snapshot["config"], dict)
+    with client.app.state.database.session() as session:
+        stored_job = session.get(ProcessingJob, job_id)
+        assert stored_job is not None
+        assert stored_job.template_snapshot_bytes is not None
+        stored_inputs = JobRepository(session).list_inputs(job_id)
+        assert len(stored_inputs) == 1
+        assert stored_inputs[0].content_bytes == image
 
     try:
         with client.app.state.database.session() as session:

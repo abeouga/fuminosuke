@@ -32,17 +32,40 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
         "confirmed_record_fields",
         "sire_names",
         "google_oauth_accounts",
+        "spreadsheet_edit_events",
+        "template_definition_revisions",
+        "output_layout_template_revisions",
+        "template_output_folders",
+        "template_candidate_sets",
+        "template_candidate_bindings",
+        "ledger_documents",
+        "ledger_document_pages",
         "job_events",
         "alembic_version",
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0009_user_spreadsheet_targets"
+            "0017_template_candidate_sets"
         )
     oauth_columns = {
         column["name"] for column in inspect(engine).get_columns("google_oauth_accounts")
     }
-    assert {"spreadsheet_id", "spreadsheet_url"} <= oauth_columns
+    assert {
+        "spreadsheet_id",
+        "spreadsheet_url",
+        "drive_root_folder_id",
+        "default_output_folder_id",
+        "default_output_folder_path",
+    } <= oauth_columns
+    ledger_columns = {column["name"] for column in inspect(engine).get_columns("ledger_documents")}
+    assert {
+        "spreadsheet_id",
+        "spreadsheet_url",
+        "drive_folder_id",
+        "drive_folder_path",
+        "spreadsheet_sync_status",
+        "spreadsheet_sync_error",
+    } <= ledger_columns
     confirmed_columns = {
         column["name"] for column in inspect(engine).get_columns("confirmed_results")
     }
@@ -61,6 +84,12 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     assert "ix_confirmed_record_field_lookup" in record_field_indexes
     job_indexes = {index["name"]: index for index in inspect(engine).get_indexes("processing_jobs")}
     assert job_indexes["ix_processing_jobs_idempotency_key"]["unique"] == 1
+    processing_job_columns = {
+        column["name"] for column in inspect(engine).get_columns("processing_jobs")
+    }
+    job_input_columns = {column["name"] for column in inspect(engine).get_columns("job_inputs")}
+    assert "template_snapshot_bytes" in processing_job_columns
+    assert "content_bytes" in job_input_columns
     with engine.connect() as connection:
         sire_names = list(
             connection.scalars(text("SELECT name FROM sire_names ORDER BY created_at, id"))
@@ -112,7 +141,7 @@ def test_upgrade_deduplicates_legacy_idempotency_keys(
                 """
             )
         ).all()
-    assert keys == [("job-a", "duplicate-key"), ("job-b", None)]
+    assert [tuple(row) for row in keys] == [("job-a", "duplicate-key"), ("job-b", None)]
 
 
 def test_upgrade_repairs_individual_id_from_corrected_normalized_reading(

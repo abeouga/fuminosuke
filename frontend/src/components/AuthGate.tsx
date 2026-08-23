@@ -6,11 +6,15 @@ export function AuthGate({
   loading,
   error,
   onRetry,
+  reconnectRequired,
+  onReconnect,
 }: {
   session: AuthSession | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
+  reconnectRequired: boolean;
+  onReconnect: () => void;
 }) {
   const configured = session?.configured ?? false;
   return (
@@ -18,10 +22,13 @@ export function AuthGate({
       <section className="auth-card" aria-labelledby="auth-title">
         <div className="auth-mark" aria-hidden="true">牛</div>
         <p className="eyebrow">GOOGLE SHEETS CONNECTION</p>
-        <h1 id="auth-title">Googleアカウントで接続</h1>
+        <h1 id="auth-title">
+          {reconnectRequired ? "Google連携の更新が必要です" : "Googleアカウントで接続"}
+        </h1>
         <p className="auth-description">
-          読み取り結果をあなたのGoogleスプレッドシートへ直接出力するため、
-          Googleアカウントの認証が必要です。
+          {reconnectRequired
+            ? "保存先をGoogle Pickerで選択する権限方式へ切り替えます。旧連携を解除して再認証してください。"
+            : "読み取り結果をあなたのGoogleスプレッドシートへ直接出力するため、Googleアカウントの認証が必要です。"}
         </p>
         {loading && <p className="auth-status" role="status">認証状態を確認しています…</p>}
         {!loading && error && (
@@ -39,7 +46,17 @@ export function AuthGate({
             </span>
           </div>
         )}
-        {!loading && !error && configured && (
+        {!loading && !error && configured && reconnectRequired && (
+          <button
+            type="button"
+            className="google-login-button"
+            onClick={onReconnect}
+          >
+            <span aria-hidden="true">G</span>
+            Google連携を更新
+          </button>
+        )}
+        {!loading && !error && configured && !reconnectRequired && (
           <button
             type="button"
             className="google-login-button"

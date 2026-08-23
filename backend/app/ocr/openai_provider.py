@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import time
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, cast
 
@@ -19,12 +21,33 @@ from pydantic import ValidationError
 
 from app.core.config import OcrSettings
 from app.core.errors import AppError
-from app.ocr.base import OcrProviderRequest, OcrProviderResponse
+from app.domain.ocr_models import ReadingStatus
+from app.ocr.base import OcrProviderRequest, OcrProviderResponse, OcrRegionInput
 from app.ocr.deterministic_mapper import build_mapped_document
 from app.ocr.prompt_loader import load_transcription_prompt
-from app.ocr.transcription_models import TranscriptionBatch
+from app.ocr.transcription_models import (
+    CompactTranscriptionBatch,
+    CompactTranscriptionItem,
+    TranscriptionBatch,
+    TranscriptionItem,
+)
 
 logger = logging.getLogger(__name__)
+
+_MAX_REGIONS_PER_CALL = 30
+_MIN_COMPACT_OUTPUT_TOKENS = 800
+_COMPACT_OUTPUT_TOKENS_PER_REGION = 120
+
+
+@dataclass(frozen=True, slots=True)
+class _TranscriptionResponse:
+    batch: TranscriptionBatch
+    model_id: str
+    input_tokens: int | None
+    output_tokens: int | None
+    estimated_cost: Decimal | None
+    request_id: str
+    duration_ms: float
 
 
 class OpenAIOcrProvider:
@@ -47,6 +70,7 @@ class OpenAIOcrProvider:
         )
 
     async def extract(self, request: OcrProviderRequest) -> OcrProviderResponse:
+        started = time.perf_counter()
         models: list[str] = []
         if self._settings.primary_model:
             models.append(self._settings.primary_model)
@@ -55,34 +79,174 @@ class OpenAIOcrProvider:
             and self._settings.fallback_model != self._settings.primary_model
         ):
             models.append(self._settings.fallback_model)
-        last_error: AppError | None = None
         call_count = 0
+        call_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(self._settings.max_concurrency)
         retryable_codes = {
             "OCR_RATE_LIMITED",
             "OCR_TIMEOUT",
             "OCR_PROVIDER_ERROR",
         }
-        for model in models:
-            for _ in range(self._settings.max_retries + 1):
+        requests = self._batched_requests(request)
+        if len(requests) > self._settings.max_calls_per_job:
+            raise self._provider_error(
+                409,
+                "OCR_CALL_BUDGET_TOO_SMALL",
+                "項目数に対してOCR APIの最大呼び出し回数が不足しています。",
+            )
+
+        async def reserve_call() -> int | None:
+            nonlocal call_count
+            async with call_lock:
                 if call_count >= self._settings.max_calls_per_job:
-                    break
-                self._raise_if_cancelled(request)
+                    return None
                 call_count += 1
-                try:
-                    return await self._call(request, model, call_count)
-                except AppError as exc:
-                    last_error = exc
-                    if exc.code not in retryable_codes:
-                        raise
-            if call_count >= self._settings.max_calls_per_job:
-                break
-        if last_error is not None:
-            raise last_error
-        raise AppError(
-            status=503,
-            code="MODEL_NOT_CONFIGURED",
-            title="OpenAI OCR is not configured",
-            detail="OCRモデルが設定されていません。",
+                return call_count
+
+        async def run_batch(
+            batch_request: OcrProviderRequest,
+            *,
+            detail: str | None = None,
+        ) -> _TranscriptionResponse:
+            last_error: AppError | None = None
+            for model in models:
+                for _ in range(self._settings.max_retries + 1):
+                    self._raise_if_cancelled(request)
+                    reserved = await reserve_call()
+                    if reserved is None:
+                        break
+                    try:
+                        async with semaphore:
+                            if detail is None:
+                                return await self._call(batch_request, model, reserved)
+                            return await self._call_detail(
+                                batch_request,
+                                model,
+                                reserved,
+                                image_detail=detail,
+                            )
+                    except AppError as exc:
+                        last_error = exc
+                        if exc.code not in retryable_codes:
+                            raise
+            if last_error is not None:
+                raise last_error
+            raise self._provider_error(
+                502,
+                "OCR_CALL_BUDGET_EXHAUSTED",
+                "OCR APIの最大呼び出し回数に達したため、全項目を読み取れませんでした。",
+            )
+
+        responses = list(await asyncio.gather(*(run_batch(item) for item in requests)))
+        combined_items = [item for response in responses for item in response.batch.items]
+
+        if self._settings.retry_uncertain_high_detail:
+            uncertain_ids = {
+                item.mapping_id
+                for item in combined_items
+                if item.status is ReadingStatus.UNCERTAIN
+            }
+            retry_regions = [
+                region for region in request.regions if region.region_id in uncertain_ids
+            ]
+            remaining_calls = self._settings.max_calls_per_job - call_count
+            if retry_regions and remaining_calls > 0:
+                retry_request = self._request_with_regions(request, retry_regions)
+                retry_batches = self._batched_requests(retry_request)[:remaining_calls]
+                retry_responses = list(
+                    await asyncio.gather(
+                        *(
+                            run_batch(item, detail=self._settings.uncertain_retry_image_detail)
+                            for item in retry_batches
+                        )
+                    )
+                )
+                responses.extend(retry_responses)
+                replacements = {
+                    item.mapping_id: item
+                    for response in retry_responses
+                    for item in response.batch.items
+                }
+                combined_items = [
+                    replacements.get(item.mapping_id, item) for item in combined_items
+                ]
+
+        combined_batch = TranscriptionBatch(
+            items=_deduplicate_requested_items(combined_items)
+        )
+        try:
+            document = build_mapped_document(request, combined_batch)
+        except (ValidationError, ValueError) as exc:
+            logger.warning(
+                "OpenAI batched OCR result could not be assembled: %s: %s",
+                type(exc).__name__,
+                str(exc),
+            )
+            raise self._provider_error(
+                502,
+                "OCR_MAPPING_INVALID",
+                "OCR転記結果をテンプレートのJSON項目へ割り当てられませんでした。",
+            ) from exc
+        input_tokens_known = all(item.input_tokens is not None for item in responses)
+        output_tokens_known = all(item.output_tokens is not None for item in responses)
+        cost_known = all(item.estimated_cost is not None for item in responses)
+        return OcrProviderResponse(
+            document=document,
+            provider="openai",
+            model_id=responses[-1].model_id,
+            prompt_version=self._settings.prompt_version,
+            api_call_count=call_count,
+            input_tokens=(
+                sum(item.input_tokens or 0 for item in responses)
+                if input_tokens_known
+                else None
+            ),
+            output_tokens=(
+                sum(item.output_tokens or 0 for item in responses)
+                if output_tokens_known
+                else None
+            ),
+            estimated_cost=(
+                sum((item.estimated_cost or Decimal("0") for item in responses), Decimal("0"))
+                if cost_known
+                else None
+            ),
+            request_id=responses[-1].request_id,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+
+    def _batched_requests(self, request: OcrProviderRequest) -> list[OcrProviderRequest]:
+        if not request.regions:
+            return [request]
+        regular_regions = [
+            region for region in request.regions if not region.is_document_identity
+        ]
+        identity_regions = [
+            region for region in request.regions if region.is_document_identity
+        ]
+        regular_requests = [
+            self._request_with_regions(
+                request,
+                regular_regions[index : index + _MAX_REGIONS_PER_CALL],
+            )
+            for index in range(0, len(regular_regions), _MAX_REGIONS_PER_CALL)
+        ]
+        identity_requests = [
+            self._request_with_regions(request, [region]) for region in identity_regions
+        ]
+        return regular_requests + identity_requests
+
+    @staticmethod
+    def _request_with_regions(
+        request: OcrProviderRequest,
+        regions: list[OcrRegionInput],
+    ) -> OcrProviderRequest:
+        return OcrProviderRequest(
+            regions=regions,
+            full_document_png=request.full_document_png,
+            template_id=request.template_id,
+            template_version=request.template_version,
+            should_cancel=request.should_cancel,
         )
 
     @staticmethod
@@ -98,10 +262,26 @@ class OpenAIOcrProvider:
 
     async def _call(
         self, request: OcrProviderRequest, model: str, call_count: int
-    ) -> OcrProviderResponse:
-        content = build_mapped_input_content(
+    ) -> _TranscriptionResponse:
+        return await self._call_detail(
             request,
-            image_detail=self._settings.image_detail,
+            model,
+            call_count,
+            image_detail=self._settings.initial_image_detail,
+        )
+
+    async def _call_detail(
+        self,
+        request: OcrProviderRequest,
+        model: str,
+        call_count: int,
+        *,
+        image_detail: str,
+    ) -> _TranscriptionResponse:
+        api_request, original_id_by_compact_id = _compact_request_ids(request)
+        content = build_mapped_input_content(
+            api_request,
+            image_detail=image_detail,
         )
         started = time.perf_counter()
         response_input = cast(ResponseInputParam, [{"role": "user", "content": content}])
@@ -110,8 +290,14 @@ class OpenAIOcrProvider:
                 model=model,
                 instructions=load_transcription_prompt(),
                 input=response_input,
-                text_format=TranscriptionBatch,
-                max_output_tokens=self._settings.max_output_tokens,
+                text_format=CompactTranscriptionBatch,
+                max_output_tokens=min(
+                    self._settings.max_output_tokens,
+                    max(
+                        _MIN_COMPACT_OUTPUT_TOKENS,
+                        len(request.regions) * _COMPACT_OUTPUT_TOKENS_PER_REGION,
+                    ),
+                ),
                 reasoning={"effort": self._settings.reasoning_effort},
                 store=False,
             )
@@ -169,12 +355,57 @@ class OpenAIOcrProvider:
                 else "OCR応答を構造化できません。"
             )
             raise self._provider_error(502, "OCR_SCHEMA_INVALID", detail)
-        if not isinstance(parsed, TranscriptionBatch):
+        if not isinstance(parsed, CompactTranscriptionBatch):
             raise self._provider_error(
                 502, "OCR_SCHEMA_INVALID", "OCR転記結果の形式が一致しません。"
             )
+        requested_ids = set(original_id_by_compact_id)
+        compact_items = _repair_single_compact_id(parsed.items, requested_ids)
+        returned_ids = [item.i for item in compact_items]
+        requested_items = [
+            _expand_compact_item(item, original_id_by_compact_id[item.i])
+            for item in compact_items
+            if item.i in requested_ids
+        ]
+        requested_returned_ids = [item.mapping_id for item in requested_items]
+        missing_ids = {
+            original_id_by_compact_id[item]
+            for item in requested_ids - set(returned_ids)
+        }
+        duplicate_requested_ids = len(requested_returned_ids) != len(
+            set(requested_returned_ids)
+        )
+        if missing_ids:
+            logger.warning(
+                "OpenAI OCR returned an incomplete requested mapping set",
+                extra={
+                    "requestId": response.id,
+                    "requestedCount": len(requested_ids),
+                    "returnedCount": len(returned_ids),
+                    "missingCount": len(missing_ids),
+                },
+            )
+            requested_items.extend(
+                TranscriptionItem(
+                    mapping_id=mapping_id,
+                    raw=None,
+                    status=ReadingStatus.UNCERTAIN,
+                    alternatives=[],
+                    review_reason="OCR_MAPPING_MISSING",
+                    matched_candidate=None,
+                    is_ditto=False,
+                )
+                for mapping_id in sorted(missing_ids)
+            )
+        if duplicate_requested_ids:
+            logger.warning(
+                "OpenAI OCR returned duplicate requested mapping IDs",
+                extra={"requestId": response.id},
+            )
+        requested_items = _deduplicate_requested_items(requested_items)
+        filtered_batch = TranscriptionBatch(items=requested_items)
         try:
-            document = build_mapped_document(request, parsed)
+            build_mapped_document(request, filtered_batch)
         except (ValidationError, ValueError) as exc:
             failed_usage = response.usage
             failed_input_tokens = (
@@ -189,7 +420,7 @@ class OpenAIOcrProvider:
                 str(exc),
                 extra={
                     "requestedMappingIds": [region.region_id for region in request.regions],
-                    "returnedMappingIds": [item.mapping_id for item in parsed.items],
+                    "returnedMappingIds": returned_ids,
                     "inputTokens": failed_input_tokens,
                     "outputTokens": failed_output_tokens,
                     "estimatedCost": str(
@@ -205,12 +436,9 @@ class OpenAIOcrProvider:
         usage = response.usage
         input_tokens = usage.input_tokens if usage else None
         output_tokens = usage.output_tokens if usage else None
-        return OcrProviderResponse(
-            document=document,
-            provider="openai",
+        return _TranscriptionResponse(
+            batch=filtered_batch,
             model_id=model,
-            prompt_version=self._settings.prompt_version,
-            api_call_count=call_count,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             estimated_cost=_estimate_cost(model, input_tokens, output_tokens),
@@ -221,6 +449,61 @@ class OpenAIOcrProvider:
     @staticmethod
     def _provider_error(status: int, code: str, detail: str) -> AppError:
         return AppError(status=status, code=code, title="OCR provider failed", detail=detail)
+
+
+def _compact_request_ids(
+    request: OcrProviderRequest,
+) -> tuple[OcrProviderRequest, dict[str, str]]:
+    compact_ids = [f"c{index}" for index in range(len(request.regions))]
+    original_id_by_compact_id = {
+        compact_id: region.region_id
+        for compact_id, region in zip(compact_ids, request.regions, strict=True)
+    }
+    return (
+        OcrProviderRequest(
+            regions=[
+                replace(region, region_id=compact_id)
+                for compact_id, region in zip(compact_ids, request.regions, strict=True)
+            ],
+            full_document_png=request.full_document_png,
+            template_id=request.template_id,
+            template_version=request.template_version,
+            should_cancel=request.should_cancel,
+        ),
+        original_id_by_compact_id,
+    )
+
+
+def _expand_compact_item(
+    item: CompactTranscriptionItem,
+    original_mapping_id: str,
+) -> TranscriptionItem:
+    status = {
+        "r": ReadingStatus.READABLE,
+        "b": ReadingStatus.BLANK,
+        "u": ReadingStatus.UNCERTAIN,
+    }[item.s]
+    return TranscriptionItem(
+        mapping_id=original_mapping_id,
+        raw=None if status is ReadingStatus.BLANK else item.v,
+        status=status,
+        alternatives=[],
+        review_reason="MODEL_UNCERTAIN" if status is ReadingStatus.UNCERTAIN else None,
+        matched_candidate=item.c,
+        is_ditto=False,
+    )
+
+
+def _repair_single_compact_id(
+    items: list[CompactTranscriptionItem],
+    requested_ids: set[str],
+) -> list[CompactTranscriptionItem]:
+    if len(items) != 1 or len(requested_ids) != 1:
+        return items
+    item = items[0]
+    if item.i in requested_ids:
+        return items
+    return [item.model_copy(update={"i": next(iter(requested_ids))})]
 
 
 def build_mapped_input_content(
@@ -241,93 +524,87 @@ def build_mapped_input_content(
     content: list[dict[str, Any]] = [
         {
             "type": "input_text",
-            "text": (
-                "各画像はテンプレートで確定済みの手書き記入セルです。"
-                "項目の意味を推測せず、mappingIdごとに画像内の文字だけを転記してください。"
-                "候補情報が付いたセルだけは、画像と十分に一致する候補を"
-                "matchedCandidateとして返せます。"
-            ),
+            "text": "各IDの画像を1件ずつ転記。r=読取可、b=空欄、u=不明。",
         }
     ]
+    if request.full_document_png is not None:
+        content.extend(
+            [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "view: full_document_context\n"
+                        "This full document is reference context for the mapped cell images. "
+                        "Return results only for the mappingIds supplied below."
+                    ),
+                },
+                {
+                    "type": "input_image",
+                    "image_url": (
+                        "data:image/png;base64,"
+                        + base64.b64encode(request.full_document_png).decode("ascii")
+                    ),
+                    "detail": image_detail,
+                },
+            ]
+        )
+    pool_id_by_key: dict[tuple[object, ...], str] = {}
     for region in request.regions:
-        content.append(
-            {
-                "type": "input_text",
-                "text": f"mappingId: {region.region_id}",
-            }
-        )
-        content.append(
-            {
-                "type": "input_text",
-                "text": "view: mapped_input_cell",
-            }
-        )
-        if region.printed_label_text:
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": (
-                        "fixedPrintedTextToIgnore: "
-                        f"{json.dumps(region.printed_label_text, ensure_ascii=False)}\n"
-                        "Ignore only that fixed printed label. "
-                        "Transcribe the handwritten entry in this image."
-                    ),
-                }
-            )
+        if not region.candidates:
+            continue
+        key = (region.candidate_type, region.candidates, region.allowed_suffixes)
+        if key in pool_id_by_key:
+            continue
+        pool_id = f"p{len(pool_id_by_key)}"
+        pool_id_by_key[key] = pool_id
         if region.candidate_type == "sale_calf_note_prefix":
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": (
-                        "candidateType: sale_calf_note_prefix\n"
-                        "allowedFirstSymbols: "
-                        f"{json.dumps(region.candidates, ensure_ascii=False)}\n"
-                        "The first transcribed character must be exactly one of "
-                        "allowedFirstSymbols. Return that symbol as matchedCandidate. "
-                        "Preserve any clearly visible handwritten suffix after it. "
-                        "Do not substitute kana or katakana for the sex symbol."
-                    ),
-                }
+            pool_text = (
+                f"{pool_id} candidateType:sale_calf_note_prefix "
+                f"allowedFirstSymbols:{json.dumps(region.candidates, ensure_ascii=False)}"
             )
         elif region.candidate_type == "mark_choice":
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": (
-                        "candidateType: circled_mark_choice\n"
-                        f"allowedMarks: {json.dumps(region.candidates, ensure_ascii=False)}\n"
-                        "Inspect the printed choices and the pencil circles. Return raw using "
-                        "only the circled values from allowedMarks, in the same order, joined "
-                        "with the Japanese separator ・. If no choice is circled, return blank. "
-                        "Do not transcribe the fixed printed choices themselves."
-                    ),
-                }
+            pool_text = (
+                f"{pool_id} candidateType:mark_choice "
+                f"allowedMarks:{json.dumps(region.candidates, ensure_ascii=False)}"
             )
-        elif region.candidates:
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": (
-                        "candidateType: sire_name\n"
-                        f"candidateSireNames: {json.dumps(region.candidates, ensure_ascii=False)}\n"
-                        "allowedSuffixes: "
-                        f"{json.dumps(region.allowed_suffixes, ensure_ascii=False)}"
-                    ),
-                }
+        elif region.candidate_type == "managed_text":
+            pool_text = (
+                f"{pool_id} candidateType:managed_text "
+                f"allowedValues:{json.dumps(region.candidates, ensure_ascii=False)} "
+                f"allowedSuffixes:{json.dumps(region.allowed_suffixes, ensure_ascii=False)}"
             )
+        else:
+            pool_text = (
+                f"{pool_id} candidateSireNames:{json.dumps(region.candidates, ensure_ascii=False)} "
+                f"allowedSuffixes:{json.dumps(region.allowed_suffixes, ensure_ascii=False)}"
+            )
+        content.append({"type": "input_text", "text": pool_text})
+
+    for region in request.regions:
+        cell_metadata = [f"mappingId:{region.region_id}"]
+        if region.printed_label_text:
+            cell_metadata.append(
+                "fixedPrintedTextToIgnore: "
+                f"{json.dumps(region.printed_label_text, ensure_ascii=False)}"
+            )
+        if region.candidates:
+            key = (region.candidate_type, region.candidates, region.allowed_suffixes)
+            cell_metadata.append(f"pool:{pool_id_by_key[key]}")
         if region.transcription_format == "japanese_era_date_numbers":
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": (
-                        "transcriptionFormat: japanese_era_date_numbers\n"
-                        "Return raw using ASCII digits only, as exactly three groups "
-                        "separated by one space: ERA_YEAR MONTH DAY. "
-                        "Do not include era names, 年/月/日, printed labels, "
-                        "or any other characters."
-                    ),
-                }
+            cell_metadata.append(
+                "transcriptionFormat:japanese_era_date_numbers ERA_YEAR MONTH DAY"
             )
+        if region.is_document_identity:
+            identity_format = region.identity_value_type or "text"
+            cell_metadata.append(f"documentIdentity:true valueType:{identity_format}")
+            if region.identity_exact_length is not None:
+                cell_metadata.append(f"exactLength:{region.identity_exact_length}")
+            if identity_format == "digits":
+                cell_metadata.append(
+                    "transcriptionRule:digits_and_visual_separators_only "
+                    "do_not_copy_text_from_other_images"
+                )
+        content.append({"type": "input_text", "text": " ".join(cell_metadata)})
         encoded = base64.b64encode(region.image_png).decode("ascii")
         content.append(
             {
@@ -336,22 +613,53 @@ def build_mapped_input_content(
                 "detail": image_detail,
             }
         )
-        if region.handwriting_png is not None:
-            handwriting_encoded = base64.b64encode(region.handwriting_png).decode("ascii")
-            content.append(
-                {
-                    "type": "input_text",
-                    "text": "view: mapped_input_cell_handwriting_hint",
-                }
-            )
-            content.append(
-                {
-                    "type": "input_image",
-                    "image_url": f"data:image/png;base64,{handwriting_encoded}",
-                    "detail": image_detail,
-                }
-            )
     return content
+
+
+def _deduplicate_requested_items(
+    items: list[TranscriptionItem],
+) -> list[TranscriptionItem]:
+    grouped: dict[str, list[TranscriptionItem]] = {}
+    order: list[str] = []
+    for item in items:
+        if item.mapping_id not in grouped:
+            grouped[item.mapping_id] = []
+            order.append(item.mapping_id)
+        grouped[item.mapping_id].append(item)
+
+    result: list[TranscriptionItem] = []
+    for mapping_id in order:
+        duplicates = grouped[mapping_id]
+        first = duplicates[0]
+        signatures = {
+            (
+                item.raw,
+                item.status,
+                item.matched_candidate,
+                item.is_ditto,
+            )
+            for item in duplicates
+        }
+        if len(signatures) == 1:
+            result.append(first)
+            continue
+        alternatives = []
+        for item in duplicates:
+            for value in ([item.raw] if item.raw else []) + item.alternatives:
+                if value != first.raw and value not in alternatives:
+                    alternatives.append(value)
+        result.append(
+            TranscriptionItem(
+                mapping_id=mapping_id,
+                raw=first.raw,
+                status=ReadingStatus.UNCERTAIN,
+                alternatives=alternatives[:10],
+                review_reason="DUPLICATE_TRANSCRIPTION_CONFLICT",
+                matched_candidate=None,
+                is_ditto=False,
+            )
+        )
+    return result
 
 
 def _estimate_cost(
