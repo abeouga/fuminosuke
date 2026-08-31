@@ -1,4 +1,4 @@
-import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
+import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
 
 const API = "/api/v1";
 
@@ -37,6 +37,48 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export function uploadPortableRestore(
+  operationId: string,
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<PortableRestoreOperation> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(
+      "POST",
+      `${API}/system-backups/portable-imports/${encodeURIComponent(operationId)}`,
+    );
+    request.withCredentials = true;
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    });
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) {
+        resolve(request.response as PortableRestoreOperation);
+        return;
+      }
+      const problem = (request.response ?? {}) as Problem;
+      if (request.status === 401) {
+        window.dispatchEvent(new CustomEvent("ledger-auth-required"));
+      }
+      reject(new ApiError(
+        problem.detail ?? problem.message ?? "バックアップZIPを取り込めませんでした。",
+        problem.code,
+      ));
+    });
+    request.addEventListener("error", () => {
+      reject(new ApiError("バックアップZIPの送信中に通信が切断されました。"));
+    });
+    request.addEventListener("abort", () => {
+      reject(new ApiError("バックアップZIPの取り込みを中止しました。", "RESTORE_ABORTED"));
+    });
+    const form = new FormData();
+    form.append("file", file, file.name);
+    request.send(form);
+  });
+}
+
 export function createIdempotencyKey(scope: "template" | "ocr"): string {
   const value = typeof globalThis.crypto?.randomUUID === "function"
     ? globalThis.crypto.randomUUID()
@@ -68,13 +110,32 @@ export const api = {
     return request<Job[]>(`/jobs?${query.toString()}`);
   },
   openaiUsage: () => request<OpenAIUsageReport>("/development/openai-usage"),
-  createPortableBackup: () => request<PortableBackupExport>("/system-backups/portable", {
+  createPortableBackup: (operationId: string) => request<PortableBackupExport>("/system-backups/portable", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operationId }),
   }),
+  portableBackupOperation: (operationId: string) =>
+    request<PortableBackupOperation>(
+      `/system-backups/portable-operations/${encodeURIComponent(operationId)}`,
+    ),
   portableBackupDownload: (id: string) =>
     requestResponse(`/system-backups/portable/${encodeURIComponent(id)}`),
   deletePortableBackup: (id: string) =>
     request<void>(`/system-backups/portable/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  portableRestoreOperation: (operationId: string) =>
+    request<PortableRestoreOperation>(
+      `/system-backups/portable-imports/${encodeURIComponent(operationId)}`,
+    ),
+  applyPortableRestore: (operationId: string) =>
+    request<PortableRestoreOperation>(
+      `/system-backups/portable-imports/${encodeURIComponent(operationId)}/apply`,
+      { method: "POST" },
+    ),
+  deletePortableRestore: (operationId: string) =>
+    request<void>(`/system-backups/portable-imports/${encodeURIComponent(operationId)}`, {
+      method: "DELETE",
+    }),
   job: (id: string) => request<Job>(`/jobs/${id}`),
   artifacts: (id: string) => request<{ items: Artifact[] }>(`/jobs/${id}/artifacts`),
   result: (id: string) => request<OcrResult>(`/ocr-jobs/${id}/result`),

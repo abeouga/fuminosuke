@@ -11,6 +11,7 @@ from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.services.portable_backup_service import PortableBackupService
+from app.services.portable_restore_service import PortableRestoreService
 from app.storage.local_storage import LocalStorageService
 
 
@@ -47,6 +48,10 @@ def get_output_layout_templates(request: Request) -> OutputLayoutTemplateService
 
 def get_portable_backup_service(request: Request) -> PortableBackupService:
     return cast(PortableBackupService, request.app.state.portable_backup_service)
+
+
+def get_portable_restore_service(request: Request) -> PortableRestoreService:
+    return cast(PortableRestoreService, request.app.state.portable_restore_service)
 
 
 def get_session(request: Request) -> Iterator[Session]:

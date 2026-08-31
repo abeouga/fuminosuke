@@ -8,11 +8,12 @@ import sqlite3
 import tempfile
 import threading
 import zipfile
+from collections.abc import Callable
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -34,6 +35,21 @@ class PortableBackup:
     file_bytes: int
     created_at: datetime
     expires_at: datetime
+
+
+@dataclass(slots=True)
+class PortableBackupProgress:
+    operation_id: str
+    status: Literal["RUNNING", "READY", "FAILED"]
+    stage: str
+    progress_percent: int
+    message: str
+    bytes_processed: int
+    total_bytes: int | None
+    backup_id: str | None
+    error_code: str | None
+    error_message: str | None
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,35 +85,67 @@ class PortableBackupService:
         self._storage = storage
         self._lock = threading.Lock()
         self._mutation_state_lock = threading.Lock()
+        self._operation_kind: Literal["backup", "restore"] | None = None
+        self._active_requests = 0
         self._active_mutations = 0
+        self._progress_lock = threading.Lock()
+        self._progress: dict[str, PortableBackupProgress] = {}
         self._remove_stale_files(self._backup_dir())
 
     @property
     def is_running(self) -> bool:
         return self._lock.locked()
 
-    def begin_mutation(self) -> bool:
-        """Register one data-changing request unless a backup has started."""
+    def begin_request(self, *, mutating: bool) -> bool:
+        """Register an HTTP request unless an exclusive operation blocks it."""
         with self._mutation_state_lock:
-            if self._lock.locked():
+            if self._operation_kind == "restore":
                 return False
-            self._active_mutations += 1
+            if mutating and self._operation_kind == "backup":
+                return False
+            self._active_requests += 1
+            if mutating:
+                self._active_mutations += 1
             return True
 
-    def end_mutation(self) -> None:
+    def end_request(self, *, mutating: bool) -> None:
         with self._mutation_state_lock:
-            if self._active_mutations <= 0:
-                raise RuntimeError("Portable backup mutation counter is unbalanced")
-            self._active_mutations -= 1
+            if self._active_requests <= 0:
+                raise RuntimeError("Portable backup request counter is unbalanced")
+            self._active_requests -= 1
+            if mutating:
+                if self._active_mutations <= 0:
+                    raise RuntimeError("Portable backup mutation counter is unbalanced")
+                self._active_mutations -= 1
 
-    def create(self) -> PortableBackup:
-        if not self._lock.acquire(blocking=False):
-            raise AppError(
-                status=409,
-                code="BACKUP_ALREADY_RUNNING",
-                title="Backup already running",
-                detail="持ち出しバックアップを作成中です。完了後に再実行してください。",
-            )
+    def begin_mutation(self) -> bool:
+        return self.begin_request(mutating=True)
+
+    def end_mutation(self) -> None:
+        self.end_request(mutating=True)
+
+    def begin_restore(self) -> None:
+        self._acquire_operation("restore")
+        try:
+            self._ensure_no_active_requests()
+            self._ensure_no_active_jobs()
+        except Exception:
+            self.end_exclusive_operation()
+            raise
+
+    def end_exclusive_operation(self) -> None:
+        with self._mutation_state_lock:
+            self._operation_kind = None
+        self._lock.release()
+
+    def create(self, operation_id: str | None = None) -> PortableBackup:
+        normalized_operation_id = self._operation_id(operation_id)
+        self._start_progress(normalized_operation_id)
+        try:
+            self._acquire_operation("backup")
+        except AppError as exc:
+            self._fail_progress(normalized_operation_id, exc)
+            raise
 
         archive_path: Path | None = None
         work_dir: Path | None = None
@@ -105,6 +153,12 @@ class PortableBackupService:
         try:
             self._ensure_no_active_mutations()
             self._ensure_no_active_jobs()
+            self._update_progress(
+                normalized_operation_id,
+                stage="PREPARING",
+                progress_percent=5,
+                message="保存データと空き容量を確認しています。",
+            )
             backup_dir = self._backup_dir()
             self._remove_stale_files(backup_dir)
 
@@ -127,8 +181,28 @@ class PortableBackupService:
                 )
                 source_files = self._source_files()
                 self._ensure_free_space(database_path, source_files, backup_dir)
-                self._copy_database(source_connection, snapshot_path)
+                self._update_progress(
+                    normalized_operation_id,
+                    stage="SNAPSHOTTING_DATABASE",
+                    progress_percent=10,
+                    message="データベースの整合スナップショットを作成しています。",
+                )
+                self._copy_database(
+                    source_connection,
+                    snapshot_path,
+                    normalized_operation_id,
+                )
                 schema_revision = self._validate_database(snapshot_path)
+                total_source_bytes = snapshot_path.stat().st_size + sum(
+                    item.size for item in source_files
+                )
+                self._update_progress(
+                    normalized_operation_id,
+                    stage="WRITING_ARCHIVE",
+                    progress_percent=35,
+                    message="帳票画像と保存データをZIPへ書き込んでいます。",
+                    total_bytes=total_source_bytes,
+                )
                 manifest_entries = self._write_archive(
                     archive_path=archive_path,
                     snapshot_path=snapshot_path,
@@ -136,6 +210,14 @@ class PortableBackupService:
                     backup_id=backup_id,
                     created_at=timestamp,
                     schema_revision=schema_revision,
+                    operation_id=normalized_operation_id,
+                    total_source_bytes=total_source_bytes,
+                )
+                self._update_progress(
+                    normalized_operation_id,
+                    stage="VERIFYING_ARCHIVE",
+                    progress_percent=92,
+                    message="作成したバックアップの整合性を確認しています。",
                 )
                 self._ensure_source_unchanged(source_connection, source_version)
             self._ensure_no_active_jobs()
@@ -150,30 +232,80 @@ class PortableBackupService:
                 expires_at=expires_at,
             )
             self._write_download_metadata(backup)
+            self._update_progress(
+                normalized_operation_id,
+                status="READY",
+                stage="READY",
+                progress_percent=100,
+                message="バックアップの作成が完了しました。",
+                bytes_processed=backup.source_bytes,
+                total_bytes=backup.source_bytes,
+                backup_id=backup.backup_id,
+            )
             completed = True
             return backup
-        except AppError:
+        except AppError as exc:
+            self._fail_progress(normalized_operation_id, exc)
             raise
         except OSError as exc:
             if exc.errno == errno.ENOSPC:
-                raise AppError(
+                error = AppError(
                     status=507,
                     code="BACKUP_STORAGE_INSUFFICIENT",
                     title="Insufficient backup storage",
                     detail="バックアップ作成用の空き容量が不足しています。",
-                ) from exc
-            raise AppError(
+                )
+                self._fail_progress(normalized_operation_id, error)
+                raise error from exc
+            error = AppError(
                 status=500,
                 code="BACKUP_CREATE_FAILED",
                 title="Backup creation failed",
                 detail="持ち出しバックアップを作成できませんでした。保存データを確認してください。",
-            ) from exc
+            )
+            self._fail_progress(normalized_operation_id, error)
+            raise error from exc
         finally:
             if work_dir is not None:
                 shutil.rmtree(work_dir, ignore_errors=True)
             if archive_path is not None and not completed:
                 self._remove_generated_files(archive_path)
-            self._lock.release()
+            self.end_exclusive_operation()
+
+    def operation(self, operation_id: str) -> PortableBackupProgress:
+        normalized_id = self._operation_id(operation_id)
+        with self._progress_lock:
+            progress = self._progress.get(normalized_id)
+            if progress is None:
+                raise AppError(
+                    status=404,
+                    code="BACKUP_OPERATION_NOT_FOUND",
+                    title="Backup operation not found",
+                    detail="バックアップの進捗情報が見つかりません。",
+                )
+            return replace(progress)
+
+    def _acquire_operation(self, kind: Literal["backup", "restore"]) -> None:
+        if not self._lock.acquire(blocking=False):
+            raise AppError(
+                status=409,
+                code="BACKUP_OPERATION_RUNNING",
+                title="Backup operation already running",
+                detail="バックアップの書き出しまたは取り込みを処理中です。",
+            )
+        with self._mutation_state_lock:
+            self._operation_kind = kind
+
+    def _ensure_no_active_requests(self) -> None:
+        with self._mutation_state_lock:
+            has_active_requests = self._active_requests > 0
+        if has_active_requests:
+            raise AppError(
+                status=409,
+                code="RESTORE_REQUESTS_ACTIVE",
+                title="Requests are still active",
+                detail="別の画面処理が進行中です。完了後に取り込みを再実行してください。",
+            )
 
     def _ensure_no_active_mutations(self) -> None:
         with self._mutation_state_lock:
@@ -188,6 +320,93 @@ class PortableBackupService:
                     "再実行してください。"
                 ),
             )
+
+    def _operation_id(self, operation_id: str | None) -> str:
+        supplied = operation_id or str(uuid4())
+        try:
+            parsed = UUID(supplied)
+        except ValueError as exc:
+            raise AppError(
+                status=422,
+                code="BACKUP_OPERATION_ID_INVALID",
+                title="Invalid backup operation id",
+                detail="バックアップ処理IDが正しくありません。",
+            ) from exc
+        normalized = str(parsed)
+        if normalized != supplied:
+            raise AppError(
+                status=422,
+                code="BACKUP_OPERATION_ID_INVALID",
+                title="Invalid backup operation id",
+                detail="バックアップ処理IDが正しくありません。",
+            )
+        return normalized
+
+    def _start_progress(self, operation_id: str) -> None:
+        with self._progress_lock:
+            self._progress[operation_id] = PortableBackupProgress(
+                operation_id=operation_id,
+                status="RUNNING",
+                stage="QUEUED",
+                progress_percent=1,
+                message="バックアップ作成を開始します。",
+                bytes_processed=0,
+                total_bytes=None,
+                backup_id=None,
+                error_code=None,
+                error_message=None,
+                updated_at=datetime.now(UTC),
+            )
+            if len(self._progress) > 50:
+                oldest = sorted(
+                    self._progress.values(), key=lambda item: item.updated_at
+                )[:-50]
+                for item in oldest:
+                    self._progress.pop(item.operation_id, None)
+
+    def _update_progress(
+        self,
+        operation_id: str,
+        *,
+        status: Literal["RUNNING", "READY", "FAILED"] | None = None,
+        stage: str | None = None,
+        progress_percent: int | None = None,
+        message: str | None = None,
+        bytes_processed: int | None = None,
+        total_bytes: int | None = None,
+        backup_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        with self._progress_lock:
+            current = self._progress[operation_id]
+            if status is not None:
+                current.status = status
+            if stage is not None:
+                current.stage = stage
+            if progress_percent is not None:
+                current.progress_percent = max(0, min(100, progress_percent))
+            if message is not None:
+                current.message = message
+            if bytes_processed is not None:
+                current.bytes_processed = bytes_processed
+            if total_bytes is not None:
+                current.total_bytes = total_bytes
+            if backup_id is not None:
+                current.backup_id = backup_id
+            current.error_code = error_code
+            current.error_message = error_message
+            current.updated_at = datetime.now(UTC)
+
+    def _fail_progress(self, operation_id: str, error: AppError) -> None:
+        self._update_progress(
+            operation_id,
+            status="FAILED",
+            stage="FAILED",
+            message=error.detail,
+            error_code=error.code,
+            error_message=error.detail,
+        )
 
     def get(self, backup_id: str) -> PortableBackup:
         normalized_id = self._validated_backup_id(backup_id)
@@ -371,9 +590,21 @@ class PortableBackupService:
         self,
         source: sqlite3.Connection,
         destination_path: Path,
+        operation_id: str,
     ) -> None:
         with closing(sqlite3.connect(destination_path)) as destination:
-            source.backup(destination)
+            source.backup(
+                destination,
+                pages=256,
+                progress=lambda _status, remaining, total: self._update_progress(
+                    operation_id,
+                    stage="SNAPSHOTTING_DATABASE",
+                    progress_percent=(
+                        10 if total <= 0 else 10 + round(((total - remaining) / total) * 20)
+                    ),
+                    message="データベースの整合スナップショットを作成しています。",
+                ),
+            )
 
     def _validate_database(self, snapshot_path: Path) -> str | None:
         with closing(sqlite3.connect(snapshot_path)) as connection:
@@ -424,8 +655,29 @@ class PortableBackupService:
         backup_id: str,
         created_at: datetime,
         schema_revision: str | None,
+        operation_id: str,
+        total_source_bytes: int,
     ) -> list[_ManifestEntry]:
         entries: list[_ManifestEntry] = []
+        processed_bytes = 0
+
+        def report_progress(chunk_bytes: int) -> None:
+            nonlocal processed_bytes
+            processed_bytes += chunk_bytes
+            ratio = (
+                1.0
+                if total_source_bytes <= 0
+                else min(1.0, processed_bytes / total_source_bytes)
+            )
+            self._update_progress(
+                operation_id,
+                stage="WRITING_ARCHIVE",
+                progress_percent=35 + round(ratio * 52),
+                message="帳票画像と保存データをZIPへ書き込んでいます。",
+                bytes_processed=processed_bytes,
+                total_bytes=total_source_bytes,
+            )
+
         with zipfile.ZipFile(
             archive_path,
             mode="w",
@@ -437,10 +689,11 @@ class PortableBackupService:
                     archive,
                     snapshot_path,
                     f"{self.ARCHIVE_ROOT}/data/app.db",
+                    report_progress,
                 )
             )
             for item in source_files:
-                entries.append(self._add_source_file(archive, item))
+                entries.append(self._add_source_file(archive, item, report_progress))
 
             manifest = {
                 "format": "llm-ocr-portable-backup",
@@ -485,6 +738,7 @@ class PortableBackupService:
         self,
         archive: zipfile.ZipFile,
         source: _SourceFile,
+        progress: Callable[[int], None] | None = None,
     ) -> _ManifestEntry:
         try:
             before = source.path.stat()
@@ -492,7 +746,12 @@ class PortableBackupService:
             raise self._data_changed_error() from exc
         if before.st_size != source.size or before.st_mtime_ns != source.modified_ns:
             raise self._data_changed_error()
-        entry = self._add_file(archive, source.path, source.archive_path)
+        entry = self._add_file(
+            archive,
+            source.path,
+            source.archive_path,
+            progress,
+        )
         try:
             after = source.path.stat()
         except FileNotFoundError as exc:
@@ -506,6 +765,7 @@ class PortableBackupService:
         archive: zipfile.ZipFile,
         source_path: Path,
         archive_path: str,
+        progress: Callable[[int], None] | None = None,
     ) -> _ManifestEntry:
         digest = hashlib.sha256()
         size = 0
@@ -520,6 +780,8 @@ class PortableBackupService:
                 destination.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
+                if progress is not None:
+                    progress(len(chunk))
         return {
             "path": archive_path.removeprefix(f"{self.ARCHIVE_ROOT}/"),
             "size": size,

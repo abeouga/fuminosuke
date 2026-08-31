@@ -39,6 +39,7 @@ test("streams a generated backup to the OS-selected file without creating a blob
   });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
+    if (path.includes("/portable-operations/")) return jsonResponse(exportProgress(path));
     if (path.endsWith("/system-backups/portable") && init?.method === "POST") {
       return jsonResponse(exportResult);
     }
@@ -108,6 +109,7 @@ test("opens a new destination before retrying a generated backup", async () => {
   });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
+    if (path.includes("/portable-operations/")) return jsonResponse(exportProgress(path));
     if (path.endsWith("/system-backups/portable") && init?.method === "POST") {
       return jsonResponse(exportResult);
     }
@@ -181,6 +183,7 @@ test("uses a memory-safe browser download fallback when the save picker is unava
   const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
+    if (path.includes("/portable-operations/")) return jsonResponse(exportProgress(path));
     if (path.endsWith("/system-backups/portable") && init?.method === "POST") {
       return jsonResponse(exportResult);
     }
@@ -198,9 +201,103 @@ test("uses a memory-safe browser download fallback when the save picker is unava
   fireEvent.click(screen.getByRole("button", { name: "バックアップを作成" }));
 
   expect(await screen.findByText("ブラウザのダウンロードを開始しました")).toBeInTheDocument();
-  expect(screen.getByText(/保存完了はこの画面では判定できません/)).toBeInTheDocument();
+  expect(screen.getByText(/保存中の進捗と完了を判定できません/)).toBeInTheDocument();
   expect(anchorClick).toHaveBeenCalledTimes(1);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+});
+
+test("validates and applies an imported backup only after explicit replacement confirmation", async () => {
+  const ready = restoreOperation("READY", "READY_TO_APPLY", 75);
+  const completed = restoreOperation("COMPLETED", "COMPLETED", 100);
+  const xhr = installMockUpload();
+  let resolveApply!: (response: Response) => void;
+  const applyResponse = new Promise<Response>((resolve) => {
+    resolveApply = resolve;
+  });
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/apply") && init?.method === "POST") return applyResponse;
+    if (path.includes("/portable-imports/")) {
+      return jsonResponse(ready);
+    }
+    return jsonResponse({}, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const { container } = render(
+    <PortableBackupDialog
+      onClose={vi.fn()}
+      returnFocusRef={{ current: null }}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("tab", { name: "取り込み" }));
+  expect(screen.getByText(/現在のDB・帳票画像・テンプレート・出力ファイルを置換/)).toBeInTheDocument();
+  const validateButton = screen.getByRole("button", { name: "ZIPを検証" });
+  expect(validateButton).toBeDisabled();
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  expect(input).not.toBeNull();
+  fireEvent.change(input!, {
+    target: { files: [new File(["backup"], "portable-backup.zip", { type: "application/zip" })] },
+  });
+  expect(screen.getByText("portable-backup.zip")).toBeInTheDocument();
+  expect(validateButton).toBeEnabled();
+
+  fireEvent.click(validateButton);
+
+  expect(await screen.findByRole("progressbar", { name: "バックアップ取り込み進捗" })).toHaveAttribute("aria-valuenow", "75");
+  const steps = screen.getByRole("list", { name: "取り込み工程" });
+  for (const label of ["ZIP受信", "ZIP検証", "DB検証", "データ切替", "再起動"]) {
+    expect(steps).toHaveTextContent(label);
+  }
+  xhr.complete(ready);
+
+  expect(await screen.findByText("ZIPの検証が完了しました")).toBeInTheDocument();
+  expect(screen.getByText("2026/08/31 12:00")).toBeInTheDocument();
+  const applyButton = screen.getByRole("button", { name: "現在データを置換して取り込む" });
+  expect(applyButton).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "現在の保存データが置換されることを確認しました" }));
+  expect(applyButton).toBeEnabled();
+
+  fireEvent.click(applyButton);
+
+  expect(await screen.findByRole("progressbar", { name: "バックアップ取り込み進捗" })).toHaveAttribute("aria-valuenow", "78");
+  expect(screen.getByText("保存処理を停止し、検証済みデータへ切り替えています。")).toBeInTheDocument();
+  resolveApply(jsonResponse(completed));
+  expect(await screen.findByText("取り込みが完了しました")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "取り込んだデータで再読み込み" })).toBeEnabled();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/portable-imports\/.+\/apply$/),
+    expect.objectContaining({ method: "POST" }),
+  );
+});
+
+test("shows a validation failure without presenting the destructive apply action", async () => {
+  const xhr = installMockUpload();
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+    detail: "取り込み処理がまだ登録されていません。",
+    code: "RESTORE_OPERATION_NOT_FOUND",
+  }, 404)));
+  const { container } = render(
+    <PortableBackupDialog
+      onClose={vi.fn()}
+      returnFocusRef={{ current: null }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "取り込み" }));
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  fireEvent.change(input, {
+    target: { files: [new File(["bad"], "broken.zip", { type: "application/zip" })] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "ZIPを検証" }));
+  xhr.fail({
+    detail: "ZIPの構造または内容を検証できませんでした。",
+    code: "RESTORE_ARCHIVE_INVALID",
+  });
+
+  expect(await screen.findByText("バックアップを取り込めませんでした")).toBeInTheDocument();
+  expect(screen.getByText("ZIPの構造または内容を検証できませんでした。")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "現在データを置換して取り込む" })).not.toBeInTheDocument();
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -208,4 +305,73 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function exportProgress(path: string) {
+  return {
+    operationId: path.split("/").at(-1),
+    status: "READY",
+    stage: "READY",
+    progressPercent: 100,
+    message: "バックアップの作成が完了しました。",
+    bytesProcessed: 12,
+    totalBytes: 12,
+    backupId: exportResult.id,
+    errorCode: null,
+    errorMessage: null,
+    updatedAt: "2026-08-31T03:00:00Z",
+  };
+}
+
+function restoreOperation(status: "READY" | "COMPLETED", stage: string, progressPercent: number) {
+  return {
+    operationId: "22222222-2222-4222-8222-222222222222",
+    status,
+    stage,
+    progressPercent,
+    message: status === "COMPLETED" ? "取り込みが完了しました。" : "検証が完了しました。",
+    fileName: "portable-backup.zip",
+    fileBytes: 6,
+    bytesProcessed: 12,
+    totalBytes: 12,
+    fileCount: 3,
+    sourceBytes: 12,
+    backupCreatedAt: "2026-08-31T03:00:00Z",
+    schemaRevision: "0022_archive_in_use_templates",
+    errorCode: null,
+    errorMessage: null,
+    rollbackExpiresAt: status === "COMPLETED" ? "2026-09-01T03:00:00Z" : null,
+    updatedAt: "2026-08-31T03:00:00Z",
+  };
+}
+
+function installMockUpload() {
+  let pending: MockXMLHttpRequest | null = null;
+  class MockXMLHttpRequest extends EventTarget {
+    upload = new EventTarget();
+    status = 0;
+    response: unknown = null;
+    responseType = "";
+    withCredentials = false;
+    open() {}
+    send() {
+      pending = this;
+      this.upload.dispatchEvent(new ProgressEvent("progress", {
+        lengthComputable: true,
+        loaded: 6,
+        total: 6,
+      }));
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest);
+  const finish = (body: unknown, status: number) => {
+    if (!pending) throw new Error("Upload was not started");
+    pending.status = status;
+    pending.response = body;
+    pending.dispatchEvent(new Event("load"));
+  };
+  return {
+    complete: (body: unknown) => finish(body, 200),
+    fail: (body: unknown) => finish(body, 422),
+  };
 }

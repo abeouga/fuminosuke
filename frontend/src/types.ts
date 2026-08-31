@@ -114,6 +114,40 @@ export type PortableBackupExport = {
   downloadUrl: string;
 };
 
+export type PortableBackupOperation = {
+  operationId: string;
+  status: "RUNNING" | "READY" | "FAILED";
+  stage: string;
+  progressPercent: number;
+  message: string;
+  bytesProcessed: number;
+  totalBytes: number | null;
+  backupId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  updatedAt: string;
+};
+
+export type PortableRestoreOperation = {
+  operationId: string;
+  status: "RUNNING" | "READY" | "APPLYING" | "COMPLETED" | "FAILED";
+  stage: string;
+  progressPercent: number;
+  message: string;
+  fileName: string;
+  fileBytes: number;
+  bytesProcessed: number;
+  totalBytes: number | null;
+  fileCount: number | null;
+  sourceBytes: number | null;
+  backupCreatedAt: string | null;
+  schemaRevision: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  rollbackExpiresAt: string | null;
+  updatedAt: string;
+};
+
 export type Artifact = { name: string; mediaType: string; url: string };
 
 export type FieldMapping = {

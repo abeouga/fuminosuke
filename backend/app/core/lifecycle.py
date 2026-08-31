@@ -20,20 +20,17 @@ from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.services.portable_backup_service import PortableBackupService
+from app.services.portable_restore_service import PortableRestoreService
 from app.storage.local_storage import LocalStorageService
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-@asynccontextmanager
-async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def start_runtime_services(app: FastAPI) -> None:
     settings = app.state.settings
-    storage = LocalStorageService(settings.storage.data_dir)
-    storage.initialize()
-    configure_logging(settings.logging)
-    database = Database(settings.database)
-    database.check_connection()
+    storage: LocalStorageService = app.state.storage
+    database: Database = app.state.database
     google_oauth = GoogleOAuthService(settings.google_oauth, database)
     google_drive = GoogleDriveService(
         database,
@@ -96,10 +93,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         worker_count=settings.jobs.max_concurrency,
     )
     await runner.start()
-    await google_sheets_edit_worker.start()
+    try:
+        await google_sheets_edit_worker.start()
+    except Exception:
+        await runner.stop()
+        raise
 
-    app.state.storage = storage
-    app.state.database = database
     app.state.job_runner = runner
     app.state.job_service = JobService(
         settings=settings,
@@ -121,11 +120,39 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         storage,
         google_drive if google_oauth.enabled else None,
     )
-    app.state.portable_backup_service = PortableBackupService(database, storage)
     app.state.job_worker_status = "running"
+
+
+async def stop_runtime_services(app: FastAPI) -> None:
+    app.state.job_worker_status = "not_started"
+    edit_worker = getattr(app.state, "google_sheets_edit_worker", None)
+    runner = getattr(app.state, "job_runner", None)
+    if edit_worker is not None:
+        await edit_worker.stop()
+    if runner is not None:
+        await runner.stop()
+
+
+@asynccontextmanager
+async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = app.state.settings
+    storage = LocalStorageService(settings.storage.data_dir)
+    storage.initialize()
+    configure_logging(settings.logging)
+    database = Database(settings.database)
+    database.check_connection()
+    app.state.storage = storage
+    app.state.database = database
+    portable_backup = PortableBackupService(database, storage)
+    app.state.portable_backup_service = portable_backup
+    app.state.portable_restore_service = PortableRestoreService(
+        database,
+        storage,
+        portable_backup,
+    )
+    await start_runtime_services(app)
     try:
         yield
     finally:
-        await google_sheets_edit_worker.stop()
-        await runner.stop()
+        await stop_runtime_services(app)
         database.dispose()

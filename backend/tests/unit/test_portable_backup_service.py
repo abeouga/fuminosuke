@@ -9,10 +9,13 @@ import zipfile
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
+import app.services.portable_restore_service as portable_restore_module
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.base import Base
@@ -281,11 +284,227 @@ def test_portable_backup_route_requires_authentication_when_oauth_is_enabled(
 
 def test_mutating_requests_are_locked_while_a_backup_is_running(client: TestClient) -> None:
     service = client.app.state.portable_backup_service
-    service._lock.acquire()
+    service._acquire_operation("backup")
     try:
         response = client.post("/api/v1/auth/logout")
     finally:
-        service._lock.release()
+        service.end_exclusive_operation()
 
     assert response.status_code == 423
     assert response.json()["code"] == "BACKUP_IN_PROGRESS"
+
+
+def test_portable_backup_operation_reports_ready_progress(client: TestClient) -> None:
+    operation_id = str(uuid4())
+
+    created = client.post(
+        "/api/v1/system-backups/portable",
+        json={"operationId": operation_id},
+    )
+    progress = client.get(
+        f"/api/v1/system-backups/portable-operations/{operation_id}"
+    )
+
+    assert created.status_code == 200
+    assert progress.status_code == 200
+    assert progress.json() == {
+        "operationId": operation_id,
+        "status": "READY",
+        "stage": "READY",
+        "progressPercent": 100,
+        "message": "バックアップの作成が完了しました。",
+        "bytesProcessed": created.json()["sourceBytes"],
+        "totalBytes": created.json()["sourceBytes"],
+        "backupId": created.json()["id"],
+        "errorCode": None,
+        "errorMessage": None,
+        "updatedAt": progress.json()["updatedAt"],
+    }
+
+
+def test_portable_import_restores_database_files_and_runtime(client: TestClient) -> None:
+    operation_id = str(uuid4())
+    restore_id = str(uuid4())
+    storage = client.app.state.storage
+    database = client.app.state.database
+    _stamp_test_database(database)
+    storage.write_bytes("uploads/original/source.png", b"before-restore")
+    with database.session() as session:
+        session.add(
+            SireName(
+                id="portable-original",
+                name="復元対象",
+                normalized_name="復元対象",
+            )
+        )
+        session.add(
+            GoogleOAuthAccount(
+                google_subject="portable-google-user",
+                email="portable@example.com",
+                encrypted_refresh_token="must-not-travel",
+                scopes="openid email",
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    exported = client.post(
+        "/api/v1/system-backups/portable",
+        json={"operationId": operation_id},
+    )
+    archive = client.get(exported.json()["downloadUrl"])
+    assert exported.status_code == 200
+    assert archive.status_code == 200
+
+    storage.write_bytes("uploads/original/source.png", b"changed-after-export")
+    storage.write_bytes("uploads/later/extra.png", b"must-be-removed")
+    with database.session() as session:
+        session.add(
+            SireName(
+                id="portable-later",
+                name="後から追加",
+                normalized_name="後から追加",
+            )
+        )
+        session.commit()
+
+    validated = client.post(
+        f"/api/v1/system-backups/portable-imports/{restore_id}",
+        files={"file": ("portable-backup.zip", archive.content, "application/zip")},
+    )
+
+    assert validated.status_code == 200, validated.text
+    assert validated.json()["status"] == "READY"
+    assert validated.json()["stage"] == "READY_TO_APPLY"
+    assert validated.json()["progressPercent"] == 75
+    assert validated.json()["fileCount"] == exported.json()["fileCount"]
+
+    applied = client.post(
+        f"/api/v1/system-backups/portable-imports/{restore_id}/apply"
+    )
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "COMPLETED"
+    assert applied.json()["progressPercent"] == 100
+    assert applied.json()["rollbackExpiresAt"] is not None
+    assert client.app.state.job_runner.is_running is True
+    assert storage.read_bytes("uploads/original/source.png") == b"before-restore"
+    assert storage.exists("uploads/later/extra.png") is False
+    with database.session() as session:
+        assert session.get(SireName, "portable-original") is not None
+        assert session.get(SireName, "portable-later") is None
+        oauth = session.get(GoogleOAuthAccount, "portable-google-user")
+        assert oauth is not None
+        assert oauth.encrypted_refresh_token == ""
+        assert oauth.is_active is False
+
+    status_response = client.get(
+        f"/api/v1/system-backups/portable-imports/{restore_id}"
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "COMPLETED"
+
+
+def test_invalid_portable_import_does_not_change_live_data(client: TestClient) -> None:
+    restore_id = str(uuid4())
+    storage = client.app.state.storage
+    storage.write_bytes("uploads/live/source.png", b"live-data")
+
+    response = client.post(
+        f"/api/v1/system-backups/portable-imports/{restore_id}",
+        files={"file": ("broken.zip", b"this-is-not-a-zip", "application/zip")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "RESTORE_ARCHIVE_INVALID"
+    assert storage.read_bytes("uploads/live/source.png") == b"live-data"
+    status_response = client.get(
+        f"/api/v1/system-backups/portable-imports/{restore_id}"
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "FAILED"
+    assert status_response.json()["progressPercent"] < 100
+
+
+def test_portable_import_rolls_back_a_partial_filesystem_swap(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = client.app.state.database
+    storage = client.app.state.storage
+    _stamp_test_database(database)
+    storage.write_bytes("uploads/source.png", b"backup-version")
+    with database.session() as session:
+        session.add(SireName(id="backup-row", name="退避", normalized_name="退避"))
+        session.commit()
+    exported = client.post(
+        "/api/v1/system-backups/portable",
+        json={"operationId": str(uuid4())},
+    )
+    archive = client.get(exported.json()["downloadUrl"])
+
+    storage.write_bytes("uploads/source.png", b"current-version")
+    with database.session() as session:
+        session.add(SireName(id="current-row", name="現行", normalized_name="現行"))
+        session.commit()
+    restore_id = str(uuid4())
+    validated = client.post(
+        f"/api/v1/system-backups/portable-imports/{restore_id}",
+        files={"file": ("portable-backup.zip", archive.content, "application/zip")},
+    )
+    assert validated.status_code == 200
+
+    original_replace = portable_restore_module.os.replace
+
+    def fail_before_installing_uploads(source: object, destination: object) -> None:
+        source_path = Path(source)  # type: ignore[arg-type]
+        destination_path = Path(destination)  # type: ignore[arg-type]
+        if (
+            source_path.name == "uploads"
+            and "portable-imports" in source_path.parts
+            and destination_path == storage.resolve("uploads")
+        ):
+            raise OSError("simulated interrupted swap")
+        original_replace(source, destination)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(portable_restore_module.os, "replace", fail_before_installing_uploads)
+
+    applied = client.post(
+        f"/api/v1/system-backups/portable-imports/{restore_id}/apply"
+    )
+
+    assert applied.status_code == 500
+    assert applied.json()["code"] == "RESTORE_APPLY_FAILED"
+    assert storage.read_bytes("uploads/source.png") == b"current-version"
+    with database.session() as session:
+        assert session.get(SireName, "current-row") is not None
+        assert session.get(SireName, "backup-row") is not None
+    assert client.app.state.job_runner.is_running is True
+
+
+def test_requests_are_locked_while_a_restore_is_applying(client: TestClient) -> None:
+    service = client.app.state.portable_backup_service
+    service._acquire_operation("restore")
+    try:
+        normal_request = client.get("/api/v1/templates")
+        health = client.get("/api/v1/health")
+    finally:
+        service.end_exclusive_operation()
+
+    assert normal_request.status_code == 423
+    assert normal_request.json()["code"] == "BACKUP_IN_PROGRESS"
+    assert health.status_code == 200
+
+
+def _stamp_test_database(database: Database) -> None:
+    with database.engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)")
+        )
+        connection.execute(text("DELETE FROM alembic_version"))
+        connection.execute(
+            text(
+                "INSERT INTO alembic_version (version_num) "
+                "VALUES ('0022_archive_in_use_templates')"
+            )
+        )
