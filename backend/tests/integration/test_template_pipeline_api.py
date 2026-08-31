@@ -341,7 +341,9 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     mixed_draft_mappings = client.get(
         f"/api/v1/template-versions/{version_id}/field-mappings"
     ).json()
-    assert mixed_draft_mappings["mappings"] == []
+    assert [
+        mapping["targetPath"] for mapping in mixed_draft_mappings["mappings"]
+    ] == ["document.cattleName"]
     assert mixed_draft_mappings["validForOcr"] is False
 
     draft_template = client.get(f"/api/v1/templates/{templates[0]['id']}").json()

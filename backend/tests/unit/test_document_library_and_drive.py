@@ -5,6 +5,7 @@ from google.oauth2.credentials import Credentials
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.db.base import Base
 from app.db.models import (
     ConfirmedResult,
@@ -92,6 +93,86 @@ def test_library_backfills_confirmed_jobs_and_groups_pages(
         with database.session() as session:
             assert session.query(LedgerDocument).count() == 1
             assert session.query(LedgerDocumentPage).count() == 1
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize("operation", ["list", "sync"])
+def test_library_backfills_current_spreadsheet_for_already_linked_page(
+    settings_factory: Callable[..., Settings],
+    operation: str,
+) -> None:
+    database = Database(settings_factory().database)
+    Base.metadata.create_all(database.engine)
+    try:
+        with database.session() as session:
+            template, _, job = _template_and_job(session)
+            ledger = LedgerDocument(
+                id="document-linked",
+                template_id=template.id,
+                individual_id="1234567890",
+                current_job_id=job.id,
+                current_document_json=_document("こよみ"),
+            )
+            session.add(ledger)
+            session.add(
+                LedgerDocumentPage(
+                    ledger_document_id=ledger.id,
+                    job_id=job.id,
+                    page_number=1,
+                    relation_type="NEW_DOCUMENT",
+                    active=True,
+                    page_content_json=_document("こよみ"),
+                    confirmed_at=job.created_at,
+                )
+            )
+            session.add(
+                ConfirmedResult(
+                    job_id=job.id,
+                    ocr_result_revision=1,
+                    individual_id="1234567890",
+                    confirmed_json=_document("こよみ"),
+                    export_relative_path="exports/linked.json",
+                    spreadsheet_id="sheet-linked",
+                    spreadsheet_url=(
+                        "https://docs.google.com/spreadsheets/d/sheet-linked/edit"
+                    ),
+                    spreadsheet_name="確定済み書類",
+                    spreadsheet_sync_status="synced",
+                )
+            )
+            session.commit()
+
+        if operation == "list":
+            DocumentLibraryService(database).list_library()
+        else:
+            class DriveSyncStub:
+                def sync_document_library(
+                    self,
+                    _expected_subject: str | None = None,
+                ) -> dict[str, str]:
+                    with database.session() as session:
+                        current = session.get(LedgerDocument, "document-linked")
+                        assert current is not None
+                        assert current.spreadsheet_id == "sheet-linked"
+                    return {"status": "SYNCED"}
+
+            result = DocumentLibraryService(
+                database,
+                google_drive=DriveSyncStub(),  # type: ignore[arg-type]
+            ).sync_document_library()
+            assert result == {"status": "SYNCED"}
+
+        with database.session() as session:
+            current = session.get(LedgerDocument, "document-linked")
+            assert current is not None
+            assert current.spreadsheet_id == "sheet-linked"
+            assert current.spreadsheet_url == (
+                "https://docs.google.com/spreadsheets/d/sheet-linked/edit"
+            )
+            assert current.spreadsheet_sync_status == "synced"
+            assert current.library_name == "確定済み書類"
+            assert current.document_name == "確定済み書類"
     finally:
         database.dispose()
 
@@ -224,11 +305,24 @@ def test_library_hides_unconfirmed_new_documents(
 
 
 class _DriveRenameStub:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+    def __init__(self, *, fail_restore: bool = False) -> None:
+        self.calls: list[tuple[str, str, str | None]] = []
+        self.current_name = "変更前"
+        self.fail_restore = fail_restore
 
-    def rename_spreadsheet(self, spreadsheet_id: str, name: str) -> str:
-        self.calls.append((spreadsheet_id, name))
+    def rename_spreadsheet(
+        self,
+        spreadsheet_id: str,
+        name: str,
+        expected_subject: str | None = None,
+        *,
+        baseline_name: str | None = None,
+    ) -> str:
+        del expected_subject
+        self.calls.append((spreadsheet_id, name, baseline_name))
+        if self.fail_restore and name == "変更前":
+            raise RuntimeError("simulated Drive rename compensation failure")
+        self.current_name = name
         return name
 
 
@@ -265,7 +359,7 @@ def test_library_renames_drive_sheet_and_soft_deletes_document(
             "name": "変更後",
             "spreadsheetRenamed": True,
         }
-        assert drive.calls == [("sheet-1", "変更後")]
+        assert drive.calls == [("sheet-1", "変更後", "変更前")]
         with database.session() as session:
             document = session.get(LedgerDocument, job.id)
             confirmed = session.query(ConfirmedResult).filter_by(job_id=job.id).one()
@@ -281,7 +375,83 @@ def test_library_renames_drive_sheet_and_soft_deletes_document(
             document = session.get(LedgerDocument, job.id)
             assert document is not None
             assert document.library_deleted_at is not None
-            assert session.query(LedgerDocumentPage).filter_by(ledger_document_id=job.id).count() == 1
+            assert (
+                session.query(LedgerDocumentPage)
+                .filter_by(ledger_document_id=job.id)
+                .count()
+                == 1
+            )
+    finally:
+        database.dispose()
+
+
+@pytest.mark.parametrize(
+    ("fail_restore", "expected_code", "expected_remote_name"),
+    [
+        (False, "DRIVE_DOCUMENT_RENAME_ROLLED_BACK", "変更前"),
+        (True, "DRIVE_DOCUMENT_RENAME_PARTIAL", "変更後"),
+    ],
+)
+def test_library_document_rename_compensates_database_commit_failure(
+    settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    fail_restore: bool,
+    expected_code: str,
+    expected_remote_name: str,
+) -> None:
+    database = Database(settings_factory().database)
+    Base.metadata.create_all(database.engine)
+    try:
+        with database.session() as session:
+            _, _, job = _template_and_job(session)
+            session.add(
+                ConfirmedResult(
+                    job_id=job.id,
+                    ocr_result_revision=1,
+                    individual_id="1234567890",
+                    confirmed_json=_document("こよみ"),
+                    export_relative_path="exports/test.json",
+                    spreadsheet_id="sheet-rename-commit-failure",
+                    spreadsheet_url=(
+                        "https://docs.google.com/spreadsheets/d/"
+                        "sheet-rename-commit-failure/edit"
+                    ),
+                    spreadsheet_name="変更前",
+                )
+            )
+            session.commit()
+            job_id = job.id
+
+        DocumentLibraryService(database).list_library()
+        drive = _DriveRenameStub(fail_restore=fail_restore)
+        service = DocumentLibraryService(
+            database,
+            google_drive=drive,  # type: ignore[arg-type]
+        )
+        original_commit = Session.commit
+        fail_next_commit = True
+
+        def commit_with_one_failure(session: Session) -> None:
+            nonlocal fail_next_commit
+            if fail_next_commit:
+                fail_next_commit = False
+                raise RuntimeError("simulated database commit failure")
+            original_commit(session)
+
+        monkeypatch.setattr(Session, "commit", commit_with_one_failure)
+
+        with pytest.raises(AppError) as caught:
+            service.rename_document(job_id, name="変更後")
+
+        assert caught.value.code == expected_code
+        assert drive.current_name == expected_remote_name
+        with database.session() as session:
+            document = session.get(LedgerDocument, job_id)
+            confirmed = session.query(ConfirmedResult).filter_by(job_id=job_id).one()
+            assert document is not None
+            assert document.library_name == "変更前"
+            assert document.document_name == "変更前"
+            assert confirmed.spreadsheet_name == "変更前"
     finally:
         database.dispose()
 
@@ -319,7 +489,7 @@ def test_drive_creates_one_spreadsheet_and_persists_document_binding(
             )
             session.commit()
 
-        def credentials_provider() -> Credentials:
+        def credentials_provider(_subject: str | None = None) -> Credentials:
             raise AssertionError("テストではGoogle APIを呼び出しません。")
 
         drive = GoogleDriveService(database, credentials_provider, lambda: "subject-1")
@@ -327,6 +497,23 @@ def test_drive_creates_one_spreadsheet_and_persists_document_binding(
             drive,
             "_create_file",
             lambda **kwargs: {"id": "spreadsheet-1", **kwargs},
+        )
+        monkeypatch.setattr(drive, "_find_spreadsheet_outputs", lambda *_args: [])
+        monkeypatch.setattr(
+            drive,
+            "_drive_item",
+            lambda file_id: {
+                "id": file_id,
+                "name": "1234567890_こよみ_繁殖台帳",
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "parents": ["year-folder"],
+                "trashed": False,
+                "appProperties": {
+                    "llmOcrLedgerDocumentId": job.id,
+                    "llmOcrDriveRootId": "year-folder",
+                    "llmOcrSpreadsheetOperationId": f"document-create:{job.id}",
+                },
+            },
         )
 
         first = drive.create_document_spreadsheet(job.id, "OCR")
@@ -366,7 +553,7 @@ def test_drive_picker_session_and_selected_folder_are_persisted(
         monkeypatch.setattr(credentials, "refresh", lambda request: None)
         drive = GoogleDriveService(
             database,
-            lambda: credentials,
+            lambda _subject=None: credentials,
             lambda: "subject-1",
             "browser-api-key",
             "123456789",
@@ -395,6 +582,9 @@ def test_drive_picker_session_and_selected_folder_are_persisted(
             "pickerConfigurationError": None,
             "folderId": "picked-folder",
             "folderName": "2026年度",
+            "roots": [
+                {"folderId": "picked-folder", "folderName": "2026年度"}
+            ],
         }
         with database.session() as session:
             account = session.get(GoogleOAuthAccount, "subject-1")
@@ -412,32 +602,37 @@ def test_drive_spreadsheet_name_is_updated_in_place(
     database = Database(settings_factory().database)
     Base.metadata.create_all(database.engine)
     try:
-        def credentials_provider() -> Credentials:
+        def credentials_provider(_subject: str | None = None) -> Credentials:
             raise AssertionError("テストではGoogle APIを呼び出しません。")
 
         drive = GoogleDriveService(database, credentials_provider, lambda: "subject-1")
         requests: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        current_name = "面接カード_変更前"
 
         def request(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal current_name
             requests.append((args, kwargs))
-            return {"id": "spreadsheet-1", "name": "面接カード_阿部桜雅"}
+            if args[0] == "PATCH":
+                current_name = "面接カード_阿部桜雅"
+            return {
+                "id": "spreadsheet-1",
+                "name": current_name,
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "parents": [],
+                "trashed": False,
+            }
 
         monkeypatch.setattr(drive, "_request", request)
 
         renamed = drive.rename_spreadsheet("spreadsheet-1", "面接カード_阿部桜雅")
 
         assert renamed == "面接カード_阿部桜雅"
-        assert requests == [
-            (
-                (
-                    "PATCH",
-                    "https://www.googleapis.com/drive/v3/files/spreadsheet-1",
-                ),
-                {
-                    "params": {"fields": "id,name"},
-                    "json": {"name": "面接カード_阿部桜雅"},
-                },
-            )
+        assert [args[0] for args, _kwargs in requests] == [
+            "GET",
+            "GET",
+            "PATCH",
+            "GET",
         ]
+        assert requests[2][1]["json"] == {"name": "面接カード_阿部桜雅"}
     finally:
         database.dispose()

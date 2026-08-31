@@ -17,7 +17,8 @@ def test_jwt_round_trip_and_signature_validation() -> None:
     assert decode_jwt(token, secret="s" * 32, audience="test-session")["sub"] == "google-user-1"
 
     header, payload, signature = token.split(".")
-    tampered = f"{header}.{payload}.{signature[:-1]}A"
+    replacement = "A" if signature[0] != "A" else "B"
+    tampered = f"{header}.{payload}.{replacement}{signature[1:]}"
     with pytest.raises(JwtValidationError):
         decode_jwt(tampered, secret="s" * 32, audience="test-session")
 

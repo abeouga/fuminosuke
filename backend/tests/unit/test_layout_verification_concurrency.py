@@ -194,6 +194,7 @@ def _finalization(clean_artifact_id: str, mask_artifact_id: str) -> _Handwriting
         input_cell_count=1,
         coverage_ratio=0.25,
         paddle_ocr_available=False,
+        opencv_applied=False,
         candidate_count=999,
     )
 

@@ -272,14 +272,7 @@ export default function App() {
         }}
         onReconnect={() => {
           setAuthLoading(true);
-          void api.disconnectGoogle()
-            .then(() => window.location.assign(googleLoginUrl(window.location.href)))
-            .catch((error: unknown) => {
-              setAuthError(
-                error instanceof Error ? error.message : "Google連携を更新できませんでした。",
-              );
-              setAuthLoading(false);
-            });
+          window.location.assign(googleLoginUrl(window.location.href));
         }}
       />
     );
@@ -449,7 +442,11 @@ function AuthDisconnectDialog({
         <div>
           <p className="eyebrow">GOOGLE CONNECTION</p>
           <h2 id="auth-disconnect-title">Google連携を解除しますか？</h2>
-          <p>保存済みのGoogleトークンを削除します。再利用にはGoogle認証が必要です。</p>
+          <p>
+            保存済みのGoogle認証トークンを削除し、この端末からログアウトします。
+            保存先設定と同期の対応付けは、安全に再連携できるよう保持します。
+            Google Drive上のファイルとフォルダは削除されません。
+          </p>
         </div>
         <div className="navigation-confirm-actions">
           <button type="button" className="secondary" onClick={onCancel}>キャンセル</button>

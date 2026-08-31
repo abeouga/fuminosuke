@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, Header, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import Field
 
+from app.api.auth_dependencies import require_authenticated_user
 from app.api.dependencies import (
     get_google_sheets,
     get_job_service,
@@ -26,9 +27,14 @@ from app.domain.ocr_models import (
     ReviewItem,
     SaleCalf,
 )
+from app.services.google_oauth_service import AuthenticatedUser
 from app.services.ocr_result_service import CorrectionValues
 
 router = APIRouter(tags=["ocr"])
+AuthenticatedRequestUser = Annotated[
+    AuthenticatedUser | None,
+    Depends(require_authenticated_user),
+]
 
 
 class OcrFieldPreview(ApiModel):
@@ -62,6 +68,7 @@ class OcrResultResponse(ApiModel):
     record_structure: dict[str, Any]
     spreadsheet_sync: dict[str, Any]
     document_resolution: dict[str, Any]
+    document_name: str
 
 
 class OcrCorrectionRequest(ApiModel):
@@ -76,6 +83,7 @@ class OcrCorrectionRequest(ApiModel):
 
 class OcrConfirmationRequest(ApiModel):
     base_revision: int = Field(ge=1)
+    document_name: str | None = Field(default=None, min_length=1, max_length=180)
 
 
 class SpreadsheetNameRequest(ApiModel):
@@ -140,8 +148,15 @@ async def create_ocr_job(
     response_model=OcrResultResponse,
     response_model_by_alias=True,
 )
-def get_ocr_result(request: Request, job_id: str) -> dict[str, Any]:
-    return get_ocr_result_service(request).get(job_id)
+def get_ocr_result(
+    request: Request,
+    job_id: str,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    return get_ocr_result_service(request).get(
+        job_id,
+        expected_subject=user.subject if user is not None else None,
+    )
 
 
 @router.put(
@@ -150,7 +165,10 @@ def get_ocr_result(request: Request, job_id: str) -> dict[str, Any]:
     response_model_by_alias=True,
 )
 def save_ocr_corrections(
-    request: Request, job_id: str, body: OcrCorrectionRequest
+    request: Request,
+    job_id: str,
+    body: OcrCorrectionRequest,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     values = CorrectionValues(
         base_revision=body.base_revision,
@@ -161,7 +179,11 @@ def save_ocr_corrections(
         custom_fields=body.custom_fields,
         review_items=body.review_items,
     )
-    return get_ocr_result_service(request).correct(job_id, values)
+    return get_ocr_result_service(request).correct(
+        job_id,
+        values,
+        expected_subject=user.subject if user is not None else None,
+    )
 
 
 @router.post(
@@ -169,8 +191,15 @@ def save_ocr_corrections(
     response_model=OcrResultResponse,
     response_model_by_alias=True,
 )
-def reopen_ocr_result(request: Request, job_id: str) -> dict[str, Any]:
-    return get_ocr_result_service(request).reopen(job_id)
+def reopen_ocr_result(
+    request: Request,
+    job_id: str,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    return get_ocr_result_service(request).reopen(
+        job_id,
+        expected_subject=user.subject if user is not None else None,
+    )
 
 
 @router.post(
@@ -182,6 +211,7 @@ def resolve_ocr_document(
     request: Request,
     job_id: str,
     body: DocumentResolutionRequest,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     return get_ocr_result_service(request).resolve_document(
         job_id,
@@ -189,6 +219,7 @@ def resolve_ocr_document(
         target_document_id=body.target_document_id,
         target_job_id=body.target_job_id,
         target_page_id=body.target_page_id,
+        expected_subject=user.subject if user is not None else None,
     )
 
 
@@ -201,10 +232,13 @@ def confirm_ocr_result(
     request: Request,
     job_id: str,
     body: OcrConfirmationRequest,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     return get_ocr_result_service(request).confirm(
         job_id,
         base_revision=body.base_revision,
+        document_name=body.document_name,
+        expected_subject=user.subject if user else None,
     )
 
 
@@ -219,8 +253,15 @@ def export_ocr_result(request: Request, job_id: str, format: str = "json") -> Fi
     response_model=OcrResultResponse,
     response_model_by_alias=True,
 )
-def retry_spreadsheet_sync(request: Request, job_id: str) -> dict[str, Any]:
-    return get_ocr_result_service(request).sync_spreadsheet(job_id)
+def retry_spreadsheet_sync(
+    request: Request,
+    job_id: str,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    return get_ocr_result_service(request).sync_spreadsheet(
+        job_id,
+        user.subject if user else None,
+    )
 
 
 @router.put("/ocr-jobs/{job_id}/spreadsheet-name")
@@ -228,8 +269,13 @@ def rename_spreadsheet(
     request: Request,
     job_id: str,
     body: SpreadsheetNameRequest,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, object | None]:
-    return get_ocr_result_service(request).rename_spreadsheet(job_id, body.file_name)
+    return get_ocr_result_service(request).rename_spreadsheet(
+        job_id,
+        body.file_name,
+        user.subject if user else None,
+    )
 
 
 @router.get(
@@ -249,21 +295,29 @@ def get_output_layout_template(request: Request, job_id: str) -> dict[str, objec
 def import_output_layout_template(
     request: Request,
     job_id: str,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, object | None]:
     document_id = get_ocr_result_service(request).document_id(job_id)
-    layout = get_google_sheets(request).capture_output_layout(document_id=document_id)
+    layout = get_google_sheets(request).capture_output_layout(
+        document_id=document_id,
+        expected_subject=user.subject if user is not None else None,
+    )
     return get_output_layout_templates(request).save_for_job(job_id, layout)
 
 
 @router.get("/google-sheets/status")
 def get_google_sheets_status(
     request: Request,
+    user: AuthenticatedRequestUser,
     job_id: str | None = Query(default=None, alias="jobId"),
 ) -> dict[str, Any]:
     sheets = get_google_sheets(request)
     if job_id is None:
         return sheets.target_status().payload()
-    return get_ocr_result_service(request).spreadsheet_status(job_id)
+    return get_ocr_result_service(request).spreadsheet_status(
+        job_id,
+        expected_subject=user.subject if user is not None else None,
+    )
 
 
 @router.get("/ocr-jobs/{job_id}/excel-table")

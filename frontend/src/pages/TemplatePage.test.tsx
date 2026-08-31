@@ -618,10 +618,11 @@ test("shows one flat five-step template workflow and reuses the canvas for docum
   expect(screen.getByLabelText("テンプレート設定の状態")).toHaveTextContent("画像準備済み");
   expect(within(workflowNavigation).getByRole("button", { name: /1.*欄の種類/ })).toHaveAttribute("aria-current", "step");
 
-  fireEvent.click(within(workflowNavigation).getByRole("button", { name: /4.*書類の見分け方/ }));
+  fireEvent.click(within(workflowNavigation).getByRole("button", { name: /4.*照合と書類名/ }));
 
   expect(screen.getByLabelText("書類を見分ける欄を選択する帳票プレビュー")).toBeInTheDocument();
-  expect(screen.getAllByText("同じ書類と判断する基準").length).toBeGreaterThan(0);
+  expect(screen.getByText("4-A 同じ書類を探す条件")).toBeInTheDocument();
+  expect(screen.getByText("4-B ライブラリ・出力で使う書類名")).toBeInTheDocument();
   expect(screen.getAllByText("個体識別番号").length).toBeGreaterThan(0);
 
   fireEvent.click(within(workflowNavigation).getByRole("button", { name: /5.*確認・保存/ }));
@@ -632,7 +633,13 @@ test("shows one flat five-step template workflow and reuses the canvas for docum
 test("persists the selected document rectangle together with the template settings", async () => {
   let savedIdentity: unknown = null;
   let savedIdentityFields: unknown = null;
-  const mappingResponse = (documentIdentity: unknown, validForOcr: boolean, documentIdentityFields: unknown[] = []) => ({
+  let savedDocumentName: unknown = null;
+  const mappingResponse = (
+    documentIdentity: unknown,
+    validForOcr: boolean,
+    documentIdentityFields: unknown[] = [],
+    documentName: unknown = null,
+  ) => ({
     canonicalWidth: 300,
     canonicalHeight: 100,
     mappings: [{
@@ -649,6 +656,7 @@ test("persists the selected document rectangle together with the template settin
     }],
     documentIdentity,
     documentIdentityFields,
+    documentName,
     targets: [{
       path: "document.unifiedEarTag",
       label: "個体識別番号",
@@ -672,7 +680,13 @@ test("persists the selected document rectangle together with the template settin
         const body = JSON.parse(String(init.body));
         savedIdentity = body.documentIdentity;
         savedIdentityFields = body.documentIdentityFields;
-        return jsonResponse(mappingResponse(body.documentIdentity, true, body.documentIdentityFields));
+        savedDocumentName = body.documentName;
+        return jsonResponse(mappingResponse(
+          body.documentIdentity,
+          true,
+          body.documentIdentityFields,
+          body.documentName,
+        ));
       }
       return jsonResponse(mappingResponse(null, false));
     }
@@ -683,26 +697,36 @@ test("persists the selected document rectangle together with the template settin
   );
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
   const workflowNavigation = await screen.findByRole("navigation", { name: "テンプレート設定の工程" });
-  fireEvent.click(within(workflowNavigation).getByRole("button", { name: /4.*書類の見分け方/ }));
+  fireEvent.click(within(workflowNavigation).getByRole("button", { name: /4.*照合と書類名/ }));
   const canvas = screen.getByLabelText("書類を見分ける欄を選択する帳票プレビュー");
   vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
     x: 0, y: 0, left: 0, top: 0, right: 300, bottom: 100,
     width: 300, height: 100, toJSON: () => ({}),
   });
   fireEvent.click(canvas, { clientX: 50, clientY: 15 });
+  fireEvent.click(screen.getByRole("checkbox", { name: "個体識別番号" }));
   fireEvent.click(within(workflowNavigation).getByRole("button", { name: /5.*確認・保存/ }));
   fireEvent.click(screen.getByRole("button", { name: "テンプレート設定をDBへ保存" }));
 
-  await waitFor(() => expect(savedIdentity).toEqual({
+  await waitFor(() => expect(savedIdentity).toBeNull());
+  expect(savedIdentityFields).toEqual([{
     mappingId: "layout_identity-input",
     targetPath: "document.unifiedEarTag",
     label: "個体識別番号",
     valueType: "digits",
     exactLength: 10,
-    matchRole: "primary",
-    displayRole: "title",
-  }));
-  expect(savedIdentityFields).toEqual([savedIdentity]);
+    matchRole: "confirmation",
+    displayRole: "none",
+    matchGroupId: "identity_group_1",
+    matchGroupLabel: "照合条件1",
+    componentOrder: 0,
+  }]);
+  expect(savedDocumentName).toEqual({
+    fieldPaths: ["document.unifiedEarTag"],
+    separator: "",
+    prefix: "",
+    suffix: "",
+  });
   expect(await screen.findByRole("button", { name: "レイアウトは保存済み" })).toBeDisabled();
 });
 

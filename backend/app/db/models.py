@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -325,13 +326,136 @@ class ProcessingJob(Base):
 
 class DocumentFolder(Base):
     __tablename__ = "document_folders"
+    __table_args__ = (
+        Index(
+            "uq_document_folders_root_normalized_name",
+            "normalized_name",
+            unique=True,
+            sqlite_where=text("parent_id IS NULL"),
+            postgresql_where=text("parent_id IS NULL"),
+        ),
+        Index(
+            "uq_document_folders_child_normalized_name",
+            "parent_id",
+            "normalized_name",
+            unique=True,
+            sqlite_where=text("parent_id IS NOT NULL"),
+            postgresql_where=text("parent_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     parent_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("document_folders.id", ondelete="RESTRICT"), nullable=True, index=True
+        String(36),
+        ForeignKey("document_folders.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class DocumentFolderDriveMapping(Base):
+    __tablename__ = "document_folder_drive_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "google_subject",
+            "document_folder_id",
+            "drive_root_folder_id",
+            name="uq_document_folder_drive_mapping_local_root",
+        ),
+        UniqueConstraint(
+            "google_subject",
+            "drive_folder_id",
+            name="uq_document_folder_drive_mapping_remote",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    google_subject: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("google_oauth_accounts.google_subject", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    document_folder_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("document_folders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    drive_root_folder_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    drive_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_parent_folder_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    drive_modified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class DocumentLibrarySyncState(Base):
+    __tablename__ = "document_library_sync_states"
+
+    google_subject: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("google_oauth_accounts.google_subject", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="IDLE")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conflicts_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    drive_change_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_roots_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class SpreadsheetOutputOperation(Base):
+    __tablename__ = "spreadsheet_output_operations"
+
+    operation_id: Mapped[str] = mapped_column(String(124), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("ledger_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    google_subject: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_job_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    drive_root_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_parent_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    drive_folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    library_folder_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    library_location_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
@@ -357,13 +481,29 @@ class LedgerDocument(Base):
     )
     spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     spreadsheet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_google_subject: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    drive_root_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_ownership_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    drive_ownership_confirmation_source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
     drive_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     drive_folder_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     library_folder_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("document_folders.id", ondelete="RESTRICT"), nullable=True, index=True
+        String(36),
+        ForeignKey("document_folders.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     library_location_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     library_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    document_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    identity_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    identity_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     library_deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
@@ -519,6 +659,8 @@ class SpreadsheetEditEvent(Base):
     applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_sheet: Mapped[str] = mapped_column(String(200), nullable=False)
     source_cell: Mapped[str] = mapped_column(String(50), nullable=False)
+    spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    google_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type DragEvent } from "react";
-import { ApiError, api } from "../api";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { ApiError, api, googleLoginUrl } from "../api";
 import { showToast } from "../components/Toast";
-import type { DocumentLibrary, DocumentLibraryFolder, DocumentLibraryGroup, DocumentLibraryLedger, OcrLibraryContext } from "../types";
+import { mountGoogleDriveSpreadsheetPicker, type PickedDriveSpreadsheet } from "../googlePicker";
+import type { DocumentLibrary, DocumentLibraryFolder, DocumentLibraryGroup, DocumentLibraryLedger, DocumentLibrarySyncResult, DriveOutputFolder, DrivePickerSession, OcrLibraryContext } from "../types";
 
 type Props = {
   startReading: (context: OcrLibraryContext) => void;
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export function DocumentLibraryPage({ startReading, openReview, initialDocumentId = null }: Props) {
+  const [libraryView, setLibraryView] = useState<"library" | "drive">("library");
   const [library, setLibrary] = useState<DocumentLibrary | null>(null);
   const [selectedLedger, setSelectedLedger] = useState<DocumentLibraryLedger | null>(null);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -17,6 +19,13 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set());
+  const [librarySyncing, setLibrarySyncing] = useState(true);
+  const [librarySyncOperation, setLibrarySyncOperation] = useState<"bidirectional" | "push" | null>("bidirectional");
+  const [libraryReconnecting, setLibraryReconnecting] = useState(false);
+  const [librarySyncResult, setLibrarySyncResult] = useState<DocumentLibrarySyncResult | null>(null);
+  const [librarySyncError, setLibrarySyncError] = useState<string | null>(null);
+  const initialSyncStartedRef = useRef(false);
+  const syncInFlightRef = useRef(false);
 
   const load = async () => {
     try {
@@ -34,7 +43,71 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  const synchronizeLibrary = async (operation: "bidirectional" | "push" = "bidirectional") => {
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    setLibrarySyncing(true);
+    setLibrarySyncOperation(operation);
+    setLibrarySyncError(null);
+    try {
+      const result = operation === "push"
+        ? await api.syncDocumentLibraryToDrive()
+        : await api.syncDocumentLibrary();
+      setLibrarySyncResult(result);
+    } catch (reason) {
+      setLibrarySyncError(reason instanceof ApiError || reason instanceof Error
+        ? reason.message
+        : "Google Driveと同期できませんでした。");
+    } finally {
+      await load();
+      syncInFlightRef.current = false;
+      setLibrarySyncing(false);
+      setLibrarySyncOperation(null);
+    }
+  };
+
+  const reconnectGoogle = () => {
+    if (libraryReconnecting) return;
+    setLibraryReconnecting(true);
+    setLibrarySyncError(null);
+    window.location.assign(googleLoginUrl(window.location.href));
+  };
+
+  const confirmLegacyOwnership = async (
+    documentId: string,
+    resourceName?: string,
+    driveRootName?: string,
+  ) => {
+    const label = resourceName ? `「${resourceName}」` : "この書類";
+    const rootLabel = driveRootName ? `\n保存先: ${driveRootName}` : "";
+    if (!window.confirm(
+      `${label}のスプレッドシートが、現在接続中のGoogleアカウントのファイルであることを確認します。${rootLabel}\n\nDriveのルート直下にある旧書類は、独自ライブラリの現在の保存場所へ整理されます。Drive側ですでに同期フォルダへ移動済みの場合は、その位置を独自ライブラリへ取り込みます。\n\n別のアカウントのファイルではないことを確認してから続行してください。`,
+    )) return;
+    try {
+      const confirmed = await api.confirmDocumentDriveOwnership(documentId);
+      showToast({
+        tone: "success",
+        title: "Googleアカウントを確認しました",
+        message: confirmed.locationAlignedFromLibrary
+          ? "この書類を双方向同期へ追加し、独自ライブラリの保存場所をGoogle Driveへ反映しました。"
+          : "この書類を双方向同期の対象に追加しました。",
+      });
+      await synchronizeLibrary();
+    } catch (reason) {
+      showToast({
+        tone: "error",
+        title: "所有アカウントを確認できませんでした",
+        message: reason instanceof ApiError ? reason.message : "保存先とGoogleアカウントを確認してください。",
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (initialSyncStartedRef.current) return;
+    initialSyncStartedRef.current = true;
+    void load();
+    void synchronizeLibrary();
+  }, []);
   useEffect(() => { setSelectedDocumentIds(new Set()); }, [currentFolderId, query]);
   useEffect(() => {
     if (!library || !initialDocumentId) return;
@@ -96,10 +169,15 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
       await load();
       showToast({ tone: "success", title: "フォルダを作成しました" });
     } catch (reason) {
+      await load();
       showToast({
         tone: "error",
         title: "フォルダを作成できませんでした",
-        message: reason instanceof ApiError ? reason.message : "入力内容を確認してください。",
+        message: reason instanceof ApiError && /^(DRIVE_|GOOGLE_)/.test(reason.code)
+          ? `${reason.message} フォルダは保持されるため、再同期してください。`
+          : reason instanceof ApiError
+            ? reason.message
+          : "入力内容を確認してください。",
       });
     }
   };
@@ -188,64 +266,400 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
     <div className="page-stack document-library-page">
       <header className="page-header split">
         <div><span className="eyebrow">DOCUMENT LIBRARY</span><h1>書類ライブラリ</h1><p>生成された書類はルートに保存されます。必要なフォルダを作成し、ドラッグ＆ドロップで整理してください。</p></div>
-        <button className="secondary" onClick={() => void load()}>再読み込み</button>
+        {libraryView === "library" && <button className="secondary" onClick={() => void load()}>再読み込み</button>}
       </header>
 
-      <div className="library-explorer-toolbar">
-        <div className="library-breadcrumbs">
-          <button type="button" onClick={() => setCurrentFolderId(null)}>ルート</button>
-          {folderPath(currentFolderId, folderById).map((folder) => <button type="button" key={folder.id} onClick={() => setCurrentFolderId(folder.id)}>{folder.name}</button>)}
-        </div>
-        <button className="primary compact" onClick={() => setCreatingFolder(true)}>新しいフォルダ</button>
+      <div className="library-view-switch" role="tablist" aria-label="書類の表示元">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={libraryView === "library"}
+          className={libraryView === "library" ? "active" : ""}
+          onClick={() => setLibraryView("library")}
+        >
+          独自ライブラリ
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={libraryView === "drive"}
+          className={libraryView === "drive" ? "active" : ""}
+          onClick={() => setLibraryView("drive")}
+        >
+          Google Drive
+        </button>
       </div>
 
-      <label className="library-search"><span>書類を検索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="識別番号・名称・テンプレート名" /></label>
+      <LibrarySyncStatus
+        syncing={librarySyncing}
+        syncOperation={librarySyncOperation}
+        reconnecting={libraryReconnecting}
+        result={librarySyncResult}
+        requestError={librarySyncError}
+        onSync={() => void synchronizeLibrary()}
+        onPush={() => void synchronizeLibrary("push")}
+        onReconnect={reconnectGoogle}
+        onConfirmOwnership={(documentId, resourceName, driveRootName) => void confirmLegacyOwnership(documentId, resourceName, driveRootName)}
+      />
 
-      <div className="library-selection-bar">
-        <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleDocuments.length === 0} onChange={(event) => setSelectedDocumentIds(event.target.checked ? new Set(visibleDocuments.map((document) => document.documentId)) : new Set())} /><span>表示中をすべて選択</span></label>
-        <strong>{selectedDocumentIds.size}件選択中</strong>
-        {selectedDocumentIds.size > 0 && <button type="button" className="ghost compact" onClick={() => setSelectedDocumentIds(new Set())}>選択解除</button>}
-        <button type="button" className="danger compact" disabled={selectedDocumentIds.size === 0} onClick={() => void deleteSelectedDocuments()}>選択した書類を削除</button>
-      </div>
+      {libraryView === "library" ? (
+        <>
+          <div className="library-explorer-toolbar">
+            <div className="library-breadcrumbs">
+              <button type="button" onClick={() => setCurrentFolderId(null)}>ルート</button>
+              {folderPath(currentFolderId, folderById).map((folder) => <button type="button" key={folder.id} onClick={() => setCurrentFolderId(folder.id)}>{folder.name}</button>)}
+            </div>
+            <button className="primary compact" onClick={() => setCreatingFolder(true)}>新しいフォルダ</button>
+          </div>
 
-      <div className="library-explorer">
-        <aside className="library-folder-tree" aria-label="フォルダ一覧">
-          <button className={currentFolderId === null ? "active" : ""} onClick={() => setCurrentFolderId(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropDocument(event, null)}><FolderIcon />ルート</button>
-          <FolderTree folders={library?.folders ?? []} parentId={null} currentFolderId={currentFolderId} onSelect={setCurrentFolderId} onDrop={dropDocument} />
-        </aside>
+          <label className="library-search"><span>書類を検索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="識別番号・名称・テンプレート名" /></label>
 
-        <main className="library-directory-content" onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropDocument(event, currentFolderId)}>
-          {creatingFolder && (
-            <form className="library-folder-create" onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
-              <input autoFocus value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="フォルダ名" maxLength={100} />
-              <button className="primary compact" disabled={!folderName.trim()}>作成</button>
-              <button type="button" className="ghost compact" onClick={() => { setCreatingFolder(false); setFolderName(""); }}>キャンセル</button>
-            </form>
-          )}
+          <div className="library-selection-bar">
+            <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleDocuments.length === 0} onChange={(event) => setSelectedDocumentIds(event.target.checked ? new Set(visibleDocuments.map((document) => document.documentId)) : new Set())} /><span>表示中をすべて選択</span></label>
+            <strong>{selectedDocumentIds.size}件選択中</strong>
+            {selectedDocumentIds.size > 0 && <button type="button" className="ghost compact" onClick={() => setSelectedDocumentIds(new Set())}>選択解除</button>}
+            <button type="button" className="danger compact" disabled={selectedDocumentIds.size === 0} onClick={() => void deleteSelectedDocuments()}>選択した書類を削除</button>
+          </div>
 
-          {!normalizedQuery && childFolders.length > 0 && (
-            <section className="library-folder-grid" aria-label="フォルダ">
-              {childFolders.map((folder) => (
-                <article className="library-folder-card" key={folder.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropDocument(event, folder.id); }}>
-                  <button className="library-folder-open" onClick={() => setCurrentFolderId(folder.id)}><FolderIcon /><span><strong>{folder.name}</strong><small>{folder.documentCount}件の書類</small></span></button>
-                  <div><button className="ghost compact" onClick={() => void renameFolder(folder)}>名前変更</button><button className="ghost compact" onClick={() => void deleteFolder(folder)}>削除</button></div>
-                </article>
-              ))}
-            </section>
-          )}
+          <div className="library-explorer">
+            <aside className="library-folder-tree" aria-label="フォルダ一覧">
+              <button className={currentFolderId === null ? "active" : ""} onClick={() => setCurrentFolderId(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropDocument(event, null)}><FolderIcon />ルート</button>
+              <FolderTree folders={library?.folders ?? []} parentId={null} currentFolderId={currentFolderId} onSelect={setCurrentFolderId} onDrop={dropDocument} />
+            </aside>
 
-          {!library ? (
-            <div className="empty-state large">書類を読み込んでいます…</div>
-          ) : visibleDocuments.length === 0 ? (
-            <div className="empty-state large"><FolderIcon /><h2>{normalizedQuery ? "該当する書類がありません" : "このフォルダは空です"}</h2><p>{normalizedQuery ? "検索条件を変更してください。" : "ルートまたは別のフォルダから書類を移動できます。"}</p></div>
-          ) : (
-            <section className="library-card-grid" aria-label="書類一覧">
-              {visibleDocuments.map((document) => <LibraryDocumentCard document={document} folders={library.folders} folderById={folderById} key={document.documentId} selected={selectedDocumentIds.has(document.documentId)} onSelect={(selected) => setSelectedDocumentIds((current) => { const next = new Set(current); if (selected) next.add(document.documentId); else next.delete(document.documentId); return next; })} onOpen={() => setSelectedLedger(document)} onMove={moveDocument} onRename={() => void renameDocument(document)} />)}
-            </section>
-          )}
-        </main>
-      </div>
+            <main className="library-directory-content" onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropDocument(event, currentFolderId)}>
+              {creatingFolder && (
+                <form className="library-folder-create" onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
+                  <input autoFocus value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="フォルダ名" maxLength={100} />
+                  <button className="primary compact" disabled={!folderName.trim()}>作成</button>
+                  <button type="button" className="ghost compact" onClick={() => { setCreatingFolder(false); setFolderName(""); }}>キャンセル</button>
+                </form>
+              )}
+
+              {!normalizedQuery && childFolders.length > 0 && (
+                <section className="library-folder-grid" aria-label="フォルダ">
+                  {childFolders.map((folder) => (
+                    <article className="library-folder-card" key={folder.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropDocument(event, folder.id); }}>
+                      <button className="library-folder-open" onClick={() => setCurrentFolderId(folder.id)}><FolderIcon /><span><strong>{folder.name}</strong><small>{folder.documentCount}件の書類</small></span></button>
+                      <div><button className="ghost compact" onClick={() => void renameFolder(folder)}>名前変更</button><button className="ghost compact" onClick={() => void deleteFolder(folder)}>削除</button></div>
+                    </article>
+                  ))}
+                </section>
+              )}
+
+              {!library ? (
+                <div className="empty-state large">書類を読み込んでいます…</div>
+              ) : visibleDocuments.length === 0 ? (
+                <div className="empty-state large"><FolderIcon /><h2>{normalizedQuery ? "該当する書類がありません" : "このフォルダは空です"}</h2><p>{normalizedQuery ? "検索条件を変更してください。" : "ルートまたは別のフォルダから書類を移動できます。"}</p></div>
+              ) : (
+                <section className="library-card-grid" aria-label="書類一覧">
+                  {visibleDocuments.map((document) => <LibraryDocumentCard document={document} folders={library.folders} folderById={folderById} key={document.documentId} selected={selectedDocumentIds.has(document.documentId)} onSelect={(selected) => setSelectedDocumentIds((current) => { const next = new Set(current); if (selected) next.add(document.documentId); else next.delete(document.documentId); return next; })} onOpen={() => setSelectedLedger(document)} onMove={moveDocument} onRename={() => void renameDocument(document)} />)}
+                </section>
+              )}
+            </main>
+          </div>
+        </>
+      ) : (
+        <GoogleDriveLibraryView />
+      )}
     </div>
+  );
+}
+
+function LibrarySyncStatus({ syncing, syncOperation, reconnecting, result, requestError, onSync, onPush, onReconnect, onConfirmOwnership }: {
+  syncing: boolean;
+  syncOperation: "bidirectional" | "push" | null;
+  reconnecting: boolean;
+  result: DocumentLibrarySyncResult | null;
+  requestError: string | null;
+  onSync: () => void;
+  onPush: () => void;
+  onReconnect: () => void;
+  onConfirmOwnership: (documentId: string, resourceName?: string, driveRootName?: string) => void;
+}) {
+  const busy = syncing || reconnecting;
+  const counts = result ? [
+    result.foldersImported > 0 ? `Driveから${result.foldersImported}フォルダ取込` : null,
+    result.foldersMirrored > 0 ? `Driveへ${result.foldersMirrored}フォルダ作成` : null,
+    result.foldersUpdated > 0 ? `${result.foldersUpdated}フォルダ更新` : null,
+    result.documentsUpdated > 0 ? `${result.documentsUpdated}書類更新` : null,
+  ].filter((item): item is string => Boolean(item)) : [];
+  const tone = busy
+    ? "syncing"
+    : requestError || result?.status === "ERROR" || result?.status === "REAUTHORIZATION_REQUIRED"
+      ? "error"
+      : result?.status === "PARTIAL"
+        ? "partial"
+        : result?.status === "SYNCED"
+          ? "synced"
+          : "idle";
+  const title = reconnecting
+    ? "Google連携を更新しています"
+    : syncing
+      ? syncOperation === "push"
+        ? "Google Driveへ未反映を同期中"
+        : "Google Driveと同期中"
+    : requestError
+      ? "Google Driveと同期できませんでした"
+      : result?.status === "SYNCED"
+        ? result.mode === "LIBRARY_TO_DRIVE"
+          ? "Google Driveへの反映が完了しました"
+          : "Google Driveと同期済み"
+        : result?.status === "PARTIAL"
+          ? result.mode === "LIBRARY_TO_DRIVE"
+            ? "反映できる項目をGoogle Driveへ同期しました"
+            : "一部を同期しました"
+          : result?.status === "REAUTHORIZATION_REQUIRED"
+            ? "Googleアカウントへの再接続が必要です"
+            : result?.status === "ERROR"
+              ? "Google Driveと同期できませんでした"
+              : "同期状態を確認できませんでした";
+  const detail = reconnecting
+    ? "保存先設定を保持したまま、追加権限の認証画面を開いています。"
+    : syncing
+      ? syncOperation === "push"
+        ? "独自ライブラリを基準に、未反映のフォルダと書類を確認しています。"
+        : "独自ライブラリとGoogle Driveのフォルダ構造を確認しています。"
+    : requestError
+      || result?.error
+      || (result?.status === "PARTIAL" && result.conflicts > 0
+        ? `${result.conflicts}件の競合を検出しました。データを失わないよう独自ライブラリの内容を保持しました。`
+        : counts.length > 0
+          ? counts.join("・")
+          : result?.status === "SYNCED"
+            ? result.mode === "LIBRARY_TO_DRIVE"
+              ? "Google Driveへ未反映のフォルダ・書類はありません。"
+              : "フォルダ構造に未反映の変更はありません。"
+            : "再同期して最新状態を確認してください。");
+  const activityAt = result?.lastSuccessAt ?? (!busy ? result?.lastAttemptAt : null);
+  const activityLabel = result?.lastSuccessAt ? "最終同期" : "最終試行";
+
+  return (
+    <aside
+      className={`library-sync-status ${tone}`}
+      role={tone === "error" ? "alert" : "status"}
+      aria-live={tone === "error" ? "assertive" : "polite"}
+      aria-busy={busy}
+    >
+      <span className="library-sync-indicator" aria-hidden="true" />
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+        {!busy && result?.conflictItems?.length ? (
+          <details className="library-sync-conflicts">
+            <summary>競合の詳細を表示</summary>
+            <ul>
+              {result.conflictItems.map((item, index) => (
+                <li key={`${item.code}-${item.resourceId}-${index}`}>
+                  {item.resourceName && <strong>{item.resourceName}</strong>}
+                  {(item.driveRootName || item.driveRootId) && (
+                    <small>保存先: {item.driveRootName || item.driveRootId}</small>
+                  )}
+                  <span>{item.detail}</span>
+                  {item.code === "DRIVE_DOCUMENT_OWNER_UNCONFIRMED" && (
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      disabled={busy}
+                      onClick={() => onConfirmOwnership(
+                        item.resourceId,
+                        item.resourceName,
+                        item.driveRootName || item.driveRootId,
+                      )}
+                    >
+                      現在のGoogleアカウントで確認
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+        {activityAt && (
+          <small>
+            {activityLabel} <time dateTime={activityAt}>{new Date(activityAt).toLocaleString("ja-JP")}</time>
+          </small>
+        )}
+      </div>
+      <div className="library-sync-actions">
+        <button
+          type="button"
+          className="primary compact"
+          disabled={busy || result?.status === "REAUTHORIZATION_REQUIRED"}
+          onClick={onPush}
+        >
+          {syncing && syncOperation === "push"
+            ? "Driveへ反映中…"
+            : "未反映をGoogle Driveへ同期"}
+        </button>
+        <button
+          type="button"
+          className="secondary compact"
+          disabled={busy}
+          onClick={result?.status === "REAUTHORIZATION_REQUIRED" ? onReconnect : onSync}
+        >
+          {reconnecting
+            ? "更新中…"
+            : syncing && syncOperation === "bidirectional"
+              ? "同期中…"
+              : result?.status === "REAUTHORIZATION_REQUIRED"
+                ? "Google連携を更新"
+                : "再同期"}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function GoogleDriveLibraryView() {
+  const [folder, setFolder] = useState<DriveOutputFolder | null>(null);
+  const [pickerSession, setPickerSession] = useState<DrivePickerSession | null>(null);
+  const pickerHostRef = useRef<HTMLDivElement | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [selectedSpreadsheet, setSelectedSpreadsheet] = useState<PickedDriveSpreadsheet | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFolder(null);
+    setPickerSession(null);
+    setPickerLoading(false);
+    setSelectedSpreadsheet(null);
+    setError(null);
+
+    void (async () => {
+      try {
+        const outputFolder = await api.driveOutputFolder();
+        if (!outputFolder.pickerConfigured) {
+          throw new Error(outputFolder.pickerConfigurationError ?? "Google Pickerの設定が必要です。");
+        }
+        if (!outputFolder.folderId) {
+          throw new Error("保存先設定でGoogle Driveの保存先フォルダーを選択してください。");
+        }
+        if (cancelled) return;
+        setFolder(outputFolder);
+        const session = await api.drivePickerSession();
+        if (!cancelled) setPickerSession(session);
+      } catch (reason) {
+        if (cancelled) return;
+        setError(reason instanceof ApiError || reason instanceof Error
+          ? reason.message
+          : "Google Driveを表示できませんでした。");
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [reloadKey]);
+
+  useEffect(() => {
+    if (!folder?.folderId || !pickerSession || !pickerHostRef.current) return;
+    let cancelled = false;
+    let disposePicker: (() => void) | null = null;
+    setPickerLoading(true);
+    setError(null);
+
+    void mountGoogleDriveSpreadsheetPicker(
+      pickerHostRef.current,
+      pickerSession,
+      folder.folderId,
+      (spreadsheet) => {
+        if (cancelled) return;
+        setSelectedSpreadsheet(spreadsheet);
+        window.open(spreadsheet.url, "_blank", "noopener,noreferrer");
+      },
+    ).then((mountedPicker) => {
+      if (cancelled) {
+        mountedPicker.dispose();
+        return;
+      }
+      disposePicker = mountedPicker.dispose;
+      setPickerLoading(false);
+    }).catch((reason: unknown) => {
+      if (cancelled) return;
+      setPickerLoading(false);
+      setError(reason instanceof ApiError || reason instanceof Error
+        ? reason.message
+        : "Google Pickerを表示できませんでした。");
+    });
+
+    return () => {
+      cancelled = true;
+      disposePicker?.();
+    };
+  }, [folder?.folderId, pickerSession]);
+
+  return (
+    <section className="library-drive-browser" aria-labelledby="library-drive-title">
+      <header className="library-drive-browser-header">
+        <div>
+          <span className="eyebrow">GOOGLE DRIVE</span>
+          <h2 id="library-drive-title">{folder?.folderName ?? "保存先フォルダー"}</h2>
+          <p>保存先からスプレッドシートを選択します。選択したファイルは新しいタブで開きます。</p>
+        </div>
+        {folder?.folderId && (
+          <a
+            className="secondary button-link"
+            href={`https://drive.google.com/drive/folders/${encodeURIComponent(folder.folderId)}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Google Driveで開く ↗
+          </a>
+        )}
+      </header>
+
+      {folder && folder.roots.length > 1 && (
+        <label className="library-drive-root-select">
+          <span>表示する保存先</span>
+          <select
+            value={folder.folderId ?? ""}
+            onChange={(event) => {
+              const selected = folder.roots.find((root) => root.folderId === event.target.value);
+              if (selected) {
+                setFolder({
+                  ...folder,
+                  folderId: selected.folderId,
+                  folderName: selected.folderName,
+                });
+              }
+            }}
+          >
+            {folder.roots.map((root) => (
+              <option key={root.folderId} value={root.folderId}>{root.folderName}</option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {error ? (
+        <div className="library-drive-error">
+          <p className="error-box" role="alert">{error}</p>
+          <button type="button" className="secondary" onClick={() => setReloadKey((current) => current + 1)}>再試行</button>
+        </div>
+      ) : !folder || !pickerSession ? (
+        <div className="empty-state large" role="status">Google Driveを読み込んでいます…</div>
+      ) : (
+        <div className="library-drive-picker-embed">
+          <div className="library-drive-picker-toolbar">
+            <p>保存先フォルダー内を移動し、開くスプレッドシートを選択してください。</p>
+            <button type="button" className="secondary compact" onClick={() => setReloadKey((current) => current + 1)}>表示を再読み込み</button>
+          </div>
+          <div className="library-drive-picker-frame">
+            {pickerLoading && <div className="library-drive-picker-loading" role="status">Google Driveを読み込んでいます…</div>}
+            <div className="library-drive-picker-host" ref={pickerHostRef} />
+          </div>
+        </div>
+      )}
+
+      {selectedSpreadsheet && (
+        <aside className="notice compact" role="status">
+          <strong>{selectedSpreadsheet.name}</strong>
+          <span>新しいタブが開かなかった場合は、右のボタンから開いてください。</span>
+          <a className="secondary button-link compact" href={selectedSpreadsheet.url} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>
+        </aside>
+      )}
+    </section>
   );
 }
 

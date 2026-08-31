@@ -203,6 +203,16 @@ export type DocumentIdentity = {
   exactLength: number | null;
   matchRole: "primary" | "confirmation";
   displayRole: "title" | "subtitle" | "none";
+  matchGroupId?: string | null;
+  matchGroupLabel?: string | null;
+  componentOrder?: number;
+};
+
+export type DocumentNameRule = {
+  fieldPaths: string[];
+  separator: string;
+  prefix: string;
+  suffix: string;
 };
 
 export type FieldMappingsResponse = {
@@ -211,6 +221,7 @@ export type FieldMappingsResponse = {
   mappings: FieldMapping[];
   documentIdentity: DocumentIdentity | null;
   documentIdentityFields: DocumentIdentity[];
+  documentName: DocumentNameRule | null;
   targets: FieldMappingTarget[];
   validForOcr: boolean;
   warnings: string[];
@@ -536,6 +547,7 @@ export type OcrResult = {
   recordStructure?: RecordStructure;
   spreadsheetSync?: SpreadsheetSyncStatus;
   documentResolution?: DocumentResolution;
+  documentName: string;
 };
 
 export type DocumentResolutionPage = {
@@ -551,6 +563,7 @@ export type DocumentResolutionCandidate = {
   sourceJobId: string | null;
   individualId: string;
   cattleName: string | null;
+  documentName?: string | null;
   pageCount: number;
   lastConfirmedAt: string;
   pages: DocumentResolutionPage[];
@@ -627,6 +640,7 @@ export type DriveOutputFolder = {
   pickerConfigurationError: string | null;
   folderId: string | null;
   folderName: string | null;
+  roots: Array<{ folderId: string; folderName: string }>;
 };
 
 export type DrivePickerSession = {
@@ -711,6 +725,28 @@ export type DocumentLibrary = {
   folders: DocumentLibraryFolder[];
   documents: DocumentLibraryLedger[];
   items: DocumentLibraryGroup[];
+};
+
+export type DocumentLibrarySyncResult = {
+  mode?: "BIDIRECTIONAL" | "LIBRARY_TO_DRIVE";
+  status: "SYNCED" | "PARTIAL" | "ERROR" | "REAUTHORIZATION_REQUIRED";
+  lastAttemptAt: string;
+  lastSuccessAt: string | null;
+  foldersImported: number;
+  foldersMirrored: number;
+  foldersUpdated: number;
+  documentsUpdated: number;
+  conflicts: number;
+  conflictItems: Array<{
+    code: string;
+    resourceId: string;
+    resourceName?: string;
+    mappingId?: string;
+    driveRootId?: string;
+    driveRootName?: string;
+    detail: string;
+  }>;
+  error: string | null;
 };
 
 export type OcrLibraryContext = {

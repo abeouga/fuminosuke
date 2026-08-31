@@ -66,18 +66,18 @@ export function ExcelExportActions({
     <div className={`excel-export-actions${compact ? " compact-export" : ""}`}>
       {driveFileName !== undefined && (
         <label className="output-file-name-field">
-          <span>出力ファイル名</span>
+          <span>書類名</span>
           <span className="output-file-name-input">
             <input
               type="text"
               value={fileName}
               maxLength={185}
-              aria-label="出力ファイル名"
+              aria-label="書類名"
               onChange={(event) => setFileName(event.target.value)}
             />
             <span>.xlsx</span>
           </span>
-          <small>{renaming ? "Driveへ反映中…" : "Drive上の名前と保存するXLSX名に反映します。"}</small>
+          <small>{renaming ? "Driveへ反映中…" : "ライブラリ、Drive、保存するXLSX名に反映します。"}</small>
         </label>
       )}
       <button className={`primary${compact ? " compact" : ""}`} disabled={copying} onClick={copy}>

@@ -5,6 +5,7 @@ import logging
 
 import anyio
 
+from app.core.errors import AppError
 from app.services.google_sheets_sync_service import GoogleSheetsSyncService, SpreadsheetEdit
 from app.services.ocr_result_service import OcrResultService
 
@@ -48,6 +49,16 @@ class GoogleSheetsEditWorker:
                     await self._process(edit)
             except asyncio.CancelledError:
                 raise
+            except AppError as exc:
+                if exc.code not in {
+                    "GOOGLE_ACCOUNT_REQUIRED",
+                    "GOOGLE_AUTH_REAUTHORIZATION_REQUIRED",
+                    "GOOGLE_AUTH_REFRESH_FAILED",
+                }:
+                    logger.warning(
+                        "Google Sheets edit polling is temporarily unavailable",
+                        exc_info=True,
+                    )
             except Exception:
                 logger.warning(
                     "Google Sheets edit polling is temporarily unavailable",
@@ -65,6 +76,7 @@ class GoogleSheetsEditWorker:
                     error=outcome.error_message,
                     applied_revision=outcome.revision,
                     spreadsheet_id=edit.spreadsheet_id,
+                    expected_subject=edit.google_subject,
                 )
             )
         except Exception:

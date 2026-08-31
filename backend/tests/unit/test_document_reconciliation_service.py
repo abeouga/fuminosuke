@@ -348,3 +348,133 @@ def test_combined_confirmation_requires_review_only_when_every_value_differs(
             assert name_matches["candidates"] == []
     finally:
         database.dispose()
+
+
+def test_grouped_identity_requires_every_component_and_keeps_name_separate(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    database = Database(settings.database)
+    Base.metadata.create_all(database.engine)
+    service = DocumentReconciliationService(DeterministicValidator())
+    try:
+        with database.session() as session:
+            template = Template(name="面接カード", document_type="spreadsheet")
+            session.add(template)
+            session.flush()
+            version = TemplateVersion(
+                template_id=template.id,
+                version_number=1,
+                mode="SPREADSHEET_TEMPLATE",
+                status="ACTIVE",
+                canonical_width=1000,
+                canonical_height=1400,
+                config_relative_path="templates/interview.json",
+                quality_json={},
+                layout_json={},
+            )
+            session.add(version)
+            session.flush()
+            snapshot = {
+                "templateSnapshot": {
+                    "config": {
+                        "documentIdentityFields": [
+                            {
+                                "targetPath": "document.cattleName",
+                                "matchGroupId": "person",
+                                "matchGroupLabel": "氏名",
+                                "componentOrder": 0,
+                            },
+                            {
+                                "targetPath": "document.unifiedEarTag",
+                                "matchGroupId": "person",
+                                "matchGroupLabel": "氏名",
+                                "componentOrder": 1,
+                            },
+                            {
+                                "targetPath": "genericValues.city",
+                                "matchGroupId": "address",
+                                "matchGroupLabel": "住所",
+                                "componentOrder": 0,
+                            },
+                        ],
+                        "documentName": {
+                            "fieldPaths": [
+                                "document.cattleName",
+                                "document.unifiedEarTag",
+                            ],
+                            "separator": "_",
+                            "prefix": "面接カード_",
+                            "suffix": "",
+                        },
+                    }
+                }
+            }
+            old_job = ProcessingJob(
+                job_type=JobType.EXTRACT_DOCUMENT.value,
+                status=JobStatus.CONFIRMED.value,
+                template_version_id=version.id,
+                request_hash="1" * 64,
+                config_snapshot_json=snapshot,
+            )
+            new_job = ProcessingJob(
+                job_type=JobType.EXTRACT_DOCUMENT.value,
+                status=JobStatus.REVIEW_REQUIRED.value,
+                template_version_id=version.id,
+                request_hash="2" * 64,
+                config_snapshot_json=snapshot,
+            )
+            session.add_all([old_job, new_job])
+            session.flush()
+            existing = _document("山田太郎", "1234567890")
+            existing["genericValues"] = {"city": "東京都新宿区"}
+            session.add(
+                LedgerDocument(
+                    id=old_job.id,
+                    template_id=template.id,
+                    individual_id="1234567890",
+                    current_job_id=old_job.id,
+                    current_document_json=existing,
+                    document_name="応募書類_山田太郎",
+                )
+            )
+            session.flush()
+
+            incoming = _document(" 山田 太郎 ", "1234567890")
+            incoming["genericValues"] = {"city": "東京都新宿区"}
+            payload = service.payload(session, job=new_job, document_json=incoming)
+            assert payload["required"] is True
+            assert payload["candidates"][0]["documentName"] == "応募書類_山田太郎"
+            assert service.proposed_document_name(new_job, incoming) == (
+                "面接カード_山田 太郎_1234567890"
+            )
+
+            address_differs = dict(incoming)
+            address_differs["genericValues"] = {"city": "東京都渋谷区"}
+            assert service.payload(
+                session,
+                job=new_job,
+                document_json=address_differs,
+            )["candidates"] == []
+
+            address_missing = dict(incoming)
+            address_missing["genericValues"] = {}
+            assert service.payload(
+                session,
+                job=new_job,
+                document_json=address_missing,
+            )["candidates"] == []
+
+            uncertain_name = _document("山田太郎", "1234567890")
+            uncertain_name["genericValues"] = {"city": "東京都新宿区"}
+            uncertain_name["document"]["cattleName"].update(
+                status="uncertain",
+                normalized=None,
+            )
+            assert service.payload(
+                session,
+                job=new_job,
+                document_json=uncertain_name,
+            )["candidates"] == []
+    finally:
+        database.dispose()

@@ -30,6 +30,8 @@ import {
 } from "../spreadsheetNavigation";
 import type { Artifact, FieldReading, OcrDocument, OcrFieldPreview, OcrResult, OutputLayoutTemplateStatus } from "../types";
 
+const LEGACY_DOCUMENT_NAME = "__legacy_document_name__";
+
 type ReadingEntry = { path: string; label: string; value: FieldReading };
 type ReviewColumn = { key: string; label: string };
 type CollectionRoot = "saleCalves" | "calvings";
@@ -226,6 +228,7 @@ export function ReviewPage({
   const [markEditorRow, setMarkEditorRow] = useState<number | null>(null);
   const [choiceEditorPath, setChoiceEditorPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,6 +237,7 @@ export function ReviewPage({
   const [sireCandidates, setSireCandidates] = useState<string[]>([]);
   const [identityStepComplete, setIdentityStepComplete] = useState(false);
   const [comparisonPageByDocument, setComparisonPageByDocument] = useState<Record<string, string>>({});
+  const [documentName, setDocumentName] = useState("");
   const [outputLayout, setOutputLayout] = useState<OutputLayoutTemplateStatus | null>(null);
   const load = async () => {
     setSelectedPath(null);
@@ -255,6 +259,7 @@ export function ReviewPage({
     );
     setResult(next);
     setDraft(hydrated);
+    setDocumentName(next.documentName ?? LEGACY_DOCUMENT_NAME);
     const initialEntry = initialSelectedPath
       ? collectReadings(hydrated, null).find((entry) => entry.path === initialSelectedPath)
       : undefined;
@@ -287,6 +292,8 @@ export function ReviewPage({
     setMarkEditorRow(null);
     setIdentityStepComplete(false);
     setComparisonPageByDocument({});
+    setConfirming(false);
+    setDocumentName("");
     setOutputLayout(null);
     void load().catch((reason) => {
       setLoadError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
@@ -718,6 +725,7 @@ export function ReviewPage({
         });
         setResult(resolved);
         setDraft(hydrateMappedReadings(resolved.result, resolved.fieldPreviews));
+        setDocumentName(resolved.documentName ?? "");
         setMessage(action === "ADD_PAGE" ? "続きのページとしてまとめました。内容を確認して確定してください。" : action === "RESCAN_PAGE" ? "以前のページと比較しました。変更箇所を確認して確定してください。" : "別の台帳として扱います。内容を確認して確定してください。");
       } catch (reason) {
         setError(reason instanceof ApiError ? reason.message : "保存方法を設定できませんでした。");
@@ -740,7 +748,7 @@ export function ReviewPage({
             <article className="document-candidate-card" key={candidate.documentId ?? candidate.sourceJobId ?? index}>
               <div>
                 <span className="eyebrow">以前の台帳 {index + 1}</span>
-                <h2>{candidate.cattleName || "牛名なし"}</h2>
+                <h2>{candidate.documentName || candidate.cattleName || "書類名なし"}</h2>
                 <p>個体識別番号 {candidate.individualId} · {candidate.pageCount}ページ · 最終確認 {new Date(candidate.lastConfirmedAt).toLocaleString("ja-JP")}</p>
               </div>
               <div className="document-resolution-actions">
@@ -785,6 +793,25 @@ export function ReviewPage({
     <div className="page-stack review-page">
       <header className="page-header split"><div><span className="eyebrow">OCR REVIEW · REVISION {result.revision}</span><h1>読み取り結果を確認</h1><p>画像と項目を見比べ、原文と整形値を必要に応じて修正してください。</p></div><button className="ghost" onClick={onClose}>← ホームへ</button></header>
       <aside className="notice compact"><strong>使用テンプレート</strong><span>{result.result.templateId} · v{result.result.templateVersion}</span></aside>
+      {!result.confirmed && result.documentName !== undefined && (
+        <section className="form-card document-name-confirmation">
+          <div>
+            <span className="eyebrow">DOCUMENT NAME</span>
+            <h2>書類名を確認</h2>
+            <p>この名前を、書類ライブラリ、保存するXLSX、Googleスプレッドシートで共通使用します。</p>
+          </div>
+          <label>
+            確定する書類名
+            <input
+              type="text"
+              value={documentName}
+              maxLength={180}
+              onChange={(event) => setDocumentName(event.target.value)}
+              placeholder="書類名を入力してください"
+            />
+          </label>
+        </section>
+      )}
       {result.provider === "mock" && <aside className="notice compact"><strong>試運転データ</strong><span>現在の候補は固定fixtureから作られています。</span></aside>}
       {result.provider === "openai" && <aside className="notice compact"><strong>{result.modelId ?? "OpenAI OCR"}</strong><span>入力 {result.inputTokens?.toLocaleString() ?? "-"} / 出力 {result.outputTokens?.toLocaleString() ?? "-"} tokens · API推定 {result.estimatedCost == null ? "計算不可" : `$${result.estimatedCost.toFixed(6)}`} · prompt {result.promptVersion ?? "-"}</span></aside>}
       {mappedPaths && <aside className="notice compact"><strong>意味づけ済み項目のみ表示</strong><span>テンプレートで設定された {mappedPaths.size} 項目を表示しています。</span></aside>}
@@ -1162,7 +1189,21 @@ export function ReviewPage({
         </section>
       )}
       {error && <p className="error-box">{error}</p>}{message && <p className="success-box">{message}</p>}
-      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? (result.spreadsheetSync?.status === "synced" ? "確定結果を保存し、Googleスプレッドシートへ反映しました。" : "確定結果から入力済みExcelを保存できます。") : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? <div className="job-action-buttons"><ExcelExportActions jobId={jobId} compact driveFileName={result.spreadsheetSync?.fileName} />{result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null}</div> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。データ検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
+      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !documentName.trim() ? "書類名を入力してください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? (result.spreadsheetSync?.status === "synced" ? "確定結果を保存し、Googleスプレッドシートへ反映しました。" : "確定結果から入力済みExcelを保存できます。") : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !documentName.trim() ? "書類ライブラリと出力で共用する名前が必要です。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? <div className="job-action-buttons"><ExcelExportActions jobId={jobId} compact driveFileName={result.spreadsheetSync?.fileName ?? result.documentName} />{result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null}</div> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady || !documentName.trim()} onClick={async () => { if (!window.confirm("この内容と書類名を確定します。よろしいですか？")) return; setBusy(true); setConfirming(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision, documentName.trim()); setResult(confirmed); setDraft(confirmed.result); setDocumentName(confirmed.documentName); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果と書類名を確定し、スプレッドシートへ反映しました。" : "結果と書類名を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setConfirming(false); setBusy(false); } }}>内容を確定</button></>}</div>
+      {confirming && (
+        <div
+          className="review-confirm-loading-backdrop"
+          role="status"
+          aria-live="assertive"
+          aria-label="スプレッドシートを作成中"
+        >
+          <div className="review-confirm-loading-card">
+            <span className="review-confirm-loading-spinner" aria-hidden="true" />
+            <strong>スプレッドシートを作成しています</strong>
+            <p>結果と書類名を確定し、Googleスプレッドシートへ反映しています。画面を閉じずにお待ちください。</p>
+          </div>
+        </div>
+      )}
       {markEditorRow !== null && (
         <CalvingMarkModal
           rowIndex={markEditorRow}

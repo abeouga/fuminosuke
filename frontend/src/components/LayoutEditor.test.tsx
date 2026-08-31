@@ -1909,7 +1909,8 @@ describe("editing safety regressions", () => {
 
     view.rerender(<LayoutEditor {...commonProps} workflowStep="identity" />);
     expect(editor.getByLabelText("書類を見分ける欄を選択する帳票プレビュー")).toBeInTheDocument();
-    expect(editor.getByText("帳票上の欄を複数選択")).toBeInTheDocument();
+    expect(editor.getByText("4-A 同じ書類を探す条件")).toBeInTheDocument();
+    expect(editor.getByText("4-B ライブラリ・出力で使う書類名")).toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "項目名の文字候補を取得" })).not.toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "消しゴム" })).not.toBeInTheDocument();
 
@@ -2102,8 +2103,11 @@ describe("editing safety regressions", () => {
     expect(onIdentityChange).toHaveBeenCalledWith([
       expect.objectContaining({
         targetPath: "document.cattleName",
-        matchRole: "primary",
-        displayRole: "title",
+        matchRole: "confirmation",
+        displayRole: "none",
+        matchGroupId: "identity_group_1",
+        matchGroupLabel: "照合条件1",
+        componentOrder: 0,
       }),
     ]);
     expect(editor.getByText("「牛名」を書類を見分ける情報へ追加しました。")).toBeInTheDocument();
@@ -2126,6 +2130,12 @@ describe("editing safety regressions", () => {
     ];
     function Harness() {
       const [fields, setFields] = useState<DocumentIdentity[]>([]);
+      const [nameRule, setNameRule] = useState<{
+        fieldPaths: string[];
+        separator: string;
+        prefix: string;
+        suffix: string;
+      } | null>(null);
       return (
         <LayoutEditor
           source="data:image/png;base64,"
@@ -2134,6 +2144,8 @@ describe("editing safety regressions", () => {
           workflowStep="identity"
           documentIdentityFields={fields}
           onDocumentIdentityFieldsChange={setFields}
+          documentNameRule={nameRule}
+          onDocumentNameRuleChange={setNameRule}
           onDetect={vi.fn()}
           onSave={vi.fn(async (current: LayoutDefinition) => current)}
         />
@@ -2151,25 +2163,20 @@ describe("editing safety regressions", () => {
     fireEvent.click(canvas, { clientX: 155, clientY: 25 });
 
     expect(editor.getByText("選択中").nextSibling).toHaveTextContent("2件");
-    expect(editor.getByLabelText("個体識別番号の照合での役割")).toHaveValue("primary");
-    expect(editor.getByLabelText("牛名の照合での役割")).toHaveValue("confirmation");
-    fireEvent.change(editor.getByLabelText("個体識別番号の照合での役割"), {
-      target: { value: "confirmation" },
+    expect(editor.getByLabelText("個体識別番号の照合グループ")).toHaveValue("identity_group_1");
+    expect(editor.getByLabelText("牛名の照合グループ")).toHaveValue("identity_group_1");
+    fireEvent.change(editor.getByLabelText("選択中のグループ名"), {
+      target: { value: "氏名" },
     });
-    expect(editor.getByText(
-      "選択した項目がすべて以前の読み取りと違う場合に確認します。",
-    )).toBeInTheDocument();
-    expect(editor.queryByText(/同じ書類と判断する基準を1つ指定するか/)).not.toBeInTheDocument();
-    fireEvent.change(editor.getByLabelText("牛名のカードでの表示"), {
-      target: { value: "title" },
-    });
-    fireEvent.change(editor.getByLabelText("個体識別番号のカードでの表示"), {
-      target: { value: "subtitle" },
-    });
+    expect(editor.getByText("氏名（個体識別番号＋牛名）がすべて一致")).toBeInTheDocument();
 
-    const preview = editor.getByLabelText("書類カードの表示プレビュー");
-    expect(within(preview).getByText("牛名")).toBeInTheDocument();
-    expect(within(preview).getByText("個体識別番号")).toBeInTheDocument();
+    fireEvent.click(editor.getByRole("checkbox", { name: "個体識別番号" }));
+    fireEvent.click(editor.getByRole("checkbox", { name: "牛名" }));
+    fireEvent.change(editor.getByLabelText("項目間の区切り"), {
+      target: { value: "_" },
+    });
+    const preview = editor.getByLabelText("書類名の生成プレビュー");
+    expect(within(preview).getByText("個体識別番号_牛名")).toBeInTheDocument();
   });
 
   test("saves classified rectangles before they are linked to records", async () => {

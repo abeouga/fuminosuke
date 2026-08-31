@@ -14,6 +14,7 @@ from app.db.session import Database
 from app.domain.field_targets import is_supported_field_path
 from app.domain.template_config import (
     DocumentIdentityConfig,
+    DocumentNameConfig,
     FieldMappingConfig,
     TemplateConfig,
     build_blank_template_config,
@@ -46,7 +47,7 @@ class TemplateManagementService:
         self._artifact_writer = ArtifactWriter(database, storage)
 
     def get_field_mappings(self, version_id: str) -> tuple[int, int, list[FieldMappingConfig]]:
-        width, height, mappings, _, _ = self.get_mapping_configuration(version_id)
+        width, height, mappings, _, _, _ = self.get_mapping_configuration(version_id)
         return width, height, mappings
 
     def get_mapping_configuration(
@@ -57,6 +58,7 @@ class TemplateManagementService:
         list[FieldMappingConfig],
         DocumentIdentityConfig | None,
         list[DocumentIdentityConfig],
+        DocumentNameConfig | None,
     ]:
         with self._database.session() as session:
             version = TemplateRepository(session).get_version(version_id)
@@ -76,6 +78,7 @@ class TemplateManagementService:
             config.field_mappings,
             config.document_identity,
             config.effective_document_identity_fields(),
+            config.document_name,
         )
 
     def save_field_mappings(
@@ -85,6 +88,7 @@ class TemplateManagementService:
         *,
         document_identity: DocumentIdentityConfig | None | _Unchanged = _UNCHANGED,
         document_identity_fields: list[DocumentIdentityConfig] | _Unchanged = _UNCHANGED,
+        document_name: DocumentNameConfig | None | _Unchanged = _UNCHANGED,
     ) -> list[FieldMappingConfig]:
         with template_mutation_lock():
             return self._save_field_mappings_locked(
@@ -92,6 +96,7 @@ class TemplateManagementService:
                 mappings,
                 document_identity=document_identity,
                 document_identity_fields=document_identity_fields,
+                document_name=document_name,
             )
 
     def _save_field_mappings_locked(
@@ -101,6 +106,7 @@ class TemplateManagementService:
         *,
         document_identity: DocumentIdentityConfig | None | _Unchanged,
         document_identity_fields: list[DocumentIdentityConfig] | _Unchanged,
+        document_name: DocumentNameConfig | None | _Unchanged,
     ) -> list[FieldMappingConfig]:
         unknown = [
             mapping.target_path
@@ -163,6 +169,9 @@ class TemplateManagementService:
                 ),
                 None,
             )
+        selected_document_name = (
+            config.document_name if isinstance(document_name, _Unchanged) else document_name
+        )
         invalid_identity_field = next(
             (
                 field
@@ -218,6 +227,7 @@ class TemplateManagementService:
                 "field_mappings": mappings,
                 "document_identity": selected_identity,
                 "document_identity_fields": selected_identity_fields,
+                "document_name": selected_document_name,
             },
             deep=True,
         )
@@ -244,6 +254,7 @@ class TemplateManagementService:
                     selected_identity.mapping_id if selected_identity is not None else None
                 ),
                 "documentIdentityFieldCount": len(selected_identity_fields),
+                "documentNameConfigured": selected_document_name is not None,
             }
             session.commit()
         return mappings

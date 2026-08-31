@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import unicodedata
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -56,6 +57,7 @@ class DocumentReconciliationService:
 
         template_id = self._template_id(session, job)
         identity = self._individual_id(document_json)
+        match_groups = self._match_groups(job)
         combined_paths = self._combined_confirmation_paths(job)
         candidates = (
             self._candidates(
@@ -65,8 +67,9 @@ class DocumentReconciliationService:
                 exclude_job_id=job.id,
                 incoming=document_json,
                 combined_paths=combined_paths,
+                match_groups=match_groups,
             )
-            if template_id and (identity or combined_paths)
+            if template_id and (identity or combined_paths or match_groups)
             else []
         )
         return {
@@ -95,6 +98,7 @@ class DocumentReconciliationService:
             return stored
         identity = self._individual_id(stored.current_corrected_json)
         template_id = self._template_id(session, job)
+        match_groups = self._match_groups(job)
         requires_individual_id = self._requires_individual_identity(
             session,
             job,
@@ -110,12 +114,18 @@ class DocumentReconciliationService:
         document_key = identity or self.document_key(job.id)
         incoming = dict(stored.current_corrected_json)
         if action == "NEW_DOCUMENT":
+            identity_snapshot, identity_fingerprint = self.identity_snapshot(
+                job,
+                incoming,
+            )
             ledger = LedgerDocument(
                 id=job.id,
                 template_id=template_id,
                 individual_id=document_key,
                 current_job_id=job.id,
                 current_document_json=incoming,
+                identity_snapshot_json=identity_snapshot or None,
+                identity_fingerprint=identity_fingerprint,
             )
             session.add(ledger)
             session.add(
@@ -138,6 +148,7 @@ class DocumentReconciliationService:
             target_job_id=target_job_id,
             incoming=incoming,
             combined_paths=self._combined_confirmation_paths(job),
+            match_groups=match_groups,
             enforce_individual_id=requires_individual_id,
         )
         pages = list(
@@ -242,12 +253,15 @@ class DocumentReconciliationService:
             if not template_id:
                 return None, None
             document_key = identity or self.document_key(job.id)
+            identity_snapshot, identity_fingerprint = self.identity_snapshot(job, document_json)
             ledger = LedgerDocument(
                 id=job.id,
                 template_id=template_id,
                 individual_id=document_key,
                 current_job_id=job.id,
                 current_document_json=document_json,
+                identity_snapshot_json=identity_snapshot or None,
+                identity_fingerprint=identity_fingerprint,
             )
             page = LedgerDocumentPage(
                 ledger_document_id=job.id,
@@ -269,8 +283,9 @@ class DocumentReconciliationService:
             )
         return existing_ledger, page
 
-    @staticmethod
+    @classmethod
     def mark_confirmed(
+        cls,
         session: Session,
         ledger: LedgerDocument,
         page: LedgerDocumentPage,
@@ -278,11 +293,16 @@ class DocumentReconciliationService:
         job_id: str,
         document_json: dict[str, Any],
         individual_id: str,
+        job: ProcessingJob | None = None,
     ) -> None:
         now = datetime.now(UTC)
         ledger.current_job_id = job_id
         ledger.current_document_json = document_json
         ledger.individual_id = individual_id
+        if job is not None:
+            identity_snapshot, identity_fingerprint = cls.identity_snapshot(job, document_json)
+            ledger.identity_snapshot_json = identity_snapshot or None
+            ledger.identity_fingerprint = identity_fingerprint
         ledger.updated_at = now
         if page.replaces_page_id:
             replaced = session.get(LedgerDocumentPage, page.replaces_page_id)
@@ -311,6 +331,7 @@ class DocumentReconciliationService:
         target_job_id: str | None,
         incoming: dict[str, Any],
         combined_paths: tuple[str, ...],
+        match_groups: tuple[tuple[str, ...], ...],
         enforce_individual_id: bool,
     ) -> LedgerDocument:
         ledger = session.get(LedgerDocument, target_document_id) if target_document_id else None
@@ -329,7 +350,13 @@ class DocumentReconciliationService:
                 and source_job
                 and self._template_id(session, source_job) == template_id
                 and (
-                    self._all_values_differ(
+                    self._all_groups_match(
+                        incoming,
+                        confirmed.confirmed_json,
+                        match_groups,
+                    )
+                    if match_groups
+                    else self._all_values_differ(
                         incoming,
                         confirmed.confirmed_json,
                         combined_paths,
@@ -348,6 +375,8 @@ class DocumentReconciliationService:
                     individual_id=confirmed.individual_id,
                     current_job_id=target_job_id,
                     current_document_json=confirmed.confirmed_json,
+                    document_name=confirmed.spreadsheet_name,
+                    library_name=confirmed.spreadsheet_name,
                 )
                 session.add(ledger)
                 session.add(
@@ -365,7 +394,16 @@ class DocumentReconciliationService:
             ledger is None
             or ledger.template_id != template_id
             or (
+                bool(match_groups)
+                and not self._all_groups_match(
+                    incoming,
+                    ledger.current_document_json,
+                    match_groups,
+                )
+            )
+            or (
                 bool(combined_paths)
+                and not match_groups
                 and not self._all_values_differ(
                     incoming,
                     ledger.current_document_json,
@@ -375,6 +413,7 @@ class DocumentReconciliationService:
             or (
                 enforce_individual_id
                 and not combined_paths
+                and not match_groups
                 and ledger.individual_id != individual_id
             )
         ):
@@ -395,10 +434,11 @@ class DocumentReconciliationService:
         exclude_job_id: str,
         incoming: dict[str, Any],
         combined_paths: tuple[str, ...],
+        match_groups: tuple[tuple[str, ...], ...],
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         document_query = select(LedgerDocument).where(LedgerDocument.template_id == template_id)
-        if not combined_paths:
+        if not combined_paths and not match_groups:
             if not individual_id:
                 return []
             document_query = document_query.where(
@@ -415,7 +455,13 @@ class DocumentReconciliationService:
                 )
             )
             linked_jobs.update(page.job_id for page in pages)
-            if combined_paths and not self._all_values_differ(
+            if match_groups and not self._all_groups_match(
+                incoming,
+                ledger.current_document_json,
+                match_groups,
+            ):
+                continue
+            if combined_paths and not match_groups and not self._all_values_differ(
                 incoming,
                 ledger.current_document_json,
                 combined_paths,
@@ -428,6 +474,7 @@ class DocumentReconciliationService:
                     ledger.current_document_json,
                     pages,
                     ledger.updated_at,
+                    ledger.document_name or ledger.library_name,
                 )
             )
         legacy_query = (
@@ -440,13 +487,19 @@ class DocumentReconciliationService:
             )
             .order_by(ConfirmedResult.confirmed_at.desc())
         )
-        if not combined_paths:
+        if not combined_paths and not match_groups:
             legacy_query = legacy_query.where(ConfirmedResult.individual_id == individual_id)
         legacy = session.execute(legacy_query).all()
         for confirmed, source_job in legacy:
             if source_job.id in linked_jobs:
                 continue
-            if combined_paths and not self._all_values_differ(
+            if match_groups and not self._all_groups_match(
+                incoming,
+                confirmed.confirmed_json,
+                match_groups,
+            ):
+                continue
+            if combined_paths and not match_groups and not self._all_values_differ(
                 incoming,
                 confirmed.confirmed_json,
                 combined_paths,
@@ -454,10 +507,136 @@ class DocumentReconciliationService:
                 continue
             candidates.append(
                 self._candidate_payload(
-                    None, source_job.id, confirmed.confirmed_json, [], confirmed.confirmed_at
+                    None,
+                    source_job.id,
+                    confirmed.confirmed_json,
+                    [],
+                    confirmed.confirmed_at,
+                    confirmed.spreadsheet_name,
                 )
             )
         return candidates
+
+    @staticmethod
+    def _match_groups(job: ProcessingJob) -> tuple[tuple[str, ...], ...]:
+        snapshot = job.config_snapshot_json
+        template_snapshot = snapshot.get("templateSnapshot")
+        config = template_snapshot.get("config") if isinstance(template_snapshot, dict) else None
+        raw_fields = config.get("documentIdentityFields") if isinstance(config, dict) else None
+        if not isinstance(raw_fields, list):
+            return ()
+        grouped: dict[str, list[tuple[int, str]]] = {}
+        for field in raw_fields:
+            if not isinstance(field, dict):
+                return ()
+            group_id = field.get("matchGroupId")
+            target_path = field.get("targetPath")
+            if not isinstance(group_id, str) or not group_id:
+                return ()
+            if not isinstance(target_path, str) or not target_path:
+                return ()
+            raw_order = field.get("componentOrder", 0)
+            order = raw_order if isinstance(raw_order, int) else 0
+            grouped.setdefault(group_id, []).append((order, target_path))
+        return tuple(
+            tuple(path for _, path in sorted(components))
+            for _, components in grouped.items()
+            if components
+        )
+
+    @classmethod
+    def _all_groups_match(
+        cls,
+        incoming: dict[str, Any],
+        existing: dict[str, Any],
+        groups: tuple[tuple[str, ...], ...],
+    ) -> bool:
+        if not groups:
+            return False
+        for paths in groups:
+            for path in paths:
+                incoming_value = cls._path_value(incoming, path, require_readable=True)
+                existing_value = cls._path_value(existing, path, require_readable=True)
+                if incoming_value is None or existing_value is None:
+                    return False
+                if cls._comparable_value(incoming_value) != cls._comparable_value(
+                    existing_value
+                ):
+                    return False
+        return True
+
+    @classmethod
+    def identity_snapshot(
+        cls,
+        job: ProcessingJob,
+        document: dict[str, Any],
+    ) -> tuple[dict[str, list[str]], str | None]:
+        groups = cls._match_groups(job)
+        if not groups:
+            return {}, None
+        snapshot: dict[str, list[str]] = {}
+        for index, paths in enumerate(groups):
+            values: list[str] = []
+            for path in paths:
+                value = cls._path_value(document, path, require_readable=True)
+                if value is None:
+                    return {}, None
+                values.append(cls._comparable_value(value))
+            snapshot[f"group-{index + 1}"] = values
+        serialized = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+        return snapshot, hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def proposed_document_name(
+        cls,
+        job: ProcessingJob,
+        document: dict[str, Any],
+    ) -> str:
+        snapshot = job.config_snapshot_json
+        template_snapshot = snapshot.get("templateSnapshot")
+        config = template_snapshot.get("config") if isinstance(template_snapshot, dict) else None
+        raw_name = config.get("documentName") if isinstance(config, dict) else None
+        if isinstance(raw_name, dict):
+            paths = raw_name.get("fieldPaths")
+            if isinstance(paths, list):
+                values = [
+                    value
+                    for path in paths
+                    if isinstance(path, str)
+                    if (value := cls._path_value(document, path)) is not None
+                ]
+                if values:
+                    separator = raw_name.get("separator", "")
+                    prefix = raw_name.get("prefix", "")
+                    suffix = raw_name.get("suffix", "")
+                    joined = (separator if isinstance(separator, str) else "").join(values)
+                    candidate = (
+                        f"{prefix if isinstance(prefix, str) else ''}"
+                        f"{joined}"
+                        f"{suffix if isinstance(suffix, str) else ''}"
+                    ).strip()
+                    if candidate:
+                        return candidate[:180]
+        raw_identity = config.get("documentIdentityFields") if isinstance(config, dict) else None
+        if isinstance(raw_identity, list):
+            title_path = next(
+                (
+                    field.get("targetPath")
+                    for field in raw_identity
+                    if isinstance(field, dict) and field.get("displayRole") == "title"
+                ),
+                None,
+            )
+            if isinstance(title_path, str):
+                title = cls._path_value(document, title_path)
+                if title:
+                    return title[:180]
+        identity = document.get("document")
+        if isinstance(identity, dict):
+            cattle_name = cls._reading_value(identity.get("cattleName"))
+            if cattle_name:
+                return cattle_name[:180]
+        return f"書類_{job.id[:8]}"
 
     @staticmethod
     def _combined_confirmation_paths(job: ProcessingJob) -> tuple[str, ...]:
@@ -495,10 +674,19 @@ class DocumentReconciliationService:
 
     @staticmethod
     def _comparable_value(value: str) -> str:
-        return unicodedata.normalize("NFKC", value).strip().casefold()
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        normalized = "".join(character for character in normalized if not character.isspace())
+        dash_characters = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212"
+        return normalized.translate(str.maketrans(dash_characters, "-------"))
 
     @classmethod
-    def _path_value(cls, document: dict[str, Any], target_path: str) -> str | None:
+    def _path_value(
+        cls,
+        document: dict[str, Any],
+        target_path: str,
+        *,
+        require_readable: bool = False,
+    ) -> str | None:
         current: Any = document
         for segment in target_path.split("."):
             if isinstance(current, dict):
@@ -509,6 +697,8 @@ class DocumentReconciliationService:
             else:
                 return None
         if isinstance(current, dict):
+            if require_readable and current.get("status") != "readable":
+                return None
             return cls._reading_value(current)
         if current in {None, ""}:
             return None
@@ -521,6 +711,7 @@ class DocumentReconciliationService:
         document: dict[str, Any],
         pages: list[LedgerDocumentPage],
         updated_at: datetime,
+        document_name: str | None = None,
     ) -> dict[str, Any]:
         identity = document.get("document", {}) if isinstance(document, dict) else {}
         name = (
@@ -531,6 +722,7 @@ class DocumentReconciliationService:
             "sourceJobId": source_job_id,
             "individualId": self._individual_id(document),
             "cattleName": name,
+            "documentName": document_name,
             "pageCount": max((page.page_number for page in pages), default=1),
             "lastConfirmedAt": updated_at.isoformat(),
             "pages": [
@@ -601,7 +793,9 @@ class DocumentReconciliationService:
         if not isinstance(value, dict):
             return None
         resolved = value.get("normalized") or value.get("raw")
-        return str(resolved) if resolved not in {None, ""} else None
+        if resolved in {None, ""}:
+            return None
+        return str(resolved).strip() or None
 
     @classmethod
     def _merge_documents(cls, previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:

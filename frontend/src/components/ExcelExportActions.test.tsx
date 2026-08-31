@@ -47,7 +47,7 @@ test("renames the Drive spreadsheet after the output name is edited", async () =
       driveFileName="面接カード_入力済み"
     />,
   );
-  fireEvent.change(screen.getByRole("textbox", { name: "出力ファイル名" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "書類名" }), {
     target: { value: "面接カード_阿部桜雅.xlsx" },
   });
 
@@ -60,6 +60,6 @@ test("renames the Drive spreadsheet after the output name is edited", async () =
       body: JSON.stringify({ fileName: "面接カード_阿部桜雅.xlsx" }),
     }),
   );
-  expect(screen.getByRole("textbox", { name: "出力ファイル名" }))
+  expect(screen.getByRole("textbox", { name: "書類名" }))
     .toHaveValue("面接カード_阿部桜雅");
 });

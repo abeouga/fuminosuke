@@ -64,11 +64,13 @@ def google_callback(
     if error or not code or not state:
         return _oauth_failure_response(service, "GOOGLE_OAUTH_CANCELLED")
     try:
-        completed = service.complete(
-            code=code,
-            state=state,
-            state_cookie=request.cookies.get(service.state_cookie_name),
-        )
+        with request.app.state.google_drive.authorization_change():
+            completed = service.complete(
+                code=code,
+                state=state,
+                state_cookie=request.cookies.get(service.state_cookie_name),
+            )
+        request.app.state.google_sheets.reset_authorization()
     except AppError as exc:
         return _oauth_failure_response(service, exc.code)
     response = RedirectResponse(completed.return_to, status_code=302)
@@ -82,8 +84,6 @@ def google_callback(
         path="/",
     )
     response.delete_cookie(service.state_cookie_name, path="/api/v1/auth/google/callback")
-    request.app.state.google_sheets.reset_authorization()
-    request.app.state.google_drive.reset_authorization()
     return response
 
 
@@ -111,10 +111,10 @@ def disconnect_google(
     user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
 ) -> JSONResponse:
     service = _service(request)
-    if user is not None:
-        service.disconnect(user)
+    with request.app.state.google_drive.authorization_change():
+        if user is not None:
+            service.disconnect(user)
     request.app.state.google_sheets.reset_authorization()
-    request.app.state.google_drive.reset_authorization()
     response = JSONResponse({"authenticated": False})
     response.delete_cookie(service.session_cookie_name, path="/")
     return response

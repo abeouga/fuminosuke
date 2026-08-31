@@ -28,10 +28,14 @@ _API_ROOT = "https://sheets.googleapis.com/v4/spreadsheets"
 SpreadsheetTargetProvider = Callable[[], tuple[str | None, str | None]]
 SpreadsheetTargetSaver = Callable[[str, str], None]
 OutputLayoutProvider = Callable[[str | None], dict[str, Any] | None]
-DocumentTargetProvider = Callable[[str | None], tuple[str | None, str | None]]
-DocumentTargetCreator = Callable[[str, str], tuple[str, str]]
-SpreadsheetTargetsProvider = Callable[[], list[tuple[str, str]]]
+DocumentTargetProvider = Callable[[str | None, str | None], tuple[str | None, str | None]]
+DocumentTargetCreator = Callable[
+    [str, str, str | None, str | None, int | None],
+    tuple[str, str],
+]
+SpreadsheetTargetsProvider = Callable[[str | None], list[tuple[str, str]]]
 DocumentSyncReporter = Callable[[str, str, str | None], None]
+SubjectProvider = Callable[[], str | None]
 
 _OUTPUT_SHEET_NAME = "帳票レイアウト"
 _BINDING_NOTE_PREFIX = "llm-ocr:field:"
@@ -69,6 +73,7 @@ class SpreadsheetEdit:
     source_sheet: str
     source_cell: str
     spreadsheet_id: str | None = None
+    google_subject: str | None = None
 
 
 class GoogleSheetsSyncService:
@@ -211,7 +216,7 @@ class GoogleSheetsSyncService:
     def __init__(
         self,
         settings: GoogleSheetsSettings,
-        credentials_provider: Callable[[], Credentials] | None = None,
+        credentials_provider: Callable[[str | None], Credentials] | None = None,
         spreadsheet_target_provider: SpreadsheetTargetProvider | None = None,
         spreadsheet_target_saver: SpreadsheetTargetSaver | None = None,
         output_layout_provider: OutputLayoutProvider | None = None,
@@ -219,6 +224,7 @@ class GoogleSheetsSyncService:
         document_target_creator: DocumentTargetCreator | None = None,
         spreadsheet_targets_provider: SpreadsheetTargetsProvider | None = None,
         document_sync_reporter: DocumentSyncReporter | None = None,
+        subject_provider: SubjectProvider | None = None,
     ) -> None:
         self._settings = settings
         self._credentials_provider = credentials_provider
@@ -229,8 +235,11 @@ class GoogleSheetsSyncService:
         self._document_target_creator = document_target_creator
         self._spreadsheet_targets_provider = spreadsheet_targets_provider
         self._document_sync_reporter = document_sync_reporter
+        self._subject_provider = subject_provider
         self._active_document_id: str | None = None
         self._session: AuthorizedSession | None = None
+        self._session_subject: str | None = None
+        self._operation_subject: str | None = None
         self._lock = Lock()
         self._statuses: dict[str, SpreadsheetSyncStatus] = {}
         self._sheet_ids: dict[str, int] = {}
@@ -254,15 +263,32 @@ class GoogleSheetsSyncService:
         self._load_spreadsheet_target()
         return self._spreadsheet_url
 
-    def status(self, job_id: str, document_id: str | None = None) -> SpreadsheetSyncStatus:
+    def status(
+        self,
+        job_id: str,
+        document_id: str | None = None,
+        expected_subject: str | None = None,
+    ) -> SpreadsheetSyncStatus:
         if not self.enabled:
             return SpreadsheetSyncStatus(False, "disabled", None)
-        if job_id not in self._statuses and document_id and self._document_target_provider:
-            _, url = self._document_target_provider(document_id)
-            return SpreadsheetSyncStatus(True, "ready", url)
-        return self._statuses.get(
-            job_id,
-            SpreadsheetSyncStatus(True, "ready", self.spreadsheet_url),
+        validated_url: str | None = None
+        if document_id and self._document_target_provider:
+            _, validated_url = self._document_target_provider(
+                document_id,
+                self._resolve_subject(expected_subject),
+            )
+        cached = self._statuses.get(job_id)
+        if cached is not None:
+            return SpreadsheetSyncStatus(
+                cached.enabled,
+                cached.status,
+                validated_url,
+                cached.last_error,
+            )
+        return SpreadsheetSyncStatus(
+            True,
+            "ready",
+            validated_url if document_id else self.spreadsheet_url,
         )
 
     def target_status(self) -> SpreadsheetSyncStatus:
@@ -282,7 +308,12 @@ class GoogleSheetsSyncService:
             self._initialize_locked()
         return SpreadsheetSyncStatus(True, "ready", self.spreadsheet_url)
 
-    def capture_output_layout(self, *, document_id: str | None = None) -> dict[str, Any]:
+    def capture_output_layout(
+        self,
+        *,
+        document_id: str | None = None,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         if not self.enabled:
             raise AppError(
                 status=409,
@@ -291,13 +322,22 @@ class GoogleSheetsSyncService:
                 detail="Googleスプレッドシート連携が無効です。",
             )
         with self._lock:
-            self._select_document_target(document_id, create=False)
-            self._initialize_locked()
-            return self._capture_output_layout_locked()
+            self._operation_subject = self._resolve_subject(expected_subject)
+            try:
+                self._select_document_target(
+                    document_id,
+                    create=False,
+                    expected_subject=self._operation_subject,
+                )
+                self._initialize_locked()
+                return self._capture_output_layout_locked()
+            finally:
+                self._operation_subject = None
 
     def reset_authorization(self) -> None:
         with self._lock:
             self._session = None
+            self._session_subject = None
             self._sheet_ids = {}
             self._sheet_grid_sizes = {}
             self._spreadsheet_id = (
@@ -319,21 +359,32 @@ class GoogleSheetsSyncService:
         confirmed: bool,
         template_version_id: str | None = None,
         document_id: str | None = None,
+        expected_subject: str | None = None,
     ) -> SpreadsheetSyncStatus:
         if not self.enabled:
             return SpreadsheetSyncStatus(False, "disabled", None)
         try:
             with self._lock:
-                self._select_document_target(document_id, create=bool(document_id))
-                self._initialize_locked()
-                self._sync_locked(
-                    job_id=job_id,
-                    revision=revision,
-                    document=document,
-                    confirmed=confirmed,
-                    template_version_id=template_version_id,
-                    document_id=document_id,
-                )
+                self._operation_subject = self._resolve_subject(expected_subject)
+                try:
+                    self._select_document_target(
+                        document_id,
+                        create=bool(document_id),
+                        expected_subject=self._operation_subject,
+                        source_job_id=job_id,
+                        source_revision=revision,
+                    )
+                    self._initialize_locked()
+                    self._sync_locked(
+                        job_id=job_id,
+                        revision=revision,
+                        document=document,
+                        confirmed=confirmed,
+                        template_version_id=template_version_id,
+                        document_id=document_id,
+                    )
+                finally:
+                    self._operation_subject = None
             status = SpreadsheetSyncStatus(True, "synced", self.spreadsheet_url)
         except Exception as exc:  # The local OCR result must remain available.
             logger.exception("Google Sheets sync failed", extra={"jobId": job_id})
@@ -348,16 +399,30 @@ class GoogleSheetsSyncService:
             self._document_sync_reporter(document_id, status.status, status.last_error)
         return status
 
-    def _select_document_target(self, document_id: str | None, *, create: bool) -> None:
+    def _select_document_target(
+        self,
+        document_id: str | None,
+        *,
+        create: bool,
+        expected_subject: str | None = None,
+        source_job_id: str | None = None,
+        source_revision: int | None = None,
+    ) -> None:
         if self._document_target_provider is None:
             return
-        spreadsheet_id, spreadsheet_url = self._document_target_provider(document_id)
+        spreadsheet_id, spreadsheet_url = self._document_target_provider(
+            document_id,
+            expected_subject,
+        )
         if not spreadsheet_id and document_id and create:
             if self._document_target_creator is None:
                 raise RuntimeError("台帳別スプレッドシート作成機能が設定されていません。")
             spreadsheet_id, spreadsheet_url = self._document_target_creator(
                 document_id,
                 self._settings.spreadsheet_title,
+                expected_subject,
+                source_job_id,
+                source_revision,
             )
         if not spreadsheet_id:
             if document_id:
@@ -374,12 +439,16 @@ class GoogleSheetsSyncService:
         self._initialized = False
 
     def _authorized_session(self) -> AuthorizedSession:
-        if self._session is not None:
+        if (
+            self._session is not None
+            and self._session_subject == self._operation_subject
+        ):
             return self._session
         if self._credentials_provider is None:
             raise RuntimeError("Googleアカウントが接続されていません。")
-        credentials = self._credentials_provider()
+        credentials = self._credentials_provider(self._operation_subject)
         self._session = AuthorizedSession(credentials)  # type: ignore[no-untyped-call]
+        self._session_subject = self._operation_subject
         return self._session
 
     def _initialize_locked(self) -> None:
@@ -1246,48 +1315,63 @@ class GoogleSheetsSyncService:
         if not self.enabled:
             return []
         pending: list[SpreadsheetEdit] = []
-        targets = self._spreadsheet_targets_provider() if self._spreadsheet_targets_provider else []
-        if not targets and self._spreadsheet_id:
-            targets = [
-                (self._spreadsheet_id, self._spreadsheet_url or self._url_for(self._spreadsheet_id))
-            ]
-        for spreadsheet_id, spreadsheet_url in targets:
-            with self._lock:
-                if spreadsheet_id != self._spreadsheet_id:
-                    self._spreadsheet_id = spreadsheet_id
-                    self._spreadsheet_url = spreadsheet_url
-                    self._sheet_ids = {}
-                    self._sheet_grid_sizes = {}
-                    self._initialized = False
-                self._initialize_locked()
-                rows = self._get_values(
-                    f"{self._quote_sheet(self._settings.edit_queue_sheet_name)}!A2:N"
+        with self._lock:
+            self._operation_subject = self._resolve_subject(None)
+            try:
+                targets = (
+                    self._spreadsheet_targets_provider(self._operation_subject)
+                    if self._spreadsheet_targets_provider
+                    else []
                 )
-            for offset, raw_row in enumerate(rows):
-                row = [*raw_row, *([""] * (len(self.EDIT_QUEUE_HEADERS) - len(raw_row)))]
-                if str(row[1]).strip().upper() != "PENDING":
-                    continue
-                try:
-                    base_revision = int(str(row[8]))
-                except (TypeError, ValueError):
-                    base_revision = 0
-                pending.append(
-                    SpreadsheetEdit(
-                        queue_row=offset + 2,
-                        edit_id=str(row[0]).strip(),
-                        job_id=str(row[3]).strip(),
-                        record_id=str(row[4]).strip(),
-                        field_id=str(row[5]).strip(),
-                        previous_value=self._optional_text(row[6]),
-                        new_value=self._optional_text(row[7]),
-                        base_revision=base_revision,
-                        source_sheet=str(row[9]).strip(),
-                        source_cell=str(row[10]).strip(),
-                        spreadsheet_id=spreadsheet_id,
+                if not targets and self._spreadsheet_id:
+                    targets = [
+                        (
+                            self._spreadsheet_id,
+                            self._spreadsheet_url or self._url_for(self._spreadsheet_id),
+                        )
+                    ]
+                for spreadsheet_id, spreadsheet_url in targets:
+                    if spreadsheet_id != self._spreadsheet_id:
+                        self._spreadsheet_id = spreadsheet_id
+                        self._spreadsheet_url = spreadsheet_url
+                        self._sheet_ids = {}
+                        self._sheet_grid_sizes = {}
+                        self._initialized = False
+                    self._initialize_locked()
+                    rows = self._get_values(
+                        f"{self._quote_sheet(self._settings.edit_queue_sheet_name)}!A2:N"
                     )
-                )
-                if len(pending) >= limit:
-                    return pending
+                    for offset, raw_row in enumerate(rows):
+                        row = [
+                            *raw_row,
+                            *([""] * (len(self.EDIT_QUEUE_HEADERS) - len(raw_row))),
+                        ]
+                        if str(row[1]).strip().upper() != "PENDING":
+                            continue
+                        try:
+                            base_revision = int(str(row[8]))
+                        except (TypeError, ValueError):
+                            base_revision = 0
+                        pending.append(
+                            SpreadsheetEdit(
+                                queue_row=offset + 2,
+                                edit_id=str(row[0]).strip(),
+                                job_id=str(row[3]).strip(),
+                                record_id=str(row[4]).strip(),
+                                field_id=str(row[5]).strip(),
+                                previous_value=self._optional_text(row[6]),
+                                new_value=self._optional_text(row[7]),
+                                base_revision=base_revision,
+                                source_sheet=str(row[9]).strip(),
+                                source_cell=str(row[10]).strip(),
+                                spreadsheet_id=spreadsheet_id,
+                                google_subject=self._operation_subject,
+                            )
+                        )
+                        if len(pending) >= limit:
+                            return pending
+            finally:
+                self._operation_subject = None
         return pending
 
     def mark_edit_processed(
@@ -1298,31 +1382,41 @@ class GoogleSheetsSyncService:
         error: str | None,
         applied_revision: int | None,
         spreadsheet_id: str | None = None,
+        expected_subject: str | None = None,
     ) -> None:
         with self._lock:
-            if spreadsheet_id and spreadsheet_id != self._spreadsheet_id:
-                self._spreadsheet_id = spreadsheet_id
-                self._spreadsheet_url = self._url_for(spreadsheet_id)
-                self._sheet_ids = {}
-                self._sheet_grid_sizes = {}
-                self._initialized = False
-            timestamp = datetime.now(UTC).astimezone().isoformat(timespec="seconds")
-            sheet = self._quote_sheet(self._settings.edit_queue_sheet_name)
-            target_id = self._required_spreadsheet_id()
-            self._request(
-                "POST",
-                f"{_API_ROOT}/{target_id}/values:batchUpdate",
-                json={
-                    "valueInputOption": "RAW",
-                    "data": [
-                        {"range": f"{sheet}!B{queue_row}", "values": [[status]]},
-                        {
-                            "range": f"{sheet}!L{queue_row}:N{queue_row}",
-                            "values": [[timestamp, error or "", applied_revision or ""]],
-                        },
-                    ],
-                },
-            )
+            self._operation_subject = self._resolve_subject(expected_subject)
+            try:
+                if spreadsheet_id and spreadsheet_id != self._spreadsheet_id:
+                    self._spreadsheet_id = spreadsheet_id
+                    self._spreadsheet_url = self._url_for(spreadsheet_id)
+                    self._sheet_ids = {}
+                    self._sheet_grid_sizes = {}
+                    self._initialized = False
+                timestamp = datetime.now(UTC).astimezone().isoformat(timespec="seconds")
+                sheet = self._quote_sheet(self._settings.edit_queue_sheet_name)
+                target_id = self._required_spreadsheet_id()
+                self._request(
+                    "POST",
+                    f"{_API_ROOT}/{target_id}/values:batchUpdate",
+                    json={
+                        "valueInputOption": "RAW",
+                        "data": [
+                            {"range": f"{sheet}!B{queue_row}", "values": [[status]]},
+                            {
+                                "range": f"{sheet}!L{queue_row}:N{queue_row}",
+                                "values": [[timestamp, error or "", applied_revision or ""]],
+                            },
+                        ],
+                    },
+                )
+            finally:
+                self._operation_subject = None
+
+    def _resolve_subject(self, expected_subject: str | None) -> str | None:
+        if expected_subject is not None:
+            return expected_subject
+        return self._subject_provider() if self._subject_provider is not None else None
 
     def _upsert_single(self, sheet: str, job_id: str, row: list[object]) -> None:
         rows = self._get_values(f"{self._quote_sheet(sheet)}!A2:A")

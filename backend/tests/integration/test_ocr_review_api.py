@@ -331,11 +331,12 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
 
     confirmed = client.post(
         f"/api/v1/ocr-jobs/{job_id}/confirm",
-        json={"baseRevision": 2},
+        json={"baseRevision": 2, "documentName": "面接カード_修正花子"},
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["confirmed"] is True
     assert confirmed.json()["individualId"] == "1234567890"
+    assert confirmed.json()["documentName"] == "面接カード_修正花子"
 
     searched = client.get("/api/v1/individual-records", params={"individualId": "123-4567-890"})
     assert searched.status_code == 200
@@ -379,7 +380,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     assert excel_table.status_code == 200
     table_body = excel_table.json()
     assert table_body["sheetName"] == "読み取り結果"
-    assert table_body["fileName"].startswith("繁殖台帳_1234567890_修正花子_")
+    assert table_body["fileName"] == "面接カード_修正花子.xlsx"
     displays = [cell["display"] for row in table_body["rows"] for cell in row["cells"]]
     assert "売却子牛一覧" in displays
     assert "福之姫" in displays
@@ -411,6 +412,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     reopened_body = reopened.json()
     assert reopened_body["confirmed"] is False
     assert reopened_body["individualId"] == "1234567890"
+    assert reopened_body["documentName"] == "面接カード_修正花子"
 
     reopened_again = client.post(f"/api/v1/ocr-jobs/{job_id}/reopen")
     assert reopened_again.status_code == 200
@@ -447,6 +449,7 @@ def test_review_correct_confirm_and_export(client: TestClient) -> None:
     )
     assert reconfirmed.status_code == 200
     assert reconfirmed.json()["confirmed"] is True
+    assert reconfirmed.json()["documentName"] == "面接カード_修正花子"
 
     updated_search = client.get(
         "/api/v1/individual-records", params={"individualId": "1234567890"}

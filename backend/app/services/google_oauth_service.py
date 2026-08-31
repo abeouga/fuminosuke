@@ -33,9 +33,9 @@ _SCOPES = (
     "openid",
     "email",
     "profile",
-    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive",
 )
-_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 _SPREADSHEETS_SCOPE_PREFIX = "https://www.googleapis.com/auth/spreadsheets"
 
 
@@ -260,16 +260,20 @@ class GoogleOAuthService:
                 return None
             return account.google_subject
 
-    def credentials(self) -> Credentials:
+    def credentials(self, subject: str | None = None) -> Credentials:
         self._require_configured()
         with self._database.session() as session:
             account = (
-                session.query(GoogleOAuthAccount)
-                .filter(GoogleOAuthAccount.is_active.is_(True))
-                .order_by(GoogleOAuthAccount.updated_at.desc())
-                .first()
+                session.get(GoogleOAuthAccount, subject)
+                if subject is not None
+                else session.scalar(
+                    select(GoogleOAuthAccount)
+                    .where(GoogleOAuthAccount.is_active.is_(True))
+                    .order_by(GoogleOAuthAccount.updated_at.desc())
+                    .limit(1)
+                )
             )
-            if account is None:
+            if account is None or not account.is_active:
                 raise RuntimeError("Googleアカウントが接続されていません。")
             if not self._authorization_is_current(account.scopes):
                 raise RuntimeError(
@@ -328,7 +332,12 @@ class GoogleOAuthService:
             account = session.get(GoogleOAuthAccount, user.subject)
             if account is not None:
                 refresh_token = self._decrypt(account.encrypted_refresh_token)
-                session.delete(account)
+                # Keep the account row as an ownership tombstone.  Folder/root
+                # mappings use the Google subject to prevent another account
+                # from adopting legacy Drive content after a disconnect.
+                account.encrypted_refresh_token = self._encrypt("")
+                account.scopes = ""
+                account.is_active = False
                 session.commit()
         if refresh_token:
             try:
@@ -449,7 +458,7 @@ class GoogleOAuthService:
     @staticmethod
     def _authorization_is_current(scope_value: str) -> bool:
         scopes = {item for item in scope_value.split() if item}
-        return _DRIVE_FILE_SCOPE in scopes and not any(
+        return _DRIVE_SCOPE in scopes and not any(
             item.startswith(_SPREADSHEETS_SCOPE_PREFIX) for item in scopes
         )
 

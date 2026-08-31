@@ -27,7 +27,7 @@ export function AuthGate({
         </h1>
         <p className="auth-description">
           {reconnectRequired
-            ? "保存先をGoogle Pickerで選択する権限方式へ切り替えます。旧連携を解除して再認証してください。"
+            ? "保存先設定を保持したまま、独自ライブラリとGoogle Driveのフォルダ構造を同期する権限を追加します。"
             : "読み取り結果をあなたのGoogleスプレッドシートへ直接出力するため、Googleアカウントの認証が必要です。"}
         </p>
         {loading && <p className="auth-status" role="status">認証状態を確認しています…</p>}

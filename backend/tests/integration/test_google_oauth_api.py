@@ -7,12 +7,20 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import GoogleOAuthAccount
+from app.db.models import (
+    DocumentFolder,
+    DocumentFolderDriveMapping,
+    GoogleOAuthAccount,
+    Template,
+    TemplateOutputFolder,
+)
 from app.db.session import Database
 from app.main import create_app
+from app.services.google_oauth_service import AuthenticatedUser
 
 
 class _TokenResponse:
@@ -24,7 +32,10 @@ class _TokenResponse:
             "access_token": "short-lived-access-token",
             "refresh_token": "stored-refresh-token",
             "id_token": "signed-google-id-token",
-            "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
+            "scope": (
+                "openid email profile "
+                "https://www.googleapis.com/auth/drive"
+            ),
         }
 
 
@@ -85,9 +96,7 @@ def test_google_oauth_login_uses_encrypted_refresh_token_and_jwt_cookie(
         authorization_url = started.headers["location"]
         assert urlparse(authorization_url).netloc == "accounts.google.com"
         authorization_query = parse_qs(urlparse(authorization_url).query)
-        assert (
-            "https://www.googleapis.com/auth/drive.file" in authorization_query["scope"][0].split()
-        )
+        assert "https://www.googleapis.com/auth/drive" in authorization_query["scope"][0].split()
         assert "https://www.googleapis.com/auth/spreadsheets" not in authorization_query[
             "scope"
         ][0].split()
@@ -141,6 +150,108 @@ def test_google_oauth_login_uses_encrypted_refresh_token_and_jwt_cookie(
         logged_out = client.post("/api/v1/auth/logout")
         assert logged_out.status_code == 200
         assert client.get("/api/v1/templates").status_code == 401
+
+
+def test_narrow_drive_authorization_requires_reconnection(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with _oauth_client(settings_factory) as client:
+        service = client.app.state.google_oauth
+
+        assert service._authorization_is_current(
+            "openid email profile https://www.googleapis.com/auth/drive.file"
+        ) is False
+        assert service._authorization_is_current(
+            "openid email profile "
+            "https://www.googleapis.com/auth/drive.file "
+            "https://www.googleapis.com/auth/drive.metadata"
+        ) is False
+        assert service._authorization_is_current(
+            "openid email profile https://www.googleapis.com/auth/drive"
+        ) is True
+
+
+def test_disconnect_removes_credentials_but_preserves_drive_ownership_metadata(
+    settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revoked_tokens: list[str] = []
+    monkeypatch.setattr(
+        "app.services.google_oauth_service.requests.post",
+        lambda *args, **kwargs: revoked_tokens.append(str(kwargs["params"]["token"])),
+    )
+
+    with _oauth_client(settings_factory) as client:
+        service = client.app.state.google_oauth
+        with client.app.state.database.session() as database_session:
+            account = GoogleOAuthAccount(
+                google_subject="google-user-1",
+                email="owner@example.com",
+                encrypted_refresh_token=service._encrypt("stored-refresh-token"),
+                scopes=(
+                    "openid email profile "
+                    "https://www.googleapis.com/auth/drive"
+                ),
+                default_output_folder_id="drive-root-1",
+                default_output_folder_name="台帳保存先",
+                default_output_folder_path="台帳保存先",
+                is_active=True,
+            )
+            template = Template(name="繁殖台帳", document_type="breeding_ledger")
+            folder = DocumentFolder(name="確定済み", normalized_name="確定済み")
+            database_session.add_all((account, template, folder))
+            database_session.flush()
+            database_session.add_all(
+                (
+                    TemplateOutputFolder(
+                        google_subject=account.google_subject,
+                        template_id=template.id,
+                        folder_id="drive-root-1",
+                        folder_name="台帳保存先",
+                        folder_path="台帳保存先",
+                    ),
+                    DocumentFolderDriveMapping(
+                        google_subject=account.google_subject,
+                        document_folder_id=folder.id,
+                        drive_root_folder_id="drive-root-1",
+                        drive_folder_id="drive-folder-1",
+                        drive_name="確定済み",
+                        drive_parent_folder_id="drive-root-1",
+                    ),
+                )
+            )
+            database_session.commit()
+            template_id = template.id
+            folder_id = folder.id
+
+        service.disconnect(
+            AuthenticatedUser(
+                subject="google-user-1",
+                email="owner@example.com",
+                display_name=None,
+                picture_url=None,
+            )
+        )
+
+        assert revoked_tokens == ["stored-refresh-token"]
+        with client.app.state.database.session() as database_session:
+            account = database_session.get(GoogleOAuthAccount, "google-user-1")
+            assert account is not None
+            assert account.is_active is False
+            assert account.scopes == ""
+            assert service._decrypt(account.encrypted_refresh_token) == ""
+            assert account.default_output_folder_id == "drive-root-1"
+            assert database_session.get(
+                TemplateOutputFolder,
+                ("google-user-1", template_id),
+            ) is not None
+            mapping = database_session.scalar(
+                select(DocumentFolderDriveMapping).where(
+                    DocumentFolderDriveMapping.google_subject == "google-user-1",
+                    DocumentFolderDriveMapping.document_folder_id == folder_id,
+                )
+            )
+            assert mapping is not None
 
 
 def test_oauth_return_url_cannot_leave_configured_frontend(

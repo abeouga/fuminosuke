@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { ReactNode } from "react";
 import type {
   DocumentIdentity,
+  DocumentNameRule,
   FieldMappingTarget,
   LayoutCell,
   LayoutCellMerge,
@@ -17,7 +18,7 @@ import { showToast } from "./Toast";
 
 export type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
-type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "erase" | "identity";
+type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity";
 type OcrLabelAlignment = "auto" | "left" | "center" | "right";
 export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
 
@@ -37,6 +38,8 @@ type LayoutEditorProps = {
   workflowStep?: LayoutWorkflowStep;
   documentIdentityFields?: DocumentIdentity[];
   onDocumentIdentityFieldsChange?: (fields: DocumentIdentity[]) => void;
+  documentNameRule?: DocumentNameRule | null;
+  onDocumentNameRuleChange?: (rule: DocumentNameRule | null) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
   draftStorageKey?: string;
@@ -657,6 +660,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   workflowStep,
   documentIdentityFields = [],
   onDocumentIdentityFieldsChange,
+  documentNameRule = null,
+  onDocumentNameRuleChange,
   onDirtyChange,
   onBusyChange,
   draftStorageKey,
@@ -684,6 +689,22 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [mode, setMode] = useState<Mode>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [identityGroupOptions, setIdentityGroupOptions] = useState<Array<{ id: string; label: string }>>(
+    () => {
+      const configured = documentIdentityFields.flatMap((field) => (
+        field.matchGroupId && field.matchGroupLabel
+          ? [{ id: field.matchGroupId, label: field.matchGroupLabel }]
+          : []
+      ));
+      return configured.length > 0
+        ? Array.from(new Map(configured.map((group) => [group.id, group])).values())
+        : [{ id: "identity_group_1", label: "照合条件1" }];
+    },
+  );
+  const [activeIdentityGroupId, setActiveIdentityGroupId] = useState(
+    () => documentIdentityFields.find((field) => field.matchGroupId)?.matchGroupId
+      ?? "identity_group_1",
+  );
   const [selectedPath, setSelectedPath] = useState("");
   const [draft, setDraft] = useState<Rect | null>(null);
   const [eraserTrail, setEraserTrail] = useState<Point[]>([]);
@@ -1003,23 +1024,40 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const primaryIdentityField = documentIdentityFields.find(
     (field) => field.matchRole === "primary",
   ) ?? null;
-  const titleIdentityField = documentIdentityFields.find(
-    (field) => field.displayRole === "title",
-  ) ?? null;
-  const subtitleIdentityField = documentIdentityFields.find(
-    (field) => field.displayRole === "subtitle",
-  ) ?? null;
   const primaryIdentityCount = documentIdentityFields.filter(
     (field) => field.matchRole === "primary",
   ).length;
   const usesCombinedConfirmation = documentIdentityFields.length >= 2
     && primaryIdentityCount === 0;
-  const identityConfigurationReady = documentIdentityFields.length > 0
-    && (primaryIdentityCount === 1 || usesCombinedConfirmation)
-    && documentIdentityFields.filter((field) => field.displayRole === "title").length === 1
-    && documentIdentityFields.filter((field) => field.displayRole === "subtitle").length <= 1;
+  const usesGroupedIdentity = documentIdentityFields.length > 0
+    && documentIdentityFields.every((field) => Boolean(field.matchGroupId));
+  const identityConfigurationReady = usesGroupedIdentity
+    ? documentIdentityFields.every((field) => Boolean(field.matchGroupLabel))
+    : documentIdentityFields.length > 0
+      && (primaryIdentityCount === 1 || usesCombinedConfirmation)
+      && documentIdentityFields.filter((field) => field.displayRole === "title").length === 1
+      && documentIdentityFields.filter((field) => field.displayRole === "subtitle").length <= 1;
+  const documentNameReady = Boolean(documentNameRule?.fieldPaths.length)
+    || workflowStep === undefined;
   const normalizedIdentityFields = (fields: DocumentIdentity[]) => {
     if (fields.length === 0) return [];
+    if (fields.some((field) => field.matchGroupId)) {
+      const orderByGroup = new Map<string, number>();
+      return fields.map((field) => {
+        const groupId = field.matchGroupId ?? activeIdentityGroupId;
+        const componentOrder = orderByGroup.get(groupId) ?? 0;
+        orderByGroup.set(groupId, componentOrder + 1);
+        const group = identityGroupOptions.find((item) => item.id === groupId);
+        return {
+          ...field,
+          matchRole: "confirmation" as const,
+          displayRole: "none" as const,
+          matchGroupId: groupId,
+          matchGroupLabel: field.matchGroupLabel ?? group?.label ?? "照合条件",
+          componentOrder,
+        };
+      });
+    }
     let primaryAssigned = false;
     let titleAssigned = false;
     let subtitleAssigned = false;
@@ -1051,8 +1089,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           label: candidate.label,
           valueType: candidate.targetPath === "document.unifiedEarTag" ? "digits" as const : "text" as const,
           exactLength: candidate.targetPath === "document.unifiedEarTag" ? 10 : null,
-          matchRole: documentIdentityFields.length === 0 ? "primary" as const : "confirmation" as const,
-          displayRole: documentIdentityFields.length === 0 ? "title" as const : "none" as const,
+          matchRole: "confirmation" as const,
+          displayRole: "none" as const,
+          matchGroupId: activeIdentityGroupId,
+          matchGroupLabel: identityGroupOptions.find((group) => group.id === activeIdentityGroupId)?.label
+            ?? "照合条件",
+          componentOrder: documentIdentityFields.filter(
+            (field) => field.matchGroupId === activeIdentityGroupId,
+          ).length,
         }];
     const normalized = normalizedIdentityFields(next);
     onDocumentIdentityFieldsChange?.(normalized);
@@ -1065,23 +1109,62 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       ? `「${candidate.label}」を書類の見分け方から外しました。`
       : `「${candidate.label}」を書類を見分ける情報へ追加しました。`);
   };
-  const updateIdentityField = (
-    targetPath: string,
-    property: "matchRole" | "displayRole",
-    value: DocumentIdentity[typeof property],
-  ) => {
-    const next = documentIdentityFields.map((field) => {
-      if (field.targetPath === targetPath) return { ...field, [property]: value };
-      if (property === "matchRole" && value === "primary") {
-        return { ...field, matchRole: "confirmation" as const };
-      }
-      if (property === "displayRole" && value !== "none" && field.displayRole === value) {
-        return { ...field, displayRole: "none" as const };
-      }
-      return field;
-    });
-    onDocumentIdentityFieldsChange?.(next);
+  const addIdentityGroup = () => {
+    const nextNumber = identityGroupOptions.length + 1;
+    const id = `identity_group_${nextNumber}_${Date.now().toString(36)}`;
+    const group = { id, label: `照合条件${nextNumber}` };
+    setIdentityGroupOptions((current) => [...current, group]);
+    setActiveIdentityGroupId(id);
   };
+  const renameIdentityGroup = (groupId: string, label: string) => {
+    const cleaned = label.slice(0, 100);
+    setIdentityGroupOptions((current) => current.map((group) => (
+      group.id === groupId ? { ...group, label: cleaned } : group
+    )));
+    onDocumentIdentityFieldsChange?.(documentIdentityFields.map((field) => (
+      field.matchGroupId === groupId ? { ...field, matchGroupLabel: cleaned } : field
+    )));
+  };
+  const moveIdentityFieldToGroup = (targetPath: string, groupId: string) => {
+    const group = identityGroupOptions.find((item) => item.id === groupId);
+    const next = documentIdentityFields.map((field) => (
+      field.targetPath === targetPath
+        ? {
+            ...field,
+            matchGroupId: groupId,
+            matchGroupLabel: group?.label ?? "照合条件",
+            componentOrder: documentIdentityFields.filter(
+              (item) => item.matchGroupId === groupId,
+            ).length,
+            matchRole: "confirmation" as const,
+            displayRole: "none" as const,
+          }
+        : field
+    ));
+    onDocumentIdentityFieldsChange?.(normalizedIdentityFields(next));
+  };
+  const toggleDocumentNamePath = (targetPath: string) => {
+    const current = documentNameRule ?? { fieldPaths: [], separator: "", prefix: "", suffix: "" };
+    const fieldPaths = current.fieldPaths.includes(targetPath)
+      ? current.fieldPaths.filter((path) => path !== targetPath)
+      : [...current.fieldPaths, targetPath];
+    onDocumentNameRuleChange?.(fieldPaths.length > 0 ? { ...current, fieldPaths } : null);
+  };
+  const updateDocumentNameRule = (patch: Partial<DocumentNameRule>) => {
+    const current = documentNameRule ?? { fieldPaths: [], separator: "", prefix: "", suffix: "" };
+    onDocumentNameRuleChange?.({ ...current, ...patch });
+  };
+  useEffect(() => {
+    const configured = documentIdentityFields.flatMap((field) => (
+      field.matchGroupId && field.matchGroupLabel
+        ? [{ id: field.matchGroupId, label: field.matchGroupLabel }]
+        : []
+    ));
+    if (configured.length === 0) return;
+    setIdentityGroupOptions((current) => Array.from(new Map(
+      [...current, ...configured].map((group) => [group.id, group]),
+    ).values()));
+  }, [documentIdentityFields]);
   useEffect(() => {
     if (documentIdentityFields.length === 0) return;
     const validFields = documentIdentityFields.filter((field) => (
@@ -2765,7 +2848,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     linkLabelId.current = null;
     setLinkPoint(null);
     if (!labelId) return;
-    if (showMeaningStep) {
+    if (mode === "parent" && showMeaningStep) {
       const parentLabel = cellById.get(labelId);
       const childLabel = [...layout.cells].reverse().find((cell) => (
         cell.role === "label"
@@ -2905,7 +2988,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const layoutReadyForOcr = hasMeaningAssignments
     && recordStructureReady
     && !hasUnassignedFields;
-  const templateReadyForOcr = layoutReadyForOcr && identityConfigurationReady;
+  const templateReadyForOcr = layoutReadyForOcr
+    && identityConfigurationReady
+    && documentNameReady;
 
   return (
     <div className="layout-editor" aria-busy={busy}>
@@ -2968,7 +3053,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         )}
         {showMeaningStep && <ModeButton current={mode} mode="parent" label="親項目を接続" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
-        {showRecordStep && <ModeButton current={mode} mode="parent" label="見出しへ接続" onChange={setMode} />}
+        {showRecordStep && <ModeButton current={mode} mode="record-parent" label="見出しへ接続" onChange={setMode} />}
         {workflowStep !== "identity" && workflowStep !== "review" && (
           <ModeButton current={mode} mode="erase" label="消しゴム" onChange={setMode} />
         )}
@@ -3028,16 +3113,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
       <div className="layout-instructions">
         {workflowStep === "classify" && mode === "select" && "検出された枠を選び、右側で種類と項目名の文字候補を確認してください。"}
-        {workflowStep === "identity" && "帳票上で強調されている欄を複数選択できます。選択後、同じ書類と判断する基準とカードの見出しを指定してください。薄く表示された矩形は選択できません。"}
+        {workflowStep === "identity" && "帳票上で強調されている欄を複数選択し、氏名や住所などの照合グループへまとめます。続けてライブラリと出力で共用する書類名を設定してください。"}
         {workflowStep === "review" && "分類数、未割当、レコード構造を確認し、問題がなければ保存してください。"}
         {workflowStep !== "identity" && workflowStep !== "review" && mode === "select" && "クリックで1つの枠、Ctrl（MacはCmd）+クリックで複数の枠を追加・解除できます。ドラッグで範囲をまとめて選択することもできます。"}
         {workflowStep !== "review" && mode === "classify" && "変更する枠をクリックまたはドラッグで選び、右側で区分を明示的に指定してください。選択しただけでは区分は変わりません。"}
         {workflowStep !== "review" && mode === "draw" && "検出されなかった記入欄をドラッグして追加します。"}
         {workflowStep !== "review" && mode === "link" && "項目名から記入欄を通過するようにドラッグします。項目名がない記入欄は右側から保存する情報を直接指定できます。"}
         {workflowStep !== "review" && mode === "record" && "車種名から備考など、同じ繰り返し表に含める複数の列見出しを横方向の1本の線で横断します。"}
-        {workflowStep !== "review" && mode === "parent" && (showMeaningStep
-          ? "「職場訪問参加状況」などの親項目から、意味づけ済みの「参加時期」「参加場所」まで線を引きます。"
-          : "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。")}
+        {workflowStep !== "review" && mode === "parent" && "「職場訪問参加状況」などの親項目から、意味づけ済みの「参加時期」「参加場所」まで線を引きます。"}
+        {workflowStep !== "review" && mode === "record-parent" && "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。"}
         {workflowStep !== "identity" && workflowStep !== "review" && mode === "erase" && "消したい意味づけまたは繰り返し部分のリンクを、消しゴムでなぞってください。矩形自体は削除されません。"}
       </div>
       {message && !showReviewStep && (
@@ -3128,9 +3212,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 setLinkPoint(location);
                 return;
               }
-              if (mode === "link" || mode === "parent") {
+              if (mode === "link" || mode === "parent" || mode === "record-parent") {
                 const labelHit = [...layout.cells].reverse().find((cell) => (
-                  (cell.role === "label" || (mode === "parent" && cell.role === "parent_label"))
+                  (cell.role === "label" || ((mode === "parent" || mode === "record-parent") && cell.role === "parent_label"))
                   && location.x >= cell.x
                   && location.x <= cell.x + cell.width
                   && location.y >= cell.y
@@ -3138,8 +3222,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 ));
                 if (!labelHit) {
                   setMessage(
-                    mode === "parent"
-                      ? showMeaningStep
+                    mode === "parent" || mode === "record-parent"
+                      ? mode === "parent"
                         ? "親項目の接続は、親となる見出しセルからドラッグを開始してください。"
                         : "親ラベル接続はラベルセルからドラッグを開始してください。"
                       : "意味づけはラベルセルからドラッグを開始してください。",
@@ -3164,7 +3248,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               ) {
                 setDraft(rectFrom(dragStart.current, location));
               }
-              if ((mode === "link" || mode === "record" || mode === "parent") && linkLabelId.current) {
+              if ((mode === "link" || mode === "record" || mode === "parent" || mode === "record-parent") && linkLabelId.current) {
                 setLinkPoint(location);
               }
               if (mode === "erase" && eraserPathRef.current) {
@@ -3198,6 +3282,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 return;
               }
               if (mode === "parent") {
+                finishParentLink(location);
+                return;
+              }
+              if (mode === "record-parent") {
                 finishParentLink(location);
                 return;
               }
@@ -3601,56 +3689,60 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           {showIdentityStep && (
             <div className="document-identity-canvas-setting">
               <span className="panel-kicker">DOCUMENT MATCHING</span>
-              <strong>帳票上の欄を複数選択</strong>
-              <p>
-                同じ書類か判断する基準と、違いを確認する情報を選択します。選択済みの矩形をもう一度クリックすると解除できます。
-              </p>
+              <strong>4-A 同じ書類を探す条件</strong>
+              <p>氏名や住所などの照合グループを作り、各グループへ複数の矩形をまとめます。すべてのグループが一致した書類だけを候補にします。</p>
               <dl>
                 <div><dt>選択できる欄</dt><dd>{identityCandidates.length}件</dd></div>
                 <div><dt>選択中</dt><dd>{selectedIdentityCandidates.length}件</dd></div>
               </dl>
+              <div className="identity-group-toolbar">
+                {identityGroupOptions.map((group) => (
+                  <button
+                    type="button"
+                    className={activeIdentityGroupId === group.id ? "secondary active" : "ghost"}
+                    onClick={() => setActiveIdentityGroupId(group.id)}
+                    key={group.id}
+                  >
+                    {group.label || "名称未入力"}
+                  </button>
+                ))}
+                <button type="button" className="secondary" onClick={addIdentityGroup}>＋ 照合グループ</button>
+              </div>
+              <label className="identity-group-name-field">
+                選択中のグループ名
+                <input
+                  value={identityGroupOptions.find((group) => group.id === activeIdentityGroupId)?.label ?? ""}
+                  maxLength={100}
+                  onChange={(event) => renameIdentityGroup(activeIdentityGroupId, event.target.value)}
+                  placeholder="例: 氏名、住所"
+                />
+              </label>
               {selectedIdentityCandidates.length > 0 ? (
                 <div className="identity-field-list" aria-live="polite">
                   {selectedIdentityCandidates.map((candidate) => {
                     const field = selectedIdentityByPath.get(candidate.targetPath)!;
                     return (
-                      <section className={field.matchRole === "primary" ? "primary-match" : "confirmation-match"} key={candidate.targetPath}>
+                      <section className="grouped-match" key={candidate.targetPath}>
                         <header>
                           <div>
                             <strong>{candidate.label}</strong>
-                            <small>{field.matchRole === "primary" ? "同じ書類と判断する基準" : "違っていたら確認する情報"}</small>
+                            <small>{field.matchGroupLabel || "照合グループ未設定"}の構成項目</small>
                           </div>
                           <button type="button" className="ghost compact" onClick={() => toggleIdentityCandidate(candidate)}>解除</button>
                         </header>
                         <label>
-                          照合での役割
+                          所属する照合グループ
                           <select
-                            aria-label={`${candidate.label}の照合での役割`}
-                            value={field.matchRole}
-                            onChange={(event) => updateIdentityField(
+                            aria-label={`${candidate.label}の照合グループ`}
+                            value={field.matchGroupId ?? activeIdentityGroupId}
+                            onChange={(event) => moveIdentityFieldToGroup(
                               candidate.targetPath,
-                              "matchRole",
-                              event.target.value as DocumentIdentity["matchRole"],
+                              event.target.value,
                             )}
                           >
-                            <option value="primary">同じ書類と判断する基準</option>
-                            <option value="confirmation">違っていたら確認</option>
-                          </select>
-                        </label>
-                        <label>
-                          カードでの表示
-                          <select
-                            aria-label={`${candidate.label}のカードでの表示`}
-                            value={field.displayRole}
-                            onChange={(event) => updateIdentityField(
-                              candidate.targetPath,
-                              "displayRole",
-                              event.target.value as DocumentIdentity["displayRole"],
-                            )}
-                          >
-                            <option value="title">一覧で大きく表示</option>
-                            <option value="subtitle">見出しの下に表示</option>
-                            <option value="none">カードには表示しない</option>
+                            {identityGroupOptions.map((group) => (
+                              <option value={group.id} key={group.id}>{group.label}</option>
+                            ))}
                           </select>
                         </label>
                       </section>
@@ -3660,32 +3752,54 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               ) : (
                 <p className="inline-warning">強調された矩形をクリックし、書類を見分ける情報を選択してください。</p>
               )}
-              {selectedIdentityCandidates.length > 0 && (
-                <div className="identity-card-preview" aria-label="書類カードの表示プレビュー">
-                  <span>カード表示プレビュー</span>
-                  <strong>{titleIdentityField?.label ?? "見出しを選択"}</strong>
-                  <small>{subtitleIdentityField?.label ?? (
-                    primaryIdentityField?.targetPath !== titleIdentityField?.targetPath
-                      ? primaryIdentityField?.label
-                      : "補足表示なし"
-                  )}</small>
+              {identityConfigurationReady && (
+                <div className="identity-rule-summary">
+                  <span>判定内容</span>
+                  <strong>{identityGroupOptions.flatMap((group) => {
+                    const labels = documentIdentityFields
+                      .filter((field) => field.matchGroupId === group.id)
+                      .sort((left, right) => (left.componentOrder ?? 0) - (right.componentOrder ?? 0))
+                      .map((field) => field.label);
+                    return labels.length > 0 ? [`${group.label}（${labels.join("＋")}）`] : [];
+                  }).join(" と ")}がすべて一致</strong>
+                  <small>未読・未確認の項目がある場合は自動統合せず、確認画面で選択します。</small>
                 </div>
-              )}
-              {!identityConfigurationReady && selectedIdentityCandidates.length > 0 && (
-                <p className="inline-warning">
-                  同じ書類と判断する基準を1つ指定するか、2項目以上をすべて「違っていたら確認」にしてください。カードの見出しは1つ指定してください。
-                </p>
-              )}
-              {usesCombinedConfirmation && (
-                <p className="identity-combination-note">
-                  選択した項目がすべて以前の読み取りと違う場合に確認します。
-                </p>
               )}
               {identityCandidates.length === 0 && (
                 <p className="inline-warning">
                   選択できる欄がありません。意味づけ工程で、繰り返し行ではない文字欄へ項目を割り当ててください。
                 </p>
               )}
+              <div className="document-name-rule-setting">
+                <span className="panel-kicker">DOCUMENT NAME</span>
+                <strong>4-B ライブラリ・出力で使う書類名</strong>
+                <p>ここで作る名前を、書類ライブラリ、保存するXLSX、Googleスプレッドシートで共通使用します。読み取り後にも修正できます。</p>
+                <div className="document-name-field-options">
+                  {identityCandidates.map((candidate) => (
+                    <label key={candidate.targetPath}>
+                      <input
+                        type="checkbox"
+                        checked={documentNameRule?.fieldPaths.includes(candidate.targetPath) ?? false}
+                        onChange={() => toggleDocumentNamePath(candidate.targetPath)}
+                      />
+                      {candidate.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="document-name-format-grid">
+                  <label>先頭の固定文字<input value={documentNameRule?.prefix ?? ""} maxLength={100} onChange={(event) => updateDocumentNameRule({ prefix: event.target.value })} placeholder="例: 面接カード_" /></label>
+                  <label>項目間の区切り<input value={documentNameRule?.separator ?? ""} maxLength={20} onChange={(event) => updateDocumentNameRule({ separator: event.target.value })} placeholder="例: _ または空欄" /></label>
+                  <label>末尾の固定文字<input value={documentNameRule?.suffix ?? ""} maxLength={100} onChange={(event) => updateDocumentNameRule({ suffix: event.target.value })} placeholder="任意" /></label>
+                </div>
+                <div className="identity-card-preview" aria-label="書類名の生成プレビュー">
+                  <span>生成プレビュー</span>
+                  <strong>{documentNameRule
+                    ? `${documentNameRule.prefix}${documentNameRule.fieldPaths.map((path) => identityCandidates.find((candidate) => candidate.targetPath === path)?.label ?? path).join(documentNameRule.separator)}${documentNameRule.suffix}`
+                    : "書類名に使う欄を選択"}</strong>
+                  <small>実際の読み取り時は項目名が読み取った値に置き換わります。</small>
+                </div>
+                {!documentNameReady && <p className="inline-warning">書類名に使う欄を1つ以上選択してください。</p>}
+              </div>
             </div>
           )}
           {workflowStep === "review" && (
@@ -3696,10 +3810,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <div><dt>内容設定済み</dt><dd>{meaningAssignedCellIds.size}</dd></div>
                 <div><dt>未割当</dt><dd>{hasUnassignedFields ? "あり" : "なし"}</dd></div>
                 <div><dt>繰り返し部分</dt><dd>{recordGroups.length}</dd></div>
-                <div><dt>照合条件</dt><dd>{usesCombinedConfirmation ? "選択項目がすべて違うとき確認" : primaryIdentityField?.label ?? "未選択"}</dd></div>
-                <div><dt>確認する情報</dt><dd>{documentIdentityFields.filter((field) => field.matchRole === "confirmation").map((field) => field.label).join("、") || "なし"}</dd></div>
-                <div><dt>カードの見出し</dt><dd>{titleIdentityField?.label ?? "未選択"}</dd></div>
-                <div><dt>保存判定</dt><dd>{layoutReadyForOcr && identityConfigurationReady ? "保存可能" : "要修正"}</dd></div>
+                <div><dt>照合グループ</dt><dd>{new Set(documentIdentityFields.map((field) => field.matchGroupId).filter(Boolean)).size}件</dd></div>
+                <div><dt>照合条件</dt><dd>{usesGroupedIdentity ? "すべてのグループが一致" : usesCombinedConfirmation ? "従来の複合確認" : primaryIdentityField?.label ?? "未選択"}</dd></div>
+                <div><dt>書類名</dt><dd>{documentNameRule?.fieldPaths.map((path) => identityCandidates.find((candidate) => candidate.targetPath === path)?.label ?? path).join(`「${documentNameRule?.separator ?? ""}」`) || "未設定"}</dd></div>
+                <div><dt>保存判定</dt><dd>{layoutReadyForOcr && identityConfigurationReady && documentNameReady ? "保存可能" : "要修正"}</dd></div>
               </dl>
             </div>
           )}
@@ -4138,9 +4252,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。
         </p>
       )}
-      {!identityConfigurationReady && (
+      {(!identityConfigurationReady || !documentNameReady) && (
         <p className="inline-warning">
-          途中保存できます。OCRへ進むには、「書類の見分け方」で照合基準とカードの見出しを指定してください。
+          途中保存できます。OCRへ進むには、「照合と書類名」で照合グループと書類名の作り方を指定してください。
         </p>
       )}
       <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-import re
 from typing import Any
 
 from sqlalchemy import select
@@ -104,10 +104,11 @@ class DocumentLibraryService:
                     continue
                 individual_id = ledger.individual_id
                 display = self._display_information(session, ledger)
-                if ledger.library_name:
+                canonical_name = ledger.document_name or ledger.library_name
+                if canonical_name:
                     display = {
                         **display,
-                        "displayTitle": ledger.library_name,
+                        "displayTitle": canonical_name,
                         "displayTitleLabel": "書類名",
                     }
                 group = groups.setdefault(
@@ -167,7 +168,7 @@ class DocumentLibraryService:
                     ),
                     "libraryFolderId": ledger.library_folder_id,
                     "locationVersion": ledger.library_location_version,
-                    "libraryName": ledger.library_name,
+                    "libraryName": canonical_name,
                 }
                 group["ledgers"].append(ledger_item)
                 document_items.append(ledger_item)
@@ -193,7 +194,13 @@ class DocumentLibraryService:
                 ),
             }
 
-    def create_folder(self, *, name: str, parent_id: str | None) -> dict[str, Any]:
+    def create_folder(
+        self,
+        *,
+        name: str,
+        parent_id: str | None,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         cleaned, normalized = self._folder_name(name)
         with self._database.session() as session:
             if parent_id is not None and session.get(DocumentFolder, parent_id) is None:
@@ -203,10 +210,37 @@ class DocumentLibraryService:
             session.add(folder)
             session.commit()
             session.refresh(folder)
-            return self._folder_payload(folder, 0)
+            folder_id = folder.id
+        if self._google_drive is not None:
+            # Keep the stable local id if one of several Drive roots fails.
+            # A later sync can adopt any already-created tagged mirror and
+            # finish the remaining roots without leaving an orphaned tag.
+            self._google_drive.mirror_library_folder(folder_id, expected_subject)
+        with self._database.session() as session:
+            persisted = session.get(DocumentFolder, folder_id)
+            if persisted is None:
+                raise self._not_found("作成したフォルダが見つかりません。")
+            return self._folder_payload(persisted, 0)
 
-    def rename_folder(self, folder_id: str, *, name: str) -> dict[str, Any]:
+    def rename_folder(
+        self,
+        folder_id: str,
+        *,
+        name: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         cleaned, normalized = self._folder_name(name)
+        with self._database.session() as session:
+            folder = session.get(DocumentFolder, folder_id)
+            if folder is None:
+                raise self._not_found("フォルダが見つかりません。")
+            self._assert_unique_name(session, folder.parent_id, normalized, exclude_id=folder.id)
+        if self._google_drive is not None:
+            self._google_drive.rename_mirrored_library_folder(
+                folder_id,
+                cleaned,
+                expected_subject,
+            )
         with self._database.session() as session:
             folder = session.get(DocumentFolder, folder_id)
             if folder is None:
@@ -216,23 +250,40 @@ class DocumentLibraryService:
             folder.normalized_name = normalized
             session.commit()
             session.refresh(folder)
-            count = len(list(session.scalars(select(LedgerDocument.id).where(LedgerDocument.library_folder_id == folder.id))))
+            count = len(
+                list(
+                    session.scalars(
+                        select(LedgerDocument.id).where(
+                            LedgerDocument.library_folder_id == folder.id
+                        )
+                    )
+                )
+            )
             return self._folder_payload(folder, count)
 
-    def delete_folder(self, folder_id: str) -> None:
+    def delete_folder(
+        self,
+        folder_id: str,
+        expected_subject: str | None = None,
+    ) -> None:
         with self._database.session() as session:
             folder = session.get(DocumentFolder, folder_id)
             if folder is None:
                 raise self._not_found("フォルダが見つかりません。")
-            has_children = session.scalar(select(DocumentFolder.id).where(DocumentFolder.parent_id == folder.id).limit(1))
-            has_documents = session.scalar(select(LedgerDocument.id).where(LedgerDocument.library_folder_id == folder.id).limit(1))
-            if has_children is not None or has_documents is not None:
-                raise AppError(
-                    status=409,
-                    code="DOCUMENT_FOLDER_NOT_EMPTY",
-                    title="Document folder is not empty",
-                    detail="書類または子フォルダを移動してから削除してください。",
-                )
+            self._assert_folder_empty(session, folder.id)
+        if self._google_drive is not None:
+            self._google_drive.delete_mirrored_library_folder(
+                folder_id,
+                expected_subject,
+            )
+        with self._database.session() as session:
+            folder = session.get(DocumentFolder, folder_id)
+            if folder is None:
+                # The production Drive hook deletes the local row in the same
+                # locked transaction as its mirrored folders. Test doubles and
+                # older hook implementations leave the local deletion here.
+                return
+            self._assert_folder_empty(session, folder.id)
             session.delete(folder)
             session.commit()
 
@@ -242,18 +293,31 @@ class DocumentLibraryService:
         *,
         folder_id: str | None,
         expected_version: int,
+        expected_subject: str | None = None,
     ) -> dict[str, Any]:
         with self._database.session() as session:
             document = session.get(LedgerDocument, document_id)
             if document is None or document.library_deleted_at is not None:
                 raise self._not_found("書類が見つかりません。")
             if document.library_location_version != expected_version:
-                raise AppError(
-                    status=409,
-                    code="DOCUMENT_LOCATION_CONFLICT",
-                    title="Document location changed",
-                    detail="別の操作で保存場所が変更されています。最新状態を読み込んでください。",
-                )
+                raise self._location_conflict()
+            if folder_id is not None and session.get(DocumentFolder, folder_id) is None:
+                raise self._not_found("移動先のフォルダが見つかりません。")
+        if self._google_drive is not None:
+            moved = self._google_drive.move_library_document(
+                document_id,
+                folder_id,
+                expected_version=expected_version,
+                expected_subject=expected_subject,
+            )
+            if isinstance(moved, dict):
+                return moved
+        with self._database.session() as session:
+            document = session.get(LedgerDocument, document_id)
+            if document is None or document.library_deleted_at is not None:
+                raise self._not_found("書類が見つかりません。")
+            if document.library_location_version != expected_version:
+                raise self._location_conflict()
             if folder_id is not None and session.get(DocumentFolder, folder_id) is None:
                 raise self._not_found("移動先のフォルダが見つかりません。")
             document.library_folder_id = folder_id
@@ -266,7 +330,60 @@ class DocumentLibraryService:
                 "locationVersion": document.library_location_version,
             }
 
-    def rename_document(self, document_id: str, *, name: str) -> dict[str, Any]:
+    def sync_document_library(
+        self,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        if self._google_drive is None:
+            raise AppError(
+                status=409,
+                code="GOOGLE_DRIVE_SYNC_UNAVAILABLE",
+                title="Google Drive sync is unavailable",
+                detail="Googleアカウントへ接続してから同期してください。",
+            )
+        with self._database.session() as session:
+            self._backfill_legacy(session)
+        return self._google_drive.sync_document_library(expected_subject)
+
+    def push_document_library_to_drive(
+        self,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        if self._google_drive is None:
+            raise AppError(
+                status=409,
+                code="GOOGLE_DRIVE_SYNC_UNAVAILABLE",
+                title="Google Drive sync is unavailable",
+                detail="Googleアカウントへ接続してから同期してください。",
+            )
+        with self._database.session() as session:
+            self._backfill_legacy(session)
+        return self._google_drive.push_document_library_to_drive(expected_subject)
+
+    def confirm_drive_ownership(
+        self,
+        document_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        if self._google_drive is None:
+            raise AppError(
+                status=409,
+                code="GOOGLE_DRIVE_SYNC_UNAVAILABLE",
+                title="Google Drive sync is unavailable",
+                detail="Googleアカウントへ接続してから所有者を確認してください。",
+            )
+        return self._google_drive.confirm_legacy_document_ownership(
+            document_id,
+            expected_subject,
+        )
+
+    def rename_document(
+        self,
+        document_id: str,
+        *,
+        name: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         cleaned = self._document_name(name)
         with self._database.session() as session:
             document = session.get(LedgerDocument, document_id)
@@ -284,6 +401,11 @@ class DocumentLibraryService:
             spreadsheet_id = document.spreadsheet_id or (
                 confirmed.spreadsheet_id if confirmed is not None else None
             )
+            baseline_name = (
+                document.library_name
+                or document.document_name
+                or (confirmed.spreadsheet_name if confirmed is not None else None)
+            )
         renamed = cleaned
         if spreadsheet_id:
             if self._google_drive is None:
@@ -293,21 +415,73 @@ class DocumentLibraryService:
                     title="Google Drive rename is unavailable",
                     detail="Googleアカウントへ再接続してから名前を変更してください。",
                 )
-            renamed = self._google_drive.rename_spreadsheet(spreadsheet_id, cleaned)
-        with self._database.session() as session:
-            document = session.get(LedgerDocument, document_id)
-            if document is None or document.library_deleted_at is not None:
-                raise self._not_found("書類が見つかりません。")
-            document.library_name = renamed
-            if document.current_job_id:
-                confirmed = session.scalar(
-                    select(ConfirmedResult).where(
-                        ConfirmedResult.job_id == document.current_job_id
-                    )
+            if baseline_name is None:
+                raise AppError(
+                    status=409,
+                    code="DRIVE_DOCUMENT_NAME_BASELINE_REQUIRED",
+                    title="Drive document name baseline is required",
+                    detail=(
+                        "Google Drive側の現在名を確認できません。"
+                        "書類ライブラリを再同期してから名前を変更してください。"
+                    ),
                 )
-                if confirmed is not None and confirmed.spreadsheet_id == spreadsheet_id:
-                    confirmed.spreadsheet_name = renamed
-            session.commit()
+            renamed = self._google_drive.rename_spreadsheet(
+                spreadsheet_id,
+                cleaned,
+                expected_subject,
+                baseline_name=baseline_name,
+            )
+        try:
+            with self._database.session() as session:
+                document = session.get(LedgerDocument, document_id)
+                if document is None or document.library_deleted_at is not None:
+                    raise self._not_found("書類が見つかりません。")
+                document.library_name = renamed
+                document.document_name = renamed
+                if document.current_job_id:
+                    confirmed = session.scalar(
+                        select(ConfirmedResult).where(
+                            ConfirmedResult.job_id == document.current_job_id
+                        )
+                    )
+                    if confirmed is not None and confirmed.spreadsheet_id == spreadsheet_id:
+                        confirmed.spreadsheet_name = renamed
+                session.commit()
+        except Exception as exc:
+            if (
+                spreadsheet_id
+                and self._google_drive is not None
+                and baseline_name is not None
+                and baseline_name != renamed
+            ):
+                try:
+                    self._google_drive.rename_spreadsheet(
+                        spreadsheet_id,
+                        baseline_name,
+                        expected_subject,
+                        baseline_name=renamed,
+                    )
+                except Exception as compensation_error:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_RENAME_PARTIAL",
+                        title="Drive document rename was partially applied",
+                        detail=(
+                            "Google Drive側の名前変更を自動で元に戻せませんでした。"
+                            "再同期して現在名を確認してください。"
+                        ),
+                    ) from compensation_error
+            if isinstance(exc, AppError):
+                raise
+            raise AppError(
+                status=409,
+                code="DRIVE_DOCUMENT_RENAME_ROLLED_BACK",
+                title="Drive document rename was rolled back",
+                detail=(
+                    "ローカルへの保存に失敗したため、Google Drive側の名前を"
+                    "元に戻しました。再試行してください。"
+                ),
+            ) from exc
         return {
             "documentId": document_id,
             "name": renamed,
@@ -320,6 +494,7 @@ class DocumentLibraryService:
         *,
         paper_size: str = "A4",
         orientation: str = "portrait",
+        expected_subject: str | None = None,
     ) -> bytes:
         with self._database.session() as session:
             document = session.get(LedgerDocument, document_id)
@@ -355,6 +530,7 @@ class DocumentLibraryService:
             spreadsheet_id,
             paper_size=paper_size,
             orientation=orientation,
+            expected_subject=expected_subject,
         )
 
     def first_page_source(self, document_id: str) -> tuple[bytes, str]:
@@ -441,9 +617,44 @@ class DocumentLibraryService:
         }
 
     @staticmethod
+    def _assert_folder_empty(session: Any, folder_id: str) -> None:
+        has_children = session.scalar(
+            select(DocumentFolder.id)
+            .where(DocumentFolder.parent_id == folder_id)
+            .limit(1)
+        )
+        has_documents = session.scalar(
+            select(LedgerDocument.id)
+            .where(LedgerDocument.library_folder_id == folder_id)
+            .limit(1)
+        )
+        if has_children is not None or has_documents is not None:
+            raise AppError(
+                status=409,
+                code="DOCUMENT_FOLDER_NOT_EMPTY",
+                title="Document folder is not empty",
+                detail="書類または子フォルダを移動してから削除してください。",
+            )
+
+    @staticmethod
+    def _location_conflict() -> AppError:
+        return AppError(
+            status=409,
+            code="DOCUMENT_LOCATION_CONFLICT",
+            title="Document location changed",
+            detail="別の操作で保存場所が変更されています。最新状態を読み込んでください。",
+        )
+
+    @staticmethod
     def _folder_name(name: str) -> tuple[str, str]:
         cleaned = " ".join(name.split())
-        if not cleaned or len(cleaned) > 100 or cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned:
+        if (
+            not cleaned
+            or len(cleaned) > 100
+            or cleaned in {".", ".."}
+            or "/" in cleaned
+            or "\\" in cleaned
+        ):
             raise AppError(
                 status=422,
                 code="DOCUMENT_FOLDER_NAME_INVALID",
@@ -476,7 +687,11 @@ class DocumentLibraryService:
         *,
         exclude_id: str | None = None,
     ) -> None:
-        parent_condition = DocumentFolder.parent_id.is_(None) if parent_id is None else DocumentFolder.parent_id == parent_id
+        parent_condition = (
+            DocumentFolder.parent_id.is_(None)
+            if parent_id is None
+            else DocumentFolder.parent_id == parent_id
+        )
         statement = select(DocumentFolder.id).where(
             parent_condition,
             DocumentFolder.normalized_name == normalized_name,
@@ -511,9 +726,38 @@ class DocumentLibraryService:
         ).all()
         changed = False
         for confirmed, job, version in rows:
+            current_ledger = session.scalar(
+                select(LedgerDocument).where(
+                    LedgerDocument.current_job_id == job.id,
+                )
+            )
+            if current_ledger is not None:
+                if confirmed.spreadsheet_id and not current_ledger.spreadsheet_id:
+                    existing_document_id = session.scalar(
+                        select(LedgerDocument.id).where(
+                            LedgerDocument.spreadsheet_id == confirmed.spreadsheet_id,
+                            LedgerDocument.id != current_ledger.id,
+                        )
+                    )
+                    if existing_document_id is None:
+                        current_ledger.spreadsheet_id = confirmed.spreadsheet_id
+                        current_ledger.spreadsheet_url = confirmed.spreadsheet_url
+                        current_ledger.spreadsheet_sync_status = (
+                            confirmed.spreadsheet_sync_status
+                        )
+                        current_ledger.spreadsheet_sync_error = (
+                            confirmed.spreadsheet_sync_error
+                        )
+                        changed = True
+                if confirmed.spreadsheet_name and not current_ledger.library_name:
+                    current_ledger.library_name = confirmed.spreadsheet_name
+                    changed = True
+                if confirmed.spreadsheet_name and not current_ledger.document_name:
+                    current_ledger.document_name = confirmed.spreadsheet_name
+                    changed = True
             if job.id in linked_jobs:
                 continue
-            ledger = session.get(LedgerDocument, job.id)
+            ledger = current_ledger or session.get(LedgerDocument, job.id)
             if ledger is None:
                 ledger = LedgerDocument(
                     id=job.id,
@@ -528,6 +772,7 @@ class DocumentLibraryService:
                     spreadsheet_sync_status=confirmed.spreadsheet_sync_status,
                     spreadsheet_sync_error=confirmed.spreadsheet_sync_error,
                     library_name=confirmed.spreadsheet_name,
+                    document_name=confirmed.spreadsheet_name,
                 )
                 session.add(ledger)
             else:
@@ -539,6 +784,9 @@ class DocumentLibraryService:
                     changed = True
                 if confirmed.spreadsheet_name and not ledger.library_name:
                     ledger.library_name = confirmed.spreadsheet_name
+                    changed = True
+                if confirmed.spreadsheet_name and not ledger.document_name:
+                    ledger.document_name = confirmed.spreadsheet_name
                     changed = True
             session.add(
                 LedgerDocumentPage(

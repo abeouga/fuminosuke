@@ -4,10 +4,11 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, Header, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import Field, model_validator
 
+from app.api.auth_dependencies import require_authenticated_user
 from app.api.dependencies import get_job_service
 from app.api.v1.routes.shared import JobAccepted, JobDetail, job_accepted, job_detail
 from app.api.v1.routes.uploads import read_upload
@@ -20,7 +21,11 @@ from app.domain.field_targets import (
     custom_field_key,
     is_supported_field_path,
 )
-from app.domain.template_config import DocumentIdentityConfig, FieldMappingConfig
+from app.domain.template_config import (
+    DocumentIdentityConfig,
+    DocumentNameConfig,
+    FieldMappingConfig,
+)
 from app.domain.template_definition import (
     TemplateDefinition,
     TemplateDefinitionRevisionView,
@@ -28,6 +33,7 @@ from app.domain.template_definition import (
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.google_oauth_service import AuthenticatedUser
 from app.services.job_service import UploadPayload
 from app.services.layout_service import LayoutService
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
@@ -168,6 +174,16 @@ class DocumentIdentityView(ApiModel):
     exact_length: int | None = None
     match_role: Literal["primary", "confirmation"] = "primary"
     display_role: Literal["title", "subtitle", "none"] = "title"
+    match_group_id: str | None = None
+    match_group_label: str | None = None
+    component_order: int = 0
+
+
+class DocumentNameView(ApiModel):
+    field_paths: list[str] = Field(min_length=1, max_length=20)
+    separator: str = Field(default="", max_length=20)
+    prefix: str = Field(default="", max_length=100)
+    suffix: str = Field(default="", max_length=100)
 
 
 class FieldMappingsResponse(ApiModel):
@@ -176,6 +192,7 @@ class FieldMappingsResponse(ApiModel):
     mappings: list[FieldMappingView]
     document_identity: DocumentIdentityView | None
     document_identity_fields: list[DocumentIdentityView] = Field(default_factory=list)
+    document_name: DocumentNameView | None = None
     targets: list[FieldMappingTargetView]
     valid_for_ocr: bool
     warnings: list[str]
@@ -188,6 +205,7 @@ class FieldMappingsUpdate(ApiModel):
         default_factory=list,
         max_length=20,
     )
+    document_name: DocumentNameView | None = None
 
     @model_validator(mode="after")
     def validate_identity_roles(self) -> FieldMappingsUpdate:
@@ -198,6 +216,13 @@ class FieldMappingsUpdate(ApiModel):
             return self
         if len({field.target_path for field in fields}) != len(fields):
             raise ValueError("書類を見分ける項目を重複して指定できません。")
+        grouped_fields = [field for field in fields if field.match_group_id]
+        if grouped_fields:
+            if len(grouped_fields) != len(fields):
+                raise ValueError("従来の照合条件と照合グループは混在できません。")
+            if any(not field.match_group_label for field in grouped_fields):
+                raise ValueError("照合グループ名を入力してください。")
+            return self
         primary_count = sum(field.match_role == "primary" for field in fields)
         if primary_count != 1 and not (primary_count == 0 and len(fields) >= 2):
             raise ValueError(
@@ -245,10 +270,34 @@ def _mapping_targets(
     return targets
 
 
+def _unassigned_layout_warnings(layout: LayoutDefinition) -> list[str]:
+    has_layout_assignments = bool(layout.relations) or any(
+        cell.role == "mark" and cell.mark_sets for cell in layout.cells
+    )
+    if not has_layout_assignments:
+        return []
+    assigned = {relation.input_cell_id for relation in layout.relations}
+    assigned.update(
+        cell.id for cell in layout.cells if cell.role == "mark" and cell.mark_sets
+    )
+    missing = [
+        cell.id
+        for cell in layout.cells
+        if cell.role in {"input", "mark"} and cell.id not in assigned
+    ]
+    if not missing:
+        return []
+    return [
+        f"読み取る内容が未設定の記入欄が{len(missing)}個あります。"
+        "すべて確認してからOCRを有効にしてください。"
+    ]
+
+
 def _mapping_validation(
     mappings: list[FieldMappingConfig],
     document_identity: DocumentIdentityConfig | None = None,
     document_identity_fields: list[DocumentIdentityConfig] | None = None,
+    document_name: DocumentNameConfig | None = None,
     *,
     require_identity: bool = False,
 ) -> tuple[bool, list[str]]:
@@ -280,22 +329,48 @@ def _mapping_validation(
         )
         if selected_count != len(identity_fields):
             warnings.append("書類を見分ける項目を、使用中の文字欄から選び直してください。")
-        primary_count = sum(field.match_role == "primary" for field in identity_fields)
-        if primary_count != 1 and not (primary_count == 0 and len(identity_fields) >= 2):
-            warnings.append(
-                "書類を見分ける基準を1つ指定するか、"
-                "2項目以上をすべて「違っていたら確認」にしてください。"
-            )
-        if sum(field.display_role == "title" for field in identity_fields) != 1:
-            warnings.append("一覧で大きく表示する項目を1つ指定してください。")
+        grouped_fields = [field for field in identity_fields if field.match_group_id]
+        if grouped_fields:
+            if len(grouped_fields) != len(identity_fields):
+                warnings.append("従来の照合条件と照合グループは混在できません。")
+            if any(not field.match_group_label for field in grouped_fields):
+                warnings.append("照合グループ名を入力してください。")
+        else:
+            primary_count = sum(field.match_role == "primary" for field in identity_fields)
+            if primary_count != 1 and not (primary_count == 0 and len(identity_fields) >= 2):
+                warnings.append(
+                    "書類を見分ける基準を1つ指定するか、"
+                    "2項目以上をすべて「違っていたら確認」にしてください。"
+                )
+            if sum(field.display_role == "title" for field in identity_fields) != 1:
+                warnings.append("一覧で大きく表示する項目を1つ指定してください。")
+    uses_grouped_matching = bool(identity_fields) and all(
+        field.match_group_id for field in identity_fields
+    )
+    if uses_grouped_matching and document_name is None:
+        warnings.append("ライブラリと出力で使う書類名の作り方が未設定です。")
     identity_valid = bool(identity_fields) and not any(
-        warning.startswith(("書類を見分ける項目", "書類を見分ける基準", "一覧で大きく"))
+        warning.startswith(
+            (
+                "書類を見分ける項目",
+                "書類を見分ける基準",
+                "一覧で大きく",
+                "従来の照合条件",
+                "照合グループ名",
+            )
+        )
         for warning in warnings
     )
     return (
         bool(enabled)
         and not invalid
-        and (identity_valid or not require_identity),
+        and (
+            (
+                identity_valid
+                and (document_name is not None or not uses_grouped_matching)
+            )
+            or not require_identity
+        ),
         warnings,
     )
 
@@ -361,9 +436,13 @@ def get_template(request: Request, template_id: str) -> TemplateView:
 def get_template_output_folder(
     request: Request,
     template_id: str,
+    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
 ) -> TemplateOutputFolderView:
     return TemplateOutputFolderView.model_validate(
-        request.app.state.google_drive.template_output_folder(template_id)
+        request.app.state.google_drive.template_output_folder(
+            template_id,
+            user.subject if user else None,
+        )
     )
 
 
@@ -376,11 +455,13 @@ def select_template_output_folder(
     request: Request,
     template_id: str,
     payload: TemplateOutputFolderSelection,
+    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
 ) -> TemplateOutputFolderView:
     return TemplateOutputFolderView.model_validate(
         request.app.state.google_drive.select_template_output_folder(
             template_id,
             payload.folder_id,
+            user.subject if user else None,
         )
     )
 
@@ -663,7 +744,14 @@ async def update_template_boundary(
     response_model_by_alias=True,
 )
 def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
-    _, _, mappings, document_identity, document_identity_fields = TemplateManagementService(
+    (
+        _,
+        _,
+        mappings,
+        document_identity,
+        document_identity_fields,
+        document_name,
+    ) = TemplateManagementService(
         request.app.state.database,
         request.app.state.storage,
     ).get_mapping_configuration(version_id)
@@ -671,6 +759,7 @@ def approve_template_version(request: Request, version_id: str) -> TemplateVersi
         mappings,
         document_identity,
         document_identity_fields,
+        document_name,
         require_identity=True,
     )
     if not valid_for_ocr:
@@ -716,7 +805,7 @@ async def update_handwriting_mask(
     response_model_by_alias=True,
 )
 def get_field_mappings(request: Request, version_id: str) -> FieldMappingsResponse:
-    width, height, mappings, document_identity, document_identity_fields = (
+    width, height, mappings, document_identity, document_identity_fields, document_name = (
         TemplateManagementService(
             request.app.state.database,
             request.app.state.storage,
@@ -730,7 +819,12 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
         mappings,
         document_identity,
         document_identity_fields,
+        document_name,
     )
+    layout_warnings = _unassigned_layout_warnings(layout)
+    if layout_warnings:
+        valid_for_ocr = False
+        warnings = [*warnings, *layout_warnings]
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
@@ -744,6 +838,11 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
             DocumentIdentityView.model_validate(item.model_dump())
             for item in document_identity_fields
         ],
+        document_name=(
+            DocumentNameView.model_validate(document_name.model_dump())
+            if document_name is not None
+            else None
+        ),
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
             for item in _mapping_targets(mappings, layout)
@@ -777,8 +876,13 @@ def update_field_mappings(
             DocumentIdentityConfig.model_validate(item.model_dump())
             for item in incoming_identity_fields
         ],
+        document_name=(
+            DocumentNameConfig.model_validate(body.document_name.model_dump())
+            if body.document_name is not None
+            else None
+        ),
     )
-    width, height, _, document_identity, document_identity_fields = (
+    width, height, _, document_identity, document_identity_fields, document_name = (
         service.get_mapping_configuration(version_id)
     )
     layout = LayoutService(
@@ -789,7 +893,12 @@ def update_field_mappings(
         mappings,
         document_identity,
         document_identity_fields,
+        document_name,
     )
+    layout_warnings = _unassigned_layout_warnings(layout)
+    if layout_warnings:
+        valid_for_ocr = False
+        warnings = [*warnings, *layout_warnings]
     return FieldMappingsResponse(
         canonical_width=width,
         canonical_height=height,
@@ -803,6 +912,11 @@ def update_field_mappings(
             DocumentIdentityView.model_validate(item.model_dump())
             for item in document_identity_fields
         ],
+        document_name=(
+            DocumentNameView.model_validate(document_name.model_dump())
+            if document_name is not None
+            else None
+        ),
         targets=[
             FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
             for item in _mapping_targets(mappings, layout)

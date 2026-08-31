@@ -22,6 +22,7 @@ from app.db.models import (
     OcrResultRevision,
     ProcessingJob,
     SpreadsheetEditEvent,
+    SpreadsheetOutputOperation,
     Template,
     TemplateVersion,
 )
@@ -95,7 +96,11 @@ class OcrResultService:
         self._google_drive = google_drive
         self._documents = DocumentReconciliationService(self._validator)
 
-    def get(self, job_id: str) -> dict[str, Any]:
+    def get(
+        self,
+        job_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
@@ -121,9 +126,15 @@ class OcrResultService:
                 job=job,
                 confirmed=is_confirmed,
                 individual_id=confirmed.individual_id if confirmed else None,
+                expected_subject=expected_subject,
             )
 
-    def correct(self, job_id: str, values: CorrectionValues) -> dict[str, Any]:
+    def correct(
+        self,
+        job_id: str,
+        values: CorrectionValues,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         with self._database.session() as session:
             self._begin_mutation(session)
             jobs = JobRepository(session)
@@ -190,8 +201,15 @@ class OcrResultService:
                     confirmed=False,
                     template_version_id=job.template_version_id,
                     document_id=self._documents.document_id_for_job(session, job_id),
+                    expected_subject=expected_subject,
                 )
-            return self._response(updated, job=job, confirmed=False, document_resolution=resolution)
+            return self._response(
+                updated,
+                job=job,
+                confirmed=False,
+                document_resolution=resolution,
+                expected_subject=expected_subject,
+            )
 
     def resolve_document(
         self,
@@ -201,6 +219,7 @@ class OcrResultService:
         target_document_id: str | None = None,
         target_job_id: str | None = None,
         target_page_id: str | None = None,
+        expected_subject: str | None = None,
     ) -> dict[str, Any]:
         with self._database.session() as session:
             self._begin_mutation(session)
@@ -230,7 +249,13 @@ class OcrResultService:
             resolution = self._documents.payload(
                 session, job=job, document_json=updated.current_corrected_json
             )
-            return self._response(updated, job=job, confirmed=False, document_resolution=resolution)
+            return self._response(
+                updated,
+                job=job,
+                confirmed=False,
+                document_resolution=resolution,
+                expected_subject=expected_subject,
+            )
 
     def apply_spreadsheet_edit(self, edit: SpreadsheetEdit) -> SpreadsheetEditOutcome:
         sync_payload: tuple[int, dict[str, Any], bool, str | None, str | None] | None = None
@@ -238,6 +263,16 @@ class OcrResultService:
             self._begin_mutation(session)
             existing = session.get(SpreadsheetEditEvent, edit.edit_id)
             if existing is not None:
+                if not self._spreadsheet_edit_matches_event(edit, existing):
+                    return SpreadsheetEditOutcome(
+                        status="FAILED",
+                        revision=None,
+                        error_code="SHEET_EDIT_ID_CONFLICT",
+                        error_message=(
+                            "同じ編集IDが別のSheet編集に使用されています。"
+                            "Sheetを再読み込みしてください。"
+                        ),
+                    )
                 return SpreadsheetEditOutcome(
                     status=existing.status,
                     revision=existing.applied_revision,
@@ -262,6 +297,8 @@ class OcrResultService:
                 base_revision=edit.base_revision,
                 source_sheet=edit.source_sheet,
                 source_cell=edit.source_cell,
+                spreadsheet_id=edit.spreadsheet_id,
+                google_subject=edit.google_subject,
                 status="PROCESSING",
             )
             session.add(event)
@@ -284,6 +321,27 @@ class OcrResultService:
                     "OCR_RESULT_NOT_FOUND",
                     "対象のOCR結果が見つかりません。",
                 )
+            document_id = self._documents.document_id_for_job(session, edit.job_id)
+            if edit.spreadsheet_id is not None:
+                ledger = (
+                    session.get(LedgerDocument, document_id)
+                    if document_id is not None
+                    else None
+                )
+                if (
+                    ledger is None
+                    or ledger.spreadsheet_id != edit.spreadsheet_id
+                    or (
+                        edit.google_subject is not None
+                        and ledger.drive_google_subject != edit.google_subject
+                    )
+                ):
+                    return self._fail_spreadsheet_edit(
+                        session,
+                        event,
+                        "SHEET_EDIT_TARGET_MISMATCH",
+                        "このSheet編集は対象書類またはGoogleアカウントと一致しません。",
+                    )
             if not edit.edit_id or edit.base_revision < 1:
                 return self._fail_spreadsheet_edit(
                     session,
@@ -367,6 +425,18 @@ class OcrResultService:
                     else:
                         individual_id = self._documents.document_key(job.id)
                     if individual_id is not None:
+                        current_confirmed = repository.get_confirmed(job.id)
+                        document_id = self._documents.document_id_for_job(session, job.id)
+                        ledger = session.get(LedgerDocument, document_id) if document_id else None
+                        document_name = (
+                            (ledger.document_name or ledger.library_name)
+                            if ledger is not None
+                            else None
+                        ) or (
+                            current_confirmed.spreadsheet_name
+                            if current_confirmed is not None
+                            else None
+                        ) or self._documents.proposed_document_name(job, serialized)
                         self._persist_confirmed_snapshot(
                             session,
                             repository=repository,
@@ -374,6 +444,7 @@ class OcrResultService:
                             stored=updated,
                             serialized=serialized,
                             individual_id=individual_id,
+                            document_name=document_name,
                         )
                         remains_confirmed = True
                 if not remains_confirmed:
@@ -406,10 +477,15 @@ class OcrResultService:
                 confirmed=confirmed,
                 template_version_id=template_version_id,
                 document_id=document_id,
+                expected_subject=edit.google_subject,
             )
         return outcome
 
-    def reopen(self, job_id: str) -> dict[str, Any]:
+    def reopen(
+        self,
+        job_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
         with self._database.session() as session:
             self._begin_mutation(session)
             job = JobRepository(session).get(job_id)
@@ -450,6 +526,7 @@ class OcrResultService:
                     confirmed=False,
                     template_version_id=job.template_version_id,
                     document_id=document_id,
+                    expected_subject=expected_subject,
                 )
             return self._response(
                 stored,
@@ -458,9 +535,36 @@ class OcrResultService:
                 individual_id=(
                     confirmed_result.individual_id if confirmed_result is not None else None
                 ),
+                expected_subject=expected_subject,
             )
 
-    def confirm(self, job_id: str, *, base_revision: int) -> dict[str, Any]:
+    @staticmethod
+    def _spreadsheet_edit_matches_event(
+        edit: SpreadsheetEdit,
+        event: SpreadsheetEditEvent,
+    ) -> bool:
+        return (
+            event.job_id == edit.job_id
+            and event.record_id == edit.record_id
+            and event.field_id == edit.field_id
+            and event.previous_value == edit.previous_value
+            and event.new_value == edit.new_value
+            and event.base_revision == edit.base_revision
+            and event.source_sheet == edit.source_sheet
+            and event.source_cell == edit.source_cell
+            and event.spreadsheet_id == edit.spreadsheet_id
+            and event.google_subject == edit.google_subject
+        )
+
+    def confirm(
+        self,
+        job_id: str,
+        *,
+        base_revision: int,
+        document_name: str | None = None,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        name_sync_operation_id: str | None = None
         with self._database.session() as session:
             self._begin_mutation(session)
             jobs = JobRepository(session)
@@ -537,6 +641,89 @@ class OcrResultService:
                 document_json=serialized,
                 configured_paths=self._configured_paths(job),
             )
+            previous_confirmed = repository.get_confirmed(job_id)
+            existing_document_name = (
+                (ledger.document_name or ledger.library_name)
+                if ledger is not None
+                else None
+            ) or (
+                previous_confirmed.spreadsheet_name
+                if previous_confirmed is not None
+                else None
+            )
+            resolved_document_name = self._normalize_spreadsheet_name(
+                document_name
+                or existing_document_name
+                or self._documents.proposed_document_name(job, serialized)
+            )
+            if (
+                not is_spreadsheet_template
+                and ledger is not None
+                and ledger.spreadsheet_id
+            ):
+                candidate_operation_id = f"name:{job_id}:{stored.revision}"[:124]
+                name_intent = session.get(
+                    SpreadsheetOutputOperation,
+                    candidate_operation_id,
+                )
+                # A migrated row may have a Drive file id but no saved name
+                # baseline.  Still create an intent so a later full sync cannot
+                # silently replace the newly confirmed local name with an
+                # unknown remote name.  Reconciliation will surface the missing
+                # baseline as a conflict instead of guessing.
+                name_changed = existing_document_name != resolved_document_name
+                if name_intent is not None:
+                    if (
+                        name_intent.document_id != ledger.id
+                        or name_intent.spreadsheet_id != ledger.spreadsheet_id
+                        or name_intent.source_job_id != job_id
+                        or name_intent.source_revision != stored.revision
+                    ):
+                        raise AppError(
+                            status=409,
+                            code="SPREADSHEET_NAME_OPERATION_CONFLICT",
+                            title="Spreadsheet name operation conflicts",
+                            detail="同じ名前同期処理が別の書類に使用されています。",
+                        )
+                    if name_intent.drive_name != resolved_document_name:
+                        name_sync_operation_id = candidate_operation_id
+                elif name_changed:
+                    if (
+                        ledger.drive_google_subject is None
+                        or ledger.drive_root_folder_id is None
+                        or ledger.drive_folder_id is None
+                    ):
+                        raise AppError(
+                            status=409,
+                            code="DRIVE_DOCUMENT_OWNER_UNCONFIRMED",
+                            title="Drive document ownership is not confirmed",
+                            detail=(
+                                "Google Drive上の既存書類名を変更する前に、"
+                                "書類ライブラリで所有アカウントを確認してください。"
+                            ),
+                        )
+                    name_intent = SpreadsheetOutputOperation(
+                        operation_id=candidate_operation_id,
+                        document_id=ledger.id,
+                        google_subject=ledger.drive_google_subject,
+                        source_job_id=job_id,
+                        source_revision=stored.revision,
+                        drive_root_folder_id=ledger.drive_root_folder_id,
+                        drive_parent_folder_id=ledger.drive_folder_id,
+                        # Empty string is the persisted "unknown baseline"
+                        # marker for legacy rows whose remote name was never
+                        # recorded.  It keeps the non-null schema invariant and
+                        # forces reconciliation to report a conflict instead of
+                        # guessing or allowing full sync to overwrite the local
+                        # name.
+                        drive_name=existing_document_name or "",
+                        drive_folder_path=ledger.drive_folder_path,
+                        library_folder_id=ledger.library_folder_id,
+                        library_location_version=ledger.library_location_version,
+                        spreadsheet_id=ledger.spreadsheet_id,
+                    )
+                    session.add(name_intent)
+                    name_sync_operation_id = candidate_operation_id
             self._persist_confirmed_snapshot(
                 session,
                 repository=repository,
@@ -544,8 +731,11 @@ class OcrResultService:
                 stored=stored,
                 serialized=serialized,
                 individual_id=individual_id,
+                document_name=resolved_document_name,
             )
             if ledger is not None and page is not None:
+                ledger.document_name = resolved_document_name
+                ledger.library_name = resolved_document_name
                 self._documents.mark_confirmed(
                     session,
                     ledger,
@@ -553,11 +743,23 @@ class OcrResultService:
                     job_id=job_id,
                     document_json=serialized,
                     individual_id=ledger.individual_id,
+                    job=job,
                 )
             session.commit()
             if is_spreadsheet_template:
-                self._publish_spreadsheet_template(job_id)
-            elif self._google_sheets is not None:
+                self._publish_spreadsheet_template(job_id, expected_subject)
+            else:
+                if (
+                    name_sync_operation_id is not None
+                    and self._google_drive is not None
+                ):
+                    self._google_drive.reconcile_document_name(
+                        ledger.id,
+                        resolved_document_name,
+                        operation_id=name_sync_operation_id,
+                        expected_subject=expected_subject,
+                    )
+            if not is_spreadsheet_template and self._google_sheets is not None:
                 self._google_sheets.sync(
                     job_id=job_id,
                     revision=stored.revision,
@@ -565,15 +767,22 @@ class OcrResultService:
                     confirmed=True,
                     template_version_id=job.template_version_id,
                     document_id=ledger.id if ledger is not None else None,
+                    expected_subject=expected_subject,
                 )
             return self._response(
                 stored,
                 job=job,
                 confirmed=True,
                 individual_id=individual_id,
+                expected_subject=expected_subject,
             )
 
-    def sync_spreadsheet(self, job_id: str) -> dict[str, Any]:
+    def sync_spreadsheet(
+        self,
+        job_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        name_retry: tuple[str, str, str] | None = None
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
             stored = OcrResultRepository(session).get_by_job(job_id)
@@ -591,31 +800,82 @@ class OcrResultService:
                     detail="同じ個体の台帳があります。保存方法を先に選択してください。",
                 )
             is_spreadsheet_template = self._is_spreadsheet_template(session, job)
-            if is_spreadsheet_template:
-                if confirmed:
-                    self._publish_spreadsheet_template(job_id)
-            elif self._google_sheets is not None:
-                self._google_sheets.sync(
-                    job_id=job_id,
-                    revision=stored.revision,
-                    document=self._normalized_document_json(stored.current_corrected_json),
-                    confirmed=confirmed,
-                    template_version_id=job.template_version_id,
-                    document_id=self._documents.document_id_for_job(session, job_id),
-                )
+            document_id = self._documents.document_id_for_job(session, job_id)
             confirmed_result = (
                 OcrResultRepository(session).get_confirmed(job_id) if confirmed else None
             )
+            if (
+                confirmed
+                and not is_spreadsheet_template
+                and document_id is not None
+                and self._google_drive is not None
+            ):
+                ledger = session.get(LedgerDocument, document_id)
+                operation_id = f"name:{job_id}:{stored.revision}"[:124]
+                intent = session.get(SpreadsheetOutputOperation, operation_id)
+                desired_name = (
+                    (ledger.document_name or ledger.library_name)
+                    if ledger is not None
+                    else None
+                ) or (
+                    confirmed_result.spreadsheet_name
+                    if confirmed_result is not None
+                    else None
+                )
+                if (
+                    intent is not None
+                    and desired_name is not None
+                    and intent.drive_name != desired_name
+                ):
+                    name_retry = (document_id, desired_name, operation_id)
+            revision = stored.revision
+            document = self._normalized_document_json(stored.current_corrected_json)
+            template_version_id = job.template_version_id
+            individual_id = (
+                confirmed_result.individual_id if confirmed_result is not None else None
+            )
+
+        if is_spreadsheet_template:
+            if confirmed:
+                self._publish_spreadsheet_template(job_id, expected_subject)
+        else:
+            if name_retry is not None and self._google_drive is not None:
+                self._google_drive.reconcile_document_name(
+                    name_retry[0],
+                    name_retry[1],
+                    operation_id=name_retry[2],
+                    expected_subject=expected_subject,
+                )
+            if self._google_sheets is not None:
+                self._google_sheets.sync(
+                    job_id=job_id,
+                    revision=revision,
+                    document=document,
+                    confirmed=confirmed,
+                    template_version_id=template_version_id,
+                    document_id=document_id,
+                    expected_subject=expected_subject,
+                )
+
+        with self._database.session() as session:
+            job = JobRepository(session).get(job_id)
+            stored = OcrResultRepository(session).get_by_job(job_id)
+            if job is None or stored is None:
+                raise self._not_found()
             return self._response(
                 stored,
                 job=job,
                 confirmed=confirmed,
-                individual_id=(
-                    confirmed_result.individual_id if confirmed_result is not None else None
-                ),
+                individual_id=individual_id,
+                expected_subject=expected_subject,
             )
 
-    def rename_spreadsheet(self, job_id: str, file_name: str) -> dict[str, object | None]:
+    def rename_spreadsheet(
+        self,
+        job_id: str,
+        file_name: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, object | None]:
         if self._google_drive is None:
             raise AppError(
                 status=409,
@@ -648,7 +908,11 @@ class OcrResultService:
                 )
             spreadsheet_id = confirmed.spreadsheet_id
 
-        renamed = self._google_drive.rename_spreadsheet(spreadsheet_id, normalized)
+        renamed = self._google_drive.rename_spreadsheet(
+            spreadsheet_id,
+            normalized,
+            expected_subject,
+        )
         with self._database.session() as session:
             current = OcrResultRepository(session).get_confirmed(job_id)
             if current is None or current.spreadsheet_id != spreadsheet_id:
@@ -659,6 +923,11 @@ class OcrResultService:
                     detail="出力先が更新されました。画面を再読み込みしてください。",
                 )
             current.spreadsheet_name = renamed
+            document_id = self._documents.document_id_for_job(session, job_id)
+            ledger = session.get(LedgerDocument, document_id) if document_id else None
+            if ledger is not None:
+                ledger.document_name = renamed
+                ledger.library_name = renamed
             session.commit()
             return {
                 "enabled": True,
@@ -675,7 +944,11 @@ class OcrResultService:
                 raise self._not_found()
             return self._documents.document_id_for_job(session, job_id)
 
-    def spreadsheet_status(self, job_id: str) -> dict[str, object | None]:
+    def spreadsheet_status(
+        self,
+        job_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, object | None]:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
@@ -685,11 +958,16 @@ class OcrResultService:
                     session,
                     job,
                     confirmed=job.status == JobStatus.CONFIRMED.value,
+                    expected_subject=expected_subject,
                 )
             document_id = self._documents.document_id_for_job(session, job_id)
         if self._google_sheets is None:
             return self._disabled_spreadsheet_status()
-        return self._google_sheets.status(job_id, document_id).payload()
+        return self._google_sheets.status(
+            job_id,
+            document_id,
+            expected_subject,
+        ).payload()
 
     @staticmethod
     def _begin_mutation(session: Session) -> None:
@@ -781,6 +1059,7 @@ class OcrResultService:
         stored: OcrResult,
         serialized: dict[str, Any],
         individual_id: str,
+        document_name: str,
     ) -> None:
         json_relative = self._storage.write_text(
             f"exports/{job.id}/confirmed_result.json",
@@ -811,6 +1090,7 @@ class OcrResultService:
                 confirmed_json=serialized,
                 confirmed_at=confirmed_at,
                 export_relative_path=json_relative,
+                spreadsheet_name=document_name,
             )
             session.add(confirmed_result)
             session.flush()
@@ -820,6 +1100,7 @@ class OcrResultService:
             confirmed_result.confirmed_json = serialized
             confirmed_result.confirmed_at = confirmed_at
             confirmed_result.export_relative_path = json_relative
+            confirmed_result.spreadsheet_name = document_name
             session.execute(
                 delete(ConfirmedRecordField).where(
                     ConfirmedRecordField.confirmed_result_id == confirmed_result.id
@@ -918,7 +1199,10 @@ class OcrResultService:
                 individual_id=confirmed.individual_id,
                 confirmed_at=confirmed.confirmed_at,
             )
-            return table.payload()
+            payload = table.payload()
+            if confirmed.spreadsheet_name:
+                payload["fileName"] = f"{confirmed.spreadsheet_name}.xlsx"
+            return payload
 
     def _response(
         self,
@@ -928,12 +1212,18 @@ class OcrResultService:
         confirmed: bool,
         individual_id: str | None = None,
         document_resolution: dict[str, Any] | None = None,
+        expected_subject: str | None = None,
     ) -> dict[str, Any]:
         snapshot_individual_id = job.config_snapshot_json.get("motherIndividualId")
         resolved_individual_id = individual_id or (
             snapshot_individual_id if isinstance(snapshot_individual_id, str) else None
         )
         resolution = document_resolution or self._document_resolution(job, stored)
+        document_name = self._resolved_document_name(
+            job,
+            stored.current_corrected_json,
+            resolution.get("documentId"),
+        )
         return {
             "jobId": stored.job_id,
             "revision": stored.revision,
@@ -956,12 +1246,35 @@ class OcrResultService:
             ),
             "recordStructure": self._record_structure(job),
             "documentResolution": resolution,
+            "documentName": document_name,
             "spreadsheetSync": self._spreadsheet_status_payload(
                 job,
                 confirmed=confirmed,
                 document_id=resolution.get("documentId"),
+                expected_subject=expected_subject,
             ),
         }
+
+    def _resolved_document_name(
+        self,
+        job: ProcessingJob,
+        document: dict[str, Any],
+        document_id: object,
+    ) -> str:
+        with self._database.session() as session:
+            ledger = (
+                session.get(LedgerDocument, document_id)
+                if isinstance(document_id, str)
+                else None
+            )
+            if ledger is not None:
+                resolved = ledger.document_name or ledger.library_name
+                if resolved:
+                    return resolved
+            confirmed = OcrResultRepository(session).get_confirmed(job.id)
+            if confirmed is not None and confirmed.spreadsheet_name:
+                return confirmed.spreadsheet_name
+        return self._documents.proposed_document_name(job, document)
 
     def _spreadsheet_status_payload(
         self,
@@ -969,6 +1282,7 @@ class OcrResultService:
         *,
         confirmed: bool,
         document_id: object,
+        expected_subject: str | None = None,
     ) -> dict[str, object | None]:
         with self._database.session() as session:
             current_job = session.get(ProcessingJob, job.id) or job
@@ -977,12 +1291,14 @@ class OcrResultService:
                     session,
                     current_job,
                     confirmed=confirmed,
+                    expected_subject=expected_subject,
                 )
         if self._google_sheets is None:
             return self._disabled_spreadsheet_status()
         return self._google_sheets.status(
             job.id,
             document_id if isinstance(document_id, str) else None,
+            expected_subject,
         ).payload()
 
     def _spreadsheet_template_status(
@@ -991,6 +1307,7 @@ class OcrResultService:
         job: ProcessingJob,
         *,
         confirmed: bool,
+        expected_subject: str | None = None,
     ) -> dict[str, object | None]:
         if self._google_drive is None:
             return self._disabled_spreadsheet_status()
@@ -1008,6 +1325,25 @@ class OcrResultService:
             and stored.spreadsheet_url
             and stored.spreadsheet_revision == stored.ocr_result_revision
         ):
+            document_id = self._documents.document_id_for_job(session, job.id)
+            ledger = (
+                session.get(LedgerDocument, document_id)
+                if document_id is not None
+                else None
+            )
+            if expected_subject is not None and (
+                ledger is None
+                or ledger.drive_google_subject != expected_subject
+            ):
+                return {
+                    "enabled": True,
+                    "status": "failed",
+                    "spreadsheetUrl": None,
+                    "fileName": stored.spreadsheet_name,
+                    "lastError": (
+                        "この書類は現在接続中のGoogleアカウントに属していません。"
+                    ),
+                }
             return {
                 "enabled": True,
                 "status": "synced",
@@ -1031,7 +1367,11 @@ class OcrResultService:
             "lastError": "入力済みGoogleスプレッドシートがまだ作成されていません。",
         }
 
-    def _publish_spreadsheet_template(self, job_id: str) -> dict[str, object | None]:
+    def _publish_spreadsheet_template(
+        self,
+        job_id: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, object | None]:
         if self._google_drive is None:
             return self._disabled_spreadsheet_status()
         with self._database.session() as session:
@@ -1044,7 +1384,33 @@ class OcrResultService:
                 and confirmed.spreadsheet_url
                 and confirmed.spreadsheet_revision == confirmed.ocr_result_revision
             ):
-                return self._spreadsheet_template_status(session, job, confirmed=True)
+                document_id = self._documents.document_id_for_job(session, job_id)
+                if document_id is not None:
+                    self._google_drive.document_target(
+                        document_id,
+                        expected_subject,
+                    )
+                    output_intent = session.get(
+                        SpreadsheetOutputOperation,
+                        f"{job_id}:{confirmed.ocr_result_revision}",
+                    )
+                    if (
+                        output_intent is not None
+                        and output_intent.drive_name == confirmed.spreadsheet_name
+                    ):
+                        return self._spreadsheet_template_status(
+                            session,
+                            job,
+                            confirmed=True,
+                            expected_subject=expected_subject,
+                        )
+                else:
+                    return self._spreadsheet_template_status(
+                        session,
+                        job,
+                        confirmed=True,
+                        expected_subject=expected_subject,
+                    )
             version = session.get(TemplateVersion, job.template_version_id)
             if version is None:
                 return self._disabled_spreadsheet_status()
@@ -1056,23 +1422,63 @@ class OcrResultService:
             )
             template_id = version.template_id
             revision = confirmed.ocr_result_revision
-            file_name = filled.file_name
-            spreadsheet_name = re.sub(r"\.xlsx$", "", file_name, flags=re.IGNORECASE).strip()[:180]
+            document_id = self._documents.document_id_for_job(session, job_id)
+            if document_id is None:
+                error = "出力先の台帳を確認できませんでした。"
+                confirmed.spreadsheet_sync_status = "failed"
+                confirmed.spreadsheet_sync_error = error
+                session.commit()
+                return {
+                    "enabled": True,
+                    "status": "failed",
+                    "spreadsheetUrl": None,
+                    "fileName": confirmed.spreadsheet_name,
+                    "lastError": error,
+                }
+            generated_name = re.sub(
+                r"\.xlsx$", "", filled.file_name, flags=re.IGNORECASE
+            ).strip()[:180]
+            spreadsheet_name = confirmed.spreadsheet_name or generated_name
+            file_name = f"{spreadsheet_name}.xlsx"
             content = filled.content
         try:
-            spreadsheet_id, spreadsheet_url = self._google_drive.create_spreadsheet_from_xlsx(
+            (
+                spreadsheet_id,
+                spreadsheet_url,
+                spreadsheet_name,
+            ) = self._google_drive.create_spreadsheet_from_xlsx(
+                document_id=document_id,
                 template_id=template_id,
+                operation_id=f"{job_id}:{revision}",
+                source_job_id=job_id,
+                source_revision=revision,
                 name=file_name,
                 content=content,
+                expected_subject=expected_subject,
             )
         except Exception as exc:
-            error = exc.detail if isinstance(exc, AppError) else "Googleスプレッドシートを作成できませんでした。"
+            error = (
+                exc.detail
+                if isinstance(exc, AppError)
+                else "Googleスプレッドシートを作成できませんでした。"
+            )
             with self._database.session() as session:
+                self._begin_mutation(session)
                 current = OcrResultRepository(session).get_confirmed(job_id)
-                if current is not None:
+                if (
+                    current is not None
+                    and current.ocr_result_revision == revision
+                ):
                     current.spreadsheet_sync_status = "failed"
                     current.spreadsheet_sync_error = error
                     session.commit()
+                else:
+                    return self._spreadsheet_template_status(
+                        session,
+                        job,
+                        confirmed=True,
+                        expected_subject=expected_subject,
+                    )
             return {
                 "enabled": True,
                 "status": "failed",
@@ -1081,20 +1487,35 @@ class OcrResultService:
                 "lastError": error,
             }
         with self._database.session() as session:
+            self._begin_mutation(session)
             current = OcrResultRepository(session).get_confirmed(job_id)
-            if current is not None:
-                current.spreadsheet_id = spreadsheet_id
-                current.spreadsheet_url = spreadsheet_url
-                current.spreadsheet_name = spreadsheet_name
-                current.spreadsheet_revision = revision
-                current.spreadsheet_sync_status = "synced"
-                current.spreadsheet_sync_error = None
-                session.commit()
+            if current is None or current.ocr_result_revision != revision:
+                return self._spreadsheet_template_status(
+                    session,
+                    job,
+                    confirmed=True,
+                    expected_subject=expected_subject,
+                )
+            ledger = session.get(LedgerDocument, document_id)
+            persisted_name = spreadsheet_name
+            if ledger is not None and ledger.spreadsheet_id == spreadsheet_id:
+                persisted_name = (
+                    ledger.document_name
+                    or ledger.library_name
+                    or spreadsheet_name
+                )
+            current.spreadsheet_id = spreadsheet_id
+            current.spreadsheet_url = spreadsheet_url
+            current.spreadsheet_name = persisted_name
+            current.spreadsheet_revision = revision
+            current.spreadsheet_sync_status = "synced"
+            current.spreadsheet_sync_error = None
+            session.commit()
         return {
             "enabled": True,
             "status": "synced",
             "spreadsheetUrl": spreadsheet_url,
-            "fileName": spreadsheet_name,
+            "fileName": persisted_name,
             "lastError": None,
         }
 

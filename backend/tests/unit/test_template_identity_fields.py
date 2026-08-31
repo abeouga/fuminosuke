@@ -161,3 +161,65 @@ def test_single_confirmation_field_is_not_a_valid_combination() -> None:
 
     with pytest.raises(ValidationError, match="at least two confirmation fields"):
         TemplateConfig.model_validate(payload)
+
+
+def test_grouped_identity_and_document_name_are_independent_rules() -> None:
+    payload = _config()
+    payload["documentIdentityFields"] = [
+        {
+            "mappingId": "individual_id",
+            "targetPath": "document.unifiedEarTag",
+            "label": "個体識別番号",
+            "matchRole": "confirmation",
+            "displayRole": "none",
+            "matchGroupId": "person",
+            "matchGroupLabel": "氏名",
+            "componentOrder": 1,
+        },
+        {
+            "mappingId": "cattle_name",
+            "targetPath": "document.cattleName",
+            "label": "牛名",
+            "matchRole": "confirmation",
+            "displayRole": "none",
+            "matchGroupId": "person",
+            "matchGroupLabel": "氏名",
+            "componentOrder": 0,
+        },
+    ]
+    payload["documentName"] = {
+        "fieldPaths": ["document.cattleName"],
+        "separator": "_",
+        "prefix": "面接カード_",
+        "suffix": "",
+    }
+
+    config = TemplateConfig.model_validate(payload)
+
+    fields = config.effective_document_identity_fields()
+    assert [field.match_group_id for field in fields] == ["person", "person"]
+    assert config.document_name is not None
+    assert config.document_name.field_paths == ["document.cattleName"]
+
+
+def test_grouped_identity_rejects_a_partially_grouped_configuration() -> None:
+    payload = _config()
+    payload["documentIdentityFields"] = [
+        {
+            "mappingId": "individual_id",
+            "targetPath": "document.unifiedEarTag",
+            "label": "個体識別番号",
+            "matchGroupId": "person",
+            "matchGroupLabel": "氏名",
+        },
+        {
+            "mappingId": "cattle_name",
+            "targetPath": "document.cattleName",
+            "label": "牛名",
+            "matchRole": "confirmation",
+            "displayRole": "title",
+        },
+    ]
+
+    with pytest.raises(ValidationError, match="cannot mix grouped and legacy matching"):
+        TemplateConfig.model_validate(payload)

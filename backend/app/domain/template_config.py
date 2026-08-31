@@ -127,6 +127,14 @@ class DocumentIdentityConfig(TemplateConfigModel):
     exact_length: int | None = Field(default=None, ge=1, le=100)
     match_role: Literal["primary", "confirmation"] = "primary"
     display_role: Literal["title", "subtitle", "none"] = "title"
+    match_group_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+    match_group_label: str | None = Field(default=None, min_length=1, max_length=100)
+    component_order: int = Field(default=0, ge=0, le=100)
 
     @field_validator("label", mode="before")
     @classmethod
@@ -137,6 +145,23 @@ class DocumentIdentityConfig(TemplateConfigModel):
     def validate_format(self) -> DocumentIdentityConfig:
         if self.value_type == "text" and self.exact_length is not None:
             raise ValueError("exactLength is supported only for digit identifiers")
+        return self
+
+
+class DocumentNameConfig(TemplateConfigModel):
+    field_paths: list[str] = Field(min_length=1, max_length=20)
+    separator: str = Field(default="", max_length=20)
+    prefix: str = Field(default="", max_length=100)
+    suffix: str = Field(default="", max_length=100)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> DocumentNameConfig:
+        cleaned = [path.strip() for path in self.field_paths]
+        if any(not path for path in cleaned):
+            raise ValueError("documentName fieldPaths cannot contain blank values")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("documentName fieldPaths must be unique")
+        self.field_paths = cleaned
         return self
 
 
@@ -170,6 +195,7 @@ class TemplateConfig(TemplateConfigModel):
         default_factory=list,
         max_length=20,
     )
+    document_name: DocumentNameConfig | None = None
     marks: list[MarkConfig]
     export: ExportConfig
 
@@ -215,17 +241,31 @@ class TemplateConfig(TemplateConfigModel):
             identity_target_paths = [field.target_path for field in identity_fields]
             if len(set(identity_target_paths)) != len(identity_target_paths):
                 raise ValueError("documentIdentityFields targetPath values must be unique")
-            primary_count = sum(field.match_role == "primary" for field in identity_fields)
-            combined_confirmation = primary_count == 0 and len(identity_fields) >= 2
-            if primary_count != 1 and not combined_confirmation:
-                raise ValueError(
-                    "documentIdentityFields must contain exactly one primary field or "
-                    "at least two confirmation fields"
-                )
-            if sum(field.display_role == "title" for field in identity_fields) != 1:
-                raise ValueError("documentIdentityFields must contain exactly one title field")
-            if sum(field.display_role == "subtitle" for field in identity_fields) > 1:
-                raise ValueError("documentIdentityFields can contain at most one subtitle field")
+            grouped_fields = [field for field in identity_fields if field.match_group_id]
+            if grouped_fields:
+                if len(grouped_fields) != len(identity_fields):
+                    raise ValueError(
+                        "documentIdentityFields cannot mix grouped and legacy matching"
+                    )
+                for field in grouped_fields:
+                    if not field.match_group_label:
+                        raise ValueError("grouped identity fields require matchGroupLabel")
+            else:
+                primary_count = sum(field.match_role == "primary" for field in identity_fields)
+                combined_confirmation = primary_count == 0 and len(identity_fields) >= 2
+                if primary_count != 1 and not combined_confirmation:
+                    raise ValueError(
+                        "documentIdentityFields must contain exactly one primary field or "
+                        "at least two confirmation fields"
+                    )
+                if sum(field.display_role == "title" for field in identity_fields) != 1:
+                    raise ValueError(
+                        "documentIdentityFields must contain exactly one title field"
+                    )
+                if sum(field.display_role == "subtitle" for field in identity_fields) > 1:
+                    raise ValueError(
+                        "documentIdentityFields can contain at most one subtitle field"
+                    )
             for identity_field in identity_fields:
                 identity_mapping = next(
                     (
@@ -248,11 +288,24 @@ class TemplateConfig(TemplateConfigModel):
                 None,
             )
             if self.document_identity is not None and (
-                primary is None
-                or self.document_identity.mapping_id != primary.mapping_id
-                or self.document_identity.target_path != primary.target_path
+                not grouped_fields
+                and (
+                    primary is None
+                    or self.document_identity.mapping_id != primary.mapping_id
+                    or self.document_identity.target_path != primary.target_path
+                )
             ):
                 raise ValueError("documentIdentity must match the primary documentIdentityField")
+        if self.document_name is not None:
+            configured_paths = {
+                mapping.target_path for mapping in self.field_mappings if mapping.enabled
+            }
+            unknown_name_path = next(
+                (path for path in self.document_name.field_paths if path not in configured_paths),
+                None,
+            )
+            if unknown_name_path is not None:
+                raise ValueError("documentName references an unknown field path")
         for mark in self.marks:
             if mark.region_id not in region_ids:
                 raise ValueError(f"Mark {mark.mark_id} references an unknown region")

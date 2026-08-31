@@ -10,7 +10,7 @@ import { TemplateCandidateSettingsEditor } from "../components/TemplateCandidate
 import { showToast } from "../components/Toast";
 import { pickGoogleDriveFolder } from "../googlePicker";
 import { useJobPoller } from "../hooks/useJobPoller";
-import type { Artifact, DocumentIdentity, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
+import type { Artifact, DocumentIdentity, DocumentNameRule, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 
 const MODES = [
   { id: "SINGLE_IMAGE_EXPERIMENTAL", number: "01", title: "記入済みの一枚から", copy: "記入済み台帳1枚を補正し、矩形と読み取り欄を画面で設定します。", count: "記入済み・1枚" },
@@ -27,7 +27,7 @@ const LAYOUT_WIZARD_STEPS: Array<{
   { id: "classify", shortTitle: "欄の種類", title: "検出された枠の種類を確認する", description: "書類から検出された枠を、項目名、記入欄、選択欄、見出し、読み取らない欄に分けます。項目名の文字候補もここで確認できます。" },
   { id: "meaning", shortTitle: "読み取る内容", title: "各欄で読み取る内容を決める", description: "記入欄と保存する情報を対応づけます。項目名のない記入欄には、保存する情報を直接指定できます。" },
   { id: "records", shortTitle: "繰り返し部分", title: "繰り返し部分をまとめる", description: "明細表など、同じ構造を繰り返す欄をひとまとまりとして設定します。" },
-  { id: "identity", shortTitle: "書類の見分け方", title: "同じ書類を見分ける情報を決める", description: "書類上の欄を複数選択し、同じ書類と判断する基準と一覧に表示する見出しを指定します。" },
+  { id: "identity", shortTitle: "照合と書類名", title: "同じ書類を探す条件と書類名を決める", description: "複数の欄を氏名・住所などの照合グループへまとめ、ライブラリと出力で共用する書類名を設定します。" },
   { id: "review", shortTitle: "確認・保存", title: "設定を確認して保存する", description: "未割当とレコード構造を確認し、テンプレート設定を保存します。" },
 ];
 
@@ -620,6 +620,7 @@ function TemplateReview({
   const [maskDirty, setMaskDirty] = useState(false);
   const [maskBusy, setMaskBusy] = useState(false);
   const [identityFields, setIdentityFields] = useState<DocumentIdentity[]>([]);
+  const [documentNameRule, setDocumentNameRule] = useState<DocumentNameRule | null>(null);
   const [maskRequiresReprocess, setMaskRequiresReprocess] = useState(
     version.status === "DRAFT"
       && Boolean(version.quality.editedMaskSha256)
@@ -645,6 +646,7 @@ function TemplateReview({
         setMappingConfig(mappings);
         setLayoutConfig(layout);
         setIdentityFields(identityFieldsFromResponse(mappings));
+        setDocumentNameRule(documentNameFromResponse(mappings));
         setMappingFresh(true);
       })
       .catch((error) => {
@@ -663,6 +665,9 @@ function TemplateReview({
     || identityFieldsSignature(identityFields) !== identityFieldsSignature(
       mappingConfig ? identityFieldsFromResponse(mappingConfig) : [],
     )
+    || documentNameSignature(documentNameRule) !== documentNameSignature(
+      mappingConfig ? documentNameFromResponse(mappingConfig) : null,
+    )
     || decisionBusy !== null
   );
   useEffect(() => {
@@ -680,17 +685,27 @@ function TemplateReview({
   const layers = ["layoutVerificationOverlay", "debugOverlay", "handwritingOnly", "handwritingProbability"].filter((name) => byName.has(name));
   const persistedIdentityFields = mappingConfig ? identityFieldsFromResponse(mappingConfig) : [];
   const identityReady = identityConfigurationReady(identityFields);
+  const documentNameReady = Boolean(documentNameRule?.fieldPaths.length);
   const identityDirty = identityFieldsSignature(identityFields) !== identityFieldsSignature(
     persistedIdentityFields,
   );
+  const documentNameDirty = documentNameSignature(documentNameRule) !== documentNameSignature(
+    mappingConfig ? documentNameFromResponse(mappingConfig) : null,
+  );
   const meaningSaved = mappingFresh
     && Boolean(mappingConfig?.validForOcr)
-    && identityConfigurationReady(persistedIdentityFields);
+    && identityConfigurationReady(persistedIdentityFields)
+    && Boolean(mappingConfig && documentNameFromResponse(mappingConfig)?.fieldPaths.length);
   const visibleMappingWarnings = mappingWarningsForIdentity(
     mappingConfig?.warnings ?? [],
     identityFields,
+    documentNameRule,
   );
-  const effectiveLayoutVerified = layoutVerified && !editorDirty && !identityDirty && mappingFresh;
+  const effectiveLayoutVerified = layoutVerified
+    && !editorDirty
+    && !identityDirty
+    && !documentNameDirty
+    && mappingFresh;
   const operationBusy = editorBusy || maskBusy || verifying || decisionBusy !== null;
   const layoutWorkflowIndex = LAYOUT_WIZARD_STEPS.findIndex(
     (step) => step.id === layoutWorkflowStep,
@@ -718,7 +733,7 @@ function TemplateReview({
   };
   const closeAfterEditorSave = () => {
     if (
-      (maskDirty || identityDirty)
+      (maskDirty || identityDirty || documentNameDirty)
       && !window.confirm(
         "保存していないテンプレート変更があります。変更を破棄して一覧へ戻りますか？",
       )
@@ -825,7 +840,7 @@ function TemplateReview({
                 key={step.id}
                 className={step.id === layoutWorkflowStep ? "current" : index < layoutWorkflowIndex ? "done" : ""}
                 aria-current={step.id === layoutWorkflowStep ? "step" : undefined}
-                disabled={operationBusy || (step.id === "review" && !identityReady)}
+                disabled={operationBusy || (step.id === "review" && (!identityReady || !documentNameReady))}
                 onClick={() => moveLayoutWorkflow(step.id)}
               >
                 <span>{index + 1}</span>
@@ -842,7 +857,9 @@ function TemplateReview({
             workflowStep={layoutWorkflowStep}
             documentIdentityFields={identityFields}
             onDocumentIdentityFieldsChange={setIdentityFields}
-            allowUnchangedSave={!mappingConfig.validForOcr || identityDirty}
+            documentNameRule={documentNameRule}
+            onDocumentNameRuleChange={setDocumentNameRule}
+            allowUnchangedSave={!mappingConfig.validForOcr || identityDirty || documentNameDirty}
             disabled={maskDirty || maskBusy}
             onDirtyChange={setEditorDirty}
             onBusyChange={setEditorBusy}
@@ -876,6 +893,9 @@ function TemplateReview({
                     exactLength: selectedMapping.targetPath === "document.unifiedEarTag" ? 10 : null,
                     matchRole: field.matchRole,
                     displayRole: field.displayRole,
+                    matchGroupId: field.matchGroupId,
+                    matchGroupLabel: field.matchGroupLabel,
+                    componentOrder: field.componentOrder,
                   };
                 });
                 const primaryIdentity = persistedIdentityFields.find((field) => field.matchRole === "primary") ?? null;
@@ -884,9 +904,11 @@ function TemplateReview({
                   refreshed.mappings,
                   primaryIdentity,
                   persistedIdentityFields,
+                  documentNameRule,
                 );
                 setMappingConfig(persisted);
                 setIdentityFields(identityFieldsFromResponse(persisted));
+                setDocumentNameRule(documentNameFromResponse(persisted));
                 setMappingFresh(true);
                 setFeedback({
                   kind: "success",
@@ -916,8 +938,8 @@ function TemplateReview({
               ← 前の工程
             </button>
             <span>
-              {layoutWorkflowStep === "identity" && !identityReady
-                ? "書類を見分ける基準と、一覧で大きく表示する項目を指定してください。"
+              {layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady)
+                ? "照合グループと、ライブラリ・出力で共用する書類名を指定してください。"
                 : layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1
                   ? "設定内容は工程を移動しても保持されます。"
                   : "未割当と、書類を見分ける項目を確認して保存してください。"}
@@ -926,7 +948,7 @@ function TemplateReview({
               <button
                 type="button"
                 className="primary"
-                disabled={operationBusy || (layoutWorkflowStep === "identity" && !identityReady)}
+                disabled={operationBusy || (layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady))}
                 onClick={() => moveLayoutWorkflow(LAYOUT_WIZARD_STEPS[layoutWorkflowIndex + 1].id)}
               >
                 次の工程 →
@@ -968,7 +990,7 @@ function TemplateReview({
         }
       }} /></section>}
       {feedback && <p className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</p>}
-      {version.status === "DRAFT" ? <div className="decision-bar"><div><strong>このテンプレート設定を採用しますか？</strong><span>{editorDirty || maskDirty || identityDirty ? "未保存の変更があります。保存してから次へ進んでください。" : maskRequiresReprocess ? "保存した選別マスクから新しい下書きを再生成してください。" : "意味づけを保存し、記入欄の再検出を完了してから承認してください。"}</span></div><button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>{decisionBusy === "reject" ? "却下中…" : "却下"}</button><button className="secondary" disabled={operationBusy || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved} onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button><button className="primary" disabled={operationBusy || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved} onClick={() => void approveVersion()}>{decisionBusy === "approve" ? "承認中…" : "承認して有効化"}</button></div> : <div className="decision-bar"><div><strong>有効テンプレートを編集中</strong><span>{editorDirty || maskDirty || identityDirty ? "未保存の変更があります。" : "保存済みの矩形設定は次に開始するOCRから使われます。"}</span></div><button className="primary" disabled={operationBusy} onClick={closeReview}>設定を閉じる</button></div>}
+      {version.status === "DRAFT" ? <div className="decision-bar"><div><strong>このテンプレート設定を採用しますか？</strong><span>{editorDirty || maskDirty || identityDirty || documentNameDirty ? "未保存の変更があります。保存してから次へ進んでください。" : maskRequiresReprocess ? "保存した選別マスクから新しい下書きを再生成してください。" : "意味づけを保存し、記入欄を再検出してから承認してください。"}</span></div><button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>{decisionBusy === "reject" ? "却下中…" : "却下"}</button><button className="secondary" disabled={operationBusy || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved} onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button><button className="primary" disabled={operationBusy || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved} onClick={() => void approveVersion()}>{decisionBusy === "approve" ? "承認中…" : "承認して有効化"}</button></div> : <div className="decision-bar"><div><strong>有効テンプレートを編集中</strong><span>{editorDirty || maskDirty || identityDirty || documentNameDirty ? "未保存の変更があります。" : "保存済みの矩形設定は次に開始するOCRから使われます。"}</span></div><button className="primary" disabled={operationBusy} onClick={closeReview}>設定を閉じる</button></div>}
     </div>
   );
 }
@@ -1034,10 +1056,16 @@ function identityFieldsSignature(fields: DocumentIdentity[]) {
     targetPath: field.targetPath,
     matchRole: field.matchRole,
     displayRole: field.displayRole,
+    matchGroupId: field.matchGroupId ?? null,
+    matchGroupLabel: field.matchGroupLabel ?? null,
+    componentOrder: field.componentOrder ?? 0,
   })).sort((left, right) => left.targetPath.localeCompare(right.targetPath)));
 }
 
 function identityConfigurationReady(fields: DocumentIdentity[]) {
+  if (fields.length > 0 && fields.every((field) => Boolean(field.matchGroupId))) {
+    return fields.every((field) => Boolean(field.matchGroupLabel));
+  }
   const primaryCount = fields.filter((field) => field.matchRole === "primary").length;
   return fields.length > 0
     && (primaryCount === 1 || (primaryCount === 0 && fields.length >= 2))
@@ -1048,11 +1076,27 @@ function identityConfigurationReady(fields: DocumentIdentity[]) {
 export function mappingWarningsForIdentity(
   warnings: string[],
   fields: DocumentIdentity[],
+  documentName: DocumentNameRule | null = null,
 ) {
   if (!identityConfigurationReady(fields)) return warnings;
   return warnings.filter((warning) => (
     warning !== "書類を見分ける項目が未設定です。"
     && !warning.startsWith("書類を見分ける基準")
     && !warning.startsWith("一覧で大きく表示する項目")
+    && (documentName === null || !warning.startsWith("ライブラリと出力で使う書類名"))
   ));
+}
+
+function documentNameFromResponse(config: FieldMappingsResponse): DocumentNameRule | null {
+  if (config.documentName?.fieldPaths.length) return config.documentName;
+  const legacyTitle = identityFieldsFromResponse(config).find(
+    (field) => field.displayRole === "title",
+  );
+  return legacyTitle
+    ? { fieldPaths: [legacyTitle.targetPath], separator: "", prefix: "", suffix: "" }
+    : null;
+}
+
+function documentNameSignature(rule: DocumentNameRule | null) {
+  return JSON.stringify(rule);
 }

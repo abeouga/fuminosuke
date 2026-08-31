@@ -1171,12 +1171,14 @@ test("allows confirmation with the manually entered individual ID", async () => 
   const confirmButton = screen.getByRole("button", { name: "内容を確定" });
   expect(confirmButton).toBeEnabled();
   fireEvent.click(confirmButton);
+  expect(screen.getByRole("status", { name: "スプレッドシートを作成中" })).toBeInTheDocument();
   await waitFor(() => {
     expect(confirmationBodies).toEqual([{ baseRevision: 1 }]);
     expect(
       container.querySelector(".revision-conflict-recovery"),
     ).toBeInTheDocument();
   });
+  expect(screen.queryByRole("status", { name: "スプレッドシートを作成中" })).not.toBeInTheDocument();
   confirmDialog.mockRestore();
 });
 

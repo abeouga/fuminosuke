@@ -7,10 +7,13 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.db.models import (
     ConfirmedResult,
+    LedgerDocument,
+    LedgerDocumentPage,
     OcrResult,
     OcrResultRevision,
     ProcessingJob,
     SpreadsheetEditEvent,
+    Template,
 )
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType, RevisionSource
@@ -117,7 +120,16 @@ def test_sheet_edits_are_idempotent_and_safely_rebase_distinct_fields(
                 edit_id="edit-name",
                 job_id=job_id,
                 field_id="document.cattleName",
-                value="無視される値",
+                value="修正花子",
+                previous_value="モック花子",
+            )
+        )
+        conflicting_duplicate = service.apply_spreadsheet_edit(
+            _edit(
+                edit_id="edit-name",
+                job_id=job_id,
+                field_id="document.cattleName",
+                value="別の編集",
                 previous_value="モック花子",
             )
         )
@@ -134,6 +146,8 @@ def test_sheet_edits_are_idempotent_and_safely_rebase_distinct_fields(
         assert first.revision == 2
         assert duplicate.status == "APPLIED"
         assert duplicate.revision == 2
+        assert conflicting_duplicate.status == "FAILED"
+        assert conflicting_duplicate.error_code == "SHEET_EDIT_ID_CONFLICT"
         assert rebased.status == "APPLIED"
         assert rebased.revision == 3
         with database.session() as session:
@@ -147,6 +161,85 @@ def test_sheet_edits_are_idempotent_and_safely_rebase_distinct_fields(
                 .count()
                 == 2
             )
+    finally:
+        database.dispose()
+
+
+def test_sheet_edit_rejects_job_from_another_spreadsheet_and_account(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    database = Database(settings.database)
+    Base.metadata.create_all(database.engine)
+    storage = LocalStorageService(settings.storage.data_dir)
+    storage.initialize()
+    document = _mock_document().model_dump(mode="json", by_alias=True)
+    try:
+        with database.session() as session:
+            template = Template(name="境界テスト", document_type="test")
+            job = ProcessingJob(
+                job_type=JobType.EXTRACT_DOCUMENT.value,
+                status=JobStatus.REVIEW_REQUIRED.value,
+                request_hash="x" * 64,
+                config_snapshot_json={},
+            )
+            session.add_all((template, job))
+            session.flush()
+            result = OcrResult(
+                job_id=job.id,
+                schema_version="1.0",
+                provider="mock",
+                raw_candidate_json=document,
+                current_corrected_json=document,
+                validation_json={},
+                revision=1,
+                api_call_count=0,
+            )
+            ledger = LedgerDocument(
+                template_id=template.id,
+                individual_id="1234567890",
+                current_job_id=job.id,
+                current_document_json=document,
+                spreadsheet_id="sheet-b",
+                drive_google_subject="subject-b",
+            )
+            session.add_all((result, ledger))
+            session.flush()
+            session.add(
+                LedgerDocumentPage(
+                    ledger_document_id=ledger.id,
+                    job_id=job.id,
+                    page_number=1,
+                    relation_type="ORIGINAL",
+                    page_content_json=document,
+                )
+            )
+            session.commit()
+            job_id = job.id
+
+        service = OcrResultService(database, storage)
+        outcome = service.apply_spreadsheet_edit(
+            SpreadsheetEdit(
+                queue_row=2,
+                edit_id="cross-account-edit",
+                job_id=job_id,
+                record_id="document",
+                field_id="document.cattleName",
+                previous_value="モック花子",
+                new_value="不正な変更",
+                base_revision=1,
+                source_sheet="帳票一覧",
+                source_cell="D2",
+                spreadsheet_id="sheet-a",
+                google_subject="subject-a",
+            )
+        )
+
+        assert outcome.status == "FAILED"
+        assert outcome.error_code == "SHEET_EDIT_TARGET_MISMATCH"
+        with database.session() as session:
+            stored = session.query(OcrResult).filter_by(job_id=job_id).one()
+            assert stored.revision == 1
     finally:
         database.dispose()
 

@@ -1,4 +1,4 @@
-import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
+import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DocumentLibrarySyncResult, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
 
 const API = "/api/v1";
 
@@ -159,6 +159,24 @@ export const api = {
     body: JSON.stringify(body),
   }),
   documentLibrary: () => request<DocumentLibrary>("/document-library"),
+  syncDocumentLibrary: () => request<DocumentLibrarySyncResult>("/document-library/sync", {
+    method: "POST",
+  }),
+  syncDocumentLibraryToDrive: () => request<DocumentLibrarySyncResult>("/document-library/sync-to-drive", {
+    method: "POST",
+  }),
+  confirmDocumentDriveOwnership: (documentId: string) =>
+    request<{
+      documentId: string;
+      googleSubject: string;
+      driveRootFolderId: string;
+      alreadyConfirmed: boolean;
+      locationAlignedFromLibrary: boolean;
+    }>(`/document-library/documents/${documentId}/drive-ownership`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    }),
   createDocumentFolder: (name: string, parentId: string | null) =>
     request<DocumentLibraryFolder>("/document-library/folders", {
       method: "POST",
@@ -311,11 +329,12 @@ export const api = {
     mappings: FieldMapping[],
     documentIdentity: FieldMappingsResponse["documentIdentity"],
     documentIdentityFields: FieldMappingsResponse["documentIdentityFields"] = documentIdentity ? [documentIdentity] : [],
+    documentName: FieldMappingsResponse["documentName"] = null,
   ) =>
     request<FieldMappingsResponse>(`/template-versions/${id}/field-mappings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mappings, documentIdentity, documentIdentityFields }),
+      body: JSON.stringify({ mappings, documentIdentity, documentIdentityFields, documentName }),
     }),
   layout: (id: string) =>
     request<LayoutDefinition>(`/template-versions/${id}/layout`),
@@ -387,11 +406,14 @@ export const api = {
       targetPageId: target?.pageId ?? null,
     }),
   }),
-  confirm: (id: string, revision: number) =>
+  confirm: (id: string, revision: number, documentName?: string) =>
     request<OcrResult>(`/ocr-jobs/${id}/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ baseRevision: revision }),
+      body: JSON.stringify({
+        baseRevision: revision,
+        ...(documentName && documentName !== "__legacy_document_name__" ? { documentName } : {}),
+      }),
     }),
   reopenResult: (id: string) =>
     request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST" }),

@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import Field
 
+from app.api.auth_dependencies import require_authenticated_user
 from app.core.errors import ApiModel
 from app.domain.ocr_models import OcrDocument
 from app.services.document_library_service import DocumentLibraryService
+from app.services.google_oauth_service import AuthenticatedUser
 from app.services.individual_record_service import IndividualRecordService
 from app.services.print_preview_service import PrintPreviewService
 from app.services.windows_printer_service import WindowsPrinterService
@@ -16,6 +18,10 @@ from app.services.windows_printer_service import WindowsPrinterService
 router = APIRouter(tags=["individual-records"])
 windows_printer = WindowsPrinterService()
 print_preview = PrintPreviewService()
+AuthenticatedRequestUser = Annotated[
+    AuthenticatedUser | None,
+    Depends(require_authenticated_user),
+]
 
 
 class IndividualRecord(ApiModel):
@@ -93,6 +99,10 @@ class DocumentBulkDelete(ApiModel):
     document_ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class DriveOwnershipConfirmation(ApiModel):
+    confirm: Literal[True]
+
+
 class DocumentPrint(ApiModel):
     mode: Literal["spreadsheet", "image"]
     copies: int = Field(default=1, ge=1, le=3)
@@ -118,15 +128,56 @@ def document_library(request: Request) -> dict[str, Any]:
     return service.list_library()
 
 
+@router.post("/document-library/sync")
+def sync_document_library(
+    request: Request,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.sync_document_library(user.subject if user else None)
+
+
+@router.post("/document-library/sync-to-drive")
+def sync_document_library_to_drive(
+    request: Request,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.push_document_library_to_drive(user.subject if user else None)
+
+
+@router.post("/document-library/documents/{document_id}/drive-ownership")
+def confirm_document_drive_ownership(
+    request: Request,
+    document_id: str,
+    body: DriveOwnershipConfirmation,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
+    del body
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.confirm_drive_ownership(
+        document_id,
+        user.subject if user else None,
+    )
+
+
 @router.get("/printer/status")
 def printer_status() -> dict[str, Any]:
     return windows_printer.status()
 
 
 @router.post("/document-library/folders", status_code=status.HTTP_201_CREATED)
-def create_document_folder(request: Request, body: DocumentFolderCreate) -> dict[str, Any]:
+def create_document_folder(
+    request: Request,
+    body: DocumentFolderCreate,
+    user: AuthenticatedRequestUser,
+) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
-    return service.create_folder(name=body.name, parent_id=body.parent_id)
+    return service.create_folder(
+        name=body.name,
+        parent_id=body.parent_id,
+        expected_subject=user.subject if user else None,
+    )
 
 
 @router.patch("/document-library/folders/{folder_id}")
@@ -134,18 +185,27 @@ def rename_document_folder(
     request: Request,
     folder_id: str,
     body: DocumentFolderRename,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
-    return service.rename_folder(folder_id, name=body.name)
+    return service.rename_folder(
+        folder_id,
+        name=body.name,
+        expected_subject=user.subject if user else None,
+    )
 
 
 @router.delete(
     "/document-library/folders/{folder_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def delete_document_folder(request: Request, folder_id: str) -> Response:
+def delete_document_folder(
+    request: Request,
+    folder_id: str,
+    user: AuthenticatedRequestUser,
+) -> Response:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
-    service.delete_folder(folder_id)
+    service.delete_folder(folder_id, user.subject if user else None)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -154,12 +214,14 @@ def move_library_document(
     request: Request,
     document_id: str,
     body: DocumentLocationUpdate,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
     return service.move_document(
         document_id,
         folder_id=body.folder_id,
         expected_version=body.expected_version,
+        expected_subject=user.subject if user else None,
     )
 
 
@@ -168,15 +230,27 @@ def rename_library_document(
     request: Request,
     document_id: str,
     body: DocumentRename,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
-    return service.rename_document(document_id, name=body.name)
+    return service.rename_document(
+        document_id,
+        name=body.name,
+        expected_subject=user.subject if user else None,
+    )
 
 
 @router.get("/document-library/documents/{document_id}/spreadsheet-print")
-def print_library_document_spreadsheet(request: Request, document_id: str) -> Response:
+def print_library_document_spreadsheet(
+    request: Request,
+    document_id: str,
+    user: AuthenticatedRequestUser,
+) -> Response:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
-    content = service.export_spreadsheet_pdf(document_id)
+    content = service.export_spreadsheet_pdf(
+        document_id,
+        expected_subject=user.subject if user else None,
+    )
     return Response(
         content=content,
         media_type="application/pdf",
@@ -188,6 +262,7 @@ def print_library_document_spreadsheet(request: Request, document_id: str) -> Re
 def preview_library_document(
     request: Request,
     document_id: str,
+    user: AuthenticatedRequestUser,
     mode: Annotated[Literal["spreadsheet", "image"], Query()],
     paper_size: Annotated[
         Literal["A4", "A5", "B5", "LETTER"],
@@ -206,6 +281,7 @@ def preview_library_document(
             document_id,
             paper_size=paper_size,
             orientation=orientation,
+            expected_subject=user.subject if user else None,
         )
         content = print_preview.from_pdf(
             source,
@@ -239,6 +315,7 @@ def print_library_document(
     request: Request,
     document_id: str,
     body: DocumentPrint,
+    user: AuthenticatedRequestUser,
 ) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
     if body.mode == "spreadsheet":
@@ -246,6 +323,7 @@ def print_library_document(
             document_id,
             paper_size=body.paper_size,
             orientation=body.orientation,
+            expected_subject=user.subject if user else None,
         )
         content = print_preview.from_pdf(
             source,

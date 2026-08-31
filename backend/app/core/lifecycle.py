@@ -63,6 +63,7 @@ async def start_runtime_services(app: FastAPI) -> None:
         )
         if google_oauth.enabled
         else None,
+        subject_provider=google_oauth.active_subject if google_oauth.enabled else None,
     )
     artifact_recovery = ArtifactRecoveryService(
         settings=settings,
