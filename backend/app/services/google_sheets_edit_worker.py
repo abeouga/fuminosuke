@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 import anyio
 
@@ -19,10 +20,12 @@ class GoogleSheetsEditWorker:
         results: OcrResultService,
         *,
         poll_interval_seconds: int,
+        mutation_notifier: Callable[[], None] | None = None,
     ) -> None:
         self._sheets = sheets
         self._results = results
         self._poll_interval_seconds = poll_interval_seconds
+        self._mutation_notifier = mutation_notifier
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -68,6 +71,8 @@ class GoogleSheetsEditWorker:
 
     async def _process(self, edit: SpreadsheetEdit) -> None:
         outcome = await anyio.to_thread.run_sync(self._results.apply_spreadsheet_edit, edit)
+        if outcome.status == "APPLIED" and self._mutation_notifier is not None:
+            self._mutation_notifier()
         try:
             await anyio.to_thread.run_sync(
                 lambda: self._sheets.mark_edit_processed(

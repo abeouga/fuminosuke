@@ -1,0 +1,209 @@
+{
+  "$defs": {
+    "CanonicalOutputLayoutCell": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binding"
+        },
+        "column": {
+          "minimum": 0,
+          "title": "Column",
+          "type": "integer"
+        },
+        "dataValidation": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datavalidation"
+        },
+        "format": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Format",
+          "type": "object"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "row": {
+          "minimum": 0,
+          "title": "Row",
+          "type": "integer"
+        },
+        "textFormatRuns": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "maxItems": 200,
+          "title": "Textformatruns",
+          "type": "array"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "row",
+        "column"
+      ],
+      "title": "CanonicalOutputLayoutCell",
+      "type": "object"
+    },
+    "CanonicalOutputLayoutMerge": {
+      "additionalProperties": false,
+      "properties": {
+        "endColumnIndex": {
+          "exclusiveMinimum": 0,
+          "title": "Endcolumnindex",
+          "type": "integer"
+        },
+        "endRowIndex": {
+          "exclusiveMinimum": 0,
+          "title": "Endrowindex",
+          "type": "integer"
+        },
+        "startColumnIndex": {
+          "minimum": 0,
+          "title": "Startcolumnindex",
+          "type": "integer"
+        },
+        "startRowIndex": {
+          "minimum": 0,
+          "title": "Startrowindex",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "startRowIndex",
+        "endRowIndex",
+        "startColumnIndex",
+        "endColumnIndex"
+      ],
+      "title": "CanonicalOutputLayoutMerge",
+      "type": "object"
+    },
+    "JsonValue": {}
+  },
+  "additionalProperties": false,
+  "properties": {
+    "cells": {
+      "items": {
+        "$ref": "#/$defs/CanonicalOutputLayoutCell"
+      },
+      "maxItems": 10000,
+      "title": "Cells",
+      "type": "array"
+    },
+    "columnCount": {
+      "minimum": 1,
+      "title": "Columncount",
+      "type": "integer"
+    },
+    "columnWidths": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Columnwidths",
+      "type": "object"
+    },
+    "frozenColumnCount": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Frozencolumncount",
+      "type": "integer"
+    },
+    "frozenRowCount": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Frozenrowcount",
+      "type": "integer"
+    },
+    "hideGridlines": {
+      "default": false,
+      "title": "Hidegridlines",
+      "type": "boolean"
+    },
+    "merges": {
+      "items": {
+        "$ref": "#/$defs/CanonicalOutputLayoutMerge"
+      },
+      "maxItems": 1000,
+      "title": "Merges",
+      "type": "array"
+    },
+    "rowCount": {
+      "minimum": 1,
+      "title": "Rowcount",
+      "type": "integer"
+    },
+    "rowHeights": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Rowheights",
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "default": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "sheetName": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Sheetname",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sheetName",
+    "rowCount",
+    "columnCount"
+  ],
+  "title": "CanonicalOutputLayout",
+  "type": "object"
+}

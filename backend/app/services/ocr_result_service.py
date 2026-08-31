@@ -666,12 +666,33 @@ class OcrResultService:
                     SpreadsheetOutputOperation,
                     candidate_operation_id,
                 )
+                prior_output_intent = session.scalar(
+                    select(SpreadsheetOutputOperation)
+                    .where(
+                        SpreadsheetOutputOperation.document_id == ledger.id,
+                        SpreadsheetOutputOperation.spreadsheet_id
+                        == ledger.spreadsheet_id,
+                        SpreadsheetOutputOperation.operation_id
+                        != candidate_operation_id,
+                    )
+                    .order_by(SpreadsheetOutputOperation.updated_at.desc())
+                    .limit(1)
+                )
+                persisted_drive_name = (
+                    prior_output_intent.drive_name
+                    if prior_output_intent is not None
+                    else None
+                )
                 # A migrated row may have a Drive file id but no saved name
                 # baseline.  Still create an intent so a later full sync cannot
                 # silently replace the newly confirmed local name with an
                 # unknown remote name.  Reconciliation will surface the missing
                 # baseline as a conflict instead of guessing.
                 name_changed = existing_document_name != resolved_document_name
+                remote_baseline_changed = (
+                    persisted_drive_name is not None
+                    and persisted_drive_name != resolved_document_name
+                )
                 if name_intent is not None:
                     if (
                         name_intent.document_id != ledger.id
@@ -687,7 +708,7 @@ class OcrResultService:
                         )
                     if name_intent.drive_name != resolved_document_name:
                         name_sync_operation_id = candidate_operation_id
-                elif name_changed:
+                elif name_changed or remote_baseline_changed:
                     if (
                         ledger.drive_google_subject is None
                         or ledger.drive_root_folder_id is None
@@ -716,7 +737,11 @@ class OcrResultService:
                         # forces reconciliation to report a conflict instead of
                         # guessing or allowing full sync to overwrite the local
                         # name.
-                        drive_name=existing_document_name or "",
+                        drive_name=(
+                            persisted_drive_name
+                            if persisted_drive_name is not None
+                            else existing_document_name or ""
+                        ),
                         drive_folder_path=ledger.drive_folder_path,
                         library_folder_id=ledger.library_folder_id,
                         library_location_version=ledger.library_location_version,
@@ -752,6 +777,7 @@ class OcrResultService:
                 if (
                     name_sync_operation_id is not None
                     and self._google_drive is not None
+                    and ledger is not None
                 ):
                     self._google_drive.reconcile_document_name(
                         ledger.id,

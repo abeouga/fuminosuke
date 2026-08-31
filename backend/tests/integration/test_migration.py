@@ -39,6 +39,10 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
         "template_output_folders",
         "template_candidate_sets",
         "template_candidate_bindings",
+        "template_package_identities",
+        "template_package_installations",
+        "template_package_drive_release_syncs",
+        "template_package_drive_draft_syncs",
         "document_folders",
         "document_folder_drive_mappings",
         "document_library_sync_states",
@@ -50,8 +54,74 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0027_backfill_sheet_bindings"
+            "0030_template_package_drive_sync"
         )
+    package_identity_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("template_package_identities")
+    }
+    assert {"publisher_id", "package_id", "local_template_id"} <= package_identity_columns
+    package_installation_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("template_package_installations")
+    }
+    assert {
+        "publisher_id",
+        "package_id",
+        "release_version",
+        "content_digest",
+        "local_template_id",
+        "local_template_version_id",
+        "local_job_id",
+        "manifest_json",
+        "canonical_template_json",
+        "canonical_quality_json",
+        "output_layout_json",
+        "local_mapping_json",
+    } <= package_installation_columns
+    package_installation_unique = {
+        constraint["name"]
+        for constraint in inspect(engine).get_unique_constraints(
+            "template_package_installations"
+        )
+    }
+    assert "uq_template_package_installation_release" in package_installation_unique
+    release_sync_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("template_package_drive_release_syncs")
+    }
+    assert {
+        "google_subject",
+        "publisher_id",
+        "package_id",
+        "release_version",
+        "content_digest",
+        "package_sha256",
+        "drive_file_id",
+        "drive_folder_id",
+        "drive_version",
+        "drive_head_revision_id",
+        "drive_etag",
+    } <= release_sync_columns
+    draft_sync_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("template_package_drive_draft_syncs")
+    }
+    assert {
+        "google_subject",
+        "draft_id",
+        "publisher_id",
+        "package_id",
+        "revision",
+        "base_release_version",
+        "content_digest",
+        "package_sha256",
+        "drive_file_id",
+        "drive_folder_id",
+        "drive_version",
+        "drive_head_revision_id",
+        "drive_etag",
+    } <= draft_sync_columns
     oauth_columns = {
         column["name"] for column in inspect(engine).get_columns("google_oauth_accounts")
     }

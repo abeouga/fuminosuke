@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -275,6 +276,165 @@ class OutputLayoutTemplateRevision(Base):
     )
 
 
+class TemplatePackageIdentity(Base):
+    __tablename__ = "template_package_identities"
+
+    publisher_id: Mapped[str] = mapped_column(String(253), primary_key=True)
+    package_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    local_template_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("templates.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplatePackageInstallation(Base):
+    __tablename__ = "template_package_installations"
+    __table_args__ = (
+        UniqueConstraint(
+            "publisher_id",
+            "package_id",
+            "release_version",
+            name="uq_template_package_installation_release",
+        ),
+        ForeignKeyConstraint(
+            ["publisher_id", "package_id"],
+            [
+                "template_package_identities.publisher_id",
+                "template_package_identities.package_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_template_package_installation_identity",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    publisher_id: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    package_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    release_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    content_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    local_template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False
+    )
+    local_template_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("template_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    local_job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False, default="FILE")
+    trust_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="UNVERIFIED"
+    )
+    manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    canonical_template_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    canonical_quality_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    output_layout_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    local_mapping_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    installed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class TemplatePackageDriveReleaseSync(Base):
+    __tablename__ = "template_package_drive_release_syncs"
+    __table_args__ = (
+        UniqueConstraint(
+            "google_subject",
+            "publisher_id",
+            "package_id",
+            "release_version",
+            name="uq_template_package_drive_release_identity",
+        ),
+        UniqueConstraint(
+            "google_subject",
+            "drive_file_id",
+            name="uq_template_package_drive_release_file",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    google_subject: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    publisher_id: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    package_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    release_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    content_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    package_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    drive_head_revision_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_etag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_modified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplatePackageDriveDraftSync(Base):
+    __tablename__ = "template_package_drive_draft_syncs"
+    __table_args__ = (
+        UniqueConstraint(
+            "google_subject",
+            "draft_id",
+            name="uq_template_package_drive_draft_identity",
+        ),
+        UniqueConstraint(
+            "google_subject",
+            "drive_file_id",
+            name="uq_template_package_drive_draft_file",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    google_subject: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    draft_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    publisher_id: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    package_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_release_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    content_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    package_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_folder_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    drive_head_revision_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_etag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    drive_modified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
@@ -431,6 +591,43 @@ class DocumentLibrarySyncState(Base):
     drive_roots_json: Mapped[list[str]] = mapped_column(
         JSON, nullable=False, default=list
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class WorkspaceCloudSyncState(Base):
+    __tablename__ = "workspace_cloud_sync_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    google_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DISABLED")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="IDLE")
+    progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dirty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    remote_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latest_snapshot_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    latest_snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    latest_snapshot_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner_device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_owner_device_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_change_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )

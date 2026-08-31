@@ -11,10 +11,12 @@ import type {
   PortableBackupExport,
   PortableBackupOperation,
   PortableRestoreOperation,
+  WorkspaceSnapshot,
+  WorkspaceSyncStatus,
 } from "../types";
 import { showToast } from "./Toast";
 
-type BackupMode = "export" | "import";
+type BackupMode = "export" | "import" | "cloud";
 type ExportPhase =
   | "confirm"
   | "choosing"
@@ -54,9 +56,11 @@ type WindowWithSavePicker = Window & {
 export function PortableBackupDialog({
   onClose,
   returnFocusRef,
+  onWorkspaceStatusChange,
 }: {
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
+  onWorkspaceStatusChange?: (status: WorkspaceSyncStatus) => void;
 }) {
   const [mode, setMode] = useState<BackupMode>("export");
   const [exportPhase, setExportPhase] = useState<ExportPhase>("confirm");
@@ -73,13 +77,23 @@ export function PortableBackupDialog({
   const [importProgress, setImportProgress] = useState(0);
   const [importError, setImportError] = useState<string | null>(null);
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<WorkspaceSyncStatus | null>(null);
+  const [cloudSnapshots, setCloudSnapshots] = useState<WorkspaceSnapshot[]>([]);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [cloudRestorePhase, setCloudRestorePhase] = useState<
+    "idle" | "preparing" | "ready" | "applying" | "completed" | "error"
+  >("idle");
+  const [cloudRestore, setCloudRestore] = useState<PortableRestoreOperation | null>(null);
+  const [cloudRestoreConfirmed, setCloudRestoreConfirmed] = useState(false);
+  const cloudRestoreOperationIdRef = useRef<string | null>(null);
   const importOperationIdRef = useRef<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const exportBusy = ["choosing", "creating", "saving"].includes(exportPhase);
   const importBusy = importPhase === "uploading" || importPhase === "applying";
-  const busy = exportBusy || importBusy;
+  const busy = exportBusy || importBusy || cloudBusy;
   const savePicker = getSavePicker();
 
   useEffect(() => {
@@ -95,6 +109,34 @@ export function PortableBackupDialog({
     return () => window.removeEventListener("keydown", onEscape);
   });
 
+  useEffect(() => {
+    if (mode !== "cloud") return;
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const status = await api.workspaceSyncStatus();
+        if (stopped) return;
+        setCloudStatus(status);
+        setCloudError(null);
+        onWorkspaceStatusChange?.(status);
+        if (status.enabled) {
+          const response = await api.workspaceSnapshots();
+          if (!stopped) setCloudSnapshots(response.items);
+        } else if (!stopped) {
+          setCloudSnapshots([]);
+        }
+      } catch (reason) {
+        if (!stopped) setCloudError(errorMessage(reason, "同期状態を取得できませんでした。"));
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 1800);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [mode, onWorkspaceStatusChange]);
+
   const cleanupPending = () => {
     if (backup && exportPhase !== "saved" && exportPhase !== "download-started") {
       void api.deletePortableBackup(backup.id).catch(() => undefined);
@@ -103,6 +145,11 @@ export function PortableBackupDialog({
     if (importId && importPhase !== "completed") {
       void api.deletePortableRestore(importId).catch(() => undefined);
       importOperationIdRef.current = null;
+    }
+    const cloudImportId = cloudRestoreOperationIdRef.current;
+    if (cloudImportId && cloudRestorePhase !== "completed") {
+      void api.deletePortableRestore(cloudImportId).catch(() => undefined);
+      cloudRestoreOperationIdRef.current = null;
     }
   };
 
@@ -130,6 +177,113 @@ export function PortableBackupDialog({
     setImportProgress(0);
     setImportError(null);
     setReplaceConfirmed(false);
+    setCloudError(null);
+    setCloudRestorePhase("idle");
+    setCloudRestore(null);
+    setCloudRestoreConfirmed(false);
+  };
+
+  const updateCloudStatus = (status: WorkspaceSyncStatus) => {
+    setCloudStatus(status);
+    onWorkspaceStatusChange?.(status);
+  };
+
+  const changeCloudEnabled = async (enabled: boolean) => {
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      const status = await api.updateWorkspaceSync(enabled);
+      updateCloudStatus(status);
+      if (enabled) {
+        const response = await api.workspaceSnapshots();
+        setCloudSnapshots(response.items);
+      } else {
+        setCloudSnapshots([]);
+      }
+    } catch (reason) {
+      setCloudError(errorMessage(reason, "Google Drive自動同期の設定を変更できませんでした。"));
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const syncCloudNow = async () => {
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      const status = await api.syncWorkspaceNow();
+      updateCloudStatus(status);
+      const response = await api.workspaceSnapshots();
+      setCloudSnapshots(response.items);
+      showToast({
+        tone: "success",
+        title: "Google Drive同期が完了しました",
+        message: `保存データ 第${status.remoteRevision.toLocaleString("ja-JP")}版`,
+      });
+    } catch (reason) {
+      const message = errorMessage(reason, "Google Driveへ同期できませんでした。");
+      setCloudError(message);
+      showToast({ tone: "error", title: "Google Drive同期に失敗しました", message });
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const refreshCloud = async () => {
+    setCloudBusy(true);
+    setCloudError(null);
+    try {
+      const status = await api.refreshWorkspaceSync();
+      updateCloudStatus(status);
+      const response = await api.workspaceSnapshots();
+      setCloudSnapshots(response.items);
+    } catch (reason) {
+      setCloudError(errorMessage(reason, "Google Driveの状態を更新できませんでした。"));
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const prepareCloudRestore = async (snapshot: WorkspaceSnapshot) => {
+    const operationId = createOperationId();
+    cloudRestoreOperationIdRef.current = operationId;
+    setCloudBusy(true);
+    setCloudError(null);
+    setCloudRestorePhase("preparing");
+    setCloudRestoreConfirmed(false);
+    try {
+      const operation = await api.prepareWorkspaceRestore(snapshot.fileId, operationId);
+      setCloudRestore(operation);
+      setCloudRestorePhase("ready");
+    } catch (reason) {
+      setCloudError(errorMessage(reason, "Google Driveの同期履歴を検証できませんでした。"));
+      setCloudRestorePhase("error");
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const applyCloudRestore = async () => {
+    const operationId = cloudRestoreOperationIdRef.current;
+    if (!operationId || !cloudRestoreConfirmed) return;
+    setCloudBusy(true);
+    setCloudError(null);
+    setCloudRestorePhase("applying");
+    try {
+      const completed = await api.applyPortableRestore(operationId);
+      setCloudRestore(completed);
+      setCloudRestorePhase("completed");
+      showToast({
+        tone: "success",
+        title: "Google Driveの保存データを取り込みました",
+        message: "取り込んだ内容でシステムを再初期化しました。",
+      });
+    } catch (reason) {
+      setCloudError(errorMessage(reason, "Google Driveの保存データを取り込めませんでした。"));
+      setCloudRestorePhase("error");
+    } finally {
+      setCloudBusy(false);
+    }
   };
 
   const chooseAndCreate = async () => {
@@ -420,6 +574,16 @@ export function PortableBackupDialog({
             >
               取り込み
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "cloud"}
+              className={mode === "cloud" ? "active" : ""}
+              disabled={busy}
+              onClick={() => changeMode("cloud")}
+            >
+              Drive自動同期
+            </button>
           </div>
           {mode === "export" ? (
             <ExportBody
@@ -431,7 +595,7 @@ export function PortableBackupDialog({
               backup={backup}
               savedName={savedName}
             />
-          ) : (
+          ) : mode === "import" ? (
             <ImportBody
               phase={importPhase}
               file={importFile}
@@ -443,6 +607,23 @@ export function PortableBackupDialog({
               onFileChange={selectImportFile}
               onChoose={() => fileInputRef.current?.click()}
               onConfirm={setReplaceConfirmed}
+            />
+          ) : (
+            <CloudSyncBody
+              status={cloudStatus}
+              snapshots={cloudSnapshots}
+              busy={cloudBusy}
+              error={cloudError}
+              restorePhase={cloudRestorePhase}
+              restore={cloudRestore}
+              restoreConfirmed={cloudRestoreConfirmed}
+              onEnabledChange={(enabled) => void changeCloudEnabled(enabled)}
+              onSync={() => void syncCloudNow()}
+              onRefresh={() => void refreshCloud()}
+              onPrepareRestore={(snapshot) => void prepareCloudRestore(snapshot)}
+              onRestoreConfirm={setCloudRestoreConfirmed}
+              onApplyRestore={() => void applyCloudRestore()}
+              onReload={() => window.location.reload()}
             />
           )}
         </div>
@@ -459,7 +640,7 @@ export function PortableBackupDialog({
               onReselect={() => void chooseAndCreate()}
               onDownloadAgain={() => backup && startBrowserDownload(backup)}
             />
-          ) : (
+          ) : mode === "import" ? (
             <ImportActions
               phase={importPhase}
               hasFile={Boolean(importFile)}
@@ -470,6 +651,10 @@ export function PortableBackupDialog({
               onApply={() => void applyImport()}
               onReset={resetImport}
             />
+          ) : (
+            <button ref={cancelRef} type="button" className="secondary" disabled={cloudBusy} onClick={closeDialog}>
+              閉じる
+            </button>
           )}
         </div>
       </section>
@@ -644,6 +829,228 @@ function ImportBody({
       note="Google連携を利用する場合は、再読み込み後に接続し直してください。"
     />
   );
+}
+
+function CloudSyncBody({
+  status,
+  snapshots,
+  busy,
+  error,
+  restorePhase,
+  restore,
+  restoreConfirmed,
+  onEnabledChange,
+  onSync,
+  onRefresh,
+  onPrepareRestore,
+  onRestoreConfirm,
+  onApplyRestore,
+  onReload,
+}: {
+  status: WorkspaceSyncStatus | null;
+  snapshots: WorkspaceSnapshot[];
+  busy: boolean;
+  error: string | null;
+  restorePhase: "idle" | "preparing" | "ready" | "applying" | "completed" | "error";
+  restore: PortableRestoreOperation | null;
+  restoreConfirmed: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  onSync: () => void;
+  onRefresh: () => void;
+  onPrepareRestore: (snapshot: WorkspaceSnapshot) => void;
+  onRestoreConfirm: (checked: boolean) => void;
+  onApplyRestore: () => void;
+  onReload: () => void;
+}) {
+  if (!status) {
+    return (
+      <div id="portable-backup-description" className="portable-backup-progress" role="status">
+        <strong>Google Driveの同期状態を確認しています。</strong>
+        <span className="portable-backup-indeterminate"><i /></span>
+        {error && <p className="portable-import-inline-error" role="alert">{error}</p>}
+      </div>
+    );
+  }
+  if (restorePhase === "preparing") {
+    return (
+      <ProgressPanel
+        kind="import"
+        stage="VALIDATING_STRUCTURE"
+        progress={38}
+        message="Google Driveから保存データを読み取り、内容を検証しています。"
+        detail="取得後も、確認するまで現在データは置換しません。"
+      />
+    );
+  }
+  if (restorePhase === "applying") {
+    return (
+      <ProgressPanel
+        kind="import"
+        stage="SWAPPING_DATA"
+        progress={84}
+        message="検証済みの保存データへ切り替えています。"
+        detail="DB・帳票画像・テンプレート・出力ファイルを置換しています。"
+      />
+    );
+  }
+  if (restorePhase === "completed") {
+    return (
+      <div id="portable-backup-description" className="portable-import-ready">
+        <ResultPanel
+          tone="success"
+          title="Google Driveからの取り込みが完了しました"
+          message="取り込んだ保存データでシステムを再初期化しました。"
+          note="APIキーとGoogle認証情報は移しません。必要な場合は再接続してください。"
+        />
+        <button type="button" className="primary" onClick={onReload}>取り込んだデータで再読み込み</button>
+      </div>
+    );
+  }
+  if (restorePhase === "ready" && restore) {
+    return (
+      <div id="portable-backup-description" className="portable-import-ready">
+        <ResultPanel
+          tone="success"
+          title="Drive上の保存データを検証しました"
+          message="内容を確認してから現在データを置換してください。"
+        />
+        <dl className="portable-import-summary">
+          <div><dt>バックアップ日時</dt><dd>{formatDate(restore.backupCreatedAt)}</dd></div>
+          <div><dt>保存データ</dt><dd>{formatBytes(restore.sourceBytes ?? 0)}</dd></div>
+          <div><dt>ファイル数</dt><dd>{(restore.fileCount ?? 0).toLocaleString("ja-JP")}</dd></div>
+          <div><dt>システム版</dt><dd>{restore.schemaRevision ?? "不明"}</dd></div>
+        </dl>
+        <label className="portable-import-confirm">
+          <input
+            type="checkbox"
+            checked={restoreConfirmed}
+            onChange={(event) => onRestoreConfirm(event.target.checked)}
+          />
+          <span>現在の保存データが置換されることを確認しました</span>
+        </label>
+        <button
+          type="button"
+          className="danger-button"
+          disabled={!restoreConfirmed || busy}
+          onClick={onApplyRestore}
+        >
+          現在データを置換して取り込む
+        </button>
+      </div>
+    );
+  }
+
+  const statusTone = status.status === "SYNCED"
+    ? "synced"
+    : ["ERROR", "REAUTHORIZATION_REQUIRED"].includes(status.status)
+      ? "error"
+      : ["READ_ONLY", "RESTORE_AVAILABLE"].includes(status.status)
+        ? "warning"
+        : "syncing";
+  return (
+    <div id="portable-backup-description" className="cloud-sync-panel">
+      <div className="cloud-sync-heading">
+        <div>
+          <strong>完全な保存データをGoogle Driveへ自動同期</strong>
+          <p>DB、帳票画像、テンプレート、出力ファイルを一つの検証済みZIPとして5世代保持します。</p>
+        </div>
+        <button
+          type="button"
+          className={status.enabled ? "secondary compact" : "primary compact"}
+          disabled={busy}
+          onClick={() => onEnabledChange(!status.enabled)}
+        >
+          {status.enabled ? "自動同期を停止" : "自動同期を有効化"}
+        </button>
+      </div>
+      <div className={`cloud-sync-current ${statusTone}`} role="status" aria-live="polite">
+        <span className="library-sync-indicator" aria-hidden="true" />
+        <div>
+          <strong>{cloudStatusLabel(status.status)}</strong>
+          <p>{status.message}</p>
+          <small>
+            このPC: {status.deviceName}
+            {status.lastSuccessAt ? ` · 最終同期 ${formatDate(status.lastSuccessAt)}` : ""}
+          </small>
+        </div>
+        {status.enabled && (
+          <div className="cloud-sync-actions">
+            <button type="button" className="secondary compact" disabled={busy} onClick={onRefresh}>状態更新</button>
+            <button
+              type="button"
+              className="primary compact"
+              disabled={busy || status.readOnly}
+              onClick={onSync}
+            >
+              今すぐ同期
+            </button>
+          </div>
+        )}
+        {(busy || status.status === "SYNCING") && (
+          <div
+            className="portable-backup-progressbar cloud-sync-progressbar"
+            role="progressbar"
+            aria-label="Google Drive書き込み進捗"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={status.progressPercent}
+          >
+            <i style={{ width: `${Math.max(4, status.progressPercent)}%` }} />
+          </div>
+        )}
+      </div>
+      {error && <p className="portable-import-inline-error" role="alert">{error}</p>}
+      {!status.enabled && (
+        <div className="portable-import-warning">
+          <strong>有効化すると、個人・業務データを含むZIPを現在のGoogle Drive保存先へ書き込みます。</strong>
+          <span>APIキー、.env、Google更新トークン、ログ、一時ファイルは同期しません。</span>
+        </div>
+      )}
+      {status.enabled && (
+        <section className="cloud-sync-history" aria-label="Google Drive同期履歴">
+          <header>
+            <div><strong>同期履歴</strong><small>新しい順・最大5世代</small></div>
+            <span>現在 第{status.remoteRevision.toLocaleString("ja-JP")}版</span>
+          </header>
+          {snapshots.length ? (
+            <ol>
+              {snapshots.map((snapshot) => (
+                <li key={snapshot.fileId}>
+                  <div>
+                    <strong>第{snapshot.revision.toLocaleString("ja-JP")}版</strong>
+                    <span>{formatDate(snapshot.createdAt)} · {formatBytes(snapshot.fileBytes)}</span>
+                    <small>{snapshot.deviceId === status.deviceId ? "このPCで作成" : "別のPCで作成"}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary compact"
+                    disabled={busy}
+                    onClick={() => onPrepareRestore(snapshot)}
+                  >
+                    内容を検証して取り込む
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p>同期履歴はまだありません。「今すぐ同期」で最初の保存データを作成できます。</p>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function cloudStatusLabel(status: string): string {
+  if (status === "SYNCED") return "同期済み";
+  if (status === "SYNCING") return "Driveへ書き込み中";
+  if (status === "PENDING") return "自動同期待ち";
+  if (status === "READ_ONLY") return "別のPCが使用中・読み取り専用";
+  if (status === "RESTORE_AVAILABLE") return "Driveに新しい保存データがあります";
+  if (status === "REAUTHORIZATION_REQUIRED") return "Google再接続が必要";
+  if (status === "ERROR") return "同期確認エラー・読み取り専用";
+  if (status === "DISABLED") return "自動同期は停止中";
+  return "同期状態を確認中";
 }
 
 function ProgressPanel({

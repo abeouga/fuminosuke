@@ -1,4 +1,4 @@
-import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DocumentLibrarySyncResult, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
+import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DocumentLibrarySyncResult, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder, TemplatePackageActivation, TemplatePackageDriveItem, TemplatePackageOperation, WorkspaceSnapshot, WorkspaceSyncStatus } from "./types";
 
 const API = "/api/v1";
 
@@ -79,6 +79,41 @@ export function uploadPortableRestore(
   });
 }
 
+export function uploadTemplatePackageInspection(
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<TemplatePackageOperation> {
+  return new Promise((resolve, reject) => {
+    const upload = new XMLHttpRequest();
+    upload.open("POST", `${API}/template-packages/imports/inspect`);
+    upload.withCredentials = true;
+    upload.responseType = "json";
+    upload.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    });
+    upload.addEventListener("load", () => {
+      if (upload.status >= 200 && upload.status < 300) {
+        resolve(upload.response as TemplatePackageOperation);
+        return;
+      }
+      const problem = (upload.response ?? {}) as Problem;
+      if (upload.status === 401) {
+        window.dispatchEvent(new CustomEvent("ledger-auth-required"));
+      }
+      reject(new ApiError(
+        problem.detail ?? problem.message ?? "template packageを検証できませんでした。",
+        problem.code,
+      ));
+    });
+    upload.addEventListener("error", () => {
+      reject(new ApiError("template packageの送信中に通信が切断されました。"));
+    });
+    const form = new FormData();
+    form.append("file", file, file.name);
+    upload.send(form);
+  });
+}
+
 export function createIdempotencyKey(scope: "template" | "ocr"): string {
   const value = typeof globalThis.crypto?.randomUUID === "function"
     ? globalThis.crypto.randomUUID()
@@ -103,6 +138,77 @@ export const api = {
       body: JSON.stringify({ folderId }),
     }),
   deleteTemplate: (id: string) => request<TemplateDeleteResult>(`/templates/${id}`, { method: "DELETE" }),
+  inspectTemplatePackageExport: (body: {
+    templateId: string;
+    templateVersionId: string;
+    publisherId: string;
+    packageId: string;
+    version: string;
+    includePreview: boolean;
+    includeHandwritingCandidates: boolean;
+    includeOutputLayout: boolean;
+  }) => request<TemplatePackageOperation>("/template-packages/exports/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }),
+  confirmTemplatePackageExport: (confirmationToken: string) =>
+    requestResponse("/template-packages/exports/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmationToken }),
+    }),
+  confirmTemplatePackageImport: (confirmationToken: string, allowOlderVersion: boolean) =>
+    request<TemplatePackageOperation>("/template-packages/imports/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmationToken, allowOlderVersion }),
+    }),
+  templatePackageOperation: (operationId: string) =>
+    request<TemplatePackageOperation>(
+      `/template-packages/operations/${encodeURIComponent(operationId)}`,
+    ),
+  templatePackagePreviewUrl: (operationId: string, role: "preview" | "clean-template") =>
+    `${API}/template-packages/operations/${encodeURIComponent(operationId)}/assets/${role}`,
+  deleteTemplatePackageOperation: (operationId: string) =>
+    request<void>(`/template-packages/operations/${encodeURIComponent(operationId)}`, {
+      method: "DELETE",
+    }),
+  activateTemplatePackage: (installationId: string, expectedActiveVersionId: string | null) =>
+    request<TemplatePackageActivation>(
+      `/template-packages/installations/${encodeURIComponent(installationId)}/activate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedActiveVersionId }),
+      },
+    ),
+  templatePackageDriveItems: () =>
+    request<TemplatePackageDriveItem[]>("/template-packages/drive/items"),
+  publishTemplatePackageDriveRelease: (confirmationToken: string) =>
+    request<TemplatePackageDriveItem>("/template-packages/drive/releases/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmationToken }),
+    }),
+  publishTemplatePackageDriveDraft: (
+    confirmationToken: string,
+    options: {
+      draftId: string | null;
+      expectedRevision: number | null;
+      baseReleaseVersion: string | null;
+    },
+  ) => request<TemplatePackageDriveItem>("/template-packages/drive/drafts/publish", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmationToken, ...options }),
+  }),
+  inspectDriveTemplatePackage: (fileId: string, kind: "RELEASE" | "DRAFT") =>
+    request<TemplatePackageOperation>("/template-packages/drive/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId, kind }),
+    }),
   sireNames: () => request<SireNamePool>("/sire-names"),
   jobs: (limit = 20, options?: { attentionOnly?: boolean }) => {
     const query = new URLSearchParams({ limit: String(limit) });
@@ -136,6 +242,28 @@ export const api = {
     request<void>(`/system-backups/portable-imports/${encodeURIComponent(operationId)}`, {
       method: "DELETE",
     }),
+  workspaceSyncStatus: () => request<WorkspaceSyncStatus>("/workspace-sync"),
+  updateWorkspaceSync: (enabled: boolean) => request<WorkspaceSyncStatus>("/workspace-sync", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  }),
+  refreshWorkspaceSync: () => request<WorkspaceSyncStatus>("/workspace-sync/refresh", {
+    method: "POST",
+  }),
+  syncWorkspaceNow: () => request<WorkspaceSyncStatus>("/workspace-sync/sync-now", {
+    method: "POST",
+  }),
+  workspaceSnapshots: () => request<{ items: WorkspaceSnapshot[] }>("/workspace-sync/snapshots"),
+  prepareWorkspaceRestore: (fileId: string, operationId: string) =>
+    request<PortableRestoreOperation>(
+      `/workspace-sync/snapshots/${encodeURIComponent(fileId)}/prepare-restore`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId }),
+      },
+    ),
   job: (id: string) => request<Job>(`/jobs/${id}`),
   artifacts: (id: string) => request<{ items: Artifact[] }>(`/jobs/${id}/artifacts`),
   result: (id: string) => request<OcrResult>(`/ocr-jobs/${id}/result`),

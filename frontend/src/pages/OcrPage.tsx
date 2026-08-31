@@ -4,6 +4,7 @@ import { CameraCapture } from "../components/CameraCapture";
 import { FilePicker } from "../components/FilePicker";
 import { showToast } from "../components/Toast";
 import { JobProgress } from "../components/JobProgress";
+import { TemplatePackageDialog } from "../components/TemplatePackageDialog";
 import { useJobPoller } from "../hooks/useJobPoller";
 import {
   navigateToSpreadsheet,
@@ -95,6 +96,11 @@ export function OcrPage({
   const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
+  const [packageDialog, setPackageDialog] = useState<
+    | { mode: "import" }
+    | { mode: "export"; template: Template; version: Template["versions"][number] }
+    | null
+  >(null);
   const creatingRef = useRef(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const templateWorkspaceIdRef = useRef(0);
@@ -292,13 +298,16 @@ export function OcrPage({
           <h1>{libraryContext?.action === "RESCAN_PAGE" ? `${libraryContext.pageNumber ?? "選択した"}ページ目を読み直す` : libraryContext?.action === "ADD_PAGE" ? "続きのページを追加" : libraryContext?.action === "NEW_DOCUMENT" ? "同じ分類の別書類を読み取る" : "書類を読み取る"}</h1>
           <p>{libraryContext ? "書類ライブラリで選択した書類に紐付けて読み取ります。" : "テンプレートと画像を選ぶと、設定済みの項目を自動で読み取ります。"}</p>
         </div>
-        <button
-          type="button"
-          className="primary ocr-template-create-button"
-          onClick={() => openTemplateWorkspace("create")}
-        >
-          <span aria-hidden="true">＋</span> 新しいテンプレート
-        </button>
+        <div className="ocr-template-header-actions">
+          <button type="button" className="secondary" onClick={() => setPackageDialog({ mode: "import" })}>テンプレートを取り込む</button>
+          <button
+            type="button"
+            className="primary ocr-template-create-button"
+            onClick={() => openTemplateWorkspace("create")}
+          >
+            <span aria-hidden="true">＋</span> 新しいテンプレート
+          </button>
+        </div>
       </header>
       {libraryContext && <aside className="notice compact"><strong>書類ライブラリから開始</strong><span>{libraryContext.action === "RESCAN_PAGE" ? "新しい画像を以前のページと比較し、承認後に差分を反映します。" : libraryContext.action === "ADD_PAGE" ? "この書類の続きとして新しいページ番号を付けます。" : "現在の書類とは別の書類・別のスプレッドシートとして保存します。"}</span></aside>}
       {versions.length === 0 ? (
@@ -417,6 +426,15 @@ export function OcrPage({
                           </span>
                         </button>
                         <span className="ocr-template-card-actions">
+                          <button
+                            type="button"
+                            className="secondary compact"
+                            aria-label={`${template.name}を配布用に書き出す`}
+                            disabled={deleting}
+                            onClick={() => setPackageDialog({ mode: "export", template, version })}
+                          >
+                            配布用に書き出す
+                          </button>
                           <button
                             type="button"
                             className="secondary compact"
@@ -574,6 +592,25 @@ export function OcrPage({
         }}
         onClose={() => setCameraOpen(false)}
       />}
+      {packageDialog && (
+        <TemplatePackageDialog
+          mode={packageDialog.mode}
+          template={packageDialog.mode === "export" ? packageDialog.template : undefined}
+          version={packageDialog.mode === "export" ? packageDialog.version : undefined}
+          refreshTemplates={refreshTemplates}
+          onClose={() => setPackageDialog(null)}
+          onReviewImported={(importedVersionId) => {
+            setPackageDialog(null);
+            openTemplateWorkspace("manage", importedVersionId);
+          }}
+          onActivated={(activatedVersionId) => {
+            setSelectionInvalidated(false);
+            setVersionId(activatedVersionId);
+            setStep(1);
+            setPackageDialog(null);
+          }}
+        />
+      )}
     </div>
   );
 }

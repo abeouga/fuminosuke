@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Lock
 from typing import Any
 from urllib.parse import quote
@@ -38,6 +40,16 @@ _DRIVE_CHANGES = "https://www.googleapis.com/drive/v3/changes"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_ZIP_MIME = "application/zip"
+_TEMPLATE_PACKAGE_MIME = "application/vnd.llmocr.template+zip"
+_WORKSPACE_ROOT_NAME = "LLM OCR ワークスペース"
+_WORKSPACE_ROOT_MARKER = "v1"
+_TEMPLATE_ROOT_NAME = "LLM OCR テンプレート"
+_TEMPLATE_ROOT_MARKER = "v1"
+_TEMPLATE_FILE_FIELDS = (
+    "id,name,mimeType,parents,createdTime,modifiedTime,size,trashed,"
+    "explicitlyTrashed,version,headRevisionId,sha256Checksum,appProperties"
+)
 
 
 class GoogleDriveService:
@@ -114,6 +126,454 @@ class GoogleDriveService:
                 for folder_id, folder_name in roots
             ],
         }
+
+    def workspace_remote_state(
+        self,
+        *,
+        device_id: str,
+        device_name: str,
+        acquire_lease: bool,
+        lease_seconds: int = 120,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._workspace_root(subject)
+            properties = self._workspace_properties(root)
+            now = datetime.now(UTC)
+            owner_id = properties.get("llmOcrLeaseDeviceId") or None
+            owner_name = properties.get("llmOcrLeaseDeviceName") or None
+            lease_expires_at = self._drive_datetime(
+                properties.get("llmOcrLeaseExpiresAt")
+            )
+            lease_active = bool(lease_expires_at and lease_expires_at > now)
+            can_acquire = not lease_active or owner_id == device_id
+            if acquire_lease and can_acquire:
+                lease_expires_at = now + timedelta(seconds=max(30, lease_seconds))
+                properties.update(
+                    {
+                        "llmOcrWorkspaceRoot": _WORKSPACE_ROOT_MARKER,
+                        "llmOcrLeaseDeviceId": device_id,
+                        "llmOcrLeaseDeviceName": device_name[:120],
+                        "llmOcrLeaseExpiresAt": lease_expires_at.isoformat(),
+                    }
+                )
+                root = self._patch_workspace_properties(root, properties)
+                verified = self._workspace_properties(root)
+                owner_id = verified.get("llmOcrLeaseDeviceId") or None
+                owner_name = verified.get("llmOcrLeaseDeviceName") or None
+                lease_expires_at = self._drive_datetime(
+                    verified.get("llmOcrLeaseExpiresAt")
+                )
+                lease_active = bool(lease_expires_at and lease_expires_at > now)
+            snapshots = self._workspace_snapshots(root)
+            return {
+                "googleSubject": subject,
+                "rootFolderId": str(root["id"]),
+                "leaseOwnerDeviceId": owner_id,
+                "leaseOwnerDeviceName": owner_name,
+                "leaseExpiresAt": lease_expires_at,
+                "leaseOwned": bool(
+                    lease_active and owner_id == device_id
+                ),
+                "snapshots": snapshots,
+            }
+
+    def upload_workspace_snapshot(
+        self,
+        *,
+        archive_path: Path,
+        revision: int,
+        sha256: str,
+        device_id: str,
+        created_at: datetime,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._workspace_root(subject)
+            metadata = {
+                "name": created_at.astimezone().strftime(
+                    f"llm-ocr-workspace-r{revision:06d}-%Y%m%d-%H%M%S.zip"
+                ),
+                "mimeType": _ZIP_MIME,
+                "parents": [str(root["id"])],
+                "appProperties": {
+                    "llmOcrWorkspaceSnapshot": _WORKSPACE_ROOT_MARKER,
+                    "llmOcrWorkspaceRevision": str(revision),
+                    "llmOcrWorkspaceSha256": sha256,
+                    "llmOcrWorkspaceDeviceId": device_id,
+                    "llmOcrWorkspaceCreatedAt": created_at.isoformat(),
+                    "llmOcrWorkspaceReady": "true",
+                },
+            }
+            response = self._raw_drive_request(
+                "POST",
+                _DRIVE_UPLOAD_FILES,
+                params={
+                    "uploadType": "resumable",
+                    "fields": (
+                        "id,name,mimeType,parents,createdTime,modifiedTime,"
+                        "size,appProperties"
+                    ),
+                    "supportsAllDrives": "true",
+                },
+                headers={
+                    "X-Upload-Content-Type": _ZIP_MIME,
+                    "X-Upload-Content-Length": str(archive_path.stat().st_size),
+                },
+                json=metadata,
+            )
+            upload_url = response.headers.get("Location")
+            if not upload_url:
+                raise AppError(
+                    status=502,
+                    code="WORKSPACE_UPLOAD_SESSION_MISSING",
+                    title="Workspace upload session was not created",
+                    detail="Google Driveへの同期用アップロードを開始できませんでした。",
+                )
+            with archive_path.open("rb") as archive:
+                completed = self._raw_drive_request(
+                    "PUT",
+                    upload_url,
+                    headers={
+                        "Content-Type": _ZIP_MIME,
+                        "Content-Length": str(archive_path.stat().st_size),
+                    },
+                    data=archive,
+                    timeout=600,
+                )
+            payload = completed.json()
+            if not isinstance(payload, dict) or not payload.get("id"):
+                raise AppError(
+                    status=502,
+                    code="WORKSPACE_UPLOAD_FAILED",
+                    title="Workspace snapshot upload failed",
+                    detail="Google Driveへ同期用バックアップを書き込めませんでした。",
+                )
+            verified = self._drive_item(str(payload["id"]))
+            if not self._is_workspace_snapshot(verified, root_id=str(root["id"])):
+                raise AppError(
+                    status=409,
+                    code="WORKSPACE_UPLOAD_VERIFICATION_FAILED",
+                    title="Workspace snapshot could not be verified",
+                    detail="Google Driveへ書き込んだ同期用バックアップを確認できませんでした。",
+                )
+            return self._workspace_snapshot_view(verified or {})
+
+    def download_workspace_snapshot(
+        self,
+        file_id: str,
+        destination: Path,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._workspace_root(subject)
+            item = self._drive_item(file_id)
+            if not self._is_workspace_snapshot(item, root_id=str(root["id"])):
+                raise AppError(
+                    status=404,
+                    code="WORKSPACE_SNAPSHOT_NOT_FOUND",
+                    title="Workspace snapshot was not found",
+                    detail="選択したGoogle Drive同期履歴が見つかりません。",
+                )
+            response = self._raw_drive_request(
+                "GET",
+                f"{_DRIVE_FILES}/{quote(file_id, safe='')}",
+                params={"alt": "media", "supportsAllDrives": "true"},
+                stream=True,
+                timeout=600,
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("wb") as target:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        target.write(chunk)
+            return self._workspace_snapshot_view(item or {})
+
+    def trim_workspace_snapshots(
+        self,
+        *,
+        retain: int = 5,
+        expected_subject: str | None = None,
+    ) -> None:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._workspace_root(subject)
+            snapshots = self._workspace_snapshots(root)
+            for item in snapshots[max(1, retain):]:
+                self._request(
+                    "PATCH",
+                    f"{_DRIVE_FILES}/{quote(str(item['fileId']), safe='')}",
+                    params={"fields": "id,trashed", "supportsAllDrives": "true"},
+                    json={"trashed": True},
+                )
+
+    def release_workspace_lease(
+        self,
+        device_id: str,
+        expected_subject: str | None = None,
+    ) -> None:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._workspace_root(subject)
+            properties = self._workspace_properties(root)
+            if properties.get("llmOcrLeaseDeviceId") != device_id:
+                return
+            properties.update(
+                {
+                    "llmOcrWorkspaceRoot": _WORKSPACE_ROOT_MARKER,
+                    "llmOcrLeaseDeviceId": "",
+                    "llmOcrLeaseDeviceName": "",
+                    "llmOcrLeaseExpiresAt": "",
+                }
+            )
+            self._patch_workspace_properties(root, properties)
+
+    def template_package_files(
+        self,
+        expected_subject: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._template_package_root(subject)
+            root_id = str(root["id"])
+            items = self._find_template_package_files(root_id)
+            return [
+                self._template_package_file_view(item)
+                for item in items
+                if self._is_template_package_file(item, root_id=root_id)
+            ]
+
+    def upload_template_package_release(
+        self,
+        *,
+        content: bytes,
+        publisher_id: str,
+        package_id: str,
+        release_version: str,
+        content_digest: str,
+        package_sha256: str,
+        file_name: str,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._template_package_root(subject)
+            root_id = str(root["id"])
+            folders = self._template_package_identity_folders(
+                root_id=root_id,
+                publisher_id=publisher_id,
+                package_id=package_id,
+            )
+            publisher_hash = self._identity_hash(publisher_id)
+            package_hash = self._identity_hash(package_id)
+            matches = [
+                item
+                for item in self._find_template_package_files(root_id)
+                if self._template_properties(item).get("lok") == "release"
+                and self._template_properties(item).get("lop") == publisher_hash
+                and self._template_properties(item).get("loi") == package_hash
+                and self._template_properties(item).get("lov") == release_version
+            ]
+            if matches:
+                if len(matches) != 1:
+                    raise self._template_release_conflict(
+                        "同一identity/versionのDrive releaseが複数存在します。"
+                    )
+                existing = matches[0]
+                properties = self._template_properties(existing)
+                if (
+                    properties.get("lod") != content_digest
+                    or properties.get("los") != package_sha256
+                ):
+                    raise self._template_release_conflict(
+                        "同一identity/versionに異なるcontent digestが存在します。"
+                    )
+                return self._template_package_file_view(existing)
+
+            properties = self._template_file_properties(
+                kind="release",
+                root_id=root_id,
+                folder_id=folders["releases"],
+                publisher_id=publisher_id,
+                package_id=package_id,
+                release_version=release_version,
+                content_digest=content_digest,
+                package_sha256=package_sha256,
+            )
+            uploaded = self._upload_template_package(
+                method="POST",
+                file_id=None,
+                content=content,
+                metadata={
+                    "name": file_name,
+                    "mimeType": _TEMPLATE_PACKAGE_MIME,
+                    "parents": [folders["releases"]],
+                    "appProperties": properties,
+                },
+                etag=None,
+            )
+            verified = self._drive_item_with_etag(str(uploaded.get("id") or ""))
+            if not self._is_template_package_file(verified, root_id=root_id, kind="release"):
+                raise AppError(
+                    status=409,
+                    code="DRIVE_TEMPLATE_RELEASE_VERIFICATION_FAILED",
+                    title="Drive template release verification failed",
+                    detail="Google Driveへ保存した正式版packageを確認できませんでした。",
+                )
+            return self._template_package_file_view(verified)
+
+    def upload_template_package_draft(
+        self,
+        *,
+        content: bytes,
+        publisher_id: str,
+        package_id: str,
+        release_version: str,
+        content_digest: str,
+        package_sha256: str,
+        file_name: str,
+        draft_id: str,
+        base_release_version: str | None,
+        expected_revision: int | None,
+        expected_drive_file_id: str | None,
+        expected_drive_version: str | None,
+        expected_head_revision_id: str | None,
+        expected_etag: str | None,
+        expected_subject: str | None = None,
+    ) -> dict[str, Any]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._template_package_root(subject)
+            root_id = str(root["id"])
+            folders = self._template_package_identity_folders(
+                root_id=root_id,
+                publisher_id=publisher_id,
+                package_id=package_id,
+            )
+            if expected_drive_file_id is None:
+                revision = 1
+                properties = self._template_file_properties(
+                    kind="draft",
+                    root_id=root_id,
+                    folder_id=folders["drafts"],
+                    publisher_id=publisher_id,
+                    package_id=package_id,
+                    release_version=release_version,
+                    content_digest=content_digest,
+                    package_sha256=package_sha256,
+                    draft_id=draft_id,
+                    draft_revision=revision,
+                    base_release_version=base_release_version,
+                )
+                uploaded = self._upload_template_package(
+                    method="POST",
+                    file_id=None,
+                    content=content,
+                    metadata={
+                        "name": file_name,
+                        "mimeType": _TEMPLATE_PACKAGE_MIME,
+                        "parents": [folders["drafts"]],
+                        "appProperties": properties,
+                    },
+                    etag=None,
+                )
+            else:
+                current = self._drive_item_with_etag(expected_drive_file_id)
+                current_properties = self._template_properties(current)
+                if (
+                    current_properties.get("lou") == draft_id
+                    and current_properties.get("lod") == content_digest
+                    and current_properties.get("los") == package_sha256
+                ):
+                    return self._template_package_file_view(current)
+                self._require_matching_draft(
+                    current,
+                    root_id=root_id,
+                    draft_id=draft_id,
+                    expected_revision=expected_revision,
+                    expected_drive_version=expected_drive_version,
+                    expected_head_revision_id=expected_head_revision_id,
+                    expected_etag=expected_etag,
+                )
+                if not expected_etag:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_TEMPLATE_DRAFT_PRECONDITION_UNAVAILABLE",
+                        title="Drive draft precondition is unavailable",
+                        detail="ETagを確認できないため作業版を安全に更新できません。",
+                    )
+                revision = int(current_properties["lor"]) + 1
+                properties = self._template_file_properties(
+                    kind="draft",
+                    root_id=root_id,
+                    folder_id=folders["drafts"],
+                    publisher_id=publisher_id,
+                    package_id=package_id,
+                    release_version=release_version,
+                    content_digest=content_digest,
+                    package_sha256=package_sha256,
+                    draft_id=draft_id,
+                    draft_revision=revision,
+                    base_release_version=base_release_version,
+                )
+                uploaded = self._upload_template_package(
+                    method="PATCH",
+                    file_id=expected_drive_file_id,
+                    content=content,
+                    metadata={
+                        "name": file_name,
+                        "mimeType": _TEMPLATE_PACKAGE_MIME,
+                        "appProperties": properties,
+                    },
+                    etag=expected_etag,
+                )
+            verified = self._drive_item_with_etag(str(uploaded.get("id") or ""))
+            if not self._is_template_package_file(verified, root_id=root_id, kind="draft"):
+                raise AppError(
+                    status=409,
+                    code="DRIVE_TEMPLATE_DRAFT_VERIFICATION_FAILED",
+                    title="Drive template draft verification failed",
+                    detail="Google Driveへ保存した作業版packageを確認できませんでした。",
+                )
+            verified_properties = self._template_properties(verified)
+            if (
+                verified_properties.get("lod") != content_digest
+                or verified_properties.get("los") != package_sha256
+                or verified_properties.get("lor") != str(revision)
+            ):
+                raise self._template_draft_conflict()
+            return self._template_package_file_view(verified)
+
+    def download_template_package_file(
+        self,
+        file_id: str,
+        *,
+        expected_kind: str,
+        expected_subject: str | None = None,
+    ) -> tuple[bytes, dict[str, Any]]:
+        with self._drive_operation(expected_subject) as subject:
+            root = self._template_package_root(subject)
+            root_id = str(root["id"])
+            item = self._drive_item_with_etag(file_id)
+            if not self._is_template_package_file(
+                item,
+                root_id=root_id,
+                kind=expected_kind,
+            ):
+                raise AppError(
+                    status=404,
+                    code="DRIVE_TEMPLATE_PACKAGE_NOT_FOUND",
+                    title="Drive template package was not found",
+                    detail="選択したGoogle Driveのtemplate packageが見つかりません。",
+                )
+            response = self._raw_drive_request(
+                "GET",
+                f"{_DRIVE_FILES}/{quote(file_id, safe='')}",
+                params={"alt": "media", "supportsAllDrives": "true"},
+                stream=True,
+                timeout=600,
+            )
+            content = b"".join(
+                chunk
+                for chunk in response.iter_content(chunk_size=1024 * 1024)
+                if chunk
+            )
+            return content, self._template_package_file_view(item)
 
     def picker_session(self, expected_subject: str | None = None) -> dict[str, str]:
         if not self._picker_api_key or not self._picker_app_id:
@@ -5004,7 +5464,7 @@ class GoogleDriveService:
             f"{_DRIVE_FILES}/{quote(file_id, safe='')}",
             params={
                 "fields": (
-                    "id,name,mimeType,parents,modifiedTime,trashed,"
+                    "id,name,mimeType,parents,createdTime,modifiedTime,size,trashed,"
                     "explicitlyTrashed,appProperties"
                 ),
                 "supportsAllDrives": "true",
@@ -5031,7 +5491,7 @@ class GoogleDriveService:
                 ),
                 "fields": (
                     "nextPageToken,files("
-                    "id,name,mimeType,parents,modifiedTime,trashed,"
+                    "id,name,mimeType,parents,createdTime,modifiedTime,size,trashed,"
                     "explicitlyTrashed,appProperties)"
                 ),
                 "pageSize": "1000",
@@ -5049,6 +5509,489 @@ class GoogleDriveService:
             if not isinstance(next_token, str) or not next_token:
                 return items
             page_token = next_token
+
+    def _template_package_root(self, subject: str) -> dict[str, Any]:
+        with self._database.session() as session:
+            account = self._active_account(session, subject)
+            parent_id = account.default_output_folder_id
+        if not parent_id:
+            raise AppError(
+                status=409,
+                code="DRIVE_OUTPUT_FOLDER_REQUIRED",
+                title="Drive output folder is required",
+                detail="先に保存先設定でGoogle Driveフォルダーを選択してください。",
+            )
+        candidates = [
+            item
+            for item in self._list_drive_children(parent_id)
+            if item.get("mimeType") == _FOLDER_MIME
+            and self._template_properties(item).get("llmOcrTemplateRoot")
+            == _TEMPLATE_ROOT_MARKER
+        ]
+        if candidates:
+            return sorted(candidates, key=lambda item: str(item.get("id") or ""))[0]
+        created = self._create_file(
+            name=_TEMPLATE_ROOT_NAME,
+            mime_type=_FOLDER_MIME,
+            parent_id=parent_id,
+            app_properties={"llmOcrTemplateRoot": _TEMPLATE_ROOT_MARKER},
+        )
+        verified = self._drive_item(str(created.get("id") or ""))
+        if (
+            verified is None
+            or verified.get("mimeType") != _FOLDER_MIME
+            or self._template_properties(verified).get("llmOcrTemplateRoot")
+            != _TEMPLATE_ROOT_MARKER
+        ):
+            raise AppError(
+                status=409,
+                code="DRIVE_TEMPLATE_ROOT_VERIFICATION_FAILED",
+                title="Drive template root verification failed",
+                detail="Google Driveのtemplate package専用フォルダーを確認できませんでした。",
+            )
+        return verified
+
+    def _template_package_identity_folders(
+        self,
+        *,
+        root_id: str,
+        publisher_id: str,
+        package_id: str,
+    ) -> dict[str, str]:
+        publisher = self._ensure_template_folder(
+            parent_id=root_id,
+            name=publisher_id,
+            marker_key="llmOcrTemplatePublisher",
+            marker_value=self._identity_hash(publisher_id),
+        )
+        package = self._ensure_template_folder(
+            parent_id=str(publisher["id"]),
+            name=package_id,
+            marker_key="llmOcrTemplatePackage",
+            marker_value=self._identity_hash(package_id),
+        )
+        releases = self._ensure_template_folder(
+            parent_id=str(package["id"]),
+            name="releases",
+            marker_key="llmOcrTemplateCollection",
+            marker_value="releases",
+        )
+        drafts = self._ensure_template_folder(
+            parent_id=str(package["id"]),
+            name="drafts",
+            marker_key="llmOcrTemplateCollection",
+            marker_value="drafts",
+        )
+        return {
+            "publisher": str(publisher["id"]),
+            "package": str(package["id"]),
+            "releases": str(releases["id"]),
+            "drafts": str(drafts["id"]),
+        }
+
+    def _ensure_template_folder(
+        self,
+        *,
+        parent_id: str,
+        name: str,
+        marker_key: str,
+        marker_value: str,
+    ) -> dict[str, Any]:
+        matches = [
+            item
+            for item in self._list_drive_children(parent_id)
+            if item.get("mimeType") == _FOLDER_MIME
+            and self._template_properties(item).get(marker_key) == marker_value
+        ]
+        if matches:
+            if len(matches) != 1:
+                raise AppError(
+                    status=409,
+                    code="DRIVE_TEMPLATE_FOLDER_CONFLICT",
+                    title="Drive template folder conflict",
+                    detail="Google Drive側に対応先を一意に決められないフォルダーがあります。",
+                )
+            return matches[0]
+        created = self._create_file(
+            name=name[:255],
+            mime_type=_FOLDER_MIME,
+            parent_id=parent_id,
+            app_properties={marker_key: marker_value},
+        )
+        verified = self._drive_item(str(created.get("id") or ""))
+        if (
+            verified is None
+            or verified.get("mimeType") != _FOLDER_MIME
+            or self._template_properties(verified).get(marker_key) != marker_value
+            or self._string_list(verified.get("parents")) != [parent_id]
+        ):
+            raise AppError(
+                status=409,
+                code="DRIVE_TEMPLATE_FOLDER_VERIFICATION_FAILED",
+                title="Drive template folder verification failed",
+                detail="Google Driveのtemplate package保存先を確認できませんでした。",
+            )
+        return verified
+
+    def _find_template_package_files(self, root_id: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, str] = {
+                "q": (
+                    "appProperties has { key='lot' and value='v1' } "
+                    "and trashed = false"
+                ),
+                "fields": f"nextPageToken,files({_TEMPLATE_FILE_FIELDS})",
+                "pageSize": "1000",
+                "spaces": "drive",
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            payload = self._request("GET", _DRIVE_FILES, params=params)
+            page_items = payload.get("files")
+            if isinstance(page_items, list):
+                for item in page_items:
+                    if not isinstance(item, dict):
+                        continue
+                    if self._template_properties(item).get("loroot") != root_id:
+                        continue
+                    detailed = self._drive_item_with_etag(str(item.get("id") or ""))
+                    if detailed:
+                        items.append(detailed)
+            next_token = payload.get("nextPageToken")
+            if not isinstance(next_token, str) or not next_token:
+                return items
+            page_token = next_token
+
+    def _drive_item_with_etag(self, file_id: str) -> dict[str, Any]:
+        response = self._raw_drive_request(
+            "GET",
+            f"{_DRIVE_FILES}/{quote(file_id, safe='')}",
+            params={"fields": _TEMPLATE_FILE_FIELDS, "supportsAllDrives": "true"},
+        )
+        payload = response.json()
+        item = payload if isinstance(payload, dict) else {}
+        etag = response.headers.get("ETag")
+        if etag:
+            item["_etag"] = etag
+        return item
+
+    def _upload_template_package(
+        self,
+        *,
+        method: str,
+        file_id: str | None,
+        content: bytes,
+        metadata: dict[str, Any],
+        etag: str | None,
+    ) -> dict[str, Any]:
+        boundary = f"llm_ocr_template_{uuid4().hex}"
+        metadata_bytes = json.dumps(
+            metadata,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        body = b"".join(
+            (
+                f"--{boundary}\r\n".encode("ascii"),
+                b"Content-Type: application/json; charset=UTF-8\r\n\r\n",
+                metadata_bytes,
+                f"\r\n--{boundary}\r\n".encode("ascii"),
+                f"Content-Type: {_TEMPLATE_PACKAGE_MIME}\r\n\r\n".encode("ascii"),
+                content,
+                f"\r\n--{boundary}--\r\n".encode("ascii"),
+            )
+        )
+        url = _DRIVE_UPLOAD_FILES
+        if file_id is not None:
+            url = f"{_DRIVE_UPLOAD_FILES}/{quote(file_id, safe='')}"
+        headers = {"Content-Type": f"multipart/related; boundary={boundary}"}
+        if etag:
+            headers["If-Match"] = etag
+        response = self._raw_drive_request(
+            method,
+            url,
+            params={
+                "uploadType": "multipart",
+                "fields": _TEMPLATE_FILE_FIELDS,
+                "supportsAllDrives": "true",
+            },
+            headers=headers,
+            data=body,
+            timeout=600,
+        )
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def _require_matching_draft(
+        self,
+        item: dict[str, Any],
+        *,
+        root_id: str,
+        draft_id: str,
+        expected_revision: int | None,
+        expected_drive_version: str | None,
+        expected_head_revision_id: str | None,
+        expected_etag: str | None,
+    ) -> None:
+        properties = self._template_properties(item)
+        if (
+            not self._is_template_package_file(item, root_id=root_id, kind="draft")
+            or properties.get("lou") != draft_id
+            or properties.get("lor") != str(expected_revision)
+            or str(item.get("version") or "") != str(expected_drive_version or "")
+            or str(item.get("headRevisionId") or "")
+            != str(expected_head_revision_id or "")
+            or str(item.get("_etag") or "") != str(expected_etag or "")
+        ):
+            raise self._template_draft_conflict()
+
+    @staticmethod
+    def _template_file_properties(
+        *,
+        kind: str,
+        root_id: str,
+        folder_id: str,
+        publisher_id: str,
+        package_id: str,
+        release_version: str,
+        content_digest: str,
+        package_sha256: str,
+        draft_id: str | None = None,
+        draft_revision: int | None = None,
+        base_release_version: str | None = None,
+    ) -> dict[str, str]:
+        properties = {
+            "lot": _TEMPLATE_ROOT_MARKER,
+            "lok": kind,
+            "loroot": root_id,
+            "lof": folder_id,
+            "lop": GoogleDriveService._identity_hash(publisher_id),
+            "loi": GoogleDriveService._identity_hash(package_id),
+            "lov": release_version,
+            "lod": content_digest,
+            "los": package_sha256,
+        }
+        if draft_id is not None and draft_revision is not None:
+            properties["lou"] = draft_id
+            properties["lor"] = str(draft_revision)
+            properties["lob"] = base_release_version or ""
+        for key, value in properties.items():
+            if len((key + value).encode("utf-8")) > 124:
+                raise AppError(
+                    status=422,
+                    code="DRIVE_TEMPLATE_PROPERTY_TOO_LONG",
+                    title="Drive template property is too long",
+                    detail="Google Drive同期用metadataの上限を超えています。",
+                )
+        return properties
+
+    @staticmethod
+    def _template_properties(item: dict[str, Any]) -> dict[str, str]:
+        value = item.get("appProperties")
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): str(item_value)
+            for key, item_value in value.items()
+            if isinstance(key, str) and item_value is not None
+        }
+
+    def _is_template_package_file(
+        self,
+        item: dict[str, Any] | None,
+        *,
+        root_id: str,
+        kind: str | None = None,
+    ) -> bool:
+        if not item:
+            return False
+        properties = self._template_properties(item)
+        file_kind = properties.get("lok")
+        folder_id = properties.get("lof")
+        return (
+            item.get("mimeType") == _TEMPLATE_PACKAGE_MIME
+            and item.get("trashed") is not True
+            and properties.get("lot") == _TEMPLATE_ROOT_MARKER
+            and properties.get("loroot") == root_id
+            and file_kind in {"release", "draft"}
+            and (kind is None or file_kind == kind)
+            and bool(folder_id)
+            and self._string_list(item.get("parents")) == [folder_id]
+            and bool(properties.get("lod"))
+            and bool(properties.get("los"))
+        )
+
+    def _template_package_file_view(self, item: dict[str, Any]) -> dict[str, Any]:
+        properties = self._template_properties(item)
+        return {
+            "kind": properties.get("lok") or "",
+            "fileId": str(item.get("id") or ""),
+            "fileName": str(item.get("name") or ""),
+            "folderId": properties.get("lof") or "",
+            "releaseVersion": properties.get("lov") or "",
+            "contentDigest": properties.get("lod") or "",
+            "packageSha256": properties.get("los") or "",
+            "publisherHash": properties.get("lop") or "",
+            "packageHash": properties.get("loi") or "",
+            "draftId": properties.get("lou") or None,
+            "draftRevision": int(properties.get("lor") or 0) or None,
+            "baseReleaseVersion": properties.get("lob") or None,
+            "driveVersion": str(item.get("version") or ""),
+            "headRevisionId": str(item.get("headRevisionId") or "") or None,
+            "etag": str(item.get("_etag") or "") or None,
+            "modifiedTime": item.get("modifiedTime"),
+            "fileBytes": int(item.get("size") or 0),
+        }
+
+    @staticmethod
+    def _identity_hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _template_release_conflict(detail: str) -> AppError:
+        return AppError(
+            status=409,
+            code="DRIVE_TEMPLATE_RELEASE_CONFLICT",
+            title="Drive template release conflict",
+            detail=detail,
+        )
+
+    @staticmethod
+    def _template_draft_conflict() -> AppError:
+        return AppError(
+            status=409,
+            code="DRIVE_TEMPLATE_DRAFT_CONFLICT",
+            title="Drive template draft conflict",
+            detail="別の環境で作業版が更新されています。再取得して内容を確認してください。",
+        )
+
+    def _workspace_root(self, subject: str) -> dict[str, Any]:
+        with self._database.session() as session:
+            account = self._active_account(session, subject)
+            parent_id = account.default_output_folder_id
+        if not parent_id:
+            raise AppError(
+                status=409,
+                code="DRIVE_OUTPUT_FOLDER_REQUIRED",
+                title="Drive output folder is required",
+                detail="先に保存先設定でGoogle Driveフォルダーを選択してください。",
+            )
+        candidates = [
+            item
+            for item in self._list_drive_children(parent_id)
+            if item.get("mimeType") == _FOLDER_MIME
+            and self._workspace_properties(item).get("llmOcrWorkspaceRoot")
+            == _WORKSPACE_ROOT_MARKER
+        ]
+        if candidates:
+            return sorted(candidates, key=lambda item: str(item.get("id") or ""))[0]
+        created = self._create_file(
+            name=_WORKSPACE_ROOT_NAME,
+            mime_type=_FOLDER_MIME,
+            parent_id=parent_id,
+            app_properties={"llmOcrWorkspaceRoot": _WORKSPACE_ROOT_MARKER},
+        )
+        verified = self._drive_item(str(created.get("id") or ""))
+        if (
+            verified is None
+            or verified.get("mimeType") != _FOLDER_MIME
+            or self._workspace_properties(verified).get("llmOcrWorkspaceRoot")
+            != _WORKSPACE_ROOT_MARKER
+        ):
+            raise AppError(
+                status=409,
+                code="WORKSPACE_ROOT_VERIFICATION_FAILED",
+                title="Workspace sync folder could not be verified",
+                detail="Google Driveの同期用フォルダーを確認できませんでした。",
+            )
+        return verified
+
+    def _workspace_snapshots(self, root: dict[str, Any]) -> list[dict[str, Any]]:
+        root_id = str(root["id"])
+        snapshots = [
+            self._workspace_snapshot_view(item)
+            for item in self._list_drive_children(root_id)
+            if self._is_workspace_snapshot(item, root_id=root_id)
+        ]
+        snapshots.sort(
+            key=lambda item: (
+                int(item.get("revision") or 0),
+                str(item.get("createdAt") or ""),
+                str(item.get("fileId") or ""),
+            ),
+            reverse=True,
+        )
+        return snapshots
+
+    @staticmethod
+    def _workspace_properties(item: dict[str, Any]) -> dict[str, str]:
+        value = item.get("appProperties")
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): str(item_value)
+            for key, item_value in value.items()
+            if isinstance(key, str) and item_value is not None
+        }
+
+    def _patch_workspace_properties(
+        self,
+        root: dict[str, Any],
+        properties: dict[str, str],
+    ) -> dict[str, Any]:
+        patched = self._request(
+            "PATCH",
+            f"{_DRIVE_FILES}/{quote(str(root['id']), safe='')}",
+            params={
+                "fields": (
+                    "id,name,mimeType,parents,createdTime,modifiedTime,size,trashed,"
+                    "explicitlyTrashed,appProperties"
+                ),
+                "supportsAllDrives": "true",
+            },
+            json={"appProperties": properties},
+        )
+        verified = self._drive_item(str(root["id"]))
+        return verified or patched
+
+    def _is_workspace_snapshot(
+        self,
+        item: dict[str, Any] | None,
+        *,
+        root_id: str,
+    ) -> bool:
+        if item is None:
+            return False
+        properties = self._workspace_properties(item)
+        return (
+            item.get("mimeType") == _ZIP_MIME
+            and item.get("trashed") is not True
+            and self._string_list(item.get("parents")) == [root_id]
+            and properties.get("llmOcrWorkspaceSnapshot") == _WORKSPACE_ROOT_MARKER
+            and properties.get("llmOcrWorkspaceReady") == "true"
+            and str(properties.get("llmOcrWorkspaceRevision") or "").isdigit()
+            and bool(properties.get("llmOcrWorkspaceSha256"))
+        )
+
+    def _workspace_snapshot_view(self, item: dict[str, Any]) -> dict[str, Any]:
+        properties = self._workspace_properties(item)
+        return {
+            "fileId": str(item.get("id") or ""),
+            "fileName": str(item.get("name") or ""),
+            "revision": int(properties.get("llmOcrWorkspaceRevision") or 0),
+            "sha256": properties.get("llmOcrWorkspaceSha256") or "",
+            "deviceId": properties.get("llmOcrWorkspaceDeviceId") or "",
+            "createdAt": (
+                properties.get("llmOcrWorkspaceCreatedAt")
+                or item.get("createdTime")
+                or item.get("modifiedTime")
+            ),
+            "fileBytes": int(item.get("size") or 0),
+        }
 
     def _find_spreadsheet_outputs(
         self,
@@ -5530,6 +6473,52 @@ class GoogleDriveService:
             )
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
+
+    def _raw_drive_request(
+        self,
+        method: str,
+        url: str,
+        **kwargs: object,
+    ) -> Any:
+        timeout = kwargs.pop("timeout", 30)
+        try:
+            response = self._authorized_session().request(  # type: ignore[no-untyped-call]
+                method,
+                url,
+                timeout=timeout,
+                **kwargs,
+            )
+        except GoogleAuthError as exc:
+            self._session = None
+            self._session_subject = None
+            raise AppError(
+                status=401,
+                code="GOOGLE_AUTH_REFRESH_FAILED",
+                title="Google authorization refresh failed",
+                detail="Google連携を更新できませんでした。連携をやり直してください。",
+            ) from exc
+        if response.status_code == 401:
+            self._session = None
+            self._session_subject = None
+            raise AppError(
+                status=401,
+                code="GOOGLE_AUTH_REAUTHORIZATION_REQUIRED",
+                title="Google authorization is no longer valid",
+                detail="Google連携の有効期限が切れています。連携をやり直してください。",
+            )
+        if response.status_code == 412:
+            raise self._template_draft_conflict()
+        if response.status_code >= 400:
+            raise AppError(
+                status=502,
+                code="GOOGLE_DRIVE_ERROR",
+                title="Google Drive request failed",
+                detail=(
+                    "Google Driveの同期用ファイルを操作できませんでした。"
+                    "Google連携を確認してください。"
+                ),
+            )
+        return response
 
     def _authorized_session(
         self,

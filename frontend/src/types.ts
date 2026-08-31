@@ -42,6 +42,124 @@ export type TemplateDeleteResult = {
   outcome: "deleted" | "archived";
 };
 
+export type TemplatePackageAssetInspection = {
+  path?: string;
+  role: string;
+  mediaType: string;
+  size: number;
+  sha256: string;
+  width: number | null;
+  height: number | null;
+  sanitized?: boolean;
+};
+
+export type TemplatePackageExportInspection = {
+  templateName: string;
+  templateVersionNumber: number;
+  mode: string;
+  candidateSets: Array<{
+    name: string;
+    valueCount: number;
+    values: string[];
+    targetPatterns: string[];
+  }>;
+  assets: TemplatePackageAssetInspection[];
+  outputLayoutIncluded: boolean;
+  spreadsheetSourceIncluded: boolean;
+  warnings: string[];
+  contentDigest: string;
+  confirmationDigest: string;
+};
+
+export type TemplatePackageImportInspection = {
+  formatVersion: number;
+  schemaVersion: number;
+  publisherId: string;
+  packageId: string;
+  version: string;
+  name: string;
+  contentDigest: string;
+  packageSha256: string;
+  minimumAppVersion: string;
+  requiredFeatures: string[];
+  optionalFeatures: string[];
+  mode: string;
+  conflictStatus: "NEW_IDENTITY" | "SAME_RELEASE" | "NEWER_RELEASE" | "OLDER_RELEASE" | "VERSION_CONFLICT";
+  existingLocalTemplateId: string | null;
+  existingLocalTemplateVersionId: string | null;
+  documentIdentityFieldCount: number;
+  documentNameFieldPaths: string[];
+  candidateSetCount: number;
+  assets: TemplatePackageAssetInspection[];
+  spreadsheetSourceIncluded: boolean;
+  outputLayoutIncluded: boolean;
+  trustStatus: "UNVERIFIED";
+};
+
+export type TemplatePackageImportResult = {
+  installationId: string;
+  localTemplateId: string;
+  localTemplateVersionId: string;
+  localJobId: string;
+  contentDigest: string;
+  releaseVersion: string;
+  created: boolean;
+  activeVersionChanged: false;
+};
+
+export type TemplatePackageOperation = {
+  operationId: string;
+  kind: "IMPORT" | "EXPORT";
+  status: "READY" | "RUNNING" | "COMPLETED" | "FAILED";
+  stage: string;
+  progressPercent: number;
+  message: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  fileName: string | null;
+  packageSha256: string | null;
+  confirmationToken: string | null;
+  importInspection: TemplatePackageImportInspection | null;
+  exportInspection: TemplatePackageExportInspection | null;
+  result: TemplatePackageImportResult | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorCategory: "SECURITY" | "COMPATIBILITY" | "CONFLICT" | "VALIDATION" | "SYSTEM" | null;
+};
+
+export type TemplatePackageActivation = {
+  installationId: string;
+  localTemplateId: string;
+  localTemplateVersionId: string;
+  previousActiveVersionId: string | null;
+  activeVersionId: string;
+  candidateSetCount: number;
+  outputLayoutMaterialized: boolean;
+  alreadyActive: boolean;
+};
+
+export type TemplatePackageDriveItem = {
+  kind: "RELEASE" | "DRAFT";
+  fileId: string;
+  fileName: string;
+  publisherId: string;
+  packageId: string;
+  releaseVersion: string;
+  contentDigest: string;
+  packageSha256: string;
+  draftId: string | null;
+  draftRevision: number | null;
+  baseReleaseVersion: string | null;
+  driveVersion: string;
+  headRevisionId: string | null;
+  etag: string | null;
+  modifiedTime: string | null;
+  fileBytes: number;
+  trustStatus: "UNVERIFIED";
+  syncStatus: "REMOTE_ONLY" | "SYNCED" | "CONFLICT";
+};
+
 export type TemplateCandidateBinding = {
   targetPattern: string;
   label: string;
@@ -146,6 +264,38 @@ export type PortableRestoreOperation = {
   errorMessage: string | null;
   rollbackExpiresAt: string | null;
   updatedAt: string;
+};
+
+export type WorkspaceSyncStatus = {
+  enabled: boolean;
+  status: string;
+  stage: string;
+  progressPercent: number;
+  message: string;
+  dirty: boolean;
+  remoteRevision: number;
+  latestSnapshotFileId: string | null;
+  latestSnapshotSha256: string | null;
+  latestSnapshotCreatedAt: string | null;
+  leaseOwnerDeviceId: string | null;
+  leaseOwnerDeviceName: string | null;
+  leaseExpiresAt: string | null;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  error: string | null;
+  deviceId: string;
+  deviceName: string;
+  readOnly: boolean;
+};
+
+export type WorkspaceSnapshot = {
+  fileId: string;
+  fileName: string;
+  revision: number;
+  sha256: string;
+  deviceId: string;
+  createdAt: string | null;
+  fileBytes: number;
 };
 
 export type Artifact = { name: string; mediaType: string; url: string };

@@ -11,7 +11,7 @@ import { DriveSettingsPage } from "./pages/DriveSettingsPage";
 import { JobPage } from "./pages/JobPage";
 import { OcrPage, type TemplateWorkspaceRequest } from "./pages/OcrPage";
 import { ReviewPage } from "./pages/ReviewPage";
-import type { AuthSession, Health, Job, OcrLibraryContext, Template } from "./types";
+import type { AuthSession, Health, Job, OcrLibraryContext, Template, WorkspaceSyncStatus } from "./types";
 
 type Page = "home" | "ocr" | "review" | "job" | "records" | "library" | "drive" | "development";
 type NavigationGuard = "review" | "ocr" | "template";
@@ -58,6 +58,7 @@ export default function App() {
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [disconnectPending, setDisconnectPending] = useState(false);
   const [portableBackupOpen, setPortableBackupOpen] = useState(false);
+  const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<WorkspaceSyncStatus | null>(null);
   const portableBackupButtonRef = useRef<HTMLButtonElement>(null);
   const templateRefreshRef = useRef<Promise<void> | null>(null);
   const templateAutoRetryAttemptedRef = useRef(false);
@@ -237,6 +238,24 @@ export default function App() {
     retryTemplates();
     void refreshJobs();
   }, [authReady, refreshJobs, retryTemplates]);
+  useEffect(() => {
+    if (!authReady) return;
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const status = await api.workspaceSyncStatus();
+        if (!stopped) setWorkspaceSyncStatus(status);
+      } catch {
+        if (!stopped) setWorkspaceSyncStatus(null);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [authReady]);
   const backendHealthy = health !== null;
   useEffect(() => {
     if (!templateLoadFailed) {
@@ -331,6 +350,21 @@ export default function App() {
         </div>
       </aside>
       <main className="main-content">
+        {workspaceSyncStatus?.readOnly && (
+          <aside className="notice persistent-system-notice workspace-read-only" role="alert">
+            <div>
+              <strong>この端末は読み取り専用です。</strong>
+              <span>{workspaceSyncStatus.message}</span>
+            </div>
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => setPortableBackupOpen(true)}
+            >
+              Drive同期を確認
+            </button>
+          </aside>
+        )}
         {templateLoadFailed && (
           <aside className="notice danger persistent-system-notice" role="alert">
             <div>
@@ -417,6 +451,7 @@ export default function App() {
         <PortableBackupDialog
           onClose={() => setPortableBackupOpen(false)}
           returnFocusRef={portableBackupButtonRef}
+          onWorkspaceStatusChange={setWorkspaceSyncStatus}
         />
       )}
     </div>

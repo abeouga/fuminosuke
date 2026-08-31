@@ -21,7 +21,10 @@ from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.services.portable_backup_service import PortableBackupService
 from app.services.portable_restore_service import PortableRestoreService
+from app.services.workspace_cloud_sync_service import WorkspaceCloudSyncService
 from app.storage.local_storage import LocalStorageService
+from app.template_packages.drive_sync_service import TemplatePackageDriveSyncService
+from app.template_packages.operation_service import TemplatePackageOperationService
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -76,10 +79,19 @@ async def start_runtime_services(app: FastAPI) -> None:
         google_sheets,
         google_drive if google_oauth.enabled else None,
     )
+    workspace_cloud_sync = WorkspaceCloudSyncService(
+        database,
+        storage,
+        app.state.portable_backup_service,
+        app.state.portable_restore_service,
+        google_drive,
+        google_oauth.active_subject,
+    )
     google_sheets_edit_worker = GoogleSheetsEditWorker(
         google_sheets,
         ocr_result_service,
         poll_interval_seconds=settings.google_sheets.edit_poll_interval_seconds,
+        mutation_notifier=workspace_cloud_sync.mark_dirty,
     )
     runner = JobRunner(
         database=database,
@@ -109,6 +121,10 @@ async def start_runtime_services(app: FastAPI) -> None:
     )
     app.state.google_sheets = google_sheets
     app.state.google_drive = google_drive
+    app.state.template_package_drive_sync = TemplatePackageDriveSyncService(
+        database,
+        google_drive,
+    )
     app.state.output_layout_templates = output_layout_templates
     app.state.artifact_recovery = artifact_recovery
     app.state.google_oauth = google_oauth
@@ -121,13 +137,18 @@ async def start_runtime_services(app: FastAPI) -> None:
         storage,
         google_drive if google_oauth.enabled else None,
     )
+    app.state.workspace_cloud_sync_service = workspace_cloud_sync
+    await workspace_cloud_sync.start()
     app.state.job_worker_status = "running"
 
 
 async def stop_runtime_services(app: FastAPI) -> None:
     app.state.job_worker_status = "not_started"
+    workspace_cloud_sync = getattr(app.state, "workspace_cloud_sync_service", None)
     edit_worker = getattr(app.state, "google_sheets_edit_worker", None)
     runner = getattr(app.state, "job_runner", None)
+    if workspace_cloud_sync is not None:
+        await workspace_cloud_sync.stop()
     if edit_worker is not None:
         await edit_worker.stop()
     if runner is not None:
@@ -151,9 +172,14 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         storage,
         portable_backup,
     )
+    app.state.template_package_operations = TemplatePackageOperationService(
+        database,
+        storage,
+    )
     await start_runtime_services(app)
     try:
         yield
     finally:
         await stop_runtime_services(app)
+        app.state.template_package_operations.close()
         database.dispose()

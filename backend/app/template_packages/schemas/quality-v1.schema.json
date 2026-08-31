@@ -1,0 +1,60 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "definitionApproved": {
+      "title": "Definitionapproved",
+      "type": "boolean"
+    },
+    "definitionValid": {
+      "title": "Definitionvalid",
+      "type": "boolean"
+    },
+    "documentBoundaryVerified": {
+      "title": "Documentboundaryverified",
+      "type": "boolean"
+    },
+    "fieldMappingCount": {
+      "maximum": 300,
+      "minimum": 0,
+      "title": "Fieldmappingcount",
+      "type": "integer"
+    },
+    "layoutFinalized": {
+      "title": "Layoutfinalized",
+      "type": "boolean"
+    },
+    "layoutVerified": {
+      "title": "Layoutverified",
+      "type": "boolean"
+    },
+    "recordStructureVerified": {
+      "title": "Recordstructureverified",
+      "type": "boolean"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "default": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "documentBoundaryVerified",
+    "layoutVerified",
+    "layoutFinalized",
+    "recordStructureVerified",
+    "definitionApproved",
+    "definitionValid",
+    "fieldMappingCount"
+  ],
+  "title": "CanonicalTemplateQuality",
+  "type": "object"
+}

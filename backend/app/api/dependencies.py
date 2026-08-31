@@ -12,6 +12,7 @@ from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.services.portable_backup_service import PortableBackupService
 from app.services.portable_restore_service import PortableRestoreService
+from app.services.workspace_cloud_sync_service import WorkspaceCloudSyncService
 from app.storage.local_storage import LocalStorageService
 
 
@@ -52,6 +53,13 @@ def get_portable_backup_service(request: Request) -> PortableBackupService:
 
 def get_portable_restore_service(request: Request) -> PortableRestoreService:
     return cast(PortableRestoreService, request.app.state.portable_restore_service)
+
+
+def get_workspace_cloud_sync_service(request: Request) -> WorkspaceCloudSyncService:
+    return cast(
+        WorkspaceCloudSyncService,
+        request.app.state.workspace_cloud_sync_service,
+    )
 
 
 def get_session(request: Request) -> Iterator[Session]:

@@ -40,6 +40,7 @@ from app.services.spreadsheet_template_import_service import SpreadsheetTemplate
 from app.services.template_candidate_service import TemplateCandidateService
 from app.services.template_definition_service import TemplateDefinitionService
 from app.services.template_management_service import TemplateManagementService
+from app.template_packages.activation_service import TemplatePackageActivationService
 
 router = APIRouter(tags=["templates"])
 
@@ -744,6 +745,20 @@ async def update_template_boundary(
     response_model_by_alias=True,
 )
 def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
+    with request.app.state.database.session() as session:
+        if TemplatePackageActivationService.imported_installation_for_version(
+            session,
+            version_id,
+        ) is not None:
+            raise AppError(
+                status=409,
+                code="TEMPLATE_PACKAGE_ACTIVATION_REQUIRED",
+                title="Imported template package requires package activation",
+                detail=(
+                    "取り込み版は読み取り候補と出力レイアウトを同時に反映するため、"
+                    "取り込み結果の「有効版にする」から有効化してください。"
+                ),
+            )
     (
         _,
         _,

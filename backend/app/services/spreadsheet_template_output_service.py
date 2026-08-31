@@ -17,10 +17,9 @@ from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.domain.enums import TemplateMode
 from app.storage.local_storage import LocalStorageService
 
-
 _SOURCE_CELL_ID = re.compile(r"^xlsx_([A-Z]{1,3}[1-9]\d*)(?:$|_)")
 _UNSAFE_FILE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-_HYPHENS = "‐‑‒–—―ー－-"
+_HYPHENS = "‐‑‒–—―ー－-"  # noqa: RUF001 - intentional accepted hyphen variants
 _MISSING = object()
 
 
@@ -94,7 +93,7 @@ class SpreadsheetTemplateOutputService:
             if not isinstance(raw_mapping, dict) or raw_mapping.get("enabled") is False:
                 continue
             value = self._mapping_value(document, raw_mapping)
-            if value is _MISSING:
+            if value is _MISSING or value is None or value == "":
                 continue
             destinations = self._destinations(raw_mapping, version.layout_json, value)
             for coordinate, destination_value in destinations:
@@ -141,7 +140,11 @@ class SpreadsheetTemplateOutputService:
     @classmethod
     def _mapping_value(cls, document: dict[str, Any], mapping: dict[str, Any]) -> object:
         target_path = mapping.get("targetPath")
-        value = cls._value_at_path(document, target_path) if isinstance(target_path, str) else _MISSING
+        value = (
+            cls._value_at_path(document, target_path)
+            if isinstance(target_path, str)
+            else _MISSING
+        )
         if value not in {_MISSING, None, ""}:
             return value
 
@@ -187,7 +190,7 @@ class SpreadsheetTemplateOutputService:
             return normalized if normalized is not None else raw
         if isinstance(current, list):
             return "、".join(str(item) for item in current)
-        if isinstance(current, (str, int, float, bool)) or current is None:
+        if isinstance(current, str | int | float | bool) or current is None:
             return current
         return _MISSING
 
@@ -282,7 +285,7 @@ class SpreadsheetTemplateOutputService:
     def _excel_value(value: object) -> str | int | float | bool | None:
         if value is _MISSING or value is None or value == "":
             return None
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str | int | float | bool):
             return value
         return str(value)
 
@@ -320,7 +323,12 @@ class SpreadsheetTemplateOutputService:
     def _merged_anchor(worksheet: Worksheet, coordinate: str) -> str:
         for merged_range in worksheet.merged_cells.ranges:
             if coordinate in merged_range:
-                return worksheet.cell(merged_range.min_row, merged_range.min_col).coordinate
+                return str(
+                    worksheet.cell(
+                        merged_range.min_row,
+                        merged_range.min_col,
+                    ).coordinate
+                )
         return coordinate
 
     @staticmethod

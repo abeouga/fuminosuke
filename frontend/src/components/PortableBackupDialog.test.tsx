@@ -300,6 +300,79 @@ test("shows a validation failure without presenting the destructive apply action
   expect(screen.queryByRole("button", { name: "現在データを置換して取り込む" })).not.toBeInTheDocument();
 });
 
+test("enables Drive auto-sync and shows verified snapshot history", async () => {
+  let enabled = false;
+  let synced = false;
+  const status = () => ({
+    enabled,
+    status: !enabled ? "DISABLED" : synced ? "SYNCED" : "PENDING",
+    stage: !enabled ? "IDLE" : synced ? "COMPLETED" : "WAITING_FOR_IDLE",
+    progressPercent: synced ? 100 : 0,
+    message: !enabled
+      ? "Google Drive自動同期は停止しています。"
+      : synced
+        ? "Google Driveと同期済みです。"
+        : "未同期の変更があります。自動同期を待っています。",
+    dirty: enabled && !synced,
+    remoteRevision: synced ? 1 : 0,
+    latestSnapshotFileId: synced ? "snapshot-1" : null,
+    latestSnapshotSha256: synced ? "a".repeat(64) : null,
+    latestSnapshotCreatedAt: synced ? "2026-09-01T00:00:00Z" : null,
+    leaseOwnerDeviceId: enabled ? "device-1" : null,
+    leaseOwnerDeviceName: enabled ? "OCR-PC" : null,
+    leaseExpiresAt: enabled ? "2026-09-01T00:02:00Z" : null,
+    lastAttemptAt: synced ? "2026-09-01T00:00:00Z" : null,
+    lastSuccessAt: synced ? "2026-09-01T00:00:00Z" : null,
+    error: null,
+    deviceId: "device-1",
+    deviceName: "OCR-PC",
+    readOnly: false,
+  });
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/workspace-sync") && init?.method === "PUT") {
+      enabled = true;
+      return jsonResponse(status());
+    }
+    if (path.endsWith("/workspace-sync/sync-now") && init?.method === "POST") {
+      synced = true;
+      return jsonResponse(status());
+    }
+    if (path.endsWith("/workspace-sync/snapshots")) {
+      return jsonResponse({
+        items: synced ? [{
+          fileId: "snapshot-1",
+          fileName: "workspace-1.zip",
+          revision: 1,
+          sha256: "a".repeat(64),
+          deviceId: "device-1",
+          createdAt: "2026-09-01T00:00:00Z",
+          fileBytes: 4096,
+        }] : [],
+      });
+    }
+    if (path.endsWith("/workspace-sync")) return jsonResponse(status());
+    return jsonResponse({}, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <PortableBackupDialog
+      onClose={vi.fn()}
+      returnFocusRef={{ current: null }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Drive自動同期" }));
+  fireEvent.click(await screen.findByRole("button", { name: "自動同期を有効化" }));
+
+  expect(await screen.findByText("自動同期待ち")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "今すぐ同期" }));
+
+  expect(await screen.findByText("同期済み")).toBeInTheDocument();
+  expect(screen.getByText("第1版")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "内容を検証して取り込む" })).toBeInTheDocument();
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
