@@ -30,3 +30,36 @@ test("copies the confirmed table and offers a per-document xlsx download", async
   expect(await screen.findByText("罫線付きでコピーしました。Excelで貼り付けできます。")).toBeInTheDocument();
   expect(writeText).toHaveBeenCalledWith("よつば");
 });
+
+test("renames the Drive spreadsheet after the output name is edited", async () => {
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    enabled: true,
+    status: "synced",
+    spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit",
+    fileName: "面接カード_阿部桜雅",
+    lastError: null,
+  }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <ExcelExportActions
+      jobId="job-1"
+      driveFileName="面接カード_入力済み"
+    />,
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "出力ファイル名" }), {
+    target: { value: "面接カード_阿部桜雅.xlsx" },
+  });
+
+  expect(await screen.findByText("Drive上のファイル名へ反映しました。", {}, { timeout: 2000 }))
+    .toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/v1/ocr-jobs/job-1/spreadsheet-name",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ fileName: "面接カード_阿部桜雅.xlsx" }),
+    }),
+  );
+  expect(screen.getByRole("textbox", { name: "出力ファイル名" }))
+    .toHaveValue("面接カード_阿部桜雅");
+});

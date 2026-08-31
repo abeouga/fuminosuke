@@ -10,6 +10,7 @@ from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
+from app.services.portable_backup_service import PortableBackupService
 from app.storage.local_storage import LocalStorageService
 
 
@@ -42,6 +43,10 @@ def get_output_layout_templates(request: Request) -> OutputLayoutTemplateService
         OutputLayoutTemplateService,
         request.app.state.output_layout_templates,
     )
+
+
+def get_portable_backup_service(request: Request) -> PortableBackupService:
+    return cast(PortableBackupService, request.app.state.portable_backup_service)
 
 
 def get_session(request: Request) -> Iterator[Session]:

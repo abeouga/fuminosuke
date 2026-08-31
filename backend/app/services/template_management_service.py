@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Literal
+
 import cv2
 import numpy as np
 import yaml
 from sqlalchemy import func, select
 
 from app.core.errors import AppError
+from app.db.models import LedgerDocument
 from app.db.session import Database
 from app.domain.field_targets import is_supported_field_path
 from app.domain.template_config import (
@@ -18,7 +22,6 @@ from app.domain.template_config import (
 from app.domain.template_fields import parse_legacy_spreadsheet_metadata
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.image_loader import verified_image_size
-from app.db.models import LedgerDocument
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.template_mutation import (
@@ -273,31 +276,36 @@ class TemplateManagementService:
         with template_mutation_lock():
             return self._save_edited_mask_locked(version_id, content)
 
-    def delete_template(self, template_id: str) -> None:
-        with template_mutation_lock():
-            with self._database.session() as session:
-                begin_immediate(session)
-                repository = TemplateRepository(session)
-                template = repository.get_template(template_id)
-                if template is None:
-                    raise self._template_not_found()
+    def delete_template(self, template_id: str) -> Literal["deleted", "archived"]:
+        with template_mutation_lock(), self._database.session() as session:
+            begin_immediate(session)
+            repository = TemplateRepository(session)
+            template = repository.get_template(template_id)
+            if template is None:
+                raise self._template_not_found()
 
-                template_document_count = session.scalar(
-                    select(func.count())
-                    .select_from(LedgerDocument)
-                    .where(LedgerDocument.template_id == template_id)
-                )
-                if template_document_count:
-                    raise self._template_in_use()
-
-                template.active_version_id = None
-                for version in repository.list_versions(template_id):
-                    session.delete(version)
-                session.delete(template)
+            template_document_count = session.scalar(
+                select(func.count())
+                .select_from(LedgerDocument)
+                .where(LedgerDocument.template_id == template_id)
+            )
+            if template_document_count:
+                # Historical ledger records still need their template and
+                # version metadata. Hide an in-use template from future
+                # selection instead of cascading deletion into those records.
+                template.archived_at = datetime.now(UTC)
                 session.commit()
+                return "archived"
+
+            template.active_version_id = None
+            for version in repository.list_versions(template_id):
+                session.delete(version)
+            session.delete(template)
+            session.commit()
         relative_path = f"templates/{template_id}"
         if self._storage.exists(relative_path):
             self._storage.delete_tree(relative_path)
+        return "deleted"
 
     def _save_edited_mask_locked(self, version_id: str, content: bytes) -> str:
         if not content.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -385,15 +393,6 @@ class TemplateManagementService:
             code="INVALID_MASK_DIMENSIONS",
             title="Invalid handwriting mask",
             detail=detail,
-        )
-
-    @staticmethod
-    def _template_in_use() -> AppError:
-        return AppError(
-            status=409,
-            code="TEMPLATE_IN_USE",
-            title="Template is in use",
-            detail="帳票データで使用されているテンプレートは削除できません。",
         )
 
     @staticmethod

@@ -10,8 +10,20 @@ import {
   type SpreadsheetNavigator,
 } from "../spreadsheetNavigation";
 import type { FieldMapping, OcrLibraryContext, Template } from "../types";
+import { TemplatePage } from "./TemplatePage";
 
 type OcrStep = 1 | 2 | 3;
+type TemplateWorkspace = "create" | "manage";
+
+export type TemplateWorkspaceRequest = {
+  id: number;
+  workspace: TemplateWorkspace;
+  editVersionId?: string;
+};
+
+type TemplateWorkspaceView = TemplateWorkspaceRequest;
+
+const EMPTY_TEMPLATE_REFRESH = async () => undefined;
 
 const OCR_STEPS = [
   { number: 1 as const, title: "型を選択", caption: "テンプレート" },
@@ -32,15 +44,27 @@ export function OcrPage({
   rememberJob,
   openReview,
   openTemplates,
+  refreshTemplates = EMPTY_TEMPLATE_REFRESH,
+  templateWorkspaceRequest,
+  onTemplateWorkspaceRequestHandled,
+  readingRootRequestId = 0,
+  onTemplateWorkspaceVisibilityChange,
   onNavigationGuardChange,
+  onTemplateNavigationGuardChange,
   onSpreadsheetNavigate = navigateToSpreadsheet,
 }: {
   templates: Template[];
   libraryContext?: OcrLibraryContext | null;
   rememberJob: (id: string) => void;
   openReview: (id: string) => void;
-  openTemplates: () => void;
+  openTemplates?: () => void;
+  refreshTemplates?: () => Promise<void>;
+  templateWorkspaceRequest?: TemplateWorkspaceRequest | null;
+  onTemplateWorkspaceRequestHandled?: () => void;
+  readingRootRequestId?: number;
+  onTemplateWorkspaceVisibilityChange?: (visible: boolean) => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
+  onTemplateNavigationGuardChange?: (shouldWarn: boolean) => void;
   onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
   const activeVersions = useMemo(
@@ -68,8 +92,12 @@ export function OcrPage({
   const [mappingRetryToken, setMappingRetryToken] = useState(0);
   const [templateQuery, setTemplateQuery] = useState("");
   const [templatePreviews, setTemplatePreviews] = useState<Record<string, string>>({});
+  const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [selectionInvalidated, setSelectionInvalidated] = useState(false);
   const creatingRef = useRef(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const templateWorkspaceIdRef = useRef(0);
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
   const visibleVersions = useMemo(() => {
@@ -83,16 +111,84 @@ export function OcrPage({
     Boolean(mappingPreview?.length)
     && mappingValid
   );
-  useEffect(() => {
-    if (!versions.some((item) => item.version.id === versionId)) {
-      idempotencyKeyRef.current = null;
-      setVersionId(
-        versions.some((item) => item.version.id === libraryContext?.templateVersionId)
-          ? libraryContext?.templateVersionId ?? ""
-          : versions[0]?.version.id ?? "",
-      );
+  const openTemplateWorkspace = (
+    workspace: TemplateWorkspace,
+    editVersionId?: string,
+  ) => {
+    if (openTemplates) {
+      openTemplates();
+      return;
     }
-  }, [libraryContext?.templateVersionId, versionId, versions]);
+    templateWorkspaceIdRef.current += 1;
+    setTemplateWorkspace({
+      id: templateWorkspaceIdRef.current,
+      workspace,
+      editVersionId,
+    });
+  };
+  const deleteTemplate = async (template: Template) => {
+    if (
+      deletingTemplateId
+      || !window.confirm(
+        `「${template.name}」を読み取り一覧から削除しますか？\n\n未使用の場合は完全に削除され、既存書類で使用中の場合は履歴を保つためアーカイブされます。`,
+      )
+    ) return;
+    setDeletingTemplateId(template.id);
+    try {
+      const result = await api.deleteTemplate(template.id);
+      await refreshTemplates();
+      if (template.versions.some((version) => version.id === versionId)) {
+        setSelectionInvalidated(true);
+        setVersionId("");
+        setStep(1);
+      }
+      showToast({
+        tone: "success",
+        title: result.outcome === "archived"
+          ? "テンプレートを読み取り一覧から削除しました"
+          : "テンプレートを削除しました",
+        message: result.outcome === "archived"
+          ? "既存書類の履歴を保つため、テンプレート本体はアーカイブされています。"
+          : `「${template.name}」と保存済み設定を削除しました。`,
+      });
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "テンプレートを削除できませんでした",
+        message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
+      });
+    } finally {
+      setDeletingTemplateId((current) => current === template.id ? null : current);
+    }
+  };
+  useEffect(() => {
+    if (!templateWorkspaceRequest) return;
+    setTemplateWorkspace(templateWorkspaceRequest);
+    onTemplateWorkspaceRequestHandled?.();
+  }, [onTemplateWorkspaceRequestHandled, templateWorkspaceRequest]);
+  useEffect(() => {
+    if (readingRootRequestId === 0) return;
+    setTemplateWorkspace(null);
+  }, [readingRootRequestId]);
+  useEffect(() => {
+    onTemplateWorkspaceVisibilityChange?.(templateWorkspace !== null);
+    return () => onTemplateWorkspaceVisibilityChange?.(false);
+  }, [onTemplateWorkspaceVisibilityChange, templateWorkspace]);
+  useEffect(() => {
+    if (versions.some((item) => item.version.id === versionId)) return;
+    idempotencyKeyRef.current = null;
+    if (versionId) {
+      setSelectionInvalidated(true);
+      setVersionId("");
+      return;
+    }
+    if (selectionInvalidated) return;
+    setVersionId(
+      versions.some((item) => item.version.id === libraryContext?.templateVersionId)
+        ? libraryContext?.templateVersionId ?? ""
+        : versions[0]?.version.id ?? "",
+    );
+  }, [libraryContext?.templateVersionId, selectionInvalidated, versionId, versions]);
   useEffect(() => {
     let cancelled = false;
     const previewSources = versions.filter(({ version }) => version.sourceJobId);
@@ -116,7 +212,8 @@ export function OcrPage({
   }, [versions]);
   useEffect(() => {
     const shouldWarn = (
-      !jobId
+      !templateWorkspace
+      && !jobId
       && (busy || step > 1 || file !== null)
     );
     onNavigationGuardChange?.(shouldWarn);
@@ -127,6 +224,7 @@ export function OcrPage({
     jobId,
     onNavigationGuardChange,
     step,
+    templateWorkspace,
   ]);
   useEffect(() => {
     let cancelled = false;
@@ -166,14 +264,43 @@ export function OcrPage({
       })
       .catch(() => openReview(terminal.id));
   });
+  if (templateWorkspace) {
+    return (
+      <TemplatePage
+        key={templateWorkspace.id}
+        templates={templates}
+        refresh={refreshTemplates}
+        rememberJob={rememberJob}
+        initialWorkspace={templateWorkspace.workspace}
+        initialEditVersionId={templateWorkspace.editVersionId}
+        onNavigationGuardChange={onTemplateNavigationGuardChange}
+        onClose={() => setTemplateWorkspace(null)}
+        onTemplateActivated={(activatedVersionId) => {
+          setSelectionInvalidated(false);
+          setVersionId(activatedVersionId);
+          setStep(1);
+          setTemplateWorkspace(null);
+        }}
+      />
+    );
+  }
   return (
     <div className="page-stack narrow">
-      <header className="page-header">
-        <span className="eyebrow">NEW READING</span>
-        <h1>{libraryContext?.action === "RESCAN_PAGE" ? `${libraryContext.pageNumber ?? "選択した"}ページ目を読み直す` : libraryContext?.action === "ADD_PAGE" ? "続きのページを追加" : libraryContext?.action === "NEW_DOCUMENT" ? "同じ個体の別の台帳を読み取る" : "台帳を読み取る"}</h1>
-        <p>{libraryContext ? `${libraryContext.cattleName || "牛名なし"}（${libraryContext.individualId}）の読み取りとして登録します。` : "テンプレートと画像を選ぶと、帳票の個体識別番号と牛名を自動で読み取ります。"}</p>
+      <header className="page-header split">
+        <div>
+          <span className="eyebrow">NEW READING</span>
+          <h1>{libraryContext?.action === "RESCAN_PAGE" ? `${libraryContext.pageNumber ?? "選択した"}ページ目を読み直す` : libraryContext?.action === "ADD_PAGE" ? "続きのページを追加" : libraryContext?.action === "NEW_DOCUMENT" ? "同じ分類の別書類を読み取る" : "書類を読み取る"}</h1>
+          <p>{libraryContext ? "書類ライブラリで選択した書類に紐付けて読み取ります。" : "テンプレートと画像を選ぶと、設定済みの項目を自動で読み取ります。"}</p>
+        </div>
+        <button
+          type="button"
+          className="primary ocr-template-create-button"
+          onClick={() => openTemplateWorkspace("create")}
+        >
+          <span aria-hidden="true">＋</span> 新しいテンプレート
+        </button>
       </header>
-      {libraryContext && <aside className="notice compact"><strong>書類ライブラリから開始</strong><span>{libraryContext.action === "RESCAN_PAGE" ? "新しい画像を以前のページと比較し、承認後に差分を反映します。" : libraryContext.action === "ADD_PAGE" ? "この台帳の続きとして新しいページ番号を付けます。" : "現在の台帳とは別の台帳・別のスプレッドシートとして保存します。"}</span></aside>}
+      {libraryContext && <aside className="notice compact"><strong>書類ライブラリから開始</strong><span>{libraryContext.action === "RESCAN_PAGE" ? "新しい画像を以前のページと比較し、承認後に差分を反映します。" : libraryContext.action === "ADD_PAGE" ? "この書類の続きとして新しいページ番号を付けます。" : "現在の書類とは別の書類・別のスプレッドシートとして保存します。"}</span></aside>}
       {versions.length === 0 ? (
         <div className="empty-state large">
           <span>型</span>
@@ -184,7 +311,7 @@ export function OcrPage({
                 読み取り欄が変更されたテンプレートは、確認が終わるまで使用できません。
                 テンプレート設定で「記入欄を再検出」を実行してください。
               </p>
-              <button type="button" className="primary" onClick={openTemplates}>
+              <button type="button" className="primary" onClick={() => openTemplateWorkspace("manage")}>
                 テンプレート設定を開く
               </button>
             </>
@@ -192,7 +319,7 @@ export function OcrPage({
             <>
               <h2>有効なテンプレートがありません</h2>
               <p>先にテンプレートを準備して承認してください。</p>
-              <button type="button" className="primary" onClick={openTemplates}>
+              <button type="button" className="primary" onClick={() => openTemplateWorkspace("create")}>
                 テンプレートを準備する
               </button>
             </>
@@ -209,7 +336,7 @@ export function OcrPage({
                   設定画面で「記入欄を再検出」すると使用できます。
                 </small>
               </span>
-              <button type="button" className="secondary compact" onClick={openTemplates}>
+              <button type="button" className="secondary compact" onClick={() => openTemplateWorkspace("manage")}>
                 テンプレート設定を開く
               </button>
             </aside>
@@ -249,40 +376,67 @@ export function OcrPage({
                 <div className="ocr-template-grid" aria-label="使用するテンプレート">
                   {visibleVersions.map(({ template, version }) => {
                     const selected = version.id === versionId;
+                    const deleting = deletingTemplateId === template.id;
                     return (
-                      <button
+                      <article
                         key={version.id}
-                        type="button"
                         className={`ocr-template-card${selected ? " selected" : ""}`}
-                        aria-pressed={selected}
-                        aria-label={`${template.name} v${version.versionNumber}を選択`}
-                        onClick={() => {
-                          idempotencyKeyRef.current = null;
-                          setVersionId(version.id);
-                        }}
                       >
-                        <span className="ocr-template-card-visual">
-                          <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>
-                          {version.sourceJobId && (
-                            <img
-                              src={templatePreviews[version.id] ?? api.templateBoundaryImageUrl(version.sourceJobId)}
-                              alt=""
-                              loading="lazy"
-                              onLoad={(event) => {
-                                event.currentTarget.hidden = false;
-                              }}
-                              onError={(event) => {
-                                event.currentTarget.hidden = true;
-                              }}
-                            />
-                          )}
-                          {selected && <span className="ocr-template-card-check" aria-hidden="true">✓</span>}
+                        <button
+                          type="button"
+                          className="ocr-template-card-select"
+                          aria-pressed={selected}
+                          aria-label={`${template.name} v${version.versionNumber}を選択`}
+                          disabled={deleting}
+                          onClick={() => {
+                            idempotencyKeyRef.current = null;
+                            setSelectionInvalidated(false);
+                            setVersionId(version.id);
+                          }}
+                        >
+                          <span className="ocr-template-card-visual">
+                            <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>
+                            {templatePreviews[version.id] && (
+                              <img
+                                src={templatePreviews[version.id]}
+                                alt=""
+                                loading="lazy"
+                                onLoad={(event) => {
+                                  event.currentTarget.hidden = false;
+                                }}
+                                onError={(event) => {
+                                  event.currentTarget.hidden = true;
+                                }}
+                              />
+                            )}
+                            {selected && <span className="ocr-template-card-check" aria-hidden="true">✓</span>}
+                          </span>
+                          <span className="ocr-template-card-copy">
+                            <strong>{template.name}</strong>
+                            <small>バージョン {version.versionNumber}</small>
+                          </span>
+                        </button>
+                        <span className="ocr-template-card-actions">
+                          <button
+                            type="button"
+                            className="secondary compact"
+                            aria-label={`${template.name}の設定を確認・修正`}
+                            disabled={!version.sourceJobId || deleting}
+                            onClick={() => openTemplateWorkspace("manage", version.id)}
+                          >
+                            設定を確認・修正
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button compact"
+                            aria-label={`${template.name}を削除`}
+                            disabled={Boolean(deletingTemplateId)}
+                            onClick={() => void deleteTemplate(template)}
+                          >
+                            {deleting ? "削除中…" : "削除"}
+                          </button>
                         </span>
-                        <span className="ocr-template-card-copy">
-                          <strong>{template.name}</strong>
-                          <small>バージョン {version.versionNumber}</small>
-                        </span>
-                      </button>
+                      </article>
                     );
                   })}
                 </div>
@@ -364,8 +518,8 @@ export function OcrPage({
                   <div><dt>処理内容</dt><dd>{enabled ? "手書き文字を読み取る" : "画像処理のみ"}</dd></div>
                 </dl>
                 <aside className="notice compact">
-                  <strong>帳票上の個体識別番号と牛名も読み取ります</strong>
-                  <span>処理後に専用の確認画面を表示します。間違っていた場合は、その場で修正してから結果表へ進めます。</span>
+                  <strong>テンプレートに設定した項目を読み取ります</strong>
+                  <span>処理後に確認画面を表示します。間違っていた場合は、その場で修正してから結果表へ進めます。</span>
                 </aside>
                 <div className="ocr-step-actions">
                   <button type="button" className="secondary" disabled={busy || Boolean(jobId)} onClick={() => setStep(2)}>戻る</button>

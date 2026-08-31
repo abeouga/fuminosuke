@@ -19,6 +19,7 @@ from app.services.individual_record_service import IndividualRecordService
 from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
+from app.services.portable_backup_service import PortableBackupService
 from app.storage.local_storage import LocalStorageService
 
 if TYPE_CHECKING:
@@ -71,7 +72,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         database=database,
         storage=storage,
     )
-    ocr_result_service = OcrResultService(database, storage, google_sheets)
+    ocr_result_service = OcrResultService(
+        database,
+        storage,
+        google_sheets,
+        google_drive if google_oauth.enabled else None,
+    )
     google_sheets_edit_worker = GoogleSheetsEditWorker(
         google_sheets,
         ocr_result_service,
@@ -110,7 +116,12 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.google_sheets_edit_worker = google_sheets_edit_worker
     app.state.individual_record_service = IndividualRecordService(database)
     app.state.data_search_service = DataSearchService(database, storage)
-    app.state.document_library_service = DocumentLibraryService(database, storage)
+    app.state.document_library_service = DocumentLibraryService(
+        database,
+        storage,
+        google_drive if google_oauth.enabled else None,
+    )
+    app.state.portable_backup_service = PortableBackupService(database, storage)
     app.state.job_worker_status = "running"
     try:
         yield

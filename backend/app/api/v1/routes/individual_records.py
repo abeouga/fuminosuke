@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Query, Request, Response, status
 from pydantic import Field
@@ -10,8 +10,12 @@ from app.core.errors import ApiModel
 from app.domain.ocr_models import OcrDocument
 from app.services.document_library_service import DocumentLibraryService
 from app.services.individual_record_service import IndividualRecordService
+from app.services.print_preview_service import PrintPreviewService
+from app.services.windows_printer_service import WindowsPrinterService
 
 router = APIRouter(tags=["individual-records"])
+windows_printer = WindowsPrinterService()
+print_preview = PrintPreviewService()
 
 
 class IndividualRecord(ApiModel):
@@ -81,6 +85,23 @@ class DocumentLocationUpdate(ApiModel):
     expected_version: int = Field(ge=1)
 
 
+class DocumentRename(ApiModel):
+    name: str = Field(min_length=1, max_length=180)
+
+
+class DocumentBulkDelete(ApiModel):
+    document_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class DocumentPrint(ApiModel):
+    mode: Literal["spreadsheet", "image"]
+    copies: int = Field(default=1, ge=1, le=3)
+    paper_size: Literal["A4", "A5", "B5", "LETTER"] = "A4"
+    orientation: Literal["portrait", "landscape"] = "portrait"
+    fit_mode: Literal["contain", "shrink"] = "contain"
+    margin_mm: int = Field(default=10, ge=0, le=30)
+
+
 @router.get(
     "/individual-records/catalog",
     response_model=IndividualRecordCatalogResponse,
@@ -95,6 +116,11 @@ def list_individual_records(request: Request) -> dict[str, Any]:
 def document_library(request: Request) -> dict[str, Any]:
     service = cast(DocumentLibraryService, request.app.state.document_library_service)
     return service.list_library()
+
+
+@router.get("/printer/status")
+def printer_status() -> dict[str, Any]:
+    return windows_printer.status()
 
 
 @router.post("/document-library/folders", status_code=status.HTTP_201_CREATED)
@@ -135,6 +161,119 @@ def move_library_document(
         folder_id=body.folder_id,
         expected_version=body.expected_version,
     )
+
+
+@router.patch("/document-library/documents/{document_id}")
+def rename_library_document(
+    request: Request,
+    document_id: str,
+    body: DocumentRename,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.rename_document(document_id, name=body.name)
+
+
+@router.get("/document-library/documents/{document_id}/spreadsheet-print")
+def print_library_document_spreadsheet(request: Request, document_id: str) -> Response:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    content = service.export_spreadsheet_pdf(document_id)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
+    )
+
+
+@router.get("/document-library/documents/{document_id}/print-preview")
+def preview_library_document(
+    request: Request,
+    document_id: str,
+    mode: Annotated[Literal["spreadsheet", "image"], Query()],
+    paper_size: Annotated[
+        Literal["A4", "A5", "B5", "LETTER"],
+        Query(alias="paperSize"),
+    ] = "A4",
+    orientation: Annotated[Literal["portrait", "landscape"], Query()] = "portrait",
+    fit_mode: Annotated[
+        Literal["contain", "shrink"],
+        Query(alias="fitMode"),
+    ] = "contain",
+    margin_mm: Annotated[int, Query(alias="marginMm", ge=0, le=30)] = 10,
+) -> Response:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    if mode == "spreadsheet":
+        source = service.export_spreadsheet_pdf(
+            document_id,
+            paper_size=paper_size,
+            orientation=orientation,
+        )
+        content = print_preview.from_pdf(
+            source,
+            paper_size=paper_size,
+            orientation=orientation,
+            fit_mode=fit_mode,
+            margin_mm=margin_mm,
+            single_page=True,
+        )
+    else:
+        source, _ = service.first_page_source(document_id)
+        content = print_preview.from_image(
+            source,
+            paper_size=paper_size,
+            orientation=orientation,
+            fit_mode=fit_mode,
+            margin_mm=margin_mm,
+        )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post("/document-library/documents/{document_id}/print")
+def print_library_document(
+    request: Request,
+    document_id: str,
+    body: DocumentPrint,
+) -> dict[str, Any]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    if body.mode == "spreadsheet":
+        source = service.export_spreadsheet_pdf(
+            document_id,
+            paper_size=body.paper_size,
+            orientation=body.orientation,
+        )
+        content = print_preview.from_pdf(
+            source,
+            paper_size=body.paper_size,
+            orientation=body.orientation,
+            fit_mode=body.fit_mode,
+            margin_mm=body.margin_mm,
+            single_page=True,
+        )
+    else:
+        source, _ = service.first_page_source(document_id)
+        content = print_preview.from_image(
+            source,
+            paper_size=body.paper_size,
+            orientation=body.orientation,
+            fit_mode=body.fit_mode,
+            margin_mm=body.margin_mm,
+        )
+    return windows_printer.print_bytes(content, suffix=".pdf", copies=body.copies)
+
+
+@router.post("/document-library/documents/bulk-delete")
+def delete_library_documents(
+    request: Request,
+    body: DocumentBulkDelete,
+) -> dict[str, int | bool]:
+    service = cast(DocumentLibraryService, request.app.state.document_library_service)
+    return service.delete_documents(body.document_ids)
 
 
 @router.get(

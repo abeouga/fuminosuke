@@ -38,6 +38,10 @@ export type Template = {
   versions: TemplateVersion[];
 };
 
+export type TemplateDeleteResult = {
+  outcome: "deleted" | "archived";
+};
+
 export type TemplateCandidateBinding = {
   targetPattern: string;
   label: string;
@@ -99,6 +103,17 @@ export type OpenAIUsageReport = {
   records: OpenAIUsageRecord[];
 };
 
+export type PortableBackupExport = {
+  id: string;
+  fileName: string;
+  fileBytes: number;
+  fileCount: number;
+  sourceBytes: number;
+  createdAt: string;
+  expiresAt: string;
+  downloadUrl: string;
+};
+
 export type Artifact = { name: string; mediaType: string; url: string };
 
 export type FieldMapping = {
@@ -114,6 +129,7 @@ export type FieldMapping = {
   modelDetail: string;
   printedLabelText?: string;
   mappingType?: "text" | "mark";
+  markRecognitionMode?: "automatic" | "manual";
   markSelectionMode?: "single" | "multiple";
   markOptions?: Array<{
     id: string;
@@ -124,6 +140,18 @@ export type FieldMapping = {
     width: number;
     height: number;
   }>;
+  compositeSubfields?: LayoutCompositeSubfieldMapping[];
+};
+
+export type LayoutCompositeSubfieldMapping = {
+  id: string;
+  semanticType: "address_prefecture" | "address_municipality";
+  targetPath: string;
+  label: string;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
 };
 
 export type FieldMappingTarget = {
@@ -165,8 +193,34 @@ export type LayoutCell = {
   text: string;
   printedLabelText?: string;
   textConfidence: number | null;
+  textDirection?: "horizontal" | "vertical";
+  textAlignment?: "left" | "center" | "right";
   source: "detected" | "manual";
   markSets?: LayoutMarkSet[];
+  compositeSubfields?: LayoutCompositeSubfield[];
+};
+
+export type LayoutCellMergePart = {
+  cell: LayoutCell;
+  partType: "input" | "literal" | "ignored";
+  literal: string;
+};
+
+export type LayoutCellMerge = {
+  id: string;
+  parentCellId: string;
+  direction: "horizontal" | "vertical";
+  parts: LayoutCellMergePart[];
+};
+
+export type LayoutCompositeSubfield = {
+  id: string;
+  semanticType: "address_prefecture" | "address_municipality";
+  label: string;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
 };
 
 export type LayoutMarkOption = {
@@ -182,6 +236,7 @@ export type LayoutMarkOption = {
 export type LayoutMarkSet = {
   id: string;
   targetPath: string;
+  recognitionMode: "automatic" | "manual";
   selectionMode: "single" | "multiple";
   options: LayoutMarkOption[];
 };
@@ -190,6 +245,7 @@ export type LayoutRelation = {
   id: string;
   inputCellId: string;
   labelCellIds: string[];
+  parentLabelCellId?: string | null;
   axis: "horizontal" | "vertical";
   order: number;
   targetPath: string;
@@ -258,6 +314,7 @@ export type LayoutDefinition = {
   detector: string;
   ocrAvailable: boolean;
   cells: LayoutCell[];
+  cellMerges?: LayoutCellMerge[];
   relations: LayoutRelation[];
   labelPool?: LayoutLabelPoolEntry[];
   recordSections?: LayoutRecordSection[];
@@ -422,6 +479,8 @@ export type OcrFieldPreview = {
   recordGroupId?: string | null;
   fieldKey?: string | null;
   mappingType?: "text" | "mark";
+  markRecognitionMode?: "automatic" | "manual";
+  markSelectionMode?: "single" | "multiple";
   markOptions?: Array<{ label: string; value: string }>;
 };
 
@@ -484,6 +543,7 @@ export type SpreadsheetSyncStatus = {
   enabled: boolean;
   status: "disabled" | "pending" | "ready" | "synced" | "failed";
   spreadsheetUrl: string | null;
+  fileName?: string | null;
   lastError: string | null;
 };
 
@@ -587,6 +647,7 @@ export type DocumentLibraryLedger = {
   spreadsheetSyncError: string | null;
   libraryFolderId: string | null;
   locationVersion: number;
+  libraryName?: string | null;
 };
 
 export type DocumentLibraryFolder = {

@@ -133,6 +133,7 @@ test.each([
   fireEvent.click(screen.getByRole("button", { name: actionLabel }));
   expect(retryCalls).toBe(0);
   expect(callback === "template" ? onOpenTemplates : onStartNewReading).toHaveBeenCalledOnce();
+  if (callback === "template") expect(onOpenTemplates).toHaveBeenCalledWith("create");
 });
 
 test("does not retry an OCR job whose accepted template snapshot is invalid", async () => {

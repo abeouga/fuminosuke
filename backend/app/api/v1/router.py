@@ -12,6 +12,7 @@ from app.api.v1.routes import (
     jobs,
     ocr,
     sire_names,
+    system_backups,
     templates,
 )
 
@@ -28,4 +29,5 @@ protected.include_router(individual_records.router)
 protected.include_router(jobs.router)
 protected.include_router(artifacts.router)
 protected.include_router(drive.router)
+protected.include_router(system_backups.router)
 router.include_router(protected)

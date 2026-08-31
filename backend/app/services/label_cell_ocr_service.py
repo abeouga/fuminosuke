@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 
 from app.layout_analysis.detector import PaddleTextDetector, TextDetector, TextRegion
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
+from app.layout_analysis.text_placement import infer_text_placement
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,13 +110,34 @@ def _crop_cell(
 def _apply_regions(cell: LayoutCell, regions: list[TextRegion]) -> LayoutCell:
     if not regions:
         return cell
-    regions = sorted(regions, key=lambda item: (item.bounds[1], item.bounds[0]))
-    text = " ".join(region.text.strip() for region in regions if region.text.strip()).strip()
+    preliminary_text = " ".join(
+        region.text.strip() for region in regions if region.text.strip()
+    ).strip()
+    text_direction, text_alignment = infer_text_placement(
+        cell_width=cell.width,
+        cell_height=cell.height,
+        text=preliminary_text,
+        bounds=(region.bounds for region in regions),
+    )
+    regions = sorted(
+        regions,
+        key=(
+            (lambda item: (item.bounds[1], item.bounds[0]))
+            if text_direction == "vertical"
+            else (lambda item: (item.bounds[0], item.bounds[1]))
+        ),
+    )
+    separator = "" if text_direction == "vertical" else " "
+    text = separator.join(
+        region.text.strip() for region in regions if region.text.strip()
+    ).strip()
     if not text:
         return cell
     return cell.model_copy(
         update={
             "text": text,
             "text_confidence": round(mean(region.confidence for region in regions), 3),
+            "text_direction": text_direction,
+            "text_alignment": text_alignment,
         }
     )

@@ -237,17 +237,17 @@ test("treats persisted compound identity fields as a saved template setting", as
   expect(screen.getByRole("button", { name: "承認して有効化" })).toBeEnabled();
 });
 
-test("shows only the filled-single and blank-template creation modes in that order", () => {
+test("shows the supported image and spreadsheet creation modes in order", () => {
   const { container } = render(
     <TemplatePage templates={[]} refresh={vi.fn()} rememberJob={vi.fn()} />,
   );
 
   const modeGroup = screen.getByRole("group", { name: "準備方法" });
   const modeButtons = within(modeGroup).getAllByRole("button");
-  expect(modeButtons).toHaveLength(2);
+  expect(modeButtons).toHaveLength(3);
   expect(modeButtons[0]).toHaveTextContent("記入済みの一枚から");
   expect(modeButtons[1]).toHaveTextContent("白紙帳票から");
-  expect(screen.queryByText(/複数スキャン/)).not.toBeInTheDocument();
+  expect(modeButtons[2]).toHaveTextContent("元のExcelから");
 
   const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
   expect(fileInput).not.toHaveAttribute("multiple");
@@ -272,6 +272,24 @@ test("separates new creation from existing-template maintenance", () => {
   expect(createTab).toHaveAttribute("aria-selected", "true");
   expect(createPanel).not.toHaveAttribute("hidden");
   expect(managePanel).toHaveAttribute("hidden");
+});
+
+test("honors the nested reading entry point and returns to reading", () => {
+  const onClose = vi.fn();
+  render(
+    <TemplatePage
+      templates={[draftTemplate]}
+      refresh={vi.fn()}
+      rememberJob={vi.fn()}
+      initialWorkspace="create"
+      onClose={onClose}
+    />,
+  );
+
+  expect(screen.getByRole("heading", { name: "テンプレート作成・編集" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "新規作成" })).toHaveAttribute("aria-selected", "true");
+  fireEvent.click(screen.getByRole("button", { name: "← 読み取りへ戻る" }));
+  expect(onClose).toHaveBeenCalledOnce();
 });
 
 test("keeps new-template input while switching between the segments", () => {
@@ -376,7 +394,7 @@ test("requires template name before starting", () => {
   expect(screen.getByRole("button", { name: "テンプレート準備を開始" })).toBeDisabled();
 });
 
-test("registers only the current template fields before template preparation", async () => {
+test("does not ask for field names before template preparation", async () => {
   let submittedFieldNames: string[] | null = null;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
@@ -392,22 +410,16 @@ test("registers only the current template fields before template preparation", a
     <TemplatePage templates={[]} refresh={vi.fn()} rememberJob={vi.fn()} />,
   );
 
-  expect(screen.getByText("保存する項目は未登録です")).toBeInTheDocument();
-  expect(screen.queryByText("個体識別番号")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("項目名"), { target: { value: "宛名" } });
-  fireEvent.click(screen.getByRole("button", { name: "項目を追加" }));
-  fireEvent.change(screen.getByLabelText("項目名"), { target: { value: "金額" } });
-  fireEvent.click(screen.getByRole("button", { name: "項目を追加" }));
-
-  expect(screen.getByRole("list", { name: "登録する保存項目" })).toHaveTextContent("宛名");
-  expect(screen.getByRole("list", { name: "登録する保存項目" })).toHaveTextContent("金額");
+  expect(screen.queryByRole("heading", { name: "この書類から保存する情報" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("項目名")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "項目を追加" })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("テンプレート名"), {
     target: { value: "バイク領収書" },
   });
   selectTemplateImage(container);
   fireEvent.click(screen.getByRole("button", { name: "テンプレート準備を開始" }));
 
-  await waitFor(() => expect(submittedFieldNames).toEqual(["宛名", "金額"]));
+  await waitFor(() => expect(submittedFieldNames).toEqual([]));
 });
 
 test("locks template creation after the first job has started", async () => {

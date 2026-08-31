@@ -4,6 +4,8 @@ import type {
   DocumentIdentity,
   FieldMappingTarget,
   LayoutCell,
+  LayoutCellMerge,
+  LayoutCellMergePart,
   LayoutDefinition,
   LayoutLabelPoolEntry,
   LayoutMarkSet,
@@ -11,11 +13,12 @@ import type {
   LayoutRecordSection,
   LayoutRelation,
 } from "../types";
+import { showToast } from "./Toast";
 
-type Point = { x: number; y: number };
+export type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
-type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "identity";
-type OcrLabelAlignment = "left" | "center" | "right";
+type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "erase" | "identity";
+type OcrLabelAlignment = "auto" | "left" | "center" | "right";
 export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
 
 export type LayoutEditorHandle = {
@@ -37,19 +40,399 @@ type LayoutEditorProps = {
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
   draftStorageKey?: string;
+  detectLabel?: string;
 };
 
 const DEFAULT_MAGNIFIER_SCALE = 2.5;
 const DEFAULT_MAGNIFIER_SIZE = 220;
 
-const ROLE_COLOR = {
-  label: "#b36b00",
-  parent_label: "#16805d",
-  input: "#00777d",
-  mark: "#7c3aed",
-  record_key_cell: "#d97706",
-  column_key_cell: "#a16207",
-  ignored: "#6b7280",
+function pointToSegmentDistance(point: Point, start: Point, end: Point) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const position = Math.max(0, Math.min(
+    1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy),
+  ));
+  return Math.hypot(
+    point.x - (start.x + position * dx),
+    point.y - (start.y + position * dy),
+  );
+}
+
+function segmentOrientation(first: Point, second: Point, third: Point) {
+  return (second.x - first.x) * (third.y - first.y)
+    - (second.y - first.y) * (third.x - first.x);
+}
+
+function pointOnSegment(point: Point, start: Point, end: Point) {
+  const epsilon = 0.000001;
+  return Math.abs(segmentOrientation(start, end, point)) <= epsilon
+    && point.x >= Math.min(start.x, end.x) - epsilon
+    && point.x <= Math.max(start.x, end.x) + epsilon
+    && point.y >= Math.min(start.y, end.y) - epsilon
+    && point.y <= Math.max(start.y, end.y) + epsilon;
+}
+
+function segmentsIntersect(firstStart: Point, firstEnd: Point, secondStart: Point, secondEnd: Point) {
+  const firstSide = segmentOrientation(firstStart, firstEnd, secondStart);
+  const secondSide = segmentOrientation(firstStart, firstEnd, secondEnd);
+  const thirdSide = segmentOrientation(secondStart, secondEnd, firstStart);
+  const fourthSide = segmentOrientation(secondStart, secondEnd, firstEnd);
+  if (
+    ((firstSide > 0 && secondSide < 0) || (firstSide < 0 && secondSide > 0))
+    && ((thirdSide > 0 && fourthSide < 0) || (thirdSide < 0 && fourthSide > 0))
+  ) return true;
+  return pointOnSegment(secondStart, firstStart, firstEnd)
+    || pointOnSegment(secondEnd, firstStart, firstEnd)
+    || pointOnSegment(firstStart, secondStart, secondEnd)
+    || pointOnSegment(firstEnd, secondStart, secondEnd);
+}
+
+export function segmentDistance(
+  firstStart: Point,
+  firstEnd: Point,
+  secondStart: Point,
+  secondEnd: Point,
+) {
+  if (segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd)) return 0;
+  return Math.min(
+    pointToSegmentDistance(firstStart, secondStart, secondEnd),
+    pointToSegmentDistance(firstEnd, secondStart, secondEnd),
+    pointToSegmentDistance(secondStart, firstStart, firstEnd),
+    pointToSegmentDistance(secondEnd, firstStart, firstEnd),
+  );
+}
+
+export function eraseMeaningParentLinksAlongSegment(
+  relations: LayoutRelation[],
+  cellsById: ReadonlyMap<string, LayoutCell>,
+  start: Point,
+  end: Point,
+  tolerance: number,
+) {
+  const erasedParentLinks = new Set<string>();
+  relations.forEach((relation) => {
+    if (!relation.parentLabelCellId) return;
+    const parent = cellsById.get(relation.parentLabelCellId);
+    if (!parent) return;
+    relation.labelCellIds.forEach((labelCellId) => {
+      const child = cellsById.get(labelCellId);
+      if (!child) return;
+      if (segmentDistance(start, end, rectCenter(parent), rectCenter(child)) <= tolerance) {
+        erasedParentLinks.add(`${relation.parentLabelCellId}\u0000${labelCellId}`);
+      }
+    });
+  });
+  if (erasedParentLinks.size === 0) return { relations, changed: false };
+  return {
+    relations: relations.map((relation) => {
+      if (!relation.parentLabelCellId) return relation;
+      const parentWasErased = relation.labelCellIds.some((labelCellId) => (
+        erasedParentLinks.has(`${relation.parentLabelCellId}\u0000${labelCellId}`)
+      ));
+      return parentWasErased ? { ...relation, parentLabelCellId: null } : relation;
+    }),
+    changed: true,
+  };
+}
+
+type MeaningRouteSegment = { start: Point; end: Point };
+type MeaningRelationRoute = {
+  relationIndex: number;
+  labelCellId: string;
+  inputCellId: string;
+  axis: LayoutRelation["axis"];
+  inputAnchor: Point;
+  segments: MeaningRouteSegment[];
+};
+
+function rectCenter(rect: Rect): Point {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function routeSegments(points: Point[]): MeaningRouteSegment[] {
+  return points.slice(1).flatMap((end, index) => {
+    const start = points[index];
+    return Math.hypot(end.x - start.x, end.y - start.y) < 0.01
+      ? []
+      : [{ start, end }];
+  });
+}
+
+function singleMeaningRoute(label: LayoutCell, input: LayoutCell) {
+  const labelCenter = rectCenter(label);
+  const inputCenter = rectCenter(input);
+  const horizontal = Math.abs(inputCenter.x - labelCenter.x)
+    >= Math.abs(inputCenter.y - labelCenter.y);
+  if (horizontal) {
+    const inputIsRight = inputCenter.x >= labelCenter.x;
+    const start = {
+      x: inputIsRight ? label.x + label.width : label.x,
+      y: labelCenter.y,
+    };
+    const end = {
+      x: inputIsRight ? input.x : input.x + input.width,
+      y: inputCenter.y,
+    };
+    const middleX = (start.x + end.x) / 2;
+    return {
+      inputAnchor: end,
+      segments: routeSegments([
+        start,
+        { x: middleX, y: start.y },
+        { x: middleX, y: end.y },
+        end,
+      ]),
+    };
+  }
+
+  const inputIsBelow = inputCenter.y >= labelCenter.y;
+  const start = {
+    x: labelCenter.x,
+    y: inputIsBelow ? label.y + label.height : label.y,
+  };
+  const end = {
+    x: inputCenter.x,
+    y: inputIsBelow ? input.y : input.y + input.height,
+  };
+  const middleY = (start.y + end.y) / 2;
+  return {
+    inputAnchor: end,
+    segments: routeSegments([
+      start,
+      { x: start.x, y: middleY },
+      { x: end.x, y: middleY },
+      end,
+    ]),
+  };
+}
+
+function buildMeaningRelationRoutes(
+  relations: LayoutRelation[],
+  cellsById: ReadonlyMap<string, LayoutCell>,
+  canonicalWidth: number,
+  canonicalHeight: number,
+) {
+  type Link = {
+    relationIndex: number;
+    labelCellId: string;
+    inputCellId: string;
+    axis: LayoutRelation["axis"];
+    input: LayoutCell;
+  };
+  const groupedLinks = new Map<string, { label: LayoutCell; links: Link[] }>();
+  relations.forEach((relation, relationIndex) => {
+    const input = cellsById.get(relation.inputCellId);
+    if (!input) return;
+    relation.labelCellIds.forEach((labelCellId) => {
+      const label = cellsById.get(labelCellId);
+      if (!label) return;
+      const key = `${labelCellId}\u0000${relation.axis}`;
+      const group = groupedLinks.get(key) ?? { label, links: [] };
+      group.links.push({
+        relationIndex,
+        labelCellId,
+        inputCellId: relation.inputCellId,
+        axis: relation.axis,
+        input,
+      });
+      groupedLinks.set(key, group);
+    });
+  });
+
+  const routes: MeaningRelationRoute[] = [];
+  const gutter = Math.max(6, Math.min(18, canonicalWidth / 180));
+  groupedLinks.forEach(({ label, links }) => {
+    if (links.length === 1) {
+      const link = links[0];
+      const route = singleMeaningRoute(label, link.input);
+      routes.push({ ...link, ...route });
+      return;
+    }
+
+    const inputCenters = links.map(({ input }) => rectCenter(input));
+    const spreadX = Math.max(...inputCenters.map(({ x }) => x))
+      - Math.min(...inputCenters.map(({ x }) => x));
+    const spreadY = Math.max(...inputCenters.map(({ y }) => y))
+      - Math.min(...inputCenters.map(({ y }) => y));
+    const labelCenter = rectCenter(label);
+
+    if (spreadY >= spreadX) {
+      const minimumX = Math.min(...links.map(({ input }) => input.x));
+      const maximumX = Math.max(...links.map(({ input }) => input.x + input.width));
+      const leftTrunkX = minimumX - gutter;
+      const rightTrunkX = maximumX + gutter;
+      const leftDistance = Math.abs(labelCenter.x - minimumX);
+      const rightDistance = Math.abs(labelCenter.x - maximumX);
+      const useLeft = rightTrunkX > canonicalWidth - 2
+        || (leftTrunkX >= 2 && leftDistance < rightDistance);
+      const trunkX = Math.max(
+        2,
+        Math.min(canonicalWidth - 2, useLeft ? leftTrunkX : rightTrunkX),
+      );
+      const targetYs = inputCenters.map(({ y }) => y);
+      const averageTargetY = targetYs.reduce((total, y) => total + y, 0) / targetYs.length;
+      const labelAnchor = trunkX <= label.x
+        ? {
+          x: label.x,
+          y: Math.max(label.y, Math.min(label.y + label.height, averageTargetY)),
+        }
+        : trunkX >= label.x + label.width
+          ? {
+            x: label.x + label.width,
+            y: Math.max(label.y, Math.min(label.y + label.height, averageTargetY)),
+          }
+          : {
+            x: trunkX,
+            y: averageTargetY >= labelCenter.y ? label.y + label.height : label.y,
+          };
+      const trunkStart = {
+        x: trunkX,
+        y: Math.min(labelAnchor.y, ...targetYs),
+      };
+      const trunkEnd = {
+        x: trunkX,
+        y: Math.max(labelAnchor.y, ...targetYs),
+      };
+      const commonSegments = [
+        ...routeSegments([labelAnchor, { x: trunkX, y: labelAnchor.y }]),
+        ...routeSegments([trunkStart, trunkEnd]),
+      ];
+      links.forEach((link, index) => {
+        const inputAnchor = {
+          x: useLeft ? link.input.x : link.input.x + link.input.width,
+          y: inputCenters[index].y,
+        };
+        routes.push({
+          ...link,
+          inputAnchor,
+          segments: [
+            ...commonSegments,
+            ...routeSegments([{ x: trunkX, y: inputAnchor.y }, inputAnchor]),
+          ],
+        });
+      });
+      return;
+    }
+
+    const minimumY = Math.min(...links.map(({ input }) => input.y));
+    const maximumY = Math.max(...links.map(({ input }) => input.y + input.height));
+    const topTrunkY = minimumY - gutter;
+    const bottomTrunkY = maximumY + gutter;
+    const topDistance = Math.abs(labelCenter.y - minimumY);
+    const bottomDistance = Math.abs(labelCenter.y - maximumY);
+    const useTop = bottomTrunkY > canonicalHeight - 2
+      || (topTrunkY >= 2 && topDistance < bottomDistance);
+    const trunkY = Math.max(
+      2,
+      Math.min(canonicalHeight - 2, useTop ? topTrunkY : bottomTrunkY),
+    );
+    const targetXs = inputCenters.map(({ x }) => x);
+    const averageTargetX = targetXs.reduce((total, x) => total + x, 0) / targetXs.length;
+    const labelAnchor = trunkY <= label.y
+      ? {
+        x: Math.max(label.x, Math.min(label.x + label.width, averageTargetX)),
+        y: label.y,
+      }
+      : trunkY >= label.y + label.height
+        ? {
+          x: Math.max(label.x, Math.min(label.x + label.width, averageTargetX)),
+          y: label.y + label.height,
+        }
+        : {
+          x: averageTargetX >= labelCenter.x ? label.x + label.width : label.x,
+          y: trunkY,
+        };
+    const trunkStart = {
+      x: Math.min(labelAnchor.x, ...targetXs),
+      y: trunkY,
+    };
+    const trunkEnd = {
+      x: Math.max(labelAnchor.x, ...targetXs),
+      y: trunkY,
+    };
+    const commonSegments = [
+      ...routeSegments([labelAnchor, { x: labelAnchor.x, y: trunkY }]),
+      ...routeSegments([trunkStart, trunkEnd]),
+    ];
+    links.forEach((link, index) => {
+      const inputAnchor = {
+        x: inputCenters[index].x,
+        y: useTop ? link.input.y : link.input.y + link.input.height,
+      };
+      routes.push({
+        ...link,
+        inputAnchor,
+        segments: [
+          ...commonSegments,
+          ...routeSegments([{ x: inputAnchor.x, y: trunkY }, inputAnchor]),
+        ],
+      });
+    });
+  });
+  return routes;
+}
+
+export function eraseMeaningLabelLinksAlongSegment(
+  relations: LayoutRelation[],
+  cellsById: ReadonlyMap<string, LayoutCell>,
+  start: Point,
+  end: Point,
+  tolerance: number,
+  canonicalWidth: number,
+  canonicalHeight: number,
+) {
+  const routes = buildMeaningRelationRoutes(
+    relations,
+    cellsById,
+    canonicalWidth,
+    canonicalHeight,
+  );
+  const erasedRelationLabels = new Set(
+    routes
+      .filter((route) => {
+        const label = cellsById.get(route.labelCellId);
+        const input = cellsById.get(route.inputCellId);
+        return route.segments.some(
+          (segment) => segmentDistance(start, end, segment.start, segment.end) <= tolerance,
+        )
+          || Boolean(label && segmentIntersectsRect(start, end, label, tolerance))
+          || Boolean(input && segmentIntersectsRect(start, end, input, tolerance));
+      })
+      .map((route) => `${route.relationIndex}\u0000${route.labelCellId}`),
+  );
+  if (erasedRelationLabels.size === 0) return { relations, changed: false };
+  return {
+    relations: relations.flatMap((relation, relationIndex) => {
+      if (relation.labelCellIds.length === 0) return [relation];
+      const remainingLabelIds = relation.labelCellIds.filter((labelId) => (
+        !erasedRelationLabels.has(`${relationIndex}\u0000${labelId}`)
+      ));
+      if (remainingLabelIds.length === 0) return [];
+      return [{ ...relation, labelCellIds: remainingLabelIds }];
+    }),
+    changed: true,
+  };
+}
+
+function routeSegmentKey(segment: MeaningRouteSegment) {
+  const start = `${segment.start.x.toFixed(2)},${segment.start.y.toFixed(2)}`;
+  const end = `${segment.end.x.toFixed(2)},${segment.end.y.toFixed(2)}`;
+  return start < end ? `${start}|${end}` : `${end}|${start}`;
+}
+
+export const LAYOUT_ROLE_STYLE = {
+  label: { stroke: "#d13c2f", fill: "#d13c2f", dash: [] },
+  parent_label: { stroke: "#a21caf", fill: "#a21caf", dash: [12, 5] },
+  input: { stroke: "#0067c0", fill: "#0067c0", dash: [] },
+  mark: { stroke: "#6d28d9", fill: "#6d28d9", dash: [7, 4] },
+  record_key_cell: { stroke: "#00875a", fill: "#00875a", dash: [14, 4, 3, 4] },
+  column_key_cell: { stroke: "#9a6700", fill: "#9a6700", dash: [3, 3] },
+  ignored: { stroke: "#59636e", fill: "#59636e", dash: [12, 8] },
 } as const;
 
 const OCR_LABEL_BADGE_STYLE = {
@@ -63,40 +446,202 @@ const OCR_LABEL_BADGE_STYLE = {
   },
 } as const;
 
+function wrapCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+) {
+  const lines: string[] = [];
+  text.split(/\r?\n/).forEach((sourceLine) => {
+    const characters = Array.from(sourceLine);
+    if (characters.length === 0) {
+      lines.push("");
+      return;
+    }
+    let currentLine = "";
+    characters.forEach((character) => {
+      const candidate = `${currentLine}${character}`;
+      if (currentLine && context.measureText(candidate).width > maxWidth) {
+        lines.push(currentLine);
+        currentLine = character;
+      } else {
+        currentLine = candidate;
+      }
+    });
+    if (currentLine) lines.push(currentLine);
+  });
+  return lines;
+}
+
+function balanceCanvasText(text: string, lineCount: number) {
+  const characters = Array.from(text.replace(/\r?\n/g, ""));
+  const charactersPerLine = Math.max(1, Math.ceil(characters.length / lineCount));
+  return Array.from({ length: lineCount }, (_, index) => (
+    characters.slice(index * charactersPerLine, (index + 1) * charactersPerLine).join("")
+  )).filter(Boolean);
+}
+
 export function drawOcrLabelText(
   context: CanvasRenderingContext2D,
   cell: LayoutCell,
   canonicalWidth: number,
-  alignment: OcrLabelAlignment = "left",
+  alignment: OcrLabelAlignment = "auto",
 ) {
   if (cell.role !== "label" && cell.role !== "parent_label") return;
   const text = cell.text.trim();
   if (!text) return;
+  const resolvedAlignment = alignment === "auto"
+    ? cell.textAlignment ?? "left"
+    : alignment;
   const padding = 4;
-  const fontSize = Math.max(8, Math.min(22, cell.height - 6, canonicalWidth / 85));
+  const compactText = Array.from(text.replace(/\s+/g, ""));
+  const inferredDirection = cell.textDirection
+    ?? (compactText.length >= 2 && cell.height >= cell.width * 1.4 ? "vertical" : "horizontal");
+  const fontSize = Math.max(8, Math.min(
+    22,
+    inferredDirection === "vertical" ? cell.width - 6 : cell.height - 6,
+    inferredDirection === "vertical" && compactText.length > 0
+      ? (cell.height - padding * 2 - 4) / compactText.length
+      : canonicalWidth / 85,
+  ));
   const badgeX = cell.x + 2;
   const badgeY = cell.y + 2;
   const badgeWidth = Math.max(1, cell.width - 4);
-  const badgeHeight = Math.max(1, Math.min(cell.height - 4, fontSize + padding * 2));
   const badgeStyle = OCR_LABEL_BADGE_STYLE[cell.role];
   context.save();
+  if (inferredDirection === "vertical" && compactText.length > 0) {
+    const verticalBadgeWidth = Math.max(1, Math.min(badgeWidth, fontSize + padding * 2));
+    const verticalBadgeX = resolvedAlignment === "left"
+      ? badgeX
+      : resolvedAlignment === "right"
+        ? badgeX + badgeWidth - verticalBadgeWidth
+        : badgeX + (badgeWidth - verticalBadgeWidth) / 2;
+    const verticalBadgeHeight = Math.max(1, cell.height - 4);
+    context.fillStyle = badgeStyle.background;
+    context.fillRect(verticalBadgeX, badgeY, verticalBadgeWidth, verticalBadgeHeight);
+    context.fillStyle = badgeStyle.text;
+    context.font = `700 ${fontSize}px sans-serif`;
+    context.textBaseline = "middle";
+    context.textAlign = "center";
+    const step = Math.max(1, (verticalBadgeHeight - padding * 2) / compactText.length);
+    compactText.forEach((character, index) => {
+      context.fillText(
+        character,
+        verticalBadgeX + verticalBadgeWidth / 2,
+        badgeY + padding + step * (index + 0.5),
+        Math.max(1, verticalBadgeWidth - padding * 2),
+      );
+    });
+    context.restore();
+    return;
+  }
+  const maxTextWidth = Math.max(1, badgeWidth - padding * 2);
+  const availableTextHeight = Math.max(1, cell.height - 4 - padding * 2);
+  const minimumReadableFontSize = Math.min(
+    fontSize,
+    Math.max(8, canonicalWidth / 120),
+  );
+  context.font = `700 ${fontSize}px sans-serif`;
+  const singleLineWidth = context.measureText(text).width;
+  const effectiveSingleLineFontSize = fontSize * Math.min(
+    1,
+    maxTextWidth / Math.max(singleLineWidth, 1),
+  );
+  const shouldWrap = (
+    (text.includes("\n") || effectiveSingleLineFontSize < minimumReadableFontSize)
+    && availableTextHeight >= minimumReadableFontSize * 2.2
+  );
+  let renderFontSize = fontSize;
+  let lines = [text];
+  let lineHeight = fontSize * 1.15;
+  if (shouldWrap) {
+    for (
+      let candidateFontSize = fontSize;
+      candidateFontSize >= minimumReadableFontSize;
+      candidateFontSize -= 1
+    ) {
+      context.font = `700 ${candidateFontSize}px sans-serif`;
+      const candidateLineHeight = candidateFontSize * 1.15;
+      const maximumLines = Math.min(
+        4,
+        Math.floor(availableTextHeight / candidateLineHeight),
+      );
+      if (maximumLines < 2) continue;
+      const candidateLines = wrapCanvasText(context, text, maxTextWidth);
+      if (candidateLines.length >= 2 && candidateLines.length <= maximumLines) {
+        renderFontSize = candidateFontSize;
+        lineHeight = candidateLineHeight;
+        lines = candidateLines;
+        break;
+      }
+    }
+    if (lines.length === 1) {
+      renderFontSize = minimumReadableFontSize;
+      lineHeight = renderFontSize * 1.15;
+      context.font = `700 ${renderFontSize}px sans-serif`;
+      const maximumLines = Math.min(4, Math.floor(availableTextHeight / lineHeight));
+      const wrappedLines = wrapCanvasText(context, text, maxTextWidth);
+      lines = wrappedLines.length <= maximumLines
+        ? wrappedLines
+        : balanceCanvasText(text, Math.max(2, maximumLines));
+    }
+  }
+  const badgeHeight = Math.max(
+    1,
+    Math.min(cell.height - 4, lineHeight * lines.length + padding * 2),
+  );
   context.fillStyle = badgeStyle.background;
   context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
   context.fillStyle = badgeStyle.text;
-  context.font = `700 ${fontSize}px sans-serif`;
+  context.font = `700 ${renderFontSize}px sans-serif`;
   context.textBaseline = "top";
-  context.textAlign = alignment;
-  const textX = alignment === "left"
+  context.textAlign = resolvedAlignment;
+  const textX = resolvedAlignment === "left"
     ? badgeX + padding
-    : alignment === "center"
+    : resolvedAlignment === "center"
       ? badgeX + badgeWidth / 2
       : badgeX + badgeWidth - padding;
-  context.fillText(
-    text,
-    textX,
-    badgeY + padding,
-    Math.max(1, badgeWidth - padding * 2),
-  );
+  lines.forEach((line, index) => {
+    context.fillText(
+      line,
+      textX,
+      badgeY + padding + lineHeight * index,
+      maxTextWidth,
+    );
+  });
+  context.restore();
+}
+
+function drawCompositeSubfields(
+  context: CanvasRenderingContext2D,
+  cell: LayoutCell,
+  canonicalWidth: number,
+) {
+  if (cell.role !== "input" || !cell.compositeSubfields?.length) return;
+  const fontSize = Math.max(8, Math.min(14, canonicalWidth / 100));
+  context.save();
+  context.strokeStyle = "#0f766e";
+  context.fillStyle = "rgba(15, 118, 110, 0.9)";
+  context.lineWidth = Math.max(1, canonicalWidth / 700);
+  context.setLineDash([Math.max(4, canonicalWidth / 220), Math.max(3, canonicalWidth / 300)]);
+  context.font = `700 ${fontSize}px sans-serif`;
+  context.textBaseline = "top";
+  context.textAlign = "left";
+  cell.compositeSubfields.forEach((subfield, index) => {
+    const x = cell.x + cell.width * subfield.xRatio;
+    if (index > 0) {
+      context.beginPath();
+      context.moveTo(x, cell.y + 2);
+      context.lineTo(x, cell.y + cell.height - 2);
+      context.stroke();
+    }
+    context.fillText(
+      subfield.label,
+      x + 4,
+      cell.y + 4,
+      Math.max(1, cell.width * subfield.widthRatio - 8),
+    );
+  });
   context.restore();
 }
 
@@ -115,6 +660,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   onDirtyChange,
   onBusyChange,
   draftStorageKey,
+  detectLabel = "枠を再検出",
 }: LayoutEditorProps, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
@@ -124,9 +670,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const magnifierFrameRef = useRef<number | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const dragStart = useRef<Point | null>(null);
+  const eraserPathRef = useRef<Point[] | null>(null);
   const additiveSelection = useRef(false);
   const linkLabelId = useRef<string | null>(null);
   const relationHistory = useRef<LayoutRelation[][]>([]);
+  const copiedCellMergeRef = useRef<LayoutCellMerge | null>(null);
   const operationLockRef = useRef(false);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
   const [layout, setLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
@@ -138,11 +686,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [selectedPath, setSelectedPath] = useState("");
   const [draft, setDraft] = useState<Rect | null>(null);
+  const [eraserTrail, setEraserTrail] = useState<Point[]>([]);
   const [linkPoint, setLinkPoint] = useState<Point | null>(null);
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [recognizingLabels, setRecognizingLabels] = useState(false);
-  const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("left");
+  const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("auto");
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
   const [magnifierScale, setMagnifierScale] = useState(DEFAULT_MAGNIFIER_SCALE);
   const [magnifierSize, setMagnifierSize] = useState(DEFAULT_MAGNIFIER_SIZE);
@@ -355,11 +904,22 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedPath(relation?.targetPath ?? "");
   }, [mode, selectedId, selected?.role, layout.relations]);
   const selectedCells = layout.cells.filter((cell) => selectedIds.has(cell.id));
+  const cellMerges = layout.cellMerges ?? [];
+  const cellMergeByParentId = useMemo(
+    () => new Map(cellMerges.map((merge) => [merge.parentCellId, merge])),
+    [cellMerges],
+  );
+  const selectedCellMerge = selected
+    ? cellMergeByParentId.get(selected.id) ?? null
+    : null;
   const recordSections = layout.recordSections ?? [];
   const recordGroups = layout.recordGroups ?? [];
   const ocrProtectedLabelIds = useMemo(() => {
     const protectedIds = new Set(
-      layout.relations.flatMap((relation) => relation.labelCellIds),
+      layout.relations.flatMap((relation) => [
+        ...relation.labelCellIds,
+        ...(relation.parentLabelCellId ? [relation.parentLabelCellId] : []),
+      ]),
     );
     recordSections.forEach((section) => {
       section.recordLabelCellIds.forEach((labelId) => protectedIds.add(labelId));
@@ -403,6 +963,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
     [layout.cells],
   );
+  const selectedMeaningRelation = selected
+    ? layout.relations.find((relation) => relation.inputCellId === selected.id)
+    : undefined;
+  const selectedMeaningParent = cellById.get(selectedMeaningRelation?.parentLabelCellId ?? "");
+  const selectedMeaningChild = selectedMeaningRelation?.labelCellIds
+    .map((labelId) => cellById.get(labelId))
+    .find((cell): cell is LayoutCell => Boolean(cell));
   const recordInputIds = useMemo(
     () => new Set(recordGroups.flatMap((group) => group.inputCellIds)),
     [recordGroups],
@@ -591,6 +1158,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const showRecordStep = !workflowStep || workflowStep === "records";
   const showIdentityStep = workflowStep === "identity";
   const showReviewStep = !workflowStep || workflowStep === "review";
+  const showDetectAction = showClassificationStep
+    || (showMeaningStep && detectLabel !== "枠を再検出");
   const cellsVisibleInList = layout.cells.filter((cell) => {
     if (!workflowStep || workflowStep === "classify" || workflowStep === "review") return true;
     if (workflowStep === "identity") {
@@ -608,13 +1177,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (
       dirty
       && !window.confirm(
-        "保存していないレイアウト変更があります。変更を破棄して枠を再検出しますか？",
+        `保存していないレイアウト変更があります。変更を破棄して「${detectLabel}」を実行しますか？`,
       )
     ) return;
     operationLockRef.current = true;
     setBusy(true);
     setDetecting(true);
-    setMessage("OpenCVを中心に帳票の枠を再検出しています…");
+    setMessage(detectLabel === "枠を再検出"
+      ? "OpenCVを中心に帳票の枠を再検出しています…"
+      : "原本を変更せず、XLSXのセル構造を復元しています…");
     try {
       const detected = await onDetect();
       const normalized = normalizeLayout(detected);
@@ -624,7 +1195,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setSelectedIds(new Set());
       relationHistory.current = [];
       setHistoryDepth(0);
-      setMessage(`${detected.cells.length}個の枠を検出しました。種類と項目名の文字候補を確認してください。`);
+      setMessage(detectLabel === "枠を再検出"
+        ? `${detected.cells.length}個の枠を検出しました。種類と項目名の文字候補を確認してください。`
+        : `${detected.cells.length}個のExcelセルを復元しました。原本XLSXは変更していません。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "セルを検出できませんでした。");
     } finally {
@@ -726,6 +1299,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     return () => window.clearTimeout(timer);
   }, [busy, currentSignature, dirty, disabled, save, workflowStep]);
 
+  const hoveredMeaningCellIdRef = useRef<string | null>(null);
   const redraw = () => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
@@ -735,9 +1309,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
+    const displayCellById = new Map(layout.cells.map((cell) => [cell.id, cell]));
+
     if (mode === "identity") {
-      layout.cells.forEach((cell) => {
-        const candidate = identityCandidateByCellId.get(cell.id);
+      layout.cells.forEach((storedCell) => {
+        const cell = displayCellById.get(storedCell.id) ?? storedCell;
+        const candidate = identityCandidateByCellId.get(storedCell.id);
         const selectedIdentity = candidate
           ? selectedIdentityByPath.get(candidate.targetPath)
           : null;
@@ -789,18 +1366,49 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       return;
     }
 
-    layout.cells.forEach((cell) => {
-      const color = ROLE_COLOR[cell.role];
+    layout.cells.forEach((storedCell) => {
+      const cell = displayCellById.get(storedCell.id) ?? storedCell;
+      const cellMerge = cellMergeByParentId.get(cell.id);
+      const roleStyle = LAYOUT_ROLE_STYLE[cell.role];
       context.save();
       const isPrimarySelection = cell.id === selectedId;
       const isRangeSelection = selectedIds.has(cell.id);
-      context.strokeStyle = isPrimarySelection ? "#d62929" : isRangeSelection ? "#2468a2" : color;
+      context.strokeStyle = isPrimarySelection ? "#d62929" : isRangeSelection ? "#2468a2" : roleStyle.stroke;
       context.lineWidth = isPrimarySelection ? 5 : isRangeSelection ? 5 : 3;
-      if (cell.role === "ignored") context.setLineDash([12, 8]);
-      context.fillStyle = `${color}${cell.role === "ignored" ? "0c" : "19"}`;
-      context.fillRect(cell.x, cell.y, cell.width, cell.height);
+      context.setLineDash(isPrimarySelection || isRangeSelection ? [] : [...roleStyle.dash]);
+      if (isPrimarySelection || isRangeSelection) {
+        context.fillStyle = isPrimarySelection ? "#d629291f" : "#2468a21a";
+        context.fillRect(cell.x, cell.y, cell.width, cell.height);
+      }
       context.strokeRect(cell.x, cell.y, cell.width, cell.height);
       context.setLineDash([]);
+      if (cellMerge) {
+        context.save();
+        context.strokeStyle = "rgba(35, 75, 103, 0.72)";
+        context.lineWidth = 2;
+        context.setLineDash([7, 5]);
+        cellMerge.parts.forEach((part) => {
+          context.strokeRect(
+            part.cell.x,
+            part.cell.y,
+            part.cell.width,
+            part.cell.height,
+          );
+        });
+        context.setLineDash([]);
+        if (cell.width >= 38 && cell.height >= 20) {
+          const badgeWidth = Math.min(54, Math.max(34, cell.width - 8));
+          const badgeHeight = Math.min(19, Math.max(14, cell.height - 8));
+          context.fillStyle = "rgba(24, 61, 87, 0.9)";
+          context.fillRect(cell.x + 4, cell.y + 4, badgeWidth, badgeHeight);
+          context.fillStyle = "#ffffff";
+          context.font = `800 ${Math.max(9, Math.min(12, badgeHeight - 6))}px sans-serif`;
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText("結合", cell.x + 4 + badgeWidth / 2, cell.y + 4 + badgeHeight / 2);
+        }
+        context.restore();
+      }
       if (cell.role === "mark") {
         context.setLineDash([5, 4]);
         context.lineWidth = 2;
@@ -817,12 +1425,35 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         context.setLineDash([]);
       }
       drawOcrLabelText(context, cell, layout.canonicalWidth, ocrLabelAlignment);
+      drawCompositeSubfields(context, cell, layout.canonicalWidth);
       context.restore();
+    });
+
+    const drawnMeaningParentLinks = new Set<string>();
+    layout.relations.forEach((relation) => {
+      const parent = displayCellById.get(relation.parentLabelCellId ?? "");
+      if (!parent) return;
+      relation.labelCellIds.forEach((labelId) => {
+        const child = displayCellById.get(labelId);
+        const linkKey = `${parent.id}:${labelId}`;
+        if (!child || drawnMeaningParentLinks.has(linkKey)) return;
+        drawnMeaningParentLinks.add(linkKey);
+        context.save();
+        context.strokeStyle = "#16805d";
+        context.lineWidth = Math.max(3, Math.min(5, layout.canonicalWidth / 420));
+        context.setLineDash([12, 7]);
+        context.globalAlpha = 0.82;
+        context.beginPath();
+        context.moveTo(parent.x + parent.width / 2, parent.y + parent.height / 2);
+        context.lineTo(child.x + child.width / 2, child.y + child.height / 2);
+        context.stroke();
+        context.restore();
+      });
     });
 
     recordSections.forEach((section) => {
       const anchors = section.recordLabelCellIds
-        .map((labelId) => cellById.get(labelId))
+        .map((labelId) => displayCellById.get(labelId))
         .filter((cell): cell is LayoutCell => Boolean(cell))
         .sort((first, second) => first.x - second.x || first.y - second.y);
       if (anchors.length === 0) return;
@@ -836,7 +1467,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       const lastAnchor = anchors[anchors.length - 1];
       const bandStartX = firstAnchor.x + firstAnchor.width / 2;
       const bandEndX = lastAnchor.x + lastAnchor.width / 2;
-      const parent = cellById.get(section.parentLabelCellId ?? "");
+      const parent = displayCellById.get(section.parentLabelCellId ?? "");
       if (parent) {
         context.strokeStyle = "#16805d";
         context.lineWidth = 5;
@@ -874,22 +1505,110 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       context.restore();
     });
 
-    layout.relations.forEach((relation) => {
-      const input = cellById.get(relation.inputCellId);
-      if (!input) return;
-      relation.labelCellIds.forEach((labelId) => {
-        const label = cellById.get(labelId);
-        if (!label) return;
+    const meaningRoutes = buildMeaningRelationRoutes(
+      layout.relations,
+      displayCellById,
+      layout.canonicalWidth,
+      layout.canonicalHeight,
+    );
+    const connectedMeaningCellIds = new Set<string>();
+    meaningRoutes.forEach((route) => {
+      connectedMeaningCellIds.add(route.labelCellId);
+      connectedMeaningCellIds.add(route.inputCellId);
+    });
+    const markerRadius = Math.max(3, Math.min(5, layout.canonicalWidth / 360));
+    connectedMeaningCellIds.forEach((cellId) => {
+      const cell = displayCellById.get(cellId);
+      if (!cell) return;
+      const markerX = cell.x + cell.width - markerRadius - 3;
+      const markerY = cell.y + markerRadius + 3;
+      context.save();
+      context.fillStyle = "#2468a2";
+      context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(markerX, markerY, markerRadius, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+      context.restore();
+    });
+
+    const activeMeaningCellId = hoveredMeaningCellIdRef.current ?? selectedId;
+    const showAllMeaningRoutes = mode === "erase";
+    const visibleMeaningRoutes = showAllMeaningRoutes
+      ? meaningRoutes
+      : activeMeaningCellId
+        ? meaningRoutes.filter((route) => (
+          route.labelCellId === activeMeaningCellId
+          || route.inputCellId === activeMeaningCellId
+        ))
+        : [];
+    if (!showAllMeaningRoutes && visibleMeaningRoutes.length > 0) {
+      const highlightedCellIds = new Set<string>();
+      visibleMeaningRoutes.forEach((route) => {
+        highlightedCellIds.add(route.labelCellId);
+        highlightedCellIds.add(route.inputCellId);
+      });
+      highlightedCellIds.forEach((cellId) => {
+        const cell = displayCellById.get(cellId);
+        if (!cell) return;
         context.save();
-        context.strokeStyle = relation.axis === "horizontal" ? "#6b3fc5" : "#c43f82";
-        context.lineWidth = 4;
-        context.setLineDash([10, 6]);
-        context.beginPath();
-        context.moveTo(input.x + input.width / 2, input.y + input.height / 2);
-        context.lineTo(label.x + label.width / 2, label.y + label.height / 2);
-        context.stroke();
+        context.fillStyle = "rgba(36, 104, 162, 0.22)";
+        context.strokeStyle = "rgba(20, 77, 121, 0.96)";
+        context.lineWidth = 6;
+        context.fillRect(cell.x, cell.y, cell.width, cell.height);
+        context.strokeRect(cell.x, cell.y, cell.width, cell.height);
         context.restore();
       });
+    }
+    const routesByColor = new Map<string, MeaningRelationRoute[]>();
+    visibleMeaningRoutes.forEach((route) => {
+      const color = route.axis === "horizontal" ? "#6b3fc5" : "#c43f82";
+      routesByColor.set(color, [...(routesByColor.get(color) ?? []), route]);
+    });
+    routesByColor.forEach((routes, color) => {
+      context.save();
+      context.fillStyle = color;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      const traceRoutes = () => {
+        context.beginPath();
+        const drawnSegments = new Set<string>();
+        routes.forEach((route) => route.segments.forEach((segment) => {
+          const key = routeSegmentKey(segment);
+          if (drawnSegments.has(key)) return;
+          drawnSegments.add(key);
+          context.moveTo(segment.start.x, segment.start.y);
+          context.lineTo(segment.end.x, segment.end.y);
+        }));
+        context.stroke();
+      };
+      if (!showAllMeaningRoutes) {
+        context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+        context.lineWidth = 11;
+        context.setLineDash([]);
+        traceRoutes();
+      }
+      context.strokeStyle = color;
+      context.lineWidth = showAllMeaningRoutes ? 4 : 6;
+      context.setLineDash(showAllMeaningRoutes ? [10, 6] : []);
+      context.globalAlpha = showAllMeaningRoutes ? 0.82 : 1;
+      traceRoutes();
+      context.setLineDash([]);
+      context.globalAlpha = 1;
+      const endpointRadius = showAllMeaningRoutes
+        ? markerRadius
+        : Math.max(5, Math.min(8, layout.canonicalWidth / 240));
+      const drawnEndpoints = new Set<string>();
+      routes.forEach(({ inputAnchor }) => {
+        const key = `${inputAnchor.x.toFixed(2)},${inputAnchor.y.toFixed(2)}`;
+        if (drawnEndpoints.has(key)) return;
+        drawnEndpoints.add(key);
+        context.beginPath();
+        context.arc(inputAnchor.x, inputAnchor.y, endpointRadius, 0, Math.PI * 2);
+        context.fill();
+      });
+      context.restore();
     });
 
     if (draft) {
@@ -902,20 +1621,42 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       context.strokeRect(draft.x, draft.y, draft.width, draft.height);
       context.setLineDash([]);
     }
+    if (mode === "erase" && eraserTrail.length > 0) {
+      context.save();
+      context.strokeStyle = "#d62929";
+      context.lineWidth = Math.max(8, layout.canonicalWidth / 100);
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.globalAlpha = 0.52;
+      context.beginPath();
+      context.moveTo(eraserTrail[0].x, eraserTrail[0].y);
+      eraserTrail.slice(1).forEach((location) => context.lineTo(location.x, location.y));
+      if (eraserTrail.length === 1) {
+        context.lineTo(eraserTrail[0].x + 0.01, eraserTrail[0].y + 0.01);
+      }
+      context.stroke();
+      context.restore();
+    }
     if (linkPoint && linkLabelId.current) {
-      const label = cellById.get(linkLabelId.current);
+      const label = displayCellById.get(linkLabelId.current);
       if (label) {
         const start = {
           x: label.x + label.width / 2,
           y: label.y + label.height / 2,
         };
         const highlightedCells = mode === "parent"
-          ? recordSections.flatMap((section) => {
-            const anchors = section.recordLabelCellIds
-              .map((labelId) => cellById.get(labelId))
-              .filter((cell): cell is LayoutCell => Boolean(cell));
-            return anchors.some((anchor) => pointInsideRect(linkPoint, anchor)) ? anchors : [];
-          })
+          ? showMeaningStep
+            ? layout.cells.filter((cell) => (
+              cell.role === "label"
+              && cell.id !== label.id
+              && pointInsideRect(linkPoint, cell)
+            ))
+            : recordSections.flatMap((section) => {
+              const anchors = section.recordLabelCellIds
+                .map((labelId) => cellById.get(labelId))
+                .filter((cell): cell is LayoutCell => Boolean(cell));
+              return anchors.some((anchor) => pointInsideRect(linkPoint, anchor)) ? anchors : [];
+            })
           : mode === "record"
             ? recordLabelCellsCrossedByLine(
               start,
@@ -927,7 +1668,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               linkPoint,
               layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
             );
-        highlightedCells.forEach((cell) => {
+        highlightedCells.forEach((storedCell) => {
+          const cell = displayCellById.get(storedCell.id) ?? storedCell;
           context.save();
           context.fillStyle = "#6b3fc530";
           context.strokeStyle = "#6b3fc5";
@@ -963,6 +1705,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     ocrLabelAlignment,
     identityCandidateByCellId,
     selectedIdentityByPath,
+    eraserTrail,
+    showMeaningStep,
   ]);
   useEffect(() => {
     const image = new Image();
@@ -999,12 +1743,146 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       && location.y >= cell.y
       && location.y <= cell.y + cell.height,
   );
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || workflowStep !== "meaning") return;
+    const connectedCellIds = new Set<string>();
+    layout.relations.forEach((relation) => {
+      connectedCellIds.add(relation.inputCellId);
+      relation.labelCellIds.forEach((labelId) => connectedCellIds.add(labelId));
+    });
+    const clearHover = () => {
+      if (!hoveredMeaningCellIdRef.current) return;
+      hoveredMeaningCellIdRef.current = null;
+      redraw();
+    };
+    const updateHover = (event: PointerEvent) => {
+      if (event.buttons !== 0 || (mode !== "select" && mode !== "link")) {
+        clearHover();
+        return;
+      }
+      const bounds = canvas.getBoundingClientRect();
+      const location = {
+        x: Math.max(0, Math.min(
+          layout.canonicalWidth,
+          (event.clientX - bounds.left) * layout.canonicalWidth / bounds.width,
+        )),
+        y: Math.max(0, Math.min(
+          layout.canonicalHeight,
+          (event.clientY - bounds.top) * layout.canonicalHeight / bounds.height,
+        )),
+      };
+      const hoveredCell = [...layout.cells].reverse().find((cell) => (
+        connectedCellIds.has(cell.id)
+        && location.x >= cell.x
+        && location.x <= cell.x + cell.width
+        && location.y >= cell.y
+        && location.y <= cell.y + cell.height
+      ));
+      const nextHoveredId = hoveredCell?.id ?? null;
+      if (nextHoveredId === hoveredMeaningCellIdRef.current) return;
+      hoveredMeaningCellIdRef.current = nextHoveredId;
+      redraw();
+    };
+    canvas.addEventListener("pointermove", updateHover);
+    canvas.addEventListener("pointerleave", clearHover);
+    return () => {
+      canvas.removeEventListener("pointermove", updateHover);
+      canvas.removeEventListener("pointerleave", clearHover);
+    };
+  }, [layout, mode, workflowStep, redraw]);
   const rectFrom = (start: Point, end: Point): Rect => ({
     x: Math.min(start.x, end.x),
     y: Math.min(start.y, end.y),
     width: Math.abs(start.x - end.x),
     height: Math.abs(start.y - end.y),
   });
+  const eraseLinksAlongSegment = (start: Point, end: Point) => {
+    const tolerance = Math.max(8, layout.canonicalWidth / 100);
+    setLayout((current) => {
+      let changed = false;
+      const storedCellById = new Map(current.cells.map((cell) => [cell.id, cell]));
+      const visualCell = (id: string) => storedCellById.get(id);
+      const erasedMeaningLinks = eraseMeaningLabelLinksAlongSegment(
+        current.relations,
+        storedCellById,
+        start,
+        end,
+        tolerance,
+        current.canonicalWidth,
+        current.canonicalHeight,
+      );
+      let relations = erasedMeaningLinks.relations;
+      if (erasedMeaningLinks.changed) changed = true;
+      const erasedParentLinks = eraseMeaningParentLinksAlongSegment(
+        relations,
+        storedCellById,
+        start,
+        end,
+        tolerance,
+      );
+      relations = erasedParentLinks.relations;
+      if (erasedParentLinks.changed) changed = true;
+
+      const removedSectionIds = new Set<string>();
+      const recordSections = (current.recordSections ?? []).flatMap((section) => {
+        const anchors = section.recordLabelCellIds
+          .map((labelId) => visualCell(labelId))
+          .filter((cell): cell is LayoutCell => Boolean(cell))
+          .sort((first, second) => first.x - second.x || first.y - second.y);
+        if (anchors.length === 0) return [section];
+        const bandY = anchors.reduce(
+          (total, anchor) => total + anchor.y + anchor.height / 2,
+          0,
+        ) / anchors.length;
+        const bandStart = {
+          x: anchors[0].x + anchors[0].width / 2,
+          y: bandY,
+        };
+        const lastAnchor = anchors[anchors.length - 1];
+        const bandEnd = {
+          x: lastAnchor.x + lastAnchor.width / 2,
+          y: bandY,
+        };
+        if (segmentDistance(start, end, bandStart, bandEnd) <= tolerance) {
+          changed = true;
+          removedSectionIds.add(section.id);
+          return [];
+        }
+        const parent = section.parentLabelCellId
+          ? visualCell(section.parentLabelCellId)
+          : undefined;
+        if (
+          parent
+          && segmentDistance(
+            start,
+            end,
+            rectCenter(parent),
+            {
+              x: (bandStart.x + bandEnd.x) / 2,
+              y: bandY,
+            },
+          ) <= tolerance
+        ) {
+          changed = true;
+          return [{ ...section, parentLabelCellId: null }];
+        }
+        return [section];
+      });
+      if (!changed) return current;
+      return {
+        ...current,
+        relations,
+        recordSections,
+        recordGroups: (current.recordGroups ?? []).filter(
+          (group) => !removedSectionIds.has(group.sectionId),
+        ),
+        recordStructureVerified: removedSectionIds.size > 0
+          ? false
+          : current.recordStructureVerified,
+      };
+    });
+  };
   const patchCell = (id: string, patch: Partial<LayoutCell>) => setLayout((current) => ({
     ...current,
     cells: current.cells.map((cell) => cell.id === id ? { ...cell, ...patch } : cell),
@@ -1037,6 +1915,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         relations = relations.map((relation) => ({
           ...relation,
           labelCellIds: relation.labelCellIds.filter((labelId) => !idSet.has(labelId)),
+        }));
+      }
+      if (role !== "label" && role !== "parent_label") {
+        relations = relations.map((relation) => ({
+          ...relation,
+          parentLabelCellId: relation.parentLabelCellId && idSet.has(relation.parentLabelCellId)
+            ? null
+            : relation.parentLabelCellId,
         }));
       }
       const invalidatedSectionIds = new Set(
@@ -1102,7 +1988,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           return {
             ...cell,
             role,
-            markSets: calvingMarkPreset(cell, rowIndex),
+            markSets: (
+              relatedPath?.startsWith("calvings.")
+              || section?.collectionPath === "calvings"
+            )
+              ? calvingMarkPreset(cell, rowIndex)
+              : genericManualChoicePreset(
+                cell,
+                availableTargets.find((target) => (
+                  normalizeLabelPoolText(target.label)
+                  === normalizeLabelPoolText(cell.text)
+                ))?.path ?? "",
+              ),
           };
         }),
         relations,
@@ -1115,6 +2012,239 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     });
   };
   const setRole = (id: string, role: LayoutCell["role"]) => setRoles([id], role);
+  const showMergeError = (message: string) => {
+    showToast({ tone: "warning", title: "セルを結合できません", message });
+  };
+  const mergeSelectedCells = (
+    cellsToMerge: LayoutCell[] = selectedCells,
+    copiedMerge?: LayoutCellMerge,
+  ) => {
+    if (cellsToMerge.length < 2) {
+      showMergeError("2つ以上のセルを選択してください。");
+      return;
+    }
+    const selectedIdSet = new Set(cellsToMerge.map((cell) => cell.id));
+    if (cellsToMerge.some((cell) => cellMergeByParentId.has(cell.id))) {
+      showMergeError("結合済みセルを別の結合に含めることはできません。先に結合を解除してください。");
+      return;
+    }
+    if (cellsToMerge.some((cell) => cell.role === "mark" || (cell.markSets?.length ?? 0) > 0)) {
+      showMergeError("選択欄はセル結合の対象にできません。");
+      return;
+    }
+    const referencedByMeaning = layout.relations.some((relation) => (
+      selectedIdSet.has(relation.inputCellId)
+      || relation.labelCellIds.some((labelId) => selectedIdSet.has(labelId))
+      || Boolean(relation.parentLabelCellId && selectedIdSet.has(relation.parentLabelCellId))
+    ));
+    const referencedByRecords = (layout.recordSections ?? []).some((section) => (
+      section.recordLabelCellIds.some((labelId) => selectedIdSet.has(labelId))
+      || Boolean(section.parentLabelCellId && selectedIdSet.has(section.parentLabelCellId))
+      || (section.rowKeyCellIds ?? []).some((cellId) => selectedIdSet.has(cellId))
+    )) || (layout.recordGroups ?? []).some((group) => (
+      group.inputCellIds.some((inputId) => selectedIdSet.has(inputId))
+      || Boolean(group.recordKeyCellId && selectedIdSet.has(group.recordKeyCellId))
+    ));
+    if (referencedByMeaning || referencedByRecords) {
+      showMergeError("意味づけまたは繰り返し部分に使用中のセルです。既存の接続を削除してから結合してください。");
+      return;
+    }
+    const plan = planManualCellMerge(
+      cellsToMerge,
+      layout.canonicalWidth,
+      layout.canonicalHeight,
+    );
+    if (typeof plan === "string") {
+      showMergeError(plan);
+      return;
+    }
+    const containsInput = plan.orderedCells.some((cell) => cell.role === "input");
+    const roles = new Set(plan.orderedCells.map((cell) => cell.role));
+    if (!containsInput && roles.size > 1) {
+      showMergeError("記入欄を含まない異なる区分のセルは結合できません。区分を揃えてから再実行してください。");
+      return;
+    }
+
+    const stamp = Date.now();
+    const parentCellId = `merged_${stamp}`;
+    const parts: LayoutCellMergePart[] = plan.orderedCells.map((cell, index) => {
+      const copiedPart = copiedMerge?.parts[index];
+      const partType: LayoutCellMergePart["partType"] = copiedPart?.partType
+        ?? (cell.role === "input"
+          ? "input"
+          : (cell.text.trim() || cell.printedLabelText?.trim())
+            ? "literal"
+            : "ignored");
+      return {
+        cell: { ...cell },
+        partType,
+        literal: copiedPart?.literal
+          ?? (partType === "literal"
+            ? (cell.text.trim() || cell.printedLabelText?.trim() || "")
+            : ""),
+      };
+    });
+    const fixedText = parts
+      .flatMap((part) => {
+        if (part.partType === "literal") return part.literal ? [part.literal] : [];
+        const printed = part.cell.printedLabelText?.trim();
+        return printed ? [printed] : [];
+      })
+      .join("");
+    const textConfidences = plan.orderedCells
+      .map((cell) => cell.textConfidence)
+      .filter((value): value is number => value !== null);
+    const parentRole: LayoutCell["role"] = containsInput
+      ? "input"
+      : plan.orderedCells[0].role;
+    const parentCell: LayoutCell = {
+      id: parentCellId,
+      role: parentRole,
+      ...plan.bounds,
+      confidence: Math.min(...plan.orderedCells.map((cell) => cell.confidence)),
+      text: containsInput
+        ? ""
+        : plan.orderedCells.map((cell) => cell.text.trim()).filter(Boolean).join(""),
+      printedLabelText: fixedText,
+      textConfidence: textConfidences.length > 0 ? Math.min(...textConfidences) : null,
+      textDirection: plan.direction,
+      textAlignment: "center",
+      source: "manual",
+      markSets: [],
+      compositeSubfields: [],
+    };
+    const merge: LayoutCellMerge = {
+      id: `cell_merge_${stamp}`,
+      parentCellId,
+      direction: plan.direction,
+      parts,
+    };
+    setLayout((current) => {
+      const firstIndex = Math.min(...current.cells
+        .map((cell, index) => selectedIdSet.has(cell.id) ? index : Number.POSITIVE_INFINITY));
+      const cells = current.cells.filter((cell) => !selectedIdSet.has(cell.id));
+      cells.splice(Math.min(firstIndex, cells.length), 0, parentCell);
+      return {
+        ...current,
+        cells,
+        cellMerges: [...(current.cellMerges ?? []), merge],
+      };
+    });
+    setSelectedId(parentCellId);
+    setSelectedIds(new Set([parentCellId]));
+    setMessage(null);
+    showToast({
+      tone: "success",
+      title: copiedMerge ? "結合パターンを貼り付けました" : "セルを結合しました",
+      message: `${parts.length}個のセルを1つの${parentRole === "input" ? "記入欄" : "セル"}として扱います。`,
+    });
+  };
+  const unmergeSelectedCell = () => {
+    if (!selected || !selectedCellMerge) return;
+    const parentId = selected.id;
+    const isReferenced = layout.relations.some((relation) => (
+      relation.inputCellId === parentId
+      || relation.labelCellIds.includes(parentId)
+      || relation.parentLabelCellId === parentId
+    )) || (layout.recordSections ?? []).some((section) => (
+      section.recordLabelCellIds.includes(parentId)
+      || section.parentLabelCellId === parentId
+      || (section.rowKeyCellIds ?? []).includes(parentId)
+    )) || (layout.recordGroups ?? []).some((group) => (
+      group.inputCellIds.includes(parentId) || group.recordKeyCellId === parentId
+    ));
+    if (isReferenced) {
+      showToast({
+        tone: "warning",
+        title: "結合を解除できません",
+        message: "この結合セルは意味づけまたは繰り返し部分に使用されています。既存の接続を削除してから解除してください。",
+      });
+      return;
+    }
+    const restoredCells = selectedCellMerge.parts.map((part) => ({ ...part.cell }));
+    setLayout((current) => {
+      const parentIndex = current.cells.findIndex((cell) => cell.id === parentId);
+      const cells = current.cells.filter((cell) => cell.id !== parentId);
+      cells.splice(Math.max(0, parentIndex), 0, ...restoredCells);
+      return {
+        ...current,
+        cells,
+        cellMerges: (current.cellMerges ?? []).filter((merge) => merge.id !== selectedCellMerge.id),
+      };
+    });
+    const restoredId = restoredCells[0]?.id ?? null;
+    setSelectedId(restoredId);
+    setSelectedIds(restoredId ? new Set([restoredId]) : new Set());
+    setMessage(null);
+    showToast({ tone: "success", title: "セルの結合を解除しました" });
+  };
+  useEffect(() => {
+    const clipboardShortcutAvailable = (target: EventTarget | null) => (
+      showClassificationStep
+      && !busy
+      && !disabled
+      && !isEditableKeyboardTarget(target)
+    );
+    const copyMergePattern = () => {
+      if (!selectedCellMerge) return false;
+      copiedCellMergeRef.current = cloneCellMerge(selectedCellMerge);
+      showToast({
+        tone: "success",
+        title: "結合パターンをコピーしました",
+        message: "下の同じ並びの先頭セルを選んでCtrl+Vを押してください。結合セルを選択したまま繰り返し貼り付けることもできます。",
+      });
+      return true;
+    };
+    const pasteMergePattern = () => {
+      const copiedMerge = copiedCellMergeRef.current;
+      if (!copiedMerge) return false;
+      const targetCells = findCopiedMergeTargetCells(
+        copiedMerge,
+        selectedCells,
+        layout.cells,
+        new Set(cellMerges.map((merge) => merge.parentCellId)),
+        layout.canonicalWidth,
+        layout.canonicalHeight,
+      );
+      if (typeof targetCells === "string") {
+        showToast({ tone: "warning", title: "結合パターンを貼り付けできません", message: targetCells });
+        return true;
+      }
+      mergeSelectedCells(targetCells, copiedMerge);
+      return true;
+    };
+    const handleMergeClipboard = (event: KeyboardEvent) => {
+      if (
+        !showClassificationStep
+        || busy
+        || disabled
+        || (!event.ctrlKey && !event.metaKey)
+        || event.altKey
+        || isEditableKeyboardTarget(event.target)
+      ) return;
+      const key = event.key.toLowerCase();
+      if (key === "c") {
+        if (copyMergePattern()) event.preventDefault();
+        return;
+      }
+      if (key !== "v") return;
+      if (pasteMergePattern()) event.preventDefault();
+    };
+    const handleNativeCopy = (event: ClipboardEvent) => {
+      if (clipboardShortcutAvailable(event.target) && copyMergePattern()) event.preventDefault();
+    };
+    const handleNativePaste = (event: ClipboardEvent) => {
+      if (clipboardShortcutAvailable(event.target) && pasteMergePattern()) event.preventDefault();
+    };
+    window.addEventListener("keydown", handleMergeClipboard);
+    window.addEventListener("copy", handleNativeCopy);
+    window.addEventListener("paste", handleNativePaste);
+    return () => {
+      window.removeEventListener("keydown", handleMergeClipboard);
+      window.removeEventListener("copy", handleNativeCopy);
+      window.removeEventListener("paste", handleNativePaste);
+    };
+  });
   const ensureAutoLabelPoolEntry = (labelText: string): LayoutLabelPoolEntry | null => {
     const entry = createAutoLabelPoolEntry(labelText, availableTargets);
     if (!entry) return null;
@@ -1460,10 +2590,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       (candidate) => candidate.collectionPath === collectionPath
         && candidate.parentLabelCellId,
     )?.parentLabelCellId ?? null;
-    const effectiveRowKeyStrategy = existingSection?.rowKeyStrategy
-      ?? (genericRows ? rowKeyStrategy : "position");
+    const inferredRowKeys = rows.rowKeyCellIds?.map((id) => cellById.get(id) ?? null);
+    const effectiveRowKeyStrategy = rows.rowKeyLabelCellId
+      ? "printed"
+      : existingSection?.rowKeyStrategy
+        ?? rows.rowKeyStrategyHint
+        ?? (genericRows ? rowKeyStrategy : "position");
     const matchedRowKeys = effectiveRowKeyStrategy === "printed"
-      ? matchRowKeyCells(rows.rows, layout.cells)
+      ? inferredRowKeys?.length === rows.rows.length && inferredRowKeys.every((cell) => cell !== null)
+        ? inferredRowKeys
+        : matchRowKeyCells(rows.rows, layout.cells)
       : rows.rows.map(() => null);
     if (effectiveRowKeyStrategy === "printed" && !matchedRowKeys) {
       setMessage("行番号の数または位置が表の行と一致しません。ステップ1で1～9などの番号セルを「行番号」にするか、行の決め方を「上から順番」に変更してください。");
@@ -1496,11 +2632,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         .filter((cell): cell is LayoutCell => Boolean(cell));
       const previous = previousByOrder.get(row.order);
       const rowKeyCell = matchedRowKeys?.[index] ?? null;
+      const geometryCells = rowKeyCell ? [rowKeyCell, ...inputs] : inputs;
       return {
         id: previous?.id ?? `record_${section.id}_${row.order}`,
         sectionId: section.id,
         order: row.order,
-        ...boundingRect(inputs, layout.canonicalWidth, layout.canonicalHeight),
+        ...boundingRect(geometryCells, layout.canonicalWidth, layout.canonicalHeight),
         inputCellIds: row.inputCellIds,
         recordKeyField: genericRows ? "rowNumber" : "parity",
         recordKeyValue: rowKeyCell?.text.trim()
@@ -1524,6 +2661,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const genericEntriesByInput = new Map<string, LayoutLabelPoolEntry>();
     if (genericRows) {
       labels.forEach((label) => {
+        if (label.id === rows.rowKeyLabelCellId) return;
         const columnInputs = layout.relations
           .filter((relation) => relation.labelCellIds.includes(label.id))
           .flatMap((relation) => {
@@ -1627,6 +2765,57 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     linkLabelId.current = null;
     setLinkPoint(null);
     if (!labelId) return;
+    if (showMeaningStep) {
+      const parentLabel = cellById.get(labelId);
+      const childLabel = [...layout.cells].reverse().find((cell) => (
+        cell.role === "label"
+        && cell.id !== labelId
+        && pointInsideRect(end, cell)
+      ));
+      if (!parentLabel || !childLabel) {
+        setMessage("親項目の見出しから、意味づけ済みの子項目名まで線を引いてください。");
+        return;
+      }
+      const scoped = attachParentLabelToMeaningRelations(
+        layout.relations,
+        parentLabel,
+        childLabel,
+      );
+      if (!scoped) {
+        setMessage(`先に「${childLabel.text.trim() || childLabel.id}」から記入欄への意味づけを行ってください。`);
+        return;
+      }
+      rememberRelations(layout.relations);
+      setLayout((current) => {
+        const next = attachParentLabelToMeaningRelations(
+          current.relations,
+          parentLabel,
+          childLabel,
+        );
+        if (!next) return current;
+        return {
+          ...current,
+          relations: next.relations,
+          labelPool: [
+            ...(current.labelPool ?? []),
+            ...next.entries.filter((entry) => (
+              !(current.labelPool ?? []).some(
+                (candidate) => candidate.targetPath === entry.targetPath,
+              )
+            )),
+          ],
+        };
+      });
+      const firstInputId = scoped.inputCellIds[0] ?? null;
+      setSelectedId(firstInputId);
+      setSelectedIds(firstInputId ? new Set([firstInputId]) : new Set());
+      setSelectedPath(scoped.entries[0]?.targetPath ?? "");
+      setMessage(
+        `${parentLabel.text.trim() || parentLabel.id} > ${childLabel.text.trim() || childLabel.id}`
+        + "として親項目を設定しました。",
+      );
+      return;
+    }
     const recordLabel = [...layout.cells].reverse().find((cell) => (
       cell.role === "label" && pointInsideRect(end, cell)
     ));
@@ -1727,9 +2916,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             {{ classify: "欄の種類", meaning: "読み取る内容", records: "繰り返し部分", identity: "書類の見分け方", review: "確認・保存" }[workflowStep]}
           </strong>
         )}
-        {showClassificationStep && (
+        {showDetectAction && (
           <button type="button" onClick={() => void detect()} disabled={busy}>
-            {detecting ? "検出中…" : "枠を再検出"}
+            {detecting ? "処理中…" : detectLabel}
           </button>
         )}
         {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <button
@@ -1743,6 +2932,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <div className="ocr-alignment-switch" role="group" aria-label="OCR文字の配置">
           <span>文字位置</span>
           {([
+            ["auto", "自動", "自動配置"],
             ["left", "左", "左揃え"],
             ["center", "中央", "中央揃え"],
             ["right", "右", "右揃え"],
@@ -1776,8 +2966,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             onChange={setMode}
           />
         )}
+        {showMeaningStep && <ModeButton current={mode} mode="parent" label="親項目を接続" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="parent" label="見出しへ接続" onChange={setMode} />}
+        {workflowStep !== "identity" && workflowStep !== "review" && (
+          <ModeButton current={mode} mode="erase" label="消しゴム" onChange={setMode} />
+        )}
         {showMeaningStep && (
           <button
             type="button"
@@ -1841,7 +3035,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         {workflowStep !== "review" && mode === "draw" && "検出されなかった記入欄をドラッグして追加します。"}
         {workflowStep !== "review" && mode === "link" && "項目名から記入欄を通過するようにドラッグします。項目名がない記入欄は右側から保存する情報を直接指定できます。"}
         {workflowStep !== "review" && mode === "record" && "車種名から備考など、同じ繰り返し表に含める複数の列見出しを横方向の1本の線で横断します。"}
-        {workflowStep !== "review" && mode === "parent" && "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。"}
+        {workflowStep !== "review" && mode === "parent" && (showMeaningStep
+          ? "「職場訪問参加状況」などの親項目から、意味づけ済みの「参加時期」「参加場所」まで線を引きます。"
+          : "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。")}
+        {workflowStep !== "identity" && workflowStep !== "review" && mode === "erase" && "消したい意味づけまたは繰り返し部分のリンクを、消しゴムでなぞってください。矩形自体は削除されません。"}
       </div>
       {message && !showReviewStep && (
         <p className="layout-status" aria-live="polite">{message}</p>
@@ -1906,6 +3103,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if (mode === "identity") {
                 return;
               }
+              if (mode === "erase") {
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                eraserPathRef.current = [location];
+                setEraserTrail([location]);
+                rememberRelations(layout.relations);
+                eraseLinksAlongSegment(location, location);
+                return;
+              }
               if (mode === "select" || mode === "classify") {
                 event.currentTarget.setPointerCapture?.(event.pointerId);
                 dragStart.current = location;
@@ -1934,7 +3139,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 if (!labelHit) {
                   setMessage(
                     mode === "parent"
-                      ? "親ラベル接続はラベルセルからドラッグを開始してください。"
+                      ? showMeaningStep
+                        ? "親項目の接続は、親となる見出しセルからドラッグを開始してください。"
+                        : "親ラベル接続はラベルセルからドラッグを開始してください。"
                       : "意味づけはラベルセルからドラッグを開始してください。",
                   );
                   return;
@@ -1960,11 +3167,27 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if ((mode === "link" || mode === "record" || mode === "parent") && linkLabelId.current) {
                 setLinkPoint(location);
               }
+              if (mode === "erase" && eraserPathRef.current) {
+                const path = eraserPathRef.current;
+                const previous = path[path.length - 1];
+                if (Math.hypot(location.x - previous.x, location.y - previous.y) >= 2) {
+                  eraseLinksAlongSegment(previous, location);
+                  const nextPath = [...path, location];
+                  eraserPathRef.current = nextPath;
+                  setEraserTrail(nextPath);
+                }
+              }
             }}
             onPointerUp={(event) => {
               const location = point(event);
               if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
                 event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              if (mode === "erase") {
+                eraserPathRef.current = null;
+                setEraserTrail([]);
+                setMessage("なぞった範囲の意味づけ・繰り返し部分のリンクを削除しました。");
+                return;
               }
               if (mode === "link") {
                 finishLink(location);
@@ -2001,7 +3224,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     setSelectedIds(ids);
                     setSelectedId(ids.has(hit.id) ? hit.id : ids.values().next().value ?? null);
                     setMessage(ids.size > 1
-                      ? `${ids.size} 個のセルを複数選択しました。右側で区分を一括変更できます。`
+                      ? `${ids.size} 個のセルを複数選択しました。右側で区分の一括変更またはセル結合ができます。`
                       : ids.size === 1
                         ? "1 個のセルを選択しています。Ctrlを押しながら別のセルを追加できます。"
                         : "セルの選択を解除しました。");
@@ -2018,7 +3241,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 setSelectedId(ids[0] ?? (additive ? selectedId : null));
                 setSelectedIds(nextIds);
                 setMessage(nextIds.size > 0
-                  ? `${nextIds.size} 個のセルをまとめて選択しました。右側で区分を一括変更できます。`
+                  ? `${nextIds.size} 個のセルをまとめて選択しました。右側で区分の一括変更またはセル結合ができます。`
                   : "選択範囲にセルはありません。変更したいセルを囲むようにドラッグしてください。");
                 return;
               }
@@ -2048,8 +3271,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               dragStart.current = null;
               additiveSelection.current = false;
               linkLabelId.current = null;
+              eraserPathRef.current = null;
               setDraft(null);
               setLinkPoint(null);
+              setEraserTrail([]);
             }}
           />
           <div
@@ -2098,7 +3323,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <option value="">セルを選択</option>
                 {cellsVisibleInList.map((cell, index) => (
                   <option key={cell.id} value={cell.id}>
-                    {index + 1}. {cell.role === "label"
+                    {index + 1}. {cellMergeByParentId.has(cell.id)
+                      ? `結合セル (${cellMergeByParentId.get(cell.id)?.parts.length ?? 0}セル)`
+                      : cell.role === "label"
                       ? "項目名"
                       : cell.role === "parent_label"
                         ? "見出し"
@@ -2120,7 +3347,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           {showClassificationStep && selectedCells.length > 1 && (
             <section className="bulk-selection">
               <h3>範囲選択: {selectedCells.length} セル</h3>
-              <p>区分変更モードでドラッグしたセルです。区分を一括で指定できます。</p>
+              <p>選択したセルの区分を一括変更するか、1つの論理セルとして結合できます。</p>
+              <div className="cell-merge-actions">
+                <button type="button" className="merge-cell-button" onClick={() => mergeSelectedCells()}>
+                  選択セルを結合
+                </button>
+                <small>元のセルは保持され、結合解除で復元できます。</small>
+              </div>
               <div className="role-buttons">
                 <button type="button" className="label-role" onClick={() => setRoles(selectedIds, "label")}>項目名にする</button>
                 <button type="button" className="parent-label-role" onClick={() => setRoles(selectedIds, "parent_label")}>見出しにする</button>
@@ -2128,7 +3361,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <button type="button" className="mark-role" onClick={() => setRoles(selectedIds, "mark")}>選択欄にする</button>
                 <button
                   type="button"
-                  className="record-key-role"
+                  className="column-key-role"
                   title="表の各行を識別する「1、2、3…」などの印刷済みセル"
                   onClick={() => setRoles(selectedIds, "record_key_cell")}
                 >
@@ -2158,6 +3391,21 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           )}
           {selected && (showLabelStep || showClassificationStep || showMeaningStep) && (
             <div className="property-form">
+              {showClassificationStep && selectedCellMerge && (
+                <section className="merged-cell-summary">
+                  <strong>結合セル</strong>
+                  <span>{selectedCellMerge.parts.length}個のセルを{selectedCellMerge.direction === "horizontal" ? "左から右" : "上から下"}の順で結合しています。</span>
+                  <ol>
+                    {selectedCellMerge.parts.map((part) => (
+                      <li key={part.cell.id}>
+                        {part.partType === "input" ? "入力" : part.partType === "literal" ? `固定文字「${part.literal || "未設定"}」` : "無視"}
+                      </li>
+                    ))}
+                  </ol>
+                  <small><kbd>Ctrl+C</kbd>で結合パターンをコピーし、下段の先頭セルまたは現在の結合セルを選んで<kbd>Ctrl+V</kbd>を押すと同じ結合を適用できます。</small>
+                  <button type="button" onClick={unmergeSelectedCell}>結合を解除</button>
+                </section>
+              )}
               {showClassificationStep && (
                 <fieldset>
                   <legend>区分</legend>
@@ -2174,7 +3422,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       行番号
                     </button>
                     <button
-                      className={selected.role === "column_key_cell" ? "active record-key-role" : "record-key-role"}
+                      className={selected.role === "column_key_cell" ? "active column-key-role" : "column-key-role"}
                       title="表の各列を識別する印刷済みセル"
                       onClick={() => setRole(selected.id, "column_key_cell")}
                     >
@@ -2219,6 +3467,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               {showMeaningStep && selected.role === "mark" && (
                 <MarkCellEditor
                   cell={selected}
+                  targets={availableTargets}
                   batchCells={selectedCells.filter((cell) => cell.role === "mark")}
                   batchRowIndexes={inferCalvingMarkRowIndexes(
                     layout,
@@ -2254,6 +3503,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       relations: current.relations.filter((relation) => (
                         relation.inputCellId !== selected.id
                         && !relation.labelCellIds.includes(selected.id)
+                      )).map((relation) => (
+                        relation.parentLabelCellId === selected.id
+                          ? { ...relation, parentLabelCellId: null }
+                          : relation
                       )),
                       recordGroups: (current.recordGroups ?? [])
                         .filter((group) => !invalidatedSectionIds.has(group.sectionId))
@@ -2289,6 +3542,17 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
           {showMeaningStep && <>
           <h3>読み取る内容の保存先</h3>
+          {selectedMeaningParent && selectedMeaningChild && (
+            <div className="meaning-parent-context" aria-label="設定済みの親項目">
+              <span>親項目で区別</span>
+              <strong>
+                {selectedMeaningParent.text.trim() || selectedMeaningParent.id}
+                <b aria-hidden="true">›</b>
+                {selectedMeaningChild.text.trim() || selectedMeaningChild.id}
+              </strong>
+              <small>同名の項目は、この親項目ごとに別の情報として保存されます。</small>
+            </div>
+          )}
           <label className="property-select">
             保存する情報
             <select
@@ -2826,6 +4090,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     <td>{relation.order}行目</td>
                     <td>{relation.axis === "horizontal" ? "横積み" : "縦積み"}</td>
                     <td>
+                      {relation.parentLabelCellId && (
+                        <span className="relation-parent-breadcrumb">
+                          {cellById.get(relation.parentLabelCellId)?.text || relation.parentLabelCellId}
+                          <b aria-hidden="true">›</b>
+                        </span>
+                      )}
                       {relation.labelCellIds.length > 0
                         ? relation.labelCellIds.map((id) => cellById.get(id)?.text || id).join(" / ")
                         : cellById.get(relation.inputCellId)?.printedLabelText || "矩形へ直接設定"}
@@ -2987,6 +4257,7 @@ export function cellsSelectedByRect(
 
 function MarkCellEditor({
   cell,
+  targets,
   batchCells,
   batchRowIndexes,
   source,
@@ -2997,6 +4268,7 @@ function MarkCellEditor({
   onBatchChange,
 }: {
   cell: LayoutCell;
+  targets: FieldMappingTarget[];
   batchCells: LayoutCell[];
   batchRowIndexes: ReadonlyMap<string, number>;
   source: string;
@@ -3133,6 +4405,20 @@ function MarkCellEditor({
     dragRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   };
+  const isCalvingMark = sets.some((markSet) => /^calvings\.\d+\./.test(markSet.targetPath));
+  if (!isCalvingMark) {
+    return (
+      <GenericChoiceCellEditor
+        cell={cell}
+        sets={sets}
+        targets={targets}
+        source={source}
+        canonicalWidth={canonicalWidth}
+        canonicalHeight={canonicalHeight}
+        onChange={onChange}
+      />
+    );
+  }
   return (
     <fieldset className="mark-cell-editor">
       <legend>分娩状況の選択マーク</legend>
@@ -3293,6 +4579,303 @@ function MarkCellEditor({
   );
 }
 
+function suggestedChoiceLabels(text: string): string[] {
+  const normalized = text.normalize("NFKC").trim();
+  const compact = normalized.replace(/[\s　・,、/／]+/g, "");
+  const knownGroups = [
+    ["都", "道", "府", "県"],
+    ["市", "区", "町", "村"],
+  ];
+  const known = knownGroups.find((labels) => (
+    labels.every((label) => compact.includes(label))
+    && compact.length <= labels.join("").length + 4
+  ));
+  if (known) return known;
+  const separated = normalized
+    .split(/[\s　・,、/／]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return separated.length >= 2 && separated.length <= 12
+    ? [...new Set(separated)]
+    : [];
+}
+
+function reflowChoiceOptions(
+  cell: LayoutCell,
+  options: LayoutMarkSet["options"],
+): LayoutMarkSet["options"] {
+  if (options.length === 0) return [];
+  return options.map((option, index) => {
+    const left = Math.round(cell.width * index / options.length);
+    const right = Math.round(cell.width * (index + 1) / options.length);
+    return {
+      ...option,
+      x: left,
+      y: 0,
+      width: Math.max(1, right - left),
+      height: Math.max(1, cell.height),
+    };
+  });
+}
+
+function nextChoiceOptionId(options: LayoutMarkSet["options"]): string {
+  const ids = new Set(options.map((option) => option.id));
+  let index = 1;
+  while (ids.has(`choice_${index}`)) index += 1;
+  return `choice_${index}`;
+}
+
+function genericManualChoicePreset(
+  cell: LayoutCell,
+  targetPath = "",
+): LayoutMarkSet[] {
+  const labels = suggestedChoiceLabels(cell.text);
+  return [{
+    id: "choice",
+    targetPath,
+    recognitionMode: "manual",
+    selectionMode: "single",
+    options: reflowChoiceOptions(
+      cell,
+      labels.map((label, index) => ({
+        id: `choice_${index + 1}`,
+        label,
+        value: label,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: Math.max(1, cell.height),
+      })),
+    ),
+  }];
+}
+
+function GenericChoiceCellEditor({
+  cell,
+  sets,
+  targets,
+  source,
+  canonicalWidth,
+  canonicalHeight,
+  onChange,
+}: {
+  cell: LayoutCell;
+  sets: LayoutMarkSet[];
+  targets: FieldMappingTarget[];
+  source: string;
+  canonicalWidth: number;
+  canonicalHeight: number;
+  onChange: (sets: LayoutMarkSet[]) => void;
+}) {
+  const [newOptionLabel, setNewOptionLabel] = useState("");
+  const markSet = sets[0];
+  const sections = [...new Set(targets.map((target) => target.section))];
+  if (!markSet) {
+    return (
+      <fieldset className="mark-cell-editor generic-choice-editor">
+        <legend>選択欄の設定</legend>
+        <p>保存先、選択肢、読み取り時の判定方法を設定します。</p>
+        <button
+          type="button"
+          className="primary compact"
+          onClick={() => onChange(genericManualChoicePreset(cell))}
+        >
+          選択欄を設定する
+        </button>
+      </fieldset>
+    );
+  }
+  const patchSet = (patch: Partial<LayoutMarkSet>) => onChange([
+    { ...markSet, ...patch },
+    ...sets.slice(1),
+  ]);
+  const patchOption = (optionId: string, patch: Partial<LayoutMarkSet["options"][number]>) => {
+    patchSet({
+      options: markSet.options.map((option) => (
+        option.id === optionId ? { ...option, ...patch } : option
+      )),
+    });
+  };
+  const cleanedNewOption = newOptionLabel.trim();
+  const duplicateNewOption = markSet.options.some((option) => (
+    option.label === cleanedNewOption || option.value === cleanedNewOption
+  ));
+  return (
+    <fieldset className="mark-cell-editor generic-choice-editor">
+      <legend>選択欄の設定</legend>
+      <label>
+        保存する情報
+        <select
+          value={markSet.targetPath}
+          onChange={(event) => patchSet({ targetPath: event.target.value })}
+        >
+          <option value="">保存先を選択</option>
+          {sections.map((section) => (
+            <optgroup label={section} key={section}>
+              {targets.filter((target) => target.section === section).map((target) => (
+                <option value={target.path} key={target.path}>{target.label}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <div className="choice-setting-grid">
+        <label>
+          判定方法
+          <select
+            value={markSet.recognitionMode ?? "automatic"}
+            onChange={(event) => patchSet({
+              recognitionMode: event.target.value as "automatic" | "manual",
+            })}
+          >
+            <option value="manual">読み取り時に人が選ぶ</option>
+            <option value="automatic">画像から自動判定する</option>
+          </select>
+        </label>
+        <label>
+          選択数
+          <select
+            value={markSet.selectionMode}
+            onChange={(event) => patchSet({
+              selectionMode: event.target.value as "single" | "multiple",
+            })}
+          >
+            <option value="single">1つだけ</option>
+            <option value="multiple">複数可</option>
+          </select>
+        </label>
+      </div>
+      <p>
+        {markSet.recognitionMode === "manual"
+          ? "この欄はOCRへ送らず、読み取り確認画面で利用者が画像を見て選択します。"
+          : "選択肢ごとの範囲を画像差分で判定し、不確実な場合は確認対象にします。"}
+      </p>
+      <svg
+        className="mark-option-canvas"
+        viewBox={`0 0 ${cell.width} ${cell.height}`}
+        preserveAspectRatio="none"
+        aria-label="選択欄の設定範囲"
+      >
+        <image
+          href={source}
+          x={-cell.x}
+          y={-cell.y}
+          width={canonicalWidth}
+          height={canonicalHeight}
+          preserveAspectRatio="none"
+        />
+        {markSet.options.map((option) => (
+          <g key={option.id}>
+            <rect
+              className="mark-option-region"
+              x={option.x}
+              y={option.y}
+              width={option.width}
+              height={option.height}
+            />
+            <text
+              className="mark-option-canvas-label"
+              x={option.x + option.width / 2}
+              y={option.y + option.height / 2}
+            >
+              {option.label}
+            </text>
+          </g>
+        ))}
+      </svg>
+      <div className="generic-choice-options">
+        {markSet.options.map((option) => (
+          <div className="generic-choice-option" key={option.id}>
+            <label>
+              表示名
+              <input
+                value={option.label}
+                maxLength={100}
+                onChange={(event) => patchOption(option.id, { label: event.target.value })}
+              />
+            </label>
+            <label>
+              内部識別値
+              <input
+                value={option.value}
+                maxLength={100}
+                onChange={(event) => patchOption(option.id, { value: event.target.value })}
+              />
+            </label>
+            {markSet.recognitionMode === "automatic" && (["x", "y", "width", "height"] as const).map((key) => (
+              <label key={key}>
+                {{ x: "X", y: "Y", width: "幅", height: "高さ" }[key]}
+                <input
+                  type="number"
+                  min={key === "width" || key === "height" ? 1 : 0}
+                  value={option[key]}
+                  onChange={(event) => patchOption(option.id, {
+                    [key]: Math.max(
+                      key === "width" || key === "height" ? 1 : 0,
+                      Number(event.target.value) || 0,
+                    ),
+                  })}
+                />
+              </label>
+            ))}
+            <button
+              type="button"
+              className="danger-button compact"
+              onClick={() => patchSet({
+                options: reflowChoiceOptions(
+                  cell,
+                  markSet.options.filter((item) => item.id !== option.id),
+                ),
+              })}
+            >
+              削除
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="choice-option-addition">
+        <label>
+          新しい選択肢
+          <input
+            value={newOptionLabel}
+            maxLength={100}
+            placeholder="例: 有"
+            onChange={(event) => setNewOptionLabel(event.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="secondary compact"
+          disabled={!cleanedNewOption || duplicateNewOption || markSet.options.length >= 50}
+          onClick={() => {
+            const label = cleanedNewOption;
+            if (!label) return;
+            const nextOptions = [
+              ...markSet.options,
+              {
+                id: nextChoiceOptionId(markSet.options),
+                label,
+                value: label,
+                x: 0,
+                y: 0,
+                width: 1,
+                height: Math.max(1, cell.height),
+              },
+            ];
+            patchSet({ options: reflowChoiceOptions(cell, nextOptions) });
+            setNewOptionLabel("");
+          }}
+        >
+          選択肢を追加
+        </button>
+        {duplicateNewOption && (
+          <small className="error-text">同じ表示名または内部識別値は追加できません。</small>
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
 function calvingMarkPreset(
   cell: LayoutCell,
   rowIndex: number,
@@ -3330,6 +4913,7 @@ function calvingMarkPreset(
   return (["outcome", "sex"] as const).map((target) => ({
     id: target,
     targetPath: `calvings.${rowIndex}.${target}`,
+    recognitionMode: "automatic",
     selectionMode: "multiple",
     options: definitions
       .map((definition) => ({ definition }))
@@ -3853,6 +5437,26 @@ function normalizeLabelPoolText(value: string): string {
     .replace(/[\s　・:：()（）［］\[\]【】]/g, "");
 }
 
+function normalizeLayoutCell(cell: LayoutCell): LayoutCell {
+  const compactText = Array.from(cell.text.replace(/\s+/g, ""));
+  const textDirection = cell.textDirection
+    ?? (compactText.length >= 2 && cell.height >= cell.width * 1.4
+      ? "vertical"
+      : "horizontal");
+  return {
+    ...cell,
+    printedLabelText: cell.printedLabelText ?? "",
+    compositeSubfields: cell.compositeSubfields ?? [],
+    textDirection,
+    textAlignment: cell.textAlignment ?? (textDirection === "vertical" ? "center" : "left"),
+    markSets: (cell.markSets ?? []).map((markSet) => ({
+      ...markSet,
+      recognitionMode: markSet.recognitionMode ?? "automatic",
+      options: markSet.options ?? [],
+    })),
+  };
+}
+
 function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
   const recordSections = (layout.recordSections ?? []).map((section) => {
     const { recordLabelCellId, ...current } = section;
@@ -3868,22 +5472,208 @@ function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
     };
   });
   const recordGroups = layout.recordGroups ?? [];
+  const activeCellIds = new Set(layout.cells.map((cell) => cell.id));
   return {
     ...layout,
     layoutSchemaVersion: layout.layoutSchemaVersion ?? 3,
     recordSections,
     recordGroups,
+    cellMerges: (layout.cellMerges ?? [])
+      .filter((merge) => activeCellIds.has(merge.parentCellId) && merge.parts.length >= 2)
+      .map((merge) => ({
+        ...merge,
+        parts: merge.parts.map((part) => ({
+          ...part,
+          literal: part.literal ?? "",
+          cell: normalizeLayoutCell(part.cell),
+        })),
+      })),
     labelPool: layout.labelPool ?? [],
     // Older drafts can retain false even after every record band has been
     // connected to its parent label. Derive the UI state from the saved
     // structure so the user can save and continue to verification.
     recordStructureVerified: recordStructureIsLinked(recordSections, recordGroups),
-    cells: layout.cells.map((cell) => ({
-      ...cell,
-      printedLabelText: cell.printedLabelText ?? "",
-      markSets: cell.markSets ?? [],
+    cells: layout.cells.map(normalizeLayoutCell),
+  };
+}
+
+type ManualCellMergePlan = {
+  direction: "horizontal" | "vertical";
+  orderedCells: LayoutCell[];
+  bounds: Rect;
+};
+
+function planManualCellMerge(
+  cells: LayoutCell[],
+  canonicalWidth: number,
+  canonicalHeight: number,
+): ManualCellMergePlan | string {
+  if (cells.length < 2) return "2つ以上のセルを選択してください。";
+  const bounds: Rect = {
+    x: Math.min(...cells.map((cell) => cell.x)),
+    y: Math.min(...cells.map((cell) => cell.y)),
+    width: Math.max(...cells.map((cell) => cell.x + cell.width))
+      - Math.min(...cells.map((cell) => cell.x)),
+    height: Math.max(...cells.map((cell) => cell.y + cell.height))
+      - Math.min(...cells.map((cell) => cell.y)),
+  };
+  const gapLimit = Math.max(8, Math.min(canonicalWidth, canonicalHeight) * 0.012);
+  const horizontalCells = [...cells].sort((first, second) => first.x - second.x || first.y - second.y);
+  const verticalCells = [...cells].sort((first, second) => first.y - second.y || first.x - second.x);
+  const horizontal = horizontalCells.every((cell, index) => {
+    if (index === 0) return true;
+    const previous = horizontalCells[index - 1];
+    const overlap = intervalOverlap(cell.y, cell.height, previous.y, previous.height);
+    const gap = cell.x - (previous.x + previous.width);
+    return overlap >= Math.min(cell.height, previous.height) * 0.25 && gap <= gapLimit;
+  });
+  const vertical = verticalCells.every((cell, index) => {
+    if (index === 0) return true;
+    const previous = verticalCells[index - 1];
+    const overlap = intervalOverlap(cell.x, cell.width, previous.x, previous.width);
+    const gap = cell.y - (previous.y + previous.height);
+    return overlap >= Math.min(cell.width, previous.width) * 0.25 && gap <= gapLimit;
+  });
+  if (!horizontal && !vertical) {
+    return "離れているセル、または読み取り順序を一意に決められないセルは結合できません。";
+  }
+  const direction = horizontal && vertical
+    ? (bounds.width >= bounds.height ? "horizontal" : "vertical")
+    : horizontal ? "horizontal" : "vertical";
+  return {
+    direction,
+    orderedCells: direction === "horizontal" ? horizontalCells : verticalCells,
+    bounds,
+  };
+}
+
+function cloneCellMerge(merge: LayoutCellMerge): LayoutCellMerge {
+  return {
+    ...merge,
+    parts: merge.parts.map((part) => ({
+      ...part,
+      cell: {
+        ...part.cell,
+        markSets: (part.cell.markSets ?? []).map((markSet) => ({
+          ...markSet,
+          options: markSet.options.map((option) => ({ ...option })),
+        })),
+        compositeSubfields: (part.cell.compositeSubfields ?? []).map((subfield) => ({ ...subfield })),
+      },
     })),
   };
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  return Boolean(
+    element
+    && (element.isContentEditable
+      || element instanceof HTMLInputElement
+      || element instanceof HTMLTextAreaElement
+      || element instanceof HTMLSelectElement),
+  );
+}
+
+function mergePartMatchesCell(part: LayoutCellMergePart, cell: LayoutCell): boolean {
+  if (part.partType === "input") return cell.role === "input";
+  if (part.partType === "ignored") {
+    return cell.role === "ignored" && !cell.text.trim() && !cell.printedLabelText?.trim();
+  }
+  const expected = part.literal.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const actual = (cell.text.trim() || cell.printedLabelText?.trim() || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+  return Boolean(expected) && expected === actual;
+}
+
+function findCopiedMergeTargetCells(
+  merge: LayoutCellMerge,
+  selectedCells: LayoutCell[],
+  activeCells: LayoutCell[],
+  mergedParentIds: ReadonlySet<string>,
+  canonicalWidth: number,
+  canonicalHeight: number,
+): LayoutCell[] | string {
+  if (merge.parts.length < 2) return "コピーした結合パターンが不完全です。";
+  if (selectedCells.length > 1) {
+    if (selectedCells.length !== merge.parts.length) {
+      return `コピー元と同じ${merge.parts.length}個のセルを選択してください。`;
+    }
+    const plan = planManualCellMerge(selectedCells, canonicalWidth, canonicalHeight);
+    if (typeof plan === "string") return plan;
+    if (
+      plan.direction !== merge.direction
+      || !plan.orderedCells.every((cell, index) => mergePartMatchesCell(merge.parts[index], cell))
+    ) return "選択したセルの並びまたは区分がコピー元と一致しません。";
+    return plan.orderedCells;
+  }
+  if (selectedCells.length === 0) {
+    return "貼り付け先の先頭セル、または直前に結合したセルを選択してください。";
+  }
+
+  const selected = selectedCells[0];
+  const sourceFirst = merge.parts[0].cell;
+  const availableCells = activeCells.filter((cell) => !mergedParentIds.has(cell.id));
+  let anchorCandidates: LayoutCell[];
+  if (mergedParentIds.has(selected.id)) {
+    const sourceLeft = Math.min(...merge.parts.map((part) => part.cell.x));
+    const sourceTop = Math.min(...merge.parts.map((part) => part.cell.y));
+    const expectedX = selected.x + sourceFirst.x - sourceLeft;
+    const expectedY = selected.y + sourceFirst.y - sourceTop;
+    anchorCandidates = availableCells
+      .filter((cell) => (
+        cell.y > selected.y + selected.height * 0.25
+        && mergePartMatchesCell(merge.parts[0], cell)
+      ))
+      .sort((first, second) => (
+        first.y - second.y
+        || Math.abs(first.x - expectedX) - Math.abs(second.x - expectedX)
+        || Math.abs(first.y - expectedY) - Math.abs(second.y - expectedY)
+      ));
+  } else {
+    if (!mergePartMatchesCell(merge.parts[0], selected)) {
+      return "貼り付け先では、コピー元の並びに対応する先頭セルを選択してください。";
+    }
+    anchorCandidates = [selected];
+  }
+
+  const baseTolerance = Math.max(6, Math.min(canonicalWidth, canonicalHeight) * 0.008);
+  for (const anchor of anchorCandidates) {
+    const offsetX = anchor.x - sourceFirst.x;
+    const offsetY = anchor.y - sourceFirst.y;
+    const usedIds = new Set<string>();
+    const matched: LayoutCell[] = [];
+    let complete = true;
+    for (const part of merge.parts) {
+      const expectedX = part.cell.x + offsetX;
+      const expectedY = part.cell.y + offsetY;
+      const candidate = availableCells
+        .filter((cell) => (
+          !usedIds.has(cell.id)
+          && mergePartMatchesCell(part, cell)
+          && Math.abs(cell.x - expectedX) <= Math.max(baseTolerance, part.cell.width * 0.3)
+          && Math.abs(cell.y - expectedY) <= Math.max(baseTolerance, part.cell.height * 0.3)
+          && Math.abs(cell.width - part.cell.width) <= Math.max(baseTolerance, part.cell.width * 0.35)
+          && Math.abs(cell.height - part.cell.height) <= Math.max(baseTolerance, part.cell.height * 0.35)
+        ))
+        .sort((first, second) => (
+          Math.abs(first.x - expectedX) + Math.abs(first.y - expectedY)
+          - Math.abs(second.x - expectedX) - Math.abs(second.y - expectedY)
+        ))[0];
+      if (!candidate) {
+        complete = false;
+        break;
+      }
+      usedIds.add(candidate.id);
+      matched.push(candidate);
+    }
+    if (!complete) continue;
+    const plan = planManualCellMerge(matched, canonicalWidth, canonicalHeight);
+    if (typeof plan !== "string" && plan.direction === merge.direction) return plan.orderedCells;
+  }
+  return "下にコピー元と同じ並びの未結合セルが見つかりませんでした。";
 }
 
 function restoreLayoutDraft(
@@ -4119,33 +5909,78 @@ export function recordRowsFromColumnLabels(
 ): {
   collectionPath: "saleCalves" | "calvings" | null;
   rows: Array<{ order: number; inputCellIds: string[] }>;
+  rowKeyLabelCellId?: string;
+  rowKeyCellIds?: string[];
+  rowKeyStrategyHint?: "position";
 } | null {
   const cellById = new Map(cells.map((cell) => [cell.id, cell]));
   const genericRows = (): {
     collectionPath: null;
     rows: Array<{ order: number; inputCellIds: string[] }>;
+    rowKeyLabelCellId?: string;
+    rowKeyCellIds?: string[];
+    rowKeyStrategyHint?: "position";
   } | null => {
-    const columns = [...new Set(labelIds)].map((labelId) => relations
-      .filter((relation) => relation.labelCellIds.includes(labelId))
-      .flatMap((relation) => {
-        const input = cellById.get(relation.inputCellId);
-        return input && (input.role === "input" || input.role === "mark")
-          ? [input]
-          : [];
-      })
-      .filter((cell, index, items) => items.findIndex((item) => item.id === cell.id) === index)
-      .sort((first, second) => (
-        first.y + first.height / 2 - (second.y + second.height / 2)
-        || first.x - second.x
-      )));
-    const counts = new Set(columns.map((column) => column.length));
-    if (columns.length < 2 || counts.size !== 1 || columns[0].length === 0) return null;
+    const columns = [...new Set(labelIds)].map((labelId) => ({
+      labelId,
+      cells: relations
+        .filter((relation) => relation.labelCellIds.includes(labelId))
+        .flatMap((relation) => {
+          const input = cellById.get(relation.inputCellId);
+          return input && (input.role === "input" || input.role === "mark")
+            ? [input]
+            : [];
+        })
+        .filter((cell, index, items) => items.findIndex((item) => item.id === cell.id) === index)
+        .sort((first, second) => (
+          first.y + first.height / 2 - (second.y + second.height / 2)
+          || first.x - second.x
+        )),
+    }));
+    const valueColumns = columns.filter((column) => column.cells.length > 0);
+    const emptyColumns = columns.filter((column) => column.cells.length === 0);
+    const counts = new Set(valueColumns.map((column) => column.cells.length));
+    if (
+      columns.length < 2
+      || valueColumns.length === 0
+      || emptyColumns.length > 1
+      || counts.size !== 1
+      || valueColumns[0].cells.length === 0
+    ) return null;
+
+    const rows = Array.from({ length: valueColumns[0].cells.length }, (_, index) => ({
+      order: index + 1,
+      inputCellIds: valueColumns.map((column) => column.cells[index].id),
+    }));
+    if (emptyColumns.length === 0) {
+      return { collectionPath: null, rows, rowKeyStrategyHint: "position" };
+    }
+
+    const rowKeyLabel = cellById.get(emptyColumns[0].labelId);
+    if (!rowKeyLabel) return null;
+    const horizontalMargin = Math.max(8, rowKeyLabel.width * 0.1);
+    const rowKeyCells = cells.filter((cell) => {
+      if (cell.role !== "record_key_cell") return false;
+      const centerX = cell.x + cell.width / 2;
+      const centerY = cell.y + cell.height / 2;
+      return centerX >= rowKeyLabel.x - horizontalMargin
+        && centerX <= rowKeyLabel.x + rowKeyLabel.width + horizontalMargin
+        && centerY > rowKeyLabel.y + rowKeyLabel.height / 2;
+    });
+    const scopedCells = [
+      ...rowKeyCells,
+      ...rows.flatMap((row) => row.inputCellIds.flatMap((inputId) => {
+        const input = cellById.get(inputId);
+        return input ? [input] : [];
+      })),
+    ];
+    const matchedRowKeys = matchRowKeyCells(rows, scopedCells);
+    if (!matchedRowKeys || matchedRowKeys.some((cell) => !cell)) return null;
     return {
       collectionPath: null,
-      rows: Array.from({ length: columns[0].length }, (_, index) => ({
-        order: index + 1,
-        inputCellIds: columns.map((column) => column[index].id),
-      })),
+      rows,
+      rowKeyLabelCellId: rowKeyLabel.id,
+      rowKeyCellIds: matchedRowKeys.map((cell) => cell!.id),
     };
   };
   const parse = (targetPath: string): {
@@ -4529,6 +6364,73 @@ export function mergeLabelRelations(
       targetPath: targetPaths[index],
     })),
   ];
+}
+
+function stableMeaningKeyHash(value: string): string {
+  return Array.from(value).reduce(
+    (hash, character) => ((hash * 31) + (character.codePointAt(0) ?? 0)) >>> 0,
+    2166136261,
+  ).toString(36);
+}
+
+function parentMeaningPathSegment(value: string, fallback: string): string {
+  const segment = value
+    .normalize("NFKC")
+    .trim()
+    .replace(/[.\\/\s:：・／()（）［\]{}「」『』]+/g, "_")
+    .replace(/[^A-Za-z0-9_\u3040-\u30ff\u3400-\u9fff々〆ヶー-]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return (segment || fallback).slice(0, 54);
+}
+
+export function attachParentLabelToMeaningRelations(
+  currentRelations: LayoutRelation[],
+  parentLabel: LayoutCell,
+  childLabel: LayoutCell,
+): {
+  relations: LayoutRelation[];
+  entries: LayoutLabelPoolEntry[];
+  inputCellIds: string[];
+} | null {
+  const matched = currentRelations
+    .filter((relation) => relation.labelCellIds.includes(childLabel.id))
+    .sort((first, second) => first.order - second.order || first.inputCellId.localeCompare(second.inputCellId));
+  if (matched.length === 0) return null;
+
+  const parentName = parentLabel.text.trim() || parentLabel.id;
+  const childName = childLabel.text.trim() || childLabel.id;
+  const parentKey = parentMeaningPathSegment(parentName, "parent");
+  const childKey = parentMeaningPathSegment(childName, "field");
+  const parentIdentity = stableMeaningKeyHash(parentLabel.id).slice(0, 7);
+  const basePath = `customFields.${parentKey}_${parentIdentity}__${childKey}`;
+  const pathByRelationId = new Map(matched.map((relation, index) => [
+    relation.id,
+    matched.length === 1 ? basePath : `${basePath}_${index + 1}`,
+  ]));
+  const relations = currentRelations.map((relation) => {
+    const targetPath = pathByRelationId.get(relation.id);
+    return targetPath
+      ? { ...relation, parentLabelCellId: parentLabel.id, targetPath }
+      : relation;
+  });
+  const entries = matched.map((relation, index): LayoutLabelPoolEntry => {
+    const targetPath = pathByRelationId.get(relation.id)!;
+    const rowSuffix = matched.length === 1 ? "" : ` ${index + 1}行目`;
+    return {
+      id: `pool_parent_${stableMeaningKeyHash(targetPath)}`.slice(0, 120),
+      label: `${parentName} > ${childName}${rowSuffix}`.slice(0, 100),
+      targetPath: targetPath.slice(0, 200),
+      section: parentName.slice(0, 100),
+      aliases: [childName.slice(0, 100)],
+      source: "manual",
+    };
+  });
+  return {
+    relations,
+    entries,
+    inputCellIds: matched.map((relation) => relation.inputCellId),
+  };
 }
 
 function normalizeLabel(value: string) {

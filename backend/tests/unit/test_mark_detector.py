@@ -82,3 +82,24 @@ def test_combines_detected_options_in_template_order() -> None:
     )
 
     assert state == (ReadingStatus.READABLE, "双・早", None)
+
+
+def test_manual_choice_is_not_detected_or_sent_to_automatic_resolution() -> None:
+    config = mark_config()
+    manual_mapping = config.field_mappings[0].model_copy(
+        update={"mark_recognition_mode": "manual"}
+    )
+    manual_config = config.model_copy(
+        update={"field_mappings": [manual_mapping]},
+        deep=True,
+    )
+    template = np.full((40, 120, 3), 255, dtype=np.uint8)
+    source = template.copy()
+    cv2.circle(source, (25, 20), 11, (40, 40, 40), thickness=3)
+
+    assert MarkDetector(manual_config).detect_all(source, template) == []
+    assert OcrWorkflowService._mark_state(manual_mapping, []) == (
+        ReadingStatus.UNCERTAIN,
+        None,
+        "MANUAL_CHOICE_REQUIRED",
+    )

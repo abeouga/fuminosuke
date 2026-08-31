@@ -187,7 +187,6 @@ class JobService:
                         title="Document template does not match",
                         detail="選択した台帳とテンプレートが一致しません。",
                     )
-                normalized_mother_id = target_document.individual_id
             if document_action == "RESCAN_PAGE":
                 target_page = (
                     session.get(LedgerDocumentPage, target_page_id) if target_page_id else None

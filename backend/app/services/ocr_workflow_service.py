@@ -253,6 +253,9 @@ class OcrWorkflowService:
             for mapping in mark_mappings:
                 state = mark_state_by_id[mapping.mapping_id]
                 mark_crop = extraction.crops.get(mapping.mapping_id)
+                if mapping.mark_recognition_mode == "manual":
+                    local_resolution_by_id[mapping.mapping_id] = "manual_choice_required"
+                    continue
                 if state[0] != ReadingStatus.UNCERTAIN or mark_crop is None:
                     local_resolution_by_id[mapping.mapping_id] = "mark_detector"
                     continue
@@ -484,6 +487,11 @@ class OcrWorkflowService:
         configured_paths.update(fixed_calving_keys)
         configured_paths.update(mapping.target_path for mapping in mark_mappings)
         configured_paths.update(
+            subfield.target_path
+            for mapping in extraction.config.field_mappings
+            for subfield in mapping.composite_subfields
+        )
+        configured_paths.update(
             self._apply_record_keys(
                 response.document,
                 job_snapshot.get("recordStructure"),
@@ -707,6 +715,13 @@ class OcrWorkflowService:
             collection, row_index = collection_row
             rows_by_collection.setdefault(collection, set()).add(row_index)
             if mapping.mapping_type == "mark":
+                if mapping.mark_recognition_mode == "manual":
+                    crop = extraction.crops.get(mapping.mapping_id)
+                    if crop is not None and crop.handwriting_only.size > 0:
+                        dark_pixels = int((crop.handwriting_only.min(axis=2) < 235).sum())
+                        if dark_pixels >= 4:
+                            active_by_collection.setdefault(collection, set()).add(row_index)
+                    continue
                 state = mark_state_by_id.get(mapping.mapping_id)
                 if state is not None and state[0] is not ReadingStatus.BLANK:
                     active_by_collection.setdefault(collection, set()).add(row_index)
@@ -736,6 +751,8 @@ class OcrWorkflowService:
         mapping: FieldMappingConfig,
         results: list[dict[str, object]],
     ) -> tuple[ReadingStatus, str | None, str | None]:
+        if mapping.mark_recognition_mode == "manual":
+            return ReadingStatus.UNCERTAIN, None, "MANUAL_CHOICE_REQUIRED"
         mapping_id = mapping.mapping_id
         options = mapping.mark_options
         selection_mode = mapping.mark_selection_mode
@@ -882,6 +899,8 @@ class OcrWorkflowService:
                     "displayLabel": mapping.label,
                     "targetPath": region.target_path,
                     "mappingType": mapping.mapping_type,
+                    "markRecognitionMode": mapping.mark_recognition_mode,
+                    "markSelectionMode": mapping.mark_selection_mode,
                     "markOptions": [
                         {"label": option.label, "value": option.value}
                         for option in mapping.mark_options

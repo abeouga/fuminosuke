@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -15,7 +15,7 @@ class LayoutModel(BaseModel):
 
 class LayoutMarkOption(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
-    label: str = Field(min_length=1, max_length=20)
+    label: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=100)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -30,9 +30,28 @@ class LayoutMarkOption(LayoutModel):
 
 class LayoutMarkSet(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
-    target_path: str = Field(min_length=1, max_length=200)
+    target_path: str = Field(default="", max_length=200)
+    recognition_mode: Literal["automatic", "manual"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
-    options: list[LayoutMarkOption] = Field(min_length=1, max_length=20)
+    options: list[LayoutMarkOption] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_unique_options(self) -> Self:
+        for attribute in ("id", "label", "value"):
+            values = [getattr(option, attribute) for option in self.options]
+            if len(values) != len(set(values)):
+                raise ValueError(f"Mark options have duplicate {attribute}s")
+        return self
+
+
+class LayoutCompositeSubfield(LayoutModel):
+    id: str = Field(min_length=1, max_length=100)
+    semantic_type: Literal["address_prefecture", "address_municipality"]
+    label: str = Field(min_length=1, max_length=100)
+    x_ratio: float = Field(ge=0, le=1)
+    y_ratio: float = Field(ge=0, le=1)
+    width_ratio: float = Field(gt=0, le=1)
+    height_ratio: float = Field(gt=0, le=1)
 
 
 class LayoutCell(LayoutModel):
@@ -54,13 +73,37 @@ class LayoutCell(LayoutModel):
     text: str = Field(default="", max_length=300)
     printed_label_text: str = Field(default="", max_length=300)
     text_confidence: float | None = Field(default=None, ge=0, le=1)
+    text_direction: Literal["horizontal", "vertical"] = "horizontal"
+    text_alignment: Literal["left", "center", "right"] = "left"
     source: Literal["detected", "manual"] = "detected"
     mark_sets: list[LayoutMarkSet] = Field(default_factory=list, max_length=10)
+    composite_subfields: list[LayoutCompositeSubfield] = Field(
+        default_factory=list,
+        max_length=10,
+    )
 
     @field_validator("text", "printed_label_text", mode="before")
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+
+class LayoutCellMergePart(LayoutModel):
+    cell: LayoutCell
+    part_type: Literal["input", "literal", "ignored"]
+    literal: str = Field(default="", max_length=300)
+
+    @field_validator("literal", mode="before")
+    @classmethod
+    def repair_text_encoding(cls, value: object) -> object:
+        return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+
+class LayoutCellMerge(LayoutModel):
+    id: str = Field(min_length=1, max_length=100)
+    parent_cell_id: str = Field(min_length=1, max_length=100)
+    direction: Literal["horizontal", "vertical"]
+    parts: list[LayoutCellMergePart] = Field(min_length=2, max_length=100)
 
 
 class LayoutRelation(LayoutModel):
@@ -69,6 +112,7 @@ class LayoutRelation(LayoutModel):
     # A field can be assigned directly when its printed label shares the same
     # rectangle, or when the form conveys the meaning without a label cell.
     label_cell_ids: list[str] = Field(default_factory=list, max_length=30)
+    parent_label_cell_id: str | None = Field(default=None, max_length=100)
     axis: Literal["horizontal", "vertical"]
     order: int = Field(ge=1)
     target_path: str = Field(min_length=1, max_length=200)
@@ -164,6 +208,7 @@ class LayoutDefinition(LayoutModel):
     detector: str = Field(default="opencv+paddleocr", max_length=100)
     ocr_available: bool = False
     cells: list[LayoutCell] = Field(default_factory=list, max_length=1000)
+    cell_merges: list[LayoutCellMerge] = Field(default_factory=list, max_length=300)
     relations: list[LayoutRelation] = Field(default_factory=list, max_length=1000)
     label_pool: list[LayoutLabelPoolEntry] = Field(default_factory=list, max_length=500)
     record_sections: list[LayoutRecordSection] = Field(default_factory=list, max_length=100)

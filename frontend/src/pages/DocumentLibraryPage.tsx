@@ -16,10 +16,15 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
   const [query, setQuery] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set());
 
   const load = async () => {
     try {
-      setLibrary(await api.documentLibrary());
+      const next = await api.documentLibrary();
+      setLibrary(next);
+      setSelectedDocumentIds((current) => new Set(
+        [...current].filter((id) => next.documents.some((document) => document.documentId === id)),
+      ));
     } catch (reason) {
       showToast({
         tone: "error",
@@ -30,6 +35,7 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
   };
 
   useEffect(() => { void load(); }, []);
+  useEffect(() => { setSelectedDocumentIds(new Set()); }, [currentFolderId, query]);
   useEffect(() => {
     if (!library || !initialDocumentId) return;
     const document = library.documents.find((item) => item.documentId === initialDocumentId);
@@ -122,6 +128,58 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
     }
   };
 
+  const renameDocument = async (document: DocumentLibraryLedger) => {
+    const currentName = document.libraryName
+      || document.displayTitle
+      || document.cattleName
+      || document.individualId;
+    const name = window.prompt("新しい書類名を入力してください。", currentName);
+    if (!name || name === currentName) return;
+    try {
+      const renamed = await api.renameLibraryDocument(document.documentId, name);
+      await load();
+      showToast({
+        tone: "success",
+        title: "書類名を変更しました",
+        message: renamed.spreadsheetRenamed
+          ? "Drive上のスプレッドシート名にも反映しました。"
+          : undefined,
+      });
+    } catch (reason) {
+      showToast({
+        tone: "error",
+        title: "書類名を変更できませんでした",
+        message: reason instanceof ApiError ? reason.message : undefined,
+      });
+    }
+  };
+
+  const deleteSelectedDocuments = async () => {
+    const documentIds = [...selectedDocumentIds];
+    if (documentIds.length === 0) return;
+    if (!window.confirm(`${documentIds.length}件の書類をライブラリから削除しますか？\nOCR履歴とDrive上のスプレッドシートは削除されません。`)) return;
+    try {
+      const deleted = await api.deleteLibraryDocuments(documentIds);
+      setSelectedDocumentIds(new Set());
+      await load();
+      showToast({
+        tone: "success",
+        title: `${deleted.deletedCount}件の書類を削除しました`,
+        message: "Drive上のスプレッドシートは保持されています。",
+      });
+    } catch (reason) {
+      showToast({
+        tone: "error",
+        title: "書類を削除できませんでした",
+        message: reason instanceof ApiError ? reason.message : undefined,
+      });
+      await load();
+    }
+  };
+
+  const allVisibleSelected = visibleDocuments.length > 0
+    && visibleDocuments.every((document) => selectedDocumentIds.has(document.documentId));
+
   if (selectedLedger) {
     return <GroupDetail group={ledgerGroup(selectedLedger)} onBack={() => setSelectedLedger(null)} startReading={startReading} openReview={openReview} />;
   }
@@ -142,6 +200,13 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
       </div>
 
       <label className="library-search"><span>書類を検索</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="識別番号・名称・テンプレート名" /></label>
+
+      <div className="library-selection-bar">
+        <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleDocuments.length === 0} onChange={(event) => setSelectedDocumentIds(event.target.checked ? new Set(visibleDocuments.map((document) => document.documentId)) : new Set())} /><span>表示中をすべて選択</span></label>
+        <strong>{selectedDocumentIds.size}件選択中</strong>
+        {selectedDocumentIds.size > 0 && <button type="button" className="ghost compact" onClick={() => setSelectedDocumentIds(new Set())}>選択解除</button>}
+        <button type="button" className="danger compact" disabled={selectedDocumentIds.size === 0} onClick={() => void deleteSelectedDocuments()}>選択した書類を削除</button>
+      </div>
 
       <div className="library-explorer">
         <aside className="library-folder-tree" aria-label="フォルダ一覧">
@@ -175,7 +240,7 @@ export function DocumentLibraryPage({ startReading, openReview, initialDocumentI
             <div className="empty-state large"><FolderIcon /><h2>{normalizedQuery ? "該当する書類がありません" : "このフォルダは空です"}</h2><p>{normalizedQuery ? "検索条件を変更してください。" : "ルートまたは別のフォルダから書類を移動できます。"}</p></div>
           ) : (
             <section className="library-card-grid" aria-label="書類一覧">
-              {visibleDocuments.map((document) => <LibraryDocumentCard document={document} folders={library.folders} folderById={folderById} key={document.documentId} onOpen={() => setSelectedLedger(document)} onMove={moveDocument} />)}
+              {visibleDocuments.map((document) => <LibraryDocumentCard document={document} folders={library.folders} folderById={folderById} key={document.documentId} selected={selectedDocumentIds.has(document.documentId)} onSelect={(selected) => setSelectedDocumentIds((current) => { const next = new Set(current); if (selected) next.add(document.documentId); else next.delete(document.documentId); return next; })} onOpen={() => setSelectedLedger(document)} onMove={moveDocument} onRename={() => void renameDocument(document)} />)}
             </section>
           )}
         </main>
@@ -200,20 +265,116 @@ function FolderIcon() {
   return <span className="library-folder-icon" aria-hidden="true" />;
 }
 
-function LibraryDocumentCard({ document, folders, folderById, onOpen, onMove }: {
+function LibraryDocumentCard({ document, folders, folderById, selected, onSelect, onOpen, onMove, onRename }: {
   document: DocumentLibraryLedger;
   folders: DocumentLibraryFolder[];
   folderById: Map<string, DocumentLibraryFolder>;
+  selected: boolean;
+  onSelect: (selected: boolean) => void;
   onOpen: () => void;
   onMove: (document: DocumentLibraryLedger, folderId: string | null) => Promise<void>;
+  onRename: () => void;
 }) {
+  const [printMenuOpen, setPrintMenuOpen] = useState(false);
+  const [printerStatus, setPrinterStatus] = useState<{ printerName: string | null; connected: boolean; state: string; detail: string } | null>(null);
+  const [printCopies, setPrintCopies] = useState(1);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [printMessage, setPrintMessage] = useState("");
+  const [printMode, setPrintMode] = useState<"spreadsheet" | "image">(document.spreadsheetUrl ? "spreadsheet" : "image");
+  const [paperSize, setPaperSize] = useState<"A4" | "A5" | "B5" | "LETTER">("A4");
+  const [printOrientation, setPrintOrientation] = useState<"portrait" | "landscape">("portrait");
+  const [fitMode, setFitMode] = useState<"contain" | "shrink">("contain");
+  const [marginMm, setMarginMm] = useState(10);
+  const firstPageImage = document.pages[0]?.thumbnailUrl;
+  const documentTitle = document.displayTitle || document.cattleName || document.individualId;
+  const previewParameters = new URLSearchParams({
+    mode: printMode,
+    paperSize,
+    orientation: printOrientation,
+    fitMode,
+    marginMm: String(marginMm),
+  });
+  const printPreviewUrl = `/api/v1/document-library/documents/${encodeURIComponent(document.documentId)}/print-preview?${previewParameters.toString()}`;
+
+  const openPrintMenu = async () => {
+    setPrintMenuOpen(true);
+    setPrintMode(document.spreadsheetUrl ? "spreadsheet" : "image");
+    setPrinterStatus(null);
+    setPrintMessage("EPSONプリンターとの接続を確認しています。");
+    try {
+      const response = await fetch("/api/v1/printer/status");
+      const status = await response.json();
+      if (!response.ok) throw new Error(status.detail || "プリンターの状態を取得できませんでした。");
+      setPrinterStatus(status);
+      setPrintMessage(status.detail);
+    } catch (error) {
+      setPrinterStatus({ printerName: null, connected: false, state: "未接続", detail: error instanceof Error ? error.message : "EPSONプリンターに接続されていません。" });
+      setPrintMessage(error instanceof Error ? error.message : "EPSONプリンターに接続されていません。");
+    }
+  };
+
+  const submitPrint = async () => {
+    if (!printerStatus?.connected || printBusy) return;
+    setPrintBusy(true);
+    setPrintMessage("印刷データをEPSONプリンターへ送信しています。");
+    try {
+      const response = await fetch(`/api/v1/document-library/documents/${encodeURIComponent(document.documentId)}/print`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: printMode,
+          copies: printCopies,
+          paperSize,
+          orientation: printOrientation,
+          fitMode,
+          marginMm,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "印刷データを送信できませんでした。");
+      setPrintMessage(result.detail);
+    } catch (error) {
+      setPrintMessage(error instanceof Error ? error.message : "印刷データを送信できませんでした。");
+    } finally {
+      setPrintBusy(false);
+    }
+  };
+
   return (
-    <article className="library-card library-document-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-ledger-document", document.documentId); }}>
+    <article
+      className={`library-card library-document-card${selected ? " selected" : ""}${printMenuOpen ? " print-open" : ""}`}
+      draggable={!printMenuOpen}
+      onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-ledger-document", document.documentId); }}
+      onPointerMove={(event) => {
+        if (event.pointerType === "touch") return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) return;
+        const x = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+        const y = Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+        event.currentTarget.style.setProperty("--card-tilt-x", `${((0.5 - y) * 4.8).toFixed(2)}deg`);
+        event.currentTarget.style.setProperty("--card-tilt-y", `${((x - 0.5) * 4.8).toFixed(2)}deg`);
+        event.currentTarget.style.setProperty("--card-glare-x", `${(x * 100).toFixed(1)}%`);
+        event.currentTarget.style.setProperty("--card-glare-y", `${(y * 100).toFixed(1)}%`);
+        event.currentTarget.style.setProperty("--card-glare-opacity", "1");
+      }}
+      onPointerLeave={(event) => {
+        event.currentTarget.style.setProperty("--card-tilt-x", "0deg");
+        event.currentTarget.style.setProperty("--card-tilt-y", "0deg");
+        event.currentTarget.style.setProperty("--card-glare-opacity", "0");
+      }}
+    >
+      <label className="library-document-select"><input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} /><span>選択</span></label>
       <button className="library-document-open" onClick={onOpen}>
-        <div className="library-card-preview"><span>書</span><small>{document.pageCount}ページ</small></div>
+        <div className="library-card-preview">
+          <span aria-hidden="true">書</span>
+          {firstPageImage && <img src={firstPageImage} alt={`${documentTitle}の1ページ目`} loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
+          <small>1 / {document.pageCount}ページ</small>
+        </div>
         <div><span className="eyebrow">{document.displayTitleLabel || "書類"}</span><h2>{document.displayTitle || document.cattleName || document.individualId}</h2><strong>{document.displaySubtitle || document.individualId}</strong><p>{document.templateName} · 最終更新 {new Date(document.updatedAt).toLocaleString("ja-JP")}</p>{document.libraryFolderId && <small className="library-document-path">{folderPath(document.libraryFolderId, folderById).map((folder) => folder.name).join(" / ")}</small>}</div>
       </button>
+      <div className="library-document-actions"><button type="button" className="ghost compact" onClick={onRename}>名前変更</button><button type="button" className="secondary compact" onClick={() => void openPrintMenu()}>印刷</button>{document.spreadsheetUrl && <a className="secondary compact" href={document.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>}</div>
       <label className="library-move-select"><span>移動先</span><select value={document.libraryFolderId ?? ""} onChange={(event) => void onMove(document, event.target.value || null)}><option value="">ルート</option>{folders.map((folder) => <option value={folder.id} key={folder.id}>{folderPath(folder.id, folderById).map((item) => item.name).join(" / ")}</option>)}</select></label>
+      {printMenuOpen && <div className="library-print-backdrop" onClick={() => setPrintMenuOpen(false)}><section className="library-print-dialog library-print-preview-dialog" role="dialog" aria-modal="true" aria-labelledby={`print-title-${document.documentId}`} onClick={(event) => event.stopPropagation()}><header><div><span className="eyebrow">PRINT PREVIEW</span><h2 id={`print-title-${document.documentId}`}>印刷プレビュー</h2></div><button type="button" className="ghost compact" onClick={() => setPrintMenuOpen(false)}>閉じる</button></header><p>{documentTitle}</p><div className="library-print-workspace"><div className="library-print-settings"><div className="library-print-source"><button type="button" className={printMode === "spreadsheet" ? "active" : ""} disabled={!document.spreadsheetUrl} onClick={() => setPrintMode("spreadsheet")}><strong>構造化済みシート</strong><small>OCR結果をXLSX構造へ配置</small></button><button type="button" className={printMode === "image" ? "active" : ""} disabled={!firstPageImage} onClick={() => setPrintMode("image")}><strong>読み取り実画像</strong><small>読み取った1ページ目</small></button></div><div className="library-print-fields"><label><span>用紙サイズ</span><select value={paperSize} onChange={(event) => setPaperSize(event.target.value as "A4" | "A5" | "B5" | "LETTER")}><option value="A4">A4</option><option value="A5">A5</option><option value="B5">B5</option><option value="LETTER">Letter</option></select></label><label><span>用紙の向き</span><select value={printOrientation} onChange={(event) => setPrintOrientation(event.target.value as "portrait" | "landscape")}><option value="portrait">縦</option><option value="landscape">横</option></select></label><label><span>配置基準</span><select value={fitMode} onChange={(event) => setFitMode(event.target.value as "contain" | "shrink")}><option value="contain">用紙内に収める</option><option value="shrink">原寸・大きい場合のみ縮小</option></select></label><label><span>余白</span><select value={marginMm} onChange={(event) => setMarginMm(Number(event.target.value))}><option value={5}>5 mm</option><option value={10}>10 mm</option><option value={15}>15 mm</option><option value={20}>20 mm</option></select></label></div><div className={`library-printer-status ${printerStatus?.connected ? "connected" : "disconnected"}`}><strong>{printerStatus?.printerName || "EPSONプリンター"}</strong><span>{printerStatus?.state || "確認中"}</span><small>{printMessage}</small></div><label className="library-print-copies"><span>印刷部数</span><select value={printCopies} onChange={(event) => setPrintCopies(Number(event.target.value))} disabled={printBusy}><option value={1}>1部</option><option value={2}>2部</option><option value={3}>3部</option></select></label><button type="button" className="primary library-print-submit" disabled={!printerStatus?.connected || printBusy || (printMode === "spreadsheet" ? !document.spreadsheetUrl : !firstPageImage)} onClick={() => void submitPrint()}>{printBusy ? "印刷データを送信中..." : `${paperSize}で印刷を実行`}</button></div><div className="library-print-preview"><div className="library-print-preview-label"><strong>{paperSize}・{printOrientation === "portrait" ? "縦" : "横"}</strong><span>余白 {marginMm} mm</span></div><iframe key={printPreviewUrl} title={`${documentTitle}の印刷プレビュー`} src={printPreviewUrl} /></div></div></section></div>}
     </article>
   );
 }

@@ -61,7 +61,11 @@ class MarkDetector:
         configured = [
             self._detect_mapping_option(mapping, option, aligned_rgb, template_rgb)
             for mapping in self._config.field_mappings
-            if mapping.enabled and mapping.mapping_type == "mark"
+            if (
+                mapping.enabled
+                and mapping.mapping_type == "mark"
+                and mapping.mark_recognition_mode == "automatic"
+            )
             for option in mapping.mark_options
         ]
         legacy = [
@@ -189,4 +193,3 @@ class MarkDetector:
             option_label=option_label,
             selection_mode=selection_mode,
         )
-

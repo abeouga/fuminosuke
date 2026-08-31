@@ -47,7 +47,7 @@ class RegionConfig(TemplateConfigModel):
 
 class MarkOptionConfig(TemplateConfigModel):
     id: str = Field(min_length=1, max_length=100)
-    label: str = Field(min_length=1, max_length=20)
+    label: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=100)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -58,6 +58,17 @@ class MarkOptionConfig(TemplateConfigModel):
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+
+class CompositeSubfieldConfig(TemplateConfigModel):
+    id: str = Field(min_length=1, max_length=100)
+    semantic_type: Literal["address_prefecture", "address_municipality"]
+    target_path: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=100)
+    x_ratio: float = Field(ge=0, le=1)
+    y_ratio: float = Field(ge=0, le=1)
+    width_ratio: float = Field(gt=0, le=1)
+    height_ratio: float = Field(gt=0, le=1)
 
 
 class FieldMappingConfig(TemplateConfigModel):
@@ -73,8 +84,13 @@ class FieldMappingConfig(TemplateConfigModel):
     model_detail: str = "high"
     printed_label_text: str = Field(default="", max_length=300)
     mapping_type: Literal["text", "mark"] = "text"
+    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
     mark_selection_mode: Literal["single", "multiple"] = "multiple"
-    mark_options: list[MarkOptionConfig] = Field(default_factory=list, max_length=20)
+    mark_options: list[MarkOptionConfig] = Field(default_factory=list, max_length=50)
+    composite_subfields: list[CompositeSubfieldConfig] = Field(
+        default_factory=list,
+        max_length=10,
+    )
 
     @field_validator("label", "printed_label_text", mode="before")
     @classmethod
@@ -95,7 +111,10 @@ class FieldMappingConfig(TemplateConfigModel):
             model_detail=self.model_detail,
             enabled=self.enabled,
             fallback_enabled=False,
-            mark_detection_enabled=self.mapping_type == "mark",
+            mark_detection_enabled=(
+                self.mapping_type == "mark"
+                and self.mark_recognition_mode == "automatic"
+            ),
             printed_label_text=self.printed_label_text,
         )
 
@@ -177,6 +196,15 @@ class TemplateConfig(TemplateConfigModel):
                 raise ValueError(f"Field mapping {mapping.mapping_id} exceeds canonical height")
             if mapping.mapping_type == "mark" and not mapping.mark_options:
                 raise ValueError(f"Mark mapping {mapping.mapping_id} has no options")
+            option_ids = [option.id for option in mapping.mark_options]
+            option_labels = [option.label for option in mapping.mark_options]
+            option_values = [option.value for option in mapping.mark_options]
+            if len(option_ids) != len(set(option_ids)):
+                raise ValueError(f"Mark mapping {mapping.mapping_id} has duplicate option IDs")
+            if len(option_labels) != len(set(option_labels)):
+                raise ValueError(f"Mark mapping {mapping.mapping_id} has duplicate option labels")
+            if len(option_values) != len(set(option_values)):
+                raise ValueError(f"Mark mapping {mapping.mapping_id} has duplicate option values")
             for option in mapping.mark_options:
                 if option.x + option.width > mapping.width:
                     raise ValueError(f"Mark option {option.id} exceeds mapping width")

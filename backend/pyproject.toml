@@ -17,6 +17,7 @@ dependencies = [
   "opencv-contrib-python==4.10.0.84",
   "openpyxl==3.1.5",
   "pillow==11.3.0",
+  "pypdfium2==5.12.1",
   "pydantic==2.11.7",
   "pydantic-settings==2.10.1",
   "python-multipart==0.0.20",

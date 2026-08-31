@@ -218,7 +218,70 @@ def test_library_hides_unconfirmed_new_documents(
 
         payload = DocumentLibraryService(database).list_library()
 
-        assert payload == {"count": 0, "items": []}
+        assert payload == {"count": 0, "items": [], "folders": [], "documents": []}
+    finally:
+        database.dispose()
+
+
+class _DriveRenameStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def rename_spreadsheet(self, spreadsheet_id: str, name: str) -> str:
+        self.calls.append((spreadsheet_id, name))
+        return name
+
+
+def test_library_renames_drive_sheet_and_soft_deletes_document(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    database = Database(settings_factory().database)
+    Base.metadata.create_all(database.engine)
+    try:
+        with database.session() as session:
+            _, _, job = _template_and_job(session)
+            session.add(
+                ConfirmedResult(
+                    job_id=job.id,
+                    ocr_result_revision=1,
+                    individual_id="1234567890",
+                    confirmed_json=_document("こよみ"),
+                    export_relative_path="exports/test.json",
+                    spreadsheet_id="sheet-1",
+                    spreadsheet_url="https://docs.google.com/spreadsheets/d/sheet-1/edit",
+                    spreadsheet_name="変更前",
+                )
+            )
+            session.commit()
+
+        DocumentLibraryService(database).list_library()
+        drive = _DriveRenameStub()
+        service = DocumentLibraryService(database, google_drive=drive)  # type: ignore[arg-type]
+
+        renamed = service.rename_document(job.id, name="変更後")
+
+        assert renamed == {
+            "documentId": job.id,
+            "name": "変更後",
+            "spreadsheetRenamed": True,
+        }
+        assert drive.calls == [("sheet-1", "変更後")]
+        with database.session() as session:
+            document = session.get(LedgerDocument, job.id)
+            confirmed = session.query(ConfirmedResult).filter_by(job_id=job.id).one()
+            assert document is not None
+            assert document.library_name == "変更後"
+            assert confirmed.spreadsheet_name == "変更後"
+
+        deleted = service.delete_documents([job.id])
+
+        assert deleted == {"deletedCount": 1, "driveFilesPreserved": True}
+        assert service.list_library()["documents"] == []
+        with database.session() as session:
+            document = session.get(LedgerDocument, job.id)
+            assert document is not None
+            assert document.library_deleted_at is not None
+            assert session.query(LedgerDocumentPage).filter_by(ledger_document_id=job.id).count() == 1
     finally:
         database.dispose()
 
@@ -338,5 +401,43 @@ def test_drive_picker_session_and_selected_folder_are_persisted(
             assert account is not None
             assert account.default_output_folder_id == "picked-folder"
             assert account.default_output_folder_path == "2026年度"
+    finally:
+        database.dispose()
+
+
+def test_drive_spreadsheet_name_is_updated_in_place(
+    settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database(settings_factory().database)
+    Base.metadata.create_all(database.engine)
+    try:
+        def credentials_provider() -> Credentials:
+            raise AssertionError("テストではGoogle APIを呼び出しません。")
+
+        drive = GoogleDriveService(database, credentials_provider, lambda: "subject-1")
+        requests: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def request(*args: object, **kwargs: object) -> dict[str, object]:
+            requests.append((args, kwargs))
+            return {"id": "spreadsheet-1", "name": "面接カード_阿部桜雅"}
+
+        monkeypatch.setattr(drive, "_request", request)
+
+        renamed = drive.rename_spreadsheet("spreadsheet-1", "面接カード_阿部桜雅")
+
+        assert renamed == "面接カード_阿部桜雅"
+        assert requests == [
+            (
+                (
+                    "PATCH",
+                    "https://www.googleapis.com/drive/v3/files/spreadsheet-1",
+                ),
+                {
+                    "params": {"fields": "id,name"},
+                    "json": {"name": "面接カード_阿部桜雅"},
+                },
+            )
+        ]
     finally:
         database.dispose()

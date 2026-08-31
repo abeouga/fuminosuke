@@ -15,6 +15,7 @@ import {
   inferRecordTargetPath,
   inferTableColumnTargetPath,
   inferTargetPath,
+  LAYOUT_ROLE_STYLE,
   LayoutEditor,
   linkLaneCells,
   matchRowKeyCells,
@@ -52,6 +53,16 @@ const allSaleTargets: FieldMappingTarget[] = Array.from(
   })),
 ).flat();
 
+test("uses distinct high-contrast styles for every rectangle role", () => {
+  const styles = Object.values(LAYOUT_ROLE_STYLE);
+  expect(new Set(styles.map((style) => style.stroke)).size).toBe(styles.length);
+  expect(LAYOUT_ROLE_STYLE.label.stroke).toBe("#d13c2f");
+  expect(LAYOUT_ROLE_STYLE.input.stroke).toBe("#0067c0");
+  expect(LAYOUT_ROLE_STYLE.label.stroke).not.toBe(LAYOUT_ROLE_STYLE.input.stroke);
+  expect(LAYOUT_ROLE_STYLE.parent_label.dash).not.toEqual(LAYOUT_ROLE_STYLE.input.dash);
+  expect(LAYOUT_ROLE_STYLE.record_key_cell.dash).not.toEqual(LAYOUT_ROLE_STYLE.column_key_cell.dash);
+});
+
 test("detects a compact two-row choice area before the handwriting space", () => {
   const width = 300;
   const height = 100;
@@ -84,6 +95,7 @@ test("batch-detects every selected mark cell and falls back per cell", async () 
   const sets = (rowIndex: number): LayoutMarkSet[] => [{
     id: "outcome",
     targetPath: `calvings.${rowIndex}.outcome`,
+    recognitionMode: "automatic",
     selectionMode: "multiple",
     options: [{
       id: "twin",
@@ -141,6 +153,7 @@ test("repairs duplicate calving mark rows in two-column reading order", () => {
   const markSets = (): LayoutMarkSet[] => ["outcome", "sex"].map((field) => ({
     id: field,
     targetPath: `calvings.0.${field}`,
+    recognitionMode: "automatic",
     selectionMode: "multiple",
     options: [],
   }));
@@ -442,6 +455,7 @@ describe("generic repeated table rows", () => {
     );
     expect(result).toEqual({
       collectionPath: null,
+      rowKeyStrategyHint: "position",
       rows: [
         { order: 1, inputCellIds: ["vehicle_1", "chassis_1"] },
         { order: 2, inputCellIds: ["vehicle_2", "chassis_2"] },
@@ -457,6 +471,36 @@ describe("generic repeated table rows", () => {
     )!.rows;
     expect(matchRowKeyCells(rows, [...labels, ...rowKeys, ...inputs])?.map((cell) => cell?.text))
       .toEqual(["1", "2"]);
+  });
+
+  test("uses a selected record-key column as the row identifier", () => {
+    const rankLabel: LayoutCell = {
+      id: "rank_label",
+      role: "label",
+      x: 50,
+      y: 0,
+      width: 40,
+      height: 24,
+      confidence: 1,
+      text: "希望順位",
+      textConfidence: 1,
+      source: "manual",
+    };
+    const result = recordRowsFromColumnLabels(
+      [rankLabel.id, ...labels.map((cell) => cell.id)],
+      [rankLabel, ...labels, ...rowKeys, ...inputs],
+      relations,
+    );
+
+    expect(result).toEqual({
+      collectionPath: null,
+      rowKeyLabelCellId: "rank_label",
+      rowKeyCellIds: ["row_key_1", "row_key_2"],
+      rows: [
+        { order: 1, inputCellIds: ["vehicle_1", "chassis_1"] },
+        { order: 2, inputCellIds: ["vehicle_2", "chassis_2"] },
+      ],
+    });
   });
 });
 
@@ -1851,6 +1895,7 @@ describe("editing safety regressions", () => {
     expect(view.container.querySelector(".cell-select-details")).not.toBeInTheDocument();
     expect(editor.getByRole("button", { name: "区分変更" })).toBeInTheDocument();
     expect(editor.getByRole("button", { name: "枠を追加" })).toBeInTheDocument();
+    expect(editor.getByRole("button", { name: "消しゴム" })).toBeInTheDocument();
 
     view.rerender(<LayoutEditor {...commonProps} workflowStep="meaning" />);
     expect(editor.getByRole("button", { name: "意味付け" })).toBeInTheDocument();
@@ -1866,12 +1911,34 @@ describe("editing safety regressions", () => {
     expect(editor.getByLabelText("書類を見分ける欄を選択する帳票プレビュー")).toBeInTheDocument();
     expect(editor.getByText("帳票上の欄を複数選択")).toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "項目名の文字候補を取得" })).not.toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "消しゴム" })).not.toBeInTheDocument();
 
     view.rerender(<LayoutEditor {...commonProps} workflowStep="review" />);
     expect(editor.getByRole("button", { name: "拡大鏡をオンにする" })).toBeInTheDocument();
     expect(editor.getAllByText("確認・保存")).toHaveLength(2);
     expect(editor.getByText("保存判定")).toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "繰り返し部分をまとめる" })).not.toBeInTheDocument();
+  });
+
+  test("keeps the XLSX cell restore action available from the meaning step", () => {
+    const onDetect = vi.fn(async () => layout());
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout()}
+        targets={[scalarTarget]}
+        workflowStep="meaning"
+        detectLabel="元のExcelセル構造に戻す"
+        onDetect={onDetect}
+        onSave={vi.fn(async (current: LayoutDefinition) => current)}
+      />,
+    );
+    const editor = within(view.container);
+
+    expect(editor.getByRole("button", { name: "元のExcelセル構造に戻す" }))
+      .toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "枠を再検出" }))
+      .not.toBeInTheDocument();
   });
 
   test("shows the resizable magnifier beside the pointer using the selected scale", () => {
@@ -2191,7 +2258,7 @@ describe("editing safety regressions", () => {
     fireEvent.click(editor.getByRole("button", { name: "枠を再検出" }));
 
     expect(confirm).toHaveBeenCalledWith(
-      "保存していないレイアウト変更があります。変更を破棄して枠を再検出しますか？",
+      "保存していないレイアウト変更があります。変更を破棄して「枠を再検出」を実行しますか？",
     );
     expect(onDetect).not.toHaveBeenCalled();
     expect(properties.getByRole("button", { name: "項目名" })).toHaveClass("active");
@@ -2403,6 +2470,7 @@ describe("editing safety regressions", () => {
       restore: vi.fn(),
       fillRect: vi.fn(),
       fillText: vi.fn(),
+      measureText: vi.fn((value: string) => ({ width: value.length * 12 })),
       get fillStyle() {
         return fillStyle;
       },
@@ -2417,7 +2485,7 @@ describe("editing safety regressions", () => {
 
     drawOcrLabelText(context, { ...labelCell, text: "価格" }, 300);
 
-    expect(context.fillRect).toHaveBeenCalledWith(12, 12, 66, 16);
+    expect(context.fillRect).toHaveBeenCalledWith(12, 12, 66, 17.2);
     expect(fillStyles).toEqual(["rgba(255, 240, 213, 0.92)", "#5f3a00"]);
     expect(context.textAlign).toBe("left");
     expect(context.fillText).toHaveBeenCalledWith("価格", 16, 16, 58);
@@ -2432,6 +2500,7 @@ describe("editing safety regressions", () => {
       restore: vi.fn(),
       fillRect: vi.fn(),
       fillText: vi.fn(),
+      measureText: vi.fn((value: string) => ({ width: value.length * 12 })),
       fillStyle: "",
       font: "",
       textBaseline: "alphabetic",
@@ -2456,7 +2525,7 @@ describe("editing safety regressions", () => {
     );
     const editor = within(view.container);
 
-    expect(editor.getByRole("button", { name: "左揃え" })).toHaveAttribute("aria-pressed", "true");
+    expect(editor.getByRole("button", { name: "自動配置" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(editor.getByRole("button", { name: "右揃え" }));
 
     expect(editor.getByRole("button", { name: "左揃え" })).toHaveAttribute("aria-pressed", "false");
@@ -2756,6 +2825,7 @@ describe("editing safety regressions", () => {
         {
           id: "outcome",
           targetPath: "calvings.0.outcome",
+          recognitionMode: "automatic",
           selectionMode: "multiple",
           options: [{
             id: "twin", label: "双", value: "twin",
@@ -2765,6 +2835,7 @@ describe("editing safety regressions", () => {
         {
           id: "sex",
           targetPath: "calvings.0.sex",
+          recognitionMode: "automatic",
           selectionMode: "multiple",
           options: [{
             id: "male", label: "♂", value: "male",
@@ -2852,10 +2923,35 @@ describe("editing safety regressions", () => {
       { path: "calvings.0.outcome", label: "繁殖履歴 1行目・結果", section: "繁殖履歴" },
       { path: "calvings.0.sex", label: "繁殖履歴 1行目・性別", section: "繁殖履歴" },
     ];
+    const calvingLayout: LayoutDefinition = {
+      ...layout([inputCell], []),
+      recordSections: [{
+        id: "calvings",
+        title: "繁殖履歴",
+        collectionPath: "calvings",
+        recordType: "calving",
+        recordLabelCellIds: [],
+        parentLabelCellId: null,
+        source: "manual",
+      }],
+      recordGroups: [{
+        id: "calving_1",
+        sectionId: "calvings",
+        order: 1,
+        x: inputCell.x,
+        y: inputCell.y,
+        width: inputCell.width,
+        height: inputCell.height,
+        inputCellIds: [inputCell.id],
+        recordKeyField: "parity",
+        recordKeyValue: "1",
+        source: "manual",
+      }],
+    };
     const view = render(
       <LayoutEditor
         source="data:image/png;base64,"
-        initialLayout={layout([inputCell], [])}
+        initialLayout={calvingLayout}
         targets={calvingTargets}
         onDetect={vi.fn()}
         onSave={vi.fn()}
@@ -2914,6 +3010,84 @@ describe("editing safety regressions", () => {
       .toHaveAttribute("x", String(initialX + 10));
   });
 
+  test("does not treat an unrelated choice as calving from the target catalog alone", () => {
+    const unrelatedChoice: LayoutCell = {
+      ...inputCell,
+      id: "unrelated_choice",
+      text: "有 無",
+    };
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([unrelatedChoice], [])}
+        targets={[
+          { path: "calvings.0.outcome", label: "繁殖履歴 1行目・結果", section: "繁殖履歴" },
+          { path: "calvings.0.sex", label: "繁殖履歴 1行目・性別", section: "繁殖履歴" },
+        ]}
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    fireEvent.change(view.container.querySelector(".accessible-cell-select select")!, {
+      target: { value: unrelatedChoice.id },
+    });
+    const properties = within(view.container.querySelector(".property-form")!);
+
+    fireEvent.click(properties.getByRole("button", { name: "選択欄" }));
+
+    expect(properties.getByText("選択欄の設定")).toBeInTheDocument();
+    expect(properties.queryByText("分娩状況の選択マーク")).not.toBeInTheDocument();
+  });
+
+  test("configures a generic manual single-choice field with arbitrary options", async () => {
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const choiceCell: LayoutCell = {
+      ...inputCell,
+      id: "attendance_choice",
+      text: "有 無",
+    };
+    const choiceTargets: FieldMappingTarget[] = [
+      { path: "customFields.attendance", label: "受験の有無", section: "この書類" },
+    ];
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([choiceCell], [])}
+        targets={choiceTargets}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    fireEvent.change(view.container.querySelector(".accessible-cell-select select")!, {
+      target: { value: choiceCell.id },
+    });
+    const properties = within(view.container.querySelector(".property-form")!);
+
+    fireEvent.click(properties.getByRole("button", { name: "選択欄" }));
+
+    expect(properties.getByText("選択欄の設定")).toBeInTheDocument();
+    expect(properties.getByLabelText("判定方法")).toHaveValue("manual");
+    expect(properties.getByLabelText("選択数")).toHaveValue("single");
+    expect(properties.getAllByDisplayValue("有")).toHaveLength(2);
+    expect(properties.getAllByDisplayValue("無")).toHaveLength(2);
+    fireEvent.change(properties.getByLabelText("保存する情報"), {
+      target: { value: "customFields.attendance" },
+    });
+    fireEvent.click(view.container.querySelector(".layout-save") as HTMLButtonElement);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved.cells[0].markSets?.[0]).toMatchObject({
+      targetPath: "customFields.attendance",
+      recognitionMode: "manual",
+      selectionMode: "single",
+      options: [
+        expect.objectContaining({ label: "有", value: "有" }),
+        expect.objectContaining({ label: "無", value: "無" }),
+      ],
+    });
+  });
+
   test("runs the existing auto-detection button for every selected mark cell", async () => {
     const originalPointerEvent = window.PointerEvent;
     const originalImage = globalThis.Image;
@@ -2937,6 +3111,7 @@ describe("editing safety regressions", () => {
     const initialSets = (rowIndex: number): LayoutMarkSet[] => [{
       id: "outcome",
       targetPath: `calvings.${rowIndex}.outcome`,
+      recognitionMode: "automatic",
       selectionMode: "multiple",
       options: [{
         id: "twin", label: "双", value: "twin",

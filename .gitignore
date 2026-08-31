@@ -21,11 +21,8 @@ terraform.tfvars
 crash.log
 /llm-ocr-sheets-*.json
 
-# The existing runtime file is retained for compatibility. Do not add new
-# credentials to it; machine-local secrets belong in backend/.env.local.
-!backend/.env
-
-# Machine-local overrides must never be committed. New credentials belong here.
+# Machine-local credentials and overrides must never be committed.
+/backend/.env
 /backend/.env.local
 
 # Test-run artifacts generated under the backend workspace.
@@ -35,10 +32,6 @@ data/**
 !data/.gitkeep
 backend/data/**
 !backend/data/.gitkeep
-
-# Version the live SQLite database. It is checkpointed before committing;
-# volatile write-ahead-log sidecars and other runtime artifacts remain local-only.
-!backend/data/app.db
 
 # Sanitized active-template bootstrap data is intentionally versioned so a new
 # local runtime starts with the shared templates. It contains no API keys,

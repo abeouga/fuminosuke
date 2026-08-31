@@ -466,6 +466,83 @@ def test_calving_mark_cell_becomes_two_choice_mappings() -> None:
     assert [option.label for option in mappings[1].mark_options] == ["♂", "♀"]
 
 
+def test_generic_manual_choice_mapping_keeps_mode_and_selection_count() -> None:
+    layout = LayoutDefinition(
+        canonical_width=300,
+        canonical_height=140,
+        cells=[
+            LayoutCell(
+                id="attendance",
+                role="mark",
+                x=40,
+                y=60,
+                width=120,
+                height=30,
+                confidence=1,
+                text="有 無",
+                mark_sets=[
+                    LayoutMarkSet(
+                        id="choice",
+                        target_path="customFields.attendance",
+                        recognition_mode="manual",
+                        selection_mode="single",
+                        options=[
+                            LayoutMarkOption(
+                                id="yes",
+                                label="有",
+                                value="yes",
+                                x=0,
+                                y=0,
+                                width=60,
+                                height=30,
+                            ),
+                            LayoutMarkOption(
+                                id="no",
+                                label="無",
+                                value="no",
+                                x=60,
+                                y=0,
+                                width=60,
+                                height=30,
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ],
+    )
+
+    mappings = LayoutService._as_field_mappings(layout)
+
+    assert len(mappings) == 1
+    assert mappings[0].target_path == "customFields.attendance"
+    assert mappings[0].mark_recognition_mode == "manual"
+    assert mappings[0].mark_selection_mode == "single"
+    assert [option.value for option in mappings[0].mark_options] == ["yes", "no"]
+
+
+def test_choice_options_reject_duplicate_labels() -> None:
+    shared = {
+        "label": "有",
+        "x": 0,
+        "y": 0,
+        "width": 30,
+        "height": 30,
+    }
+
+    with pytest.raises(ValidationError, match="duplicate labels"):
+        LayoutMarkSet(
+            id="choice",
+            target_path="customFields.attendance",
+            recognition_mode="manual",
+            selection_mode="single",
+            options=[
+                LayoutMarkOption(id="yes", value="yes", **shared),
+                LayoutMarkOption(id="no", value="no", **shared),
+            ],
+        )
+
+
 def test_repeated_table_label_creates_multiple_mappings_and_keeps_secondary_labels() -> None:
     cells = [
         LayoutCell(

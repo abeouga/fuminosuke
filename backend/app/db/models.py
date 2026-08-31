@@ -91,6 +91,9 @@ class Template(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
 
 class TemplateOutputFolder(Base):
@@ -360,6 +363,10 @@ class LedgerDocument(Base):
         String(36), ForeignKey("document_folders.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     library_location_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    library_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    library_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     spreadsheet_sync_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
     spreadsheet_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -538,6 +545,12 @@ class ConfirmedResult(Base):
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     export_relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    spreadsheet_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    spreadsheet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    spreadsheet_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    spreadsheet_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spreadsheet_sync_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    spreadsheet_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfirmedRecordField(Base):

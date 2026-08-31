@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -14,6 +15,7 @@ from app.db.models import (
     LedgerDocumentPage,
     OcrResult,
     ProcessingJob,
+    Template,
     TemplateVersion,
 )
 from app.domain.enums import RevisionSource
@@ -93,19 +95,25 @@ class DocumentReconciliationService:
             return stored
         identity = self._individual_id(stored.current_corrected_json)
         template_id = self._template_id(session, job)
-        if not identity or not template_id:
+        requires_individual_id = self._requires_individual_identity(
+            session,
+            job,
+            configured_paths,
+        )
+        if not template_id or (requires_individual_id and not identity):
             raise AppError(
                 status=409,
                 code="INDIVIDUAL_ID_REQUIRED",
                 title="Individual identification number is required",
                 detail="個体識別番号を確定してから保存方法を選択してください。",
             )
+        document_key = identity or self.document_key(job.id)
         incoming = dict(stored.current_corrected_json)
         if action == "NEW_DOCUMENT":
             ledger = LedgerDocument(
                 id=job.id,
                 template_id=template_id,
-                individual_id=identity,
+                individual_id=document_key,
                 current_job_id=job.id,
                 current_document_json=incoming,
             )
@@ -125,11 +133,12 @@ class DocumentReconciliationService:
         ledger = self._target_document(
             session,
             template_id=template_id,
-            individual_id=identity,
+            individual_id=document_key,
             target_document_id=target_document_id,
             target_job_id=target_job_id,
             incoming=incoming,
             combined_paths=self._combined_confirmation_paths(job),
+            enforce_individual_id=requires_individual_id,
         )
         pages = list(
             session.scalars(
@@ -202,6 +211,7 @@ class DocumentReconciliationService:
         *,
         job: ProcessingJob,
         document_json: dict[str, Any],
+        configured_paths: set[str] | None,
     ) -> tuple[LedgerDocument | None, LedgerDocumentPage | None]:
         page = session.scalar(select(LedgerDocumentPage).where(LedgerDocumentPage.job_id == job.id))
         if page is None:
@@ -215,7 +225,12 @@ class DocumentReconciliationService:
                 )
             identity = self._individual_id(document_json)
             template_id = self._template_id(session, job)
-            if not identity:
+            requires_individual_id = self._requires_individual_identity(
+                session,
+                job,
+                configured_paths,
+            )
+            if requires_individual_id and not identity:
                 raise AppError(
                     status=409,
                     code="INDIVIDUAL_ID_REQUIRED",
@@ -226,10 +241,11 @@ class DocumentReconciliationService:
             # They remain confirmable and continue using the job ID as the row key.
             if not template_id:
                 return None, None
+            document_key = identity or self.document_key(job.id)
             ledger = LedgerDocument(
                 id=job.id,
                 template_id=template_id,
-                individual_id=identity,
+                individual_id=document_key,
                 current_job_id=job.id,
                 current_document_json=document_json,
             )
@@ -280,6 +296,11 @@ class DocumentReconciliationService:
         page = session.scalar(select(LedgerDocumentPage).where(LedgerDocumentPage.job_id == job_id))
         return page.ledger_document_id if page else None
 
+    @staticmethod
+    def document_key(job_id: str) -> str:
+        digest = hashlib.sha256(job_id.encode("utf-8")).digest()
+        return f"{int.from_bytes(digest[:8], 'big') % 10_000_000_000:010d}"
+
     def _target_document(
         self,
         session: Session,
@@ -290,6 +311,7 @@ class DocumentReconciliationService:
         target_job_id: str | None,
         incoming: dict[str, Any],
         combined_paths: tuple[str, ...],
+        enforce_individual_id: bool,
     ) -> LedgerDocument:
         ledger = session.get(LedgerDocument, target_document_id) if target_document_id else None
         if ledger is None and target_job_id:
@@ -313,7 +335,11 @@ class DocumentReconciliationService:
                         combined_paths,
                     )
                     if combined_paths
-                    else confirmed.individual_id == individual_id
+                    else (
+                        confirmed.individual_id == individual_id
+                        if enforce_individual_id
+                        else True
+                    )
                 )
             ):
                 ledger = LedgerDocument(
@@ -346,7 +372,11 @@ class DocumentReconciliationService:
                     combined_paths,
                 )
             )
-            or (not combined_paths and ledger.individual_id != individual_id)
+            or (
+                enforce_individual_id
+                and not combined_paths
+                and ledger.individual_id != individual_id
+            )
         ):
             raise AppError(
                 status=409,
@@ -532,6 +562,32 @@ class DocumentReconciliationService:
             else None
         )
         return version.template_id if version else None
+
+    @staticmethod
+    def _requires_individual_identity(
+        session: Session,
+        job: ProcessingJob,
+        configured_paths: set[str] | None,
+    ) -> bool:
+        version = (
+            session.get(TemplateVersion, job.template_version_id)
+            if job.template_version_id
+            else None
+        )
+        template = session.get(Template, version.template_id) if version else None
+        if template is not None:
+            document_type = template.document_type.casefold()
+            if "breeding" in document_type or document_type.startswith("cow-"):
+                return True
+            if document_type == "spreadsheet":
+                return False
+        if configured_paths is None:
+            return True
+        return any(
+            path == "document.unifiedEarTag"
+            or path.startswith(("pedigree.", "saleCalves.", "calvings."))
+            for path in configured_paths
+        )
 
     @staticmethod
     def _individual_id(document: dict[str, Any]) -> str | None:

@@ -413,13 +413,46 @@ test("searches and displays confirmed data", async () => {
   expect(screen.getByRole("heading", { name: "検索結果" })).toBeInTheDocument();
 });
 
-test("does not expose the legacy sire-name management page in the side panel", async () => {
+test("nests template management under reading instead of exposing a separate side-panel item", async () => {
   render(<App />);
 
   const navigation = await screen.findByRole("navigation", { name: "メインメニュー" });
-  expect(within(navigation).getByRole("button", { name: /テンプレート/ })).toBeInTheDocument();
+  const reading = within(navigation).getByRole("button", { name: "読み取り" });
+  expect(reading).toBeInTheDocument();
+  expect(within(navigation).queryByRole("button", { name: "テンプレート" })).not.toBeInTheDocument();
   expect(within(navigation).queryByRole("button", { name: /種雄牛名を追加/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "種雄牛名を追加" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "テンプレートを準備" }));
+  expect(await screen.findByRole("heading", { name: "テンプレート作成・編集" })).toBeInTheDocument();
+  expect(reading).toHaveClass("active");
+  expect(screen.getByRole("tab", { name: "新規作成" })).toHaveAttribute("aria-selected", "true");
+
+  fireEvent.click(reading);
+  expect(await screen.findByRole("heading", { name: "書類を読み取る" })).toBeInTheDocument();
+});
+
+test("places the portable backup action directly below development information", async () => {
+  render(<App />);
+
+  const navigation = await screen.findByRole("navigation", { name: "メインメニュー" });
+  const buttons = within(navigation).getAllByRole("button");
+  const labels = buttons.map((button) => button.textContent?.trim());
+  expect(labels.indexOf("持ち出しバックアップ")).toBe(labels.indexOf("開発情報") + 1);
+
+  const backupButton = within(navigation).getByRole("button", { name: "持ち出しバックアップ" });
+  fireEvent.click(backupButton);
+
+  const dialog = screen.getByRole("dialog", { name: "持ち出しバックアップ" });
+  expect(dialog).toHaveTextContent("SSDから直接起動しません");
+  expect(dialog).toHaveTextContent("非暗号化ZIP");
+  expect(dialog).toHaveTextContent("Google再接続が必要");
+  const fetchMock = vi.mocked(fetch);
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+  expect(screen.queryByRole("dialog", { name: "持ち出しバックアップ" })).not.toBeInTheDocument();
+  expect(backupButton).toHaveFocus();
 });
 
 test("warns before leaving an unconfirmed OCR review", async () => {

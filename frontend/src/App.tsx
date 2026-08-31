@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, googleLoginUrl } from "./api";
 import { AuthGate } from "./components/AuthGate";
+import { PortableBackupDialog } from "./components/PortableBackupDialog";
 import { ToastViewport } from "./components/Toast";
 import { DevelopmentPage } from "./pages/DevelopmentPage";
 import { HomePage } from "./pages/HomePage";
@@ -8,14 +9,13 @@ import { IndividualRecordsPage } from "./pages/IndividualRecordsPage";
 import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
 import { DriveSettingsPage } from "./pages/DriveSettingsPage";
 import { JobPage } from "./pages/JobPage";
-import { OcrPage } from "./pages/OcrPage";
+import { OcrPage, type TemplateWorkspaceRequest } from "./pages/OcrPage";
 import { ReviewPage } from "./pages/ReviewPage";
-import { TemplatePage } from "./pages/TemplatePage";
 import type { AuthSession, Health, Job, OcrLibraryContext, Template } from "./types";
 
-type Page = "home" | "templates" | "ocr" | "review" | "job" | "records" | "library" | "drive" | "development";
+type Page = "home" | "ocr" | "review" | "job" | "records" | "library" | "drive" | "development";
 type NavigationGuard = "review" | "ocr" | "template";
-type PendingNavigation = { page: Page; guard: NavigationGuard };
+type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
 const RECENT_KEY = "ledger-ocr-recent-jobs";
 const ATTENTION_STATUSES = new Set([
   "CREATED",
@@ -48,14 +48,20 @@ export default function App() {
   );
   const [monitoredJobId, setMonitoredJobId] = useState<string | null>(null);
   const [ocrLibraryContext, setOcrLibraryContext] = useState<OcrLibraryContext | null>(null);
+  const [templateWorkspaceRequest, setTemplateWorkspaceRequest] = useState<TemplateWorkspaceRequest | null>(null);
+  const [templateWorkspaceVisible, setTemplateWorkspaceVisible] = useState(false);
+  const [readingRootRequestId, setReadingRootRequestId] = useState(0);
   const [libraryDocumentId, setLibraryDocumentId] = useState<string | null>(null);
   const [navigationGuard, setNavigationGuard] = useState<NavigationGuard | null>(
     initialReviewJobId ? "review" : null,
   );
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [disconnectPending, setDisconnectPending] = useState(false);
+  const [portableBackupOpen, setPortableBackupOpen] = useState(false);
+  const portableBackupButtonRef = useRef<HTMLButtonElement>(null);
   const templateRefreshRef = useRef<Promise<void> | null>(null);
   const templateAutoRetryAttemptedRef = useRef(false);
+  const templateWorkspaceRequestIdRef = useRef(0);
   const updateReviewGuard = useCallback((shouldWarn: boolean) => {
     setNavigationGuard((current) => shouldWarn ? "review" : current === "review" ? null : current);
   }, []);
@@ -126,6 +132,19 @@ export default function App() {
     writeRecentJobIds([id, ...current.filter((item) => item !== id)].slice(0, 20));
     void refreshJobs();
   }, [refreshJobs]);
+  const openTemplateWorkspace = useCallback((
+    workspace: TemplateWorkspaceRequest["workspace"],
+    editVersionId?: string,
+  ) => {
+    templateWorkspaceRequestIdRef.current += 1;
+    setOcrLibraryContext(null);
+    setTemplateWorkspaceRequest({
+      id: templateWorkspaceRequestIdRef.current,
+      workspace,
+      editVersionId,
+    });
+    setPage("ocr");
+  }, []);
   const openReview = (id: string, requireIdentityConfirmation = true) => {
     const url = new URL(window.location.href);
     url.searchParams.set("job", id);
@@ -145,7 +164,7 @@ export default function App() {
       return;
     }
     if (job.jobType === "PREPARE_TEMPLATE" && job.status === "REVIEW_REQUIRED") {
-      void refreshTemplates().catch(() => undefined).finally(() => setPage("templates"));
+      void refreshTemplates().catch(() => undefined).finally(() => openTemplateWorkspace("manage"));
       return;
     }
     setMonitoredJobId(job.id);
@@ -160,7 +179,10 @@ export default function App() {
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
-    if (nextPage === "ocr") setOcrLibraryContext(null);
+    if (nextPage === "ocr") {
+      setOcrLibraryContext(null);
+      setTemplateWorkspaceRequest(null);
+    }
     setPage(nextPage);
   };
   const navigateTo = (nextPage: Page) => {
@@ -171,6 +193,17 @@ export default function App() {
     }
     applyNavigation(nextPage);
     return true;
+  };
+  const openReadingRoot = () => {
+    if (page === "ocr" && templateWorkspaceVisible) {
+      if (navigationGuard) {
+        setPendingNavigation({ page: "ocr", guard: navigationGuard, resetOcrWorkspace: true });
+        return false;
+      }
+      setReadingRootRequestId((current) => current + 1);
+      return true;
+    }
+    return navigateTo("ocr");
   };
 
   useEffect(() => {
@@ -259,12 +292,20 @@ export default function App() {
         </button>
         <nav aria-label="メインメニュー">
           <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
-          <NavButton active={page === "templates"} icon="templates" label="テンプレート" onClick={() => navigateTo("templates")} />
-          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={() => navigateTo("ocr")} />
+          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={openReadingRoot} />
           <NavButton active={page === "library"} icon="library" label="書類ライブラリ" onClick={() => { setLibraryDocumentId(null); navigateTo("library"); }} />
           <NavButton active={page === "records"} icon="search" label="データ検索" onClick={() => navigateTo("records")} />
           <NavButton active={page === "drive"} icon="drive" label="保存先設定" onClick={() => navigateTo("drive")} />
           <NavButton active={page === "development"} icon="development" label="開発情報" onClick={() => navigateTo("development")} />
+          <button
+            ref={portableBackupButtonRef}
+            type="button"
+            className="portable-backup-nav"
+            onClick={() => setPortableBackupOpen(true)}
+          >
+            <span><SidebarIcon name="backup" /></span>
+            持ち出しバックアップ
+          </button>
         </nav>
         <div className="side-footer">
           {auth?.user?.pictureUrl
@@ -313,15 +354,32 @@ export default function App() {
             </button>
           </aside>
         )}
-        {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={navigateTo} onOpenJob={openJob} />}
-        {page === "templates" && <TemplatePage templates={templates} refresh={refreshTemplates} rememberJob={rememberJob} onNavigationGuardChange={updateTemplateGuard} />}
-        {page === "ocr" && <OcrPage templates={templates} libraryContext={ocrLibraryContext} rememberJob={rememberJob} openReview={openReview} openTemplates={() => navigateTo("templates")} onNavigationGuardChange={updateOcrGuard} />}
+        {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={(destination) => {
+          if (destination === "templates") {
+            openTemplateWorkspace("create");
+            return;
+          }
+          navigateTo(destination);
+        }} onOpenJob={openJob} />}
+        {page === "ocr" && <OcrPage
+          templates={templates}
+          libraryContext={ocrLibraryContext}
+          rememberJob={rememberJob}
+          openReview={openReview}
+          refreshTemplates={refreshTemplates}
+          templateWorkspaceRequest={templateWorkspaceRequest}
+          onTemplateWorkspaceRequestHandled={() => setTemplateWorkspaceRequest(null)}
+          readingRootRequestId={readingRootRequestId}
+          onTemplateWorkspaceVisibilityChange={setTemplateWorkspaceVisible}
+          onNavigationGuardChange={updateOcrGuard}
+          onTemplateNavigationGuardChange={updateTemplateGuard}
+        />}
         {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} initialSelectedPath={initialReviewField} autoReopenConfirmed={initialReviewEdit} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
           onOpenReview={openReview}
-          onOpenTemplates={() => { retryTemplates(); navigateTo("templates"); }}
+          onOpenTemplates={(workspace) => { retryTemplates(); openTemplateWorkspace(workspace); }}
           onStartNewReading={() => navigateTo("ocr")}
         />}
         {page === "records" && <IndividualRecordsPage
@@ -331,7 +389,7 @@ export default function App() {
             setPage("library");
           }}
         />}
-        {page === "library" && <DocumentLibraryPage initialDocumentId={libraryDocumentId} openReview={(id) => openReview(id, false)} startReading={(context) => { setOcrLibraryContext(context); setPage("ocr"); }} />}
+        {page === "library" && <DocumentLibraryPage initialDocumentId={libraryDocumentId} openReview={(id) => openReview(id, false)} startReading={(context) => { setTemplateWorkspaceRequest(null); setOcrLibraryContext(context); setPage("ocr"); }} />}
         {page === "drive" && <DriveSettingsPage />}
         {page === "development" && <DevelopmentPage />}
       </main>
@@ -341,6 +399,12 @@ export default function App() {
           guard={pendingNavigation.guard}
           onCancel={() => setPendingNavigation(null)}
           onConfirm={() => {
+            if (pendingNavigation.resetOcrWorkspace) {
+              setPendingNavigation(null);
+              setNavigationGuard(null);
+              setReadingRootRequestId((current) => current + 1);
+              return;
+            }
             const destination = pendingNavigation.page;
             setPendingNavigation(null);
             applyNavigation(destination);
@@ -354,6 +418,12 @@ export default function App() {
             setDisconnectPending(false);
             void api.disconnectGoogle().finally(() => { void refreshAuth(); });
           }}
+        />
+      )}
+      {portableBackupOpen && (
+        <PortableBackupDialog
+          onClose={() => setPortableBackupOpen(false)}
+          returnFocusRef={portableBackupButtonRef}
         />
       )}
     </div>
@@ -491,7 +561,7 @@ function oauthErrorMessage(code: string | null): string | null {
   return "Googleアカウントの認証に失敗しました。認証を最初からやり直してください。";
 }
 
-type SidebarIconName = "home" | "templates" | "ocr" | "library" | "search" | "drive" | "development";
+type SidebarIconName = "home" | "ocr" | "library" | "search" | "drive" | "development" | "backup";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
   return <button className={active ? "active" : ""} onClick={onClick}><span><SidebarIcon name={icon} /></span>{label}</button>;
@@ -500,10 +570,10 @@ function NavButton({ active, icon, label, onClick }: { active: boolean; icon: Si
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
-  if (name === "templates") return <svg {...props}><path d="m12 3 8 4.5-8 4.5-8-4.5Z" /><path d="m4 12 8 4.5 8-4.5" /><path d="m4 16.5 8 4.5 8-4.5" /></svg>;
   if (name === "ocr") return <svg {...props}><rect x="3" y="7" width="18" height="12" rx="2" /><path d="M8 7 9.5 4h5L16 7M12 10v6m-3-3h6" /></svg>;
   if (name === "library") return <svg {...props}><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17.5H6.5A2.5 2.5 0 0 0 4 22Z" /><path d="M4 4.5V22m4-15h8m-8 4h8" /></svg>;
   if (name === "search") return <svg {...props}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>;
   if (name === "drive") return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M7 15h.01M11 15h6" /></svg>;
+  if (name === "backup") return <svg {...props}><path d="M12 3v11m0 0 4-4m-4 4-4-4" /><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" /></svg>;
   return <svg {...props}><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16" /></svg>;
 }

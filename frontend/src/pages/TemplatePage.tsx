@@ -39,11 +39,19 @@ export function TemplatePage({
   refresh,
   rememberJob,
   onNavigationGuardChange,
+  initialWorkspace,
+  initialEditVersionId,
+  onClose,
+  onTemplateActivated,
 }: {
   templates: Template[];
   refresh: () => Promise<void>;
   rememberJob: (id: string) => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
+  initialWorkspace?: TemplateWorkspace;
+  initialEditVersionId?: string;
+  onClose?: () => void;
+  onTemplateActivated?: (versionId: string) => void;
 }) {
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("SINGLE_IMAGE_EXPERIMENTAL");
   const [name, setName] = useState("");
@@ -55,7 +63,7 @@ export function TemplatePage({
   const [busy, setBusy] = useState(false);
   const [openingReview, setOpeningReview] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<TemplateWorkspace | null>(null);
+  const [workspace, setWorkspace] = useState<TemplateWorkspace | null>(initialWorkspace ?? null);
   const [templateQuery, setTemplateQuery] = useState("");
   const [templateFilter, setTemplateFilter] = useState<TemplateListFilter>("current");
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
@@ -68,7 +76,20 @@ export function TemplatePage({
     version: TemplateVersion;
     jobId: string;
     origin: TemplateWorkspace;
-  } | null>(null);
+    returnToReading?: boolean;
+  } | null>(() => {
+    if (!initialEditVersionId) return null;
+    const version = templates
+      .flatMap((template) => template.versions)
+      .find((candidate) => candidate.id === initialEditVersionId);
+    if (!version?.sourceJobId) return null;
+    return {
+      version,
+      jobId: version.sourceJobId,
+      origin: "manage",
+      returnToReading: true,
+    };
+  });
   const creatingRef = useRef(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const openingReviewRef = useRef(false);
@@ -142,6 +163,29 @@ export function TemplatePage({
     : null;
   const submissionLocked = Boolean(jobId)
     && (job?.id !== jobId || !["FAILED", "CANCELLED", "INTERRUPTED"].includes(job.status));
+  const creationNavigationRisk = !review && !candidateEditor && (
+    busy
+    || submissionLocked
+    || name.trim().length > 0
+    || fieldNameDraft.trim().length > 0
+    || fieldNames.length > 0
+    || files.length > 0
+  );
+  useEffect(() => {
+    if (review || candidateEditor) return;
+    onNavigationGuardChange?.(creationNavigationRisk);
+  }, [candidateEditor, creationNavigationRisk, onNavigationGuardChange, review]);
+  useEffect(
+    () => () => onNavigationGuardChange?.(false),
+    [onNavigationGuardChange],
+  );
+  const closeWorkspace = () => {
+    if (
+      creationNavigationRisk
+      && !window.confirm("入力途中のテンプレートがあります。内容を破棄して読み取りへ戻りますか？")
+    ) return;
+    onClose?.();
+  };
   const addFieldName = () => {
     const nextName = fieldNameDraft.normalize("NFKC").trim().replace(/\s+/g, " ");
     if (!nextName || duplicateFieldName || fieldNames.length >= 200) return;
@@ -149,9 +193,36 @@ export function TemplatePage({
     setFieldNameDraft("");
     idempotencyKeyRef.current = null;
   };
-
   if (review) {
-    return <TemplateReview version={review.version} jobId={review.jobId} onNavigationGuardChange={onNavigationGuardChange} onClose={() => { setWorkspace(review.origin); setReview(null); setJobId(null); setMessage(null); void refresh().catch(() => undefined); }} onReprocess={(nextJobId) => { setWorkspace(review.origin); setReview(null); setJobId(nextJobId); setMessage(null); rememberJob(nextJobId); }} />;
+    return <TemplateReview
+      version={review.version}
+      jobId={review.jobId}
+      closeLabel={review.returnToReading ? "← 読み取りへ戻る" : undefined}
+      onNavigationGuardChange={onNavigationGuardChange}
+      onClose={() => {
+        const returnToReading = review.returnToReading;
+        setWorkspace(review.origin);
+        setReview(null);
+        setJobId(null);
+        setMessage(null);
+        void refresh().catch(() => undefined).finally(() => {
+          if (returnToReading) onClose?.();
+        });
+      }}
+      onApproved={async (versionId) => {
+        if (!onTemplateActivated) return false;
+        await refresh();
+        onTemplateActivated(versionId);
+        return true;
+      }}
+      onReprocess={(nextJobId) => {
+        setWorkspace(review.origin);
+        setReview(null);
+        setJobId(nextJobId);
+        setMessage(null);
+        rememberJob(nextJobId);
+      }}
+    />;
   }
   if (candidateEditor) {
     return <TemplateCandidateSettingsEditor
@@ -165,7 +236,9 @@ export function TemplatePage({
     />;
   }
   const deleteTemplate = async (template: Template) => {
-    if (deletingTemplateId || !window.confirm(`「${template.name}」を削除しますか？`)) {
+    if (deletingTemplateId || !window.confirm(
+      `「${template.name}」を読み取り一覧から削除しますか？\n\n未使用の場合は完全に削除され、既存書類で使用中の場合は履歴を保つためアーカイブされます。`,
+    )) {
       return;
     }
     const deletingId = template.id;
@@ -173,9 +246,17 @@ export function TemplatePage({
     setDeletingTemplateId(deletingId);
     setMessage(null);
     try {
-      await api.deleteTemplate(deletingId);
-      setMessage(`テンプレート「${templateName}」を削除しました。`);
+      const result = await api.deleteTemplate(deletingId);
       await refresh();
+      showToast({
+        tone: "success",
+        title: result.outcome === "archived"
+          ? "テンプレートを読み取り一覧から削除しました"
+          : "テンプレートを削除しました",
+        message: result.outcome === "archived"
+          ? "既存書類の履歴を保つため、テンプレート本体はアーカイブされています。"
+          : `「${templateName}」と保存済み設定を削除しました。`,
+      });
     } catch (error) {
       setMessage(errorMessage(error, "テンプレートを削除できませんでした。"));
     } finally {
@@ -213,7 +294,10 @@ export function TemplatePage({
   };
   return (
     <div className="page-stack narrow">
-      <header className="page-header"><span className="eyebrow">TEMPLATE MANAGEMENT</span><h1>テンプレート管理</h1><p>新しい帳票の型を作成するか、既存の設定を確認・修正します。</p></header>
+      <header className="page-header split">
+        <div><span className="eyebrow">READING / TEMPLATE MANAGEMENT</span><h1>テンプレート作成・編集</h1><p>新しい帳票の型を作成するか、既存の設定を確認・修正します。</p></div>
+        {onClose && <button type="button" className="ghost" onClick={closeWorkspace}>← 読み取りへ戻る</button>}
+      </header>
       {message && <div className="error-box action-message" role="alert"><span>{message}</span>{job?.status === "REVIEW_REQUIRED" && <button type="button" className="secondary compact" disabled={openingReview} onClick={() => void openPreparedTemplate(job)}>{openingReview ? "再取得中…" : "確認画面を再取得"}</button>}</div>}
       <div
         className="template-workspace-tabs"
@@ -284,67 +368,6 @@ export function TemplatePage({
               }}>既存テンプレートを確認</button>
             </div>
           )}
-          <section className="template-field-catalog-builder" aria-labelledby="template-field-catalog-title">
-            <header>
-              <div>
-                <span className="eyebrow">INFORMATION TO SAVE</span>
-                <h3 id="template-field-catalog-title">この書類から保存する情報</h3>
-                <p>テンプレート設定で割り当てる項目を先に登録します。ここで登録した項目だけが候補に表示されます。</p>
-              </div>
-              <span className="template-field-catalog-count">{fieldNames.length}項目</span>
-            </header>
-            <div className="template-field-catalog-input">
-              <label>
-                項目名
-                <input
-                  value={fieldNameDraft}
-                  maxLength={100}
-                  placeholder="例: 宛名"
-                  onChange={(event) => setFieldNameDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    addFieldName();
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!normalizedFieldNameDraft || Boolean(duplicateFieldName) || fieldNames.length >= 200}
-                onClick={addFieldName}
-              >
-                項目を追加
-              </button>
-            </div>
-            {duplicateFieldName && (
-              <p className="inline-warning">「{duplicateFieldName}」は登録済みです。</p>
-            )}
-            {fieldNames.length > 0 ? (
-              <ul className="template-field-catalog-list" aria-label="登録する保存項目">
-                {fieldNames.map((fieldName) => (
-                  <li key={fieldName}>
-                    <span>{fieldName}</span>
-                    <button
-                      type="button"
-                      aria-label={`${fieldName}を削除`}
-                      onClick={() => {
-                        setFieldNames((current) => current.filter((item) => item !== fieldName));
-                        idempotencyKeyRef.current = null;
-                      }}
-                    >
-                      削除
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="template-field-catalog-empty">
-                <strong>保存する項目は未登録です</strong>
-                <span>このまま開始した場合、ステップ2の候補は空になります。必要な項目は作成途中でも追加できます。</span>
-              </div>
-            )}
-          </section>
           <fieldset><legend>準備方法</legend><div className="mode-grid">{MODES.map((item) => (
             <button type="button" key={item.id} className={`mode-card ${mode === item.id ? "selected" : ""}`} onClick={() => {
               idempotencyKeyRef.current = null;
@@ -574,12 +597,16 @@ function TemplateReview({
   jobId,
   onClose,
   onReprocess,
+  onApproved,
+  closeLabel = "← 一覧へ戻る",
   onNavigationGuardChange,
 }: {
   version: TemplateVersion;
   jobId: string;
   onClose: () => void;
   onReprocess: (jobId: string) => void;
+  onApproved?: (versionId: string) => boolean | Promise<boolean>;
+  closeLabel?: string;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
 }) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -649,6 +676,7 @@ function TemplateReview({
   const before = byName.get("alignedSource.1") ?? byName.get("normalized") ?? byName.get("cleanTemplate") ?? "";
   const after = byName.get("cleanPreview") ?? byName.get("cleanTemplate") ?? before;
   const mask = layoutVerified ? byName.get("handwritingMask") : undefined;
+  const isSpreadsheetTemplate = version.mode === "SPREADSHEET_TEMPLATE";
   const layers = ["layoutVerificationOverlay", "debugOverlay", "handwritingOnly", "handwritingProbability"].filter((name) => byName.has(name));
   const persistedIdentityFields = mappingConfig ? identityFieldsFromResponse(mappingConfig) : [];
   const identityReady = identityConfigurationReady(identityFields);
@@ -744,7 +772,8 @@ function TemplateReview({
     if (!effectiveLayoutVerified || !meaningSaved || maskRequiresReprocess || editorBusy || maskDirty || maskBusy || !beginDecision("approve")) return;
     try {
       await api.approve(version.id);
-      onClose();
+      const handled = await onApproved?.(version.id);
+      if (!handled) onClose();
     } catch (error) {
       setFeedback({ kind: "error", text: errorMessage(error, "テンプレートを承認できませんでした。") });
     } finally {
@@ -753,7 +782,7 @@ function TemplateReview({
   };
   return (
     <div className="page-stack">
-      <header className="page-header split"><div><span className="eyebrow">TEMPLATE {version.status === "ACTIVE" ? "FIELD SETTINGS" : "REVIEW"} · V{version.versionNumber}</span><h1>{version.status === "ACTIVE" ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={operationBusy} onClick={closeReview}>← 一覧へ戻る</button></header>
+      <header className="page-header split"><div><span className="eyebrow">TEMPLATE {version.status === "ACTIVE" ? "FIELD SETTINGS" : "REVIEW"} · V{version.versionNumber}</span><h1>{version.status === "ACTIVE" ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={operationBusy} onClick={closeReview}>{closeLabel}</button></header>
       <div className="template-lifecycle-status" aria-label="テンプレート設定の状態">
         <div className="done"><span>前処理</span><strong>画像準備済み</strong></div>
         <div className={meaningSaved ? "done" : "current"}><span>現在</span><strong>{meaningSaved ? "テンプレート設定保存済み" : `テンプレート設定中 · ${activeLayoutStep.shortTitle}`}</strong></div>
@@ -818,6 +847,9 @@ function TemplateReview({
             onDirtyChange={setEditorDirty}
             onBusyChange={setEditorBusy}
             draftStorageKey={`template-layout-draft:${version.id}`}
+            detectLabel={version.mode === "SPREADSHEET_TEMPLATE"
+              ? "元のExcelセル構造に戻す"
+              : undefined}
             onDetect={async () => api.detectLayout(version.id)}
             onRecognizeLabels={async (layout) => api.recognizeLayoutLabels(version.id, layout)}
             onSave={async (layout) => {
@@ -903,7 +935,7 @@ function TemplateReview({
           </div>
         </section>
       )}
-      {meaningSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><span className="eyebrow">LAYOUT VERIFICATION</span><h2>記入欄を実データで再検出</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : "保存した矩形だけを対象にOpenCVでセル候補を再検出します。任意の文字認識機能がある場合は候補を補助します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty} onClick={async () => {
+      {meaningSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><span className="eyebrow">LAYOUT VERIFICATION</span><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した矩形だけを対象にOpenCVでセル候補を再検出します。任意の文字認識機能がある場合は候補を補助します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty} onClick={async () => {
         if (verificationLockRef.current || editorDirty || editorBusy) return;
         verificationLockRef.current = true;
         setVerifying(true);
@@ -913,16 +945,18 @@ function TemplateReview({
           setLayoutConfig(verified);
           const refreshedArtifacts = await api.artifacts(jobId);
           setArtifacts(refreshedArtifacts.items);
-          setLayer("layoutVerificationOverlay");
+          if (!isSpreadsheetTemplate) setLayer("layoutVerificationOverlay");
           setLayoutVerified(true);
-          setFeedback({ kind: "success", text: `${verified.relations.length}件の意味づけ対象を再検出しました。` });
+          setFeedback({ kind: "success", text: isSpreadsheetTemplate
+            ? `${verified.relations.length}件の意味づけとXLSXセル構造を確定しました。`
+            : `${verified.relations.length}件の意味づけ対象を再検出しました。` });
         } catch (error) {
-          setFeedback({ kind: "error", text: errorMessage(error, "記入欄を再検出できませんでした。") });
+          setFeedback({ kind: "error", text: errorMessage(error, isSpreadsheetTemplate ? "XLSXのセル構造を確定できませんでした。" : "記入欄を再検出できませんでした。") });
         } finally {
           setVerifying(false);
           verificationLockRef.current = false;
         }
-      }}>{verifying ? "再検出中…" : "記入欄を再検出"}</button></section>}
+      }}>{verifying ? (isSpreadsheetTemplate ? "確定中…" : "再検出中…") : (isSpreadsheetTemplate ? "XLSX構造を確定" : "記入欄を再検出")}</button></section>}
       {mask && layoutVerified && mappingFresh && <section className="form-card"><div className="section-title"><div><span className="eyebrow">DETECTION REVIEW</span><h2>再検出した文字候補の選別</h2><p>保存済みの記入欄内をOpenCVで再検証した候補です。任意の文字認識機能がある場合は候補を補助します。</p></div></div>{editorDirty && <p className="inline-warning">先にレイアウト変更を保存し、記入欄を再検出してください。</p>}<MaskEditor source={mask} background={before} candidatesSource={byName.get("handwritingCandidates")} disabled={editorDirty || editorBusy} onDirtyChange={setMaskDirty} onBusyChange={setMaskBusy} onSave={async (blob) => {
         await api.saveMask(version.id, blob);
         if (version.status === "DRAFT") {

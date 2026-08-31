@@ -609,10 +609,12 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
                     "height": 80,
                 },
                 "recordGroupId": None,
-                "fieldKey": None,
-                "mappingType": "text",
-                "markOptions": [],
-            }
+                    "fieldKey": None,
+                    "mappingType": "text",
+                    "markRecognitionMode": "automatic",
+                    "markSelectionMode": "multiple",
+                    "markOptions": [],
+                }
         ]
 
 

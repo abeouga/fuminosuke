@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from threading import Lock
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import AuthorizedSession
@@ -18,8 +20,10 @@ from app.db.models import GoogleOAuthAccount, LedgerDocument, Template, Template
 from app.db.session import Database
 
 _DRIVE_FILES = "https://www.googleapis.com/drive/v3/files"
+_DRIVE_UPLOAD_FILES = "https://www.googleapis.com/upload/drive/v3/files"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class GoogleDriveService:
@@ -311,6 +315,239 @@ class GoogleDriveService:
                 session.commit()
             return spreadsheet_id, spreadsheet_url
 
+    def create_spreadsheet_from_xlsx(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        content: bytes,
+    ) -> tuple[str, str]:
+        with self._lock:
+            with self._database.session() as session:
+                template = session.get(Template, template_id)
+                if template is None:
+                    raise AppError(
+                        status=404,
+                        code="TEMPLATE_NOT_FOUND",
+                        title="Template not found",
+                        detail="指定されたテンプレートが見つかりません。",
+                    )
+                account = self._active_account(session)
+                template_folder = session.get(
+                    TemplateOutputFolder,
+                    (account.google_subject, template_id),
+                )
+                folder_id = (
+                    template_folder.folder_id
+                    if template_folder is not None
+                    else account.default_output_folder_id
+                )
+                if not folder_id:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_OUTPUT_FOLDER_REQUIRED",
+                        title="Drive output folder is required",
+                        detail="先に保存先設定でGoogle Driveフォルダーを選択してください。",
+                    )
+
+            title = re.sub(r"\.xlsx$", "", name, flags=re.IGNORECASE).strip() or template.name
+            boundary = f"llm_ocr_{uuid4().hex}"
+            metadata = json.dumps(
+                {
+                    "name": title[:180],
+                    "mimeType": _SPREADSHEET_MIME,
+                    "parents": [folder_id],
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            body = b"".join(
+                (
+                    f"--{boundary}\r\n".encode("ascii"),
+                    b"Content-Type: application/json; charset=UTF-8\r\n\r\n",
+                    metadata,
+                    f"\r\n--{boundary}\r\n".encode("ascii"),
+                    f"Content-Type: {_XLSX_MIME}\r\n\r\n".encode("ascii"),
+                    content,
+                    f"\r\n--{boundary}--\r\n".encode("ascii"),
+                )
+            )
+            created = self._request(
+                "POST",
+                _DRIVE_UPLOAD_FILES,
+                params={"uploadType": "multipart", "fields": "id,name,mimeType,parents"},
+                headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+                data=body,
+            )
+            spreadsheet_id = created.get("id")
+            if not isinstance(spreadsheet_id, str) or not spreadsheet_id:
+                raise AppError(
+                    status=502,
+                    code="GOOGLE_DRIVE_CONVERSION_FAILED",
+                    title="Google Drive conversion failed",
+                    detail="入力済みXLSXをGoogleスプレッドシートへ変換できませんでした。",
+                )
+            return spreadsheet_id, self._spreadsheet_url(spreadsheet_id)
+
+    def export_spreadsheet_pdf(
+        self,
+        spreadsheet_id: str,
+        *,
+        paper_size: str = "A4",
+        orientation: str = "portrait",
+    ) -> bytes:
+        from io import BytesIO
+        import os
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import tempfile
+
+        from openpyxl import load_workbook  # type: ignore[import-untyped]
+        from openpyxl.worksheet.properties import PageSetupProperties  # type: ignore[import-untyped]
+
+        response = self._authorized_session().request(  # type: ignore[no-untyped-call]
+            "GET",
+            f"{_DRIVE_FILES}/{quote(spreadsheet_id, safe='')}/export",
+            params={"mimeType": _XLSX_MIME},
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            raise AppError(
+                status=502,
+                code="GOOGLE_DRIVE_EXPORT_ERROR",
+                title="Google Drive export failed",
+                detail=(
+                    "構造化済みスプレッドシートを印刷用PDFへ変換できませんでした。"
+                    "Google連携を確認してください。"
+                ),
+            )
+        configured = os.getenv("LLM_OCR_LIBREOFFICE_PATH") or os.getenv(
+            "LIBREOFFICE_PATH"
+        )
+        candidates = [
+            configured,
+            shutil.which("soffice"),
+            shutil.which("soffice.exe"),
+            str(
+                Path(os.environ.get("ProgramFiles", "C:/Program Files"))
+                / "LibreOffice/program/soffice.exe"
+            ),
+            str(
+                Path(
+                    os.environ.get(
+                        "ProgramFiles(x86)",
+                        "C:/Program Files (x86)",
+                    )
+                )
+                / "LibreOffice/program/soffice.exe"
+            ),
+        ]
+        soffice = next(
+            (Path(candidate) for candidate in candidates if candidate and Path(candidate).is_file()),
+            None,
+        )
+        if soffice is None:
+            raise AppError(
+                status=503,
+                code="SPREADSHEET_PRINT_RENDERER_NOT_AVAILABLE",
+                title="Spreadsheet print renderer is not available",
+                detail="構造化済みシートの1ページ印刷に必要なLibreOfficeがインストールされていません。",
+            )
+
+        paper_sizes = {
+            "LETTER": "1",
+            "A4": "9",
+            "A5": "11",
+            "B5": "13",
+        }
+        normalized_paper_size = paper_sizes.get(paper_size, paper_sizes["A4"])
+        normalized_orientation = (
+            "landscape" if orientation == "landscape" else "portrait"
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="llm-ocr-spreadsheet-print-"
+        ) as directory_name:
+            directory = Path(directory_name)
+            source_path = directory / "spreadsheet.xlsx"
+            profile_path = directory / "libreoffice-profile"
+            profile_path.mkdir()
+            try:
+                workbook = load_workbook(BytesIO(bytes(response.content)))
+                for worksheet in workbook.worksheets:
+                    if worksheet.sheet_state != "visible":
+                        continue
+                    worksheet.print_area = worksheet.calculate_dimension()
+                    if worksheet.sheet_properties.pageSetUpPr is None:
+                        worksheet.sheet_properties.pageSetUpPr = PageSetupProperties(
+                            fitToPage=True,
+                            autoPageBreaks=False,
+                        )
+                    else:
+                        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+                        worksheet.sheet_properties.pageSetUpPr.autoPageBreaks = False
+                    worksheet.page_setup.paperSize = normalized_paper_size
+                    worksheet.page_setup.orientation = normalized_orientation
+                    worksheet.page_setup.fitToWidth = 1
+                    worksheet.page_setup.fitToHeight = 1
+                    worksheet.page_setup.scale = None
+                    worksheet.page_margins.left = 0
+                    worksheet.page_margins.right = 0
+                    worksheet.page_margins.top = 0
+                    worksheet.page_margins.bottom = 0
+                    worksheet.page_margins.header = 0
+                    worksheet.page_margins.footer = 0
+                workbook.save(source_path)
+                workbook.close()
+            except Exception as exc:
+                raise AppError(
+                    status=422,
+                    code="SPREADSHEET_PRINT_PREPARATION_FAILED",
+                    title="Spreadsheet print preparation failed",
+                    detail="構造化済みシートを1ページ印刷用に準備できませんでした。",
+                ) from exc
+
+            command = [
+                str(soffice),
+                "--headless",
+                "--nologo",
+                "--nodefault",
+                "--nofirststartwizard",
+                f"-env:UserInstallation={profile_path.as_uri()}",
+                "--convert-to",
+                'pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}',
+                "--outdir",
+                str(directory),
+                str(source_path),
+            ]
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=directory,
+                    capture_output=True,
+                    check=False,
+                    timeout=90,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise AppError(
+                    status=504,
+                    code="SPREADSHEET_PRINT_RENDER_TIMEOUT",
+                    title="Spreadsheet print rendering timed out",
+                    detail="構造化済みシートの1ページ変換が90秒以内に完了しませんでした。",
+                ) from exc
+
+            pdf_path = directory / "spreadsheet.pdf"
+            if completed.returncode != 0 or not pdf_path.is_file():
+                raise AppError(
+                    status=422,
+                    code="SPREADSHEET_PRINT_RENDER_FAILED",
+                    title="Spreadsheet print rendering failed",
+                    detail="構造化済みシートを1ページのPDFへ変換できませんでした。",
+                )
+            return pdf_path.read_bytes()
+
     def mark_document_sync(
         self,
         document_id: str,
@@ -325,6 +562,16 @@ class GoogleDriveService:
             ledger.spreadsheet_sync_status = status
             ledger.spreadsheet_sync_error = error
             session.commit()
+
+    def rename_spreadsheet(self, spreadsheet_id: str, name: str) -> str:
+        renamed = self._request(
+            "PATCH",
+            f"{_DRIVE_FILES}/{quote(spreadsheet_id, safe='')}",
+            params={"fields": "id,name"},
+            json={"name": name},
+        )
+        renamed_name = renamed.get("name")
+        return renamed_name if isinstance(renamed_name, str) and renamed_name else name
 
     def _account_snapshot(self) -> dict[str, str | None]:
         subject = self._require_subject()

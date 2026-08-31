@@ -13,6 +13,43 @@ test("groups a ledger and starts page-specific reading actions", async () => {
   const openReview = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
     count: 1,
+    folders: [],
+    documents: [{
+      documentId: "document-1",
+      templateId: "template-1",
+      templateName: "繁殖台帳",
+      individualId: "1355480523",
+      cattleName: "こよみ",
+      currentJobId: "job-2",
+      updatedAt: "2026-08-21T10:00:00Z",
+      pageCount: 2,
+      pages: [{
+        pageId: "page-1",
+        pageNumber: 1,
+        sourceJobId: "job-1",
+        templateVersionId: "version-1",
+        thumbnailUrl: "/api/v1/jobs/job-1/artifacts/alignedSource",
+        confirmedAt: "2026-08-20T10:00:00Z",
+        versionCount: 2,
+        history: [],
+      }, {
+        pageId: "page-2",
+        pageNumber: 2,
+        sourceJobId: "job-2",
+        templateVersionId: "version-1",
+        thumbnailUrl: "/api/v1/jobs/job-2/artifacts/alignedSource",
+        confirmedAt: "2026-08-21T10:00:00Z",
+        versionCount: 1,
+        history: [],
+      }],
+      spreadsheetId: "sheet-1",
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit",
+      driveFolderPath: "帳票OCR > 2026年度",
+      spreadsheetSyncStatus: "synced",
+      spreadsheetSyncError: null,
+      libraryFolderId: null,
+      locationVersion: 1,
+    }],
     items: [{
       individualId: "1355480523",
       cattleName: "こよみ",
@@ -58,7 +95,9 @@ test("groups a ledger and starts page-specific reading actions", async () => {
 
   render(<DocumentLibraryPage startReading={startReading} openReview={openReview} />);
   const libraryCard = await screen.findByRole("button", { name: /こよみ.*1355480523/ });
-  vi.spyOn(libraryCard, "getBoundingClientRect").mockReturnValue({
+  const interactiveCard = libraryCard.closest("article");
+  expect(interactiveCard).not.toBeNull();
+  vi.spyOn(interactiveCard!, "getBoundingClientRect").mockReturnValue({
     left: 100,
     top: 50,
     width: 200,
@@ -74,17 +113,17 @@ test("groups a ledger and starts page-specific reading actions", async () => {
     return 1;
   });
   fireEvent(
-    libraryCard,
+    interactiveCard!,
     new MouseEvent("pointermove", { bubbles: true, clientX: 300, clientY: 50 }),
   );
-  expect(libraryCard.style.getPropertyValue("--card-glare-opacity")).toBe("1");
-  expect(libraryCard.style.getPropertyValue("--card-tilt-x")).toBe("2.40deg");
-  expect(libraryCard.style.getPropertyValue("--card-tilt-y")).toBe("2.40deg");
+  expect(interactiveCard!.style.getPropertyValue("--card-glare-opacity")).toBe("1");
+  expect(interactiveCard!.style.getPropertyValue("--card-tilt-x")).toBe("2.40deg");
+  expect(interactiveCard!.style.getPropertyValue("--card-tilt-y")).toBe("2.40deg");
 
-  fireEvent.pointerLeave(libraryCard, { pointerType: "mouse" });
-  expect(libraryCard.style.getPropertyValue("--card-glare-opacity")).toBe("0");
-  expect(libraryCard.style.getPropertyValue("--card-tilt-x")).toBe("0deg");
-  expect(libraryCard.style.getPropertyValue("--card-tilt-y")).toBe("0deg");
+  fireEvent.pointerLeave(interactiveCard!, { pointerType: "mouse" });
+  expect(interactiveCard!.style.getPropertyValue("--card-glare-opacity")).toBe("0");
+  expect(interactiveCard!.style.getPropertyValue("--card-tilt-x")).toBe("0deg");
+  expect(interactiveCard!.style.getPropertyValue("--card-tilt-y")).toBe("0deg");
 
   fireEvent.click(libraryCard);
 
@@ -94,6 +133,7 @@ test("groups a ledger and starts page-specific reading actions", async () => {
     "href",
     "https://docs.google.com/spreadsheets/d/sheet-1/edit",
   );
+  expect(screen.getByRole("link", { name: /スプレッドシートを開く/ })).toHaveAttribute("target", "_blank");
 
   fireEvent.click(screen.getAllByRole("button", { name: "このページを読み直す" })[1]);
   expect(startReading).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -117,4 +157,57 @@ test("groups a ledger and starts page-specific reading actions", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "現在の結果を開く" }));
   await waitFor(() => expect(openReview).toHaveBeenCalledWith("job-2"));
+});
+
+test("selects, renames, and bulk deletes library documents", async () => {
+  const document = {
+    documentId: "document-1",
+    templateId: "template-1",
+    templateName: "面接カード",
+    individualId: "candidate-1",
+    cattleName: null,
+    displayTitle: "面接カード 2026",
+    displayTitleLabel: "書類名",
+    displaySubtitle: "candidate-1",
+    displaySubtitleLabel: "識別子",
+    currentJobId: "job-1",
+    updatedAt: "2026-08-30T10:00:00Z",
+    pageCount: 1,
+    pages: [],
+    spreadsheetId: "sheet-1",
+    spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit",
+    driveFolderPath: "帳票OCR > 2026年度",
+    spreadsheetSyncStatus: "synced",
+    spreadsheetSyncError: null,
+    libraryFolderId: null,
+    locationVersion: 1,
+  };
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PATCH") {
+      return new Response(JSON.stringify({ documentId: "document-1", name: "面接カード 変更後", spreadsheetRenamed: true }), { status: 200 });
+    }
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({ deletedCount: 1, driveFilesPreserved: true }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ count: 1, folders: [], documents: [document], items: [] }), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(window, "prompt").mockReturnValue("面接カード 変更後");
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(<DocumentLibraryPage startReading={vi.fn()} openReview={vi.fn()} />);
+  const openSheet = await screen.findByRole("link", { name: /スプレッドシートを開く/ });
+  expect(openSheet).toHaveAttribute("target", "_blank");
+
+  fireEvent.click(screen.getByRole("button", { name: "名前変更" }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true));
+
+  const checkboxes = screen.getAllByRole("checkbox");
+  fireEvent.click(checkboxes[1]);
+  expect(screen.getByText("1件選択中")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "選択した書類を削除" }));
+
+  await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+  const deleteCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+  expect(deleteCall?.[1]?.body).toBe(JSON.stringify({ documentIds: ["document-1"] }));
 });

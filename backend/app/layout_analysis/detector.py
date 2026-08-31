@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 from app.domain.text_encoding import normalize_paddle_japanese_text
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
+from app.layout_analysis.text_placement import infer_text_placement
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,7 +309,24 @@ class LayoutDetector:
         matched = [
             region for region in text_regions if LayoutDetector._text_is_in_cell(region, rect)
         ]
-        text = " ".join(region.text for region in sorted(matched, key=lambda item: item.bounds[0]))
+        preliminary_text = " ".join(region.text for region in matched)
+        text_direction, text_alignment = infer_text_placement(
+            cell_width=rect.width,
+            cell_height=rect.height,
+            text=preliminary_text,
+            bounds=(region.bounds for region in matched),
+            origin_x=rect.x,
+        )
+        ordered = sorted(
+            matched,
+            key=(
+                (lambda item: (item.bounds[1], item.bounds[0]))
+                if text_direction == "vertical"
+                else (lambda item: (item.bounds[0], item.bounds[1]))
+            ),
+        )
+        separator = "" if text_direction == "vertical" else " "
+        text = separator.join(region.text for region in ordered)
         text_confidence = (
             float(np.mean([region.confidence for region in matched])) if matched else None
         )
@@ -324,6 +342,8 @@ class LayoutDetector:
             confidence=round(rect.confidence, 3),
             text=text,
             text_confidence=round(text_confidence, 3) if text_confidence is not None else None,
+            text_direction=text_direction,
+            text_alignment=text_alignment,
             source="detected",
         )
 

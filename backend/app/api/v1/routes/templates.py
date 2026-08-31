@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, File, Form, Header, Request, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, Header, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import Field, model_validator
 
@@ -57,6 +57,10 @@ class TemplateView(ApiModel):
     active_version_id: str | None
     created_at: datetime
     versions: list[TemplateVersionView] = Field(default_factory=list)
+
+
+class TemplateDeleteResponse(ApiModel):
+    outcome: Literal["deleted", "archived"]
 
 
 class TemplateOutputFolderView(ApiModel):
@@ -120,6 +124,17 @@ class MarkOptionView(ApiModel):
     height: int
 
 
+class CompositeSubfieldView(ApiModel):
+    id: str
+    semantic_type: Literal["address_prefecture", "address_municipality"]
+    target_path: str
+    label: str
+    x_ratio: float
+    y_ratio: float
+    width_ratio: float
+    height_ratio: float
+
+
 class FieldMappingView(ApiModel):
     mapping_id: str
     target_path: str
@@ -133,8 +148,10 @@ class FieldMappingView(ApiModel):
     model_detail: str = "high"
     printed_label_text: str = ""
     mapping_type: str = "text"
+    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
     mark_selection_mode: str = "multiple"
     mark_options: list[MarkOptionView] = Field(default_factory=list)
+    composite_subfields: list[CompositeSubfieldView] = Field(default_factory=list)
 
 
 class FieldMappingTargetView(ApiModel):
@@ -405,13 +422,17 @@ def replace_template_candidate_settings(
     return TemplateCandidateSettingsView.model_validate(result)
 
 
-@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_template(request: Request, template_id: str) -> Response:
-    TemplateManagementService(
+@router.delete(
+    "/templates/{template_id}",
+    response_model=TemplateDeleteResponse,
+    response_model_by_alias=True,
+)
+def delete_template(request: Request, template_id: str) -> TemplateDeleteResponse:
+    outcome = TemplateManagementService(
         request.app.state.database,
         request.app.state.storage,
     ).delete_template(template_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return TemplateDeleteResponse(outcome=outcome)
 
 
 @router.post(
@@ -542,6 +563,43 @@ def print_template_version(
             auto_print=auto_print,
         )
     return HTMLResponse(content)
+
+
+@router.get(
+    "/template-versions/{version_id}/print-pdf",
+    response_class=FileResponse,
+)
+def get_template_version_print_pdf(request: Request, version_id: str) -> FileResponse:
+    with request.app.state.database.session() as session:
+        version = TemplateRepository(session).get_version(version_id)
+        if version is None:
+            raise AppError(
+                status=404,
+                code="TEMPLATE_NOT_FOUND",
+                title="Template not found",
+                detail="指定されたテンプレート版が見つかりません。",
+            )
+        relative_path = version.quality_json.get("spreadsheetPrintablePdfPath")
+    if not isinstance(relative_path, str) or not relative_path:
+        raise AppError(
+            status=404,
+            code="TEMPLATE_PRINT_PDF_NOT_FOUND",
+            title="Template print PDF not found",
+            detail="このテンプレートにはExcel由来の印刷PDFがありません。",
+        )
+    path = request.app.state.storage.resolve(relative_path)
+    if not path.is_file():
+        raise AppError(
+            status=404,
+            code="TEMPLATE_PRINT_PDF_NOT_FOUND",
+            title="Template print PDF not found",
+            detail="印刷PDFが保存先に見つかりません。テンプレートを再作成してください。",
+        )
+    return FileResponse(
+        path=path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
+    )
 
 
 @router.get("/template-jobs/{job_id}/boundary-image", response_class=FileResponse)

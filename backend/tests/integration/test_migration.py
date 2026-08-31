@@ -45,7 +45,7 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0017_template_candidate_sets"
+            "0022_archive_in_use_templates"
         )
     oauth_columns = {
         column["name"] for column in inspect(engine).get_columns("google_oauth_accounts")

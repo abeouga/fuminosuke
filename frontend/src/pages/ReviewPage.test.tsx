@@ -796,6 +796,110 @@ test("opens a full-screen six-choice editor for a calving mark cell", async () =
   expect(screen.getByRole("button", { name: "性別 calvings.0.sex を編集" })).toHaveTextContent("♂");
 });
 
+test("requires the user to resolve generic manual single and multiple choices", async () => {
+  let selectionMode: "single" | "multiple" = "single";
+  const manualChoice = {
+    ...reading,
+    raw: null,
+    normalized: null,
+    status: "uncertain" as const,
+    reviewReason: "MANUAL_CHOICE_REQUIRED",
+    sourceRegionId: "return-prefecture-type",
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-manual-choice/result")) {
+      return jsonResponse({
+        jobId: "job-manual-choice",
+        revision: 1,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-1",
+          templateVersion: "1",
+          document: {},
+          saleCalves: [],
+          pedigree: {},
+          calvings: [],
+          customFields: { returnPrefectureType: manualChoice },
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: true, issues: [] },
+        provider: "local-manual-choice",
+        modelId: null,
+        promptVersion: null,
+        apiCallCount: 0,
+        inputTokens: null,
+        outputTokens: null,
+        estimatedCost: null,
+        confirmed: false,
+        individualId: null,
+        fieldPreviews: [{
+          targetPath: "customFields.returnPrefectureType",
+          mappingId: "return-prefecture-type",
+          mappingType: "mark",
+          markRecognitionMode: "manual",
+          markSelectionMode: selectionMode,
+          markOptions: [
+            { label: "都", value: "metropolis" },
+            { label: "道", value: "circuit" },
+            { label: "府", value: "urban-prefecture" },
+            { label: "県", value: "prefecture" },
+          ],
+          artifactUrl: "/return-prefecture-type.png",
+          boundingBox: { x: 10, y: 20, width: 300, height: 60 },
+        }],
+      });
+    }
+    if (path.endsWith("/jobs/job-manual-choice/artifacts")) return jsonResponse({ items: [] });
+    return jsonResponse({});
+  }));
+
+  render(<ReviewPage jobId="job-manual-choice" onClose={() => undefined} />);
+
+  const cell = await screen.findByRole("button", {
+    name: "returnPrefectureType customFields.returnPrefectureType を編集",
+  });
+  expect(cell).toHaveTextContent("未入力");
+  fireEvent.doubleClick(cell);
+  expect(screen.queryByLabelText(
+    "returnPrefectureType customFields.returnPrefectureType を直接編集",
+  )).not.toBeInTheDocument();
+
+  const dialog = await screen.findByRole("dialog", { name: "returnPrefectureTypeを選択" });
+  expect(dialog).toHaveClass("generic-choice-modal");
+  expect(screen.getByAltText("returnPrefectureTypeの選択欄"))
+    .toHaveAttribute("src", "/return-prefecture-type.png");
+  fireEvent.click(screen.getByRole("button", { name: "都" }));
+  expect(screen.getByRole("button", { name: "都" }))
+    .toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "道" }));
+  expect(screen.getByRole("button", { name: "都" }))
+    .toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "道" }))
+    .toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "この選択を反映" }));
+
+  expect(cell).toHaveTextContent("道");
+  expect(cell).toHaveTextContent("OK");
+
+  cleanup();
+  selectionMode = "multiple";
+  render(<ReviewPage jobId="job-manual-choice" onClose={() => undefined} />);
+  const multipleCell = await screen.findByRole("button", {
+    name: "returnPrefectureType customFields.returnPrefectureType を編集",
+  });
+  fireEvent.click(multipleCell);
+  fireEvent.click(await screen.findByRole("button", { name: "都" }));
+  fireEvent.click(screen.getByRole("button", { name: "道" }));
+  expect(screen.getByRole("button", { name: "都" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "道" }))
+    .toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "この選択を反映" }));
+  expect(multipleCell).toHaveTextContent("都・道");
+});
+
 test("keeps the normalized value in sync when a readable raw value is corrected", async () => {
   const readableWithAlternative = {
     ...reading,

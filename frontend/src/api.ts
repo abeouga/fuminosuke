@@ -1,4 +1,4 @@
-import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateOutputFolder } from "./types";
+import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder } from "./types";
 
 const API = "/api/v1";
 
@@ -10,7 +10,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${API}${path}`, { ...init, credentials: "include" });
   if (!response.ok) {
     let problem: Problem = {};
@@ -28,6 +28,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw apiError;
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await requestResponse(path, init);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -55,7 +60,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ folderId }),
     }),
-  deleteTemplate: (id: string) => request<void>(`/templates/${id}`, { method: "DELETE" }),
+  deleteTemplate: (id: string) => request<TemplateDeleteResult>(`/templates/${id}`, { method: "DELETE" }),
   sireNames: () => request<SireNamePool>("/sire-names"),
   jobs: (limit = 20, options?: { attentionOnly?: boolean }) => {
     const query = new URLSearchParams({ limit: String(limit) });
@@ -63,6 +68,13 @@ export const api = {
     return request<Job[]>(`/jobs?${query.toString()}`);
   },
   openaiUsage: () => request<OpenAIUsageReport>("/development/openai-usage"),
+  createPortableBackup: () => request<PortableBackupExport>("/system-backups/portable", {
+    method: "POST",
+  }),
+  portableBackupDownload: (id: string) =>
+    requestResponse(`/system-backups/portable/${encodeURIComponent(id)}`),
+  deletePortableBackup: (id: string) =>
+    request<void>(`/system-backups/portable/${encodeURIComponent(id)}`, { method: "DELETE" }),
   job: (id: string) => request<Job>(`/jobs/${id}`),
   artifacts: (id: string) => request<{ items: Artifact[] }>(`/jobs/${id}/artifacts`),
   result: (id: string) => request<OcrResult>(`/ocr-jobs/${id}/result`),
@@ -107,6 +119,24 @@ export const api = {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folderId, expectedVersion }),
+      },
+    ),
+  renameLibraryDocument: (documentId: string, name: string) =>
+    request<{ documentId: string; name: string; spreadsheetRenamed: boolean }>(
+      `/document-library/documents/${documentId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    ),
+  deleteLibraryDocuments: (documentIds: string[]) =>
+    request<{ deletedCount: number; driveFilesPreserved: boolean }>(
+      "/document-library/documents/bulk-delete",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentIds }),
       },
     ),
   driveOutputFolder: () => request<DriveOutputFolder>("/google-drive/output-folder"),
@@ -178,7 +208,6 @@ export const api = {
     body.set("ocrEnabled", String(enabled));
     body.set("file", file);
     if (context) {
-      body.set("motherIndividualId", context.individualId);
       body.set("documentAction", context.action);
       if (context.documentId) body.set("targetDocumentId", context.documentId);
       if (context.pageId) body.set("targetPageId", context.pageId);
@@ -307,6 +336,12 @@ export const api = {
     request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST" }),
   syncSpreadsheet: (id: string) =>
     request<OcrResult>(`/ocr-jobs/${id}/spreadsheet-sync`, { method: "POST" }),
+  renameSpreadsheet: (id: string, fileName: string) =>
+    request<SpreadsheetSyncStatus>(`/ocr-jobs/${id}/spreadsheet-name`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName }),
+    }),
   outputLayout: (id: string) =>
     request<OutputLayoutTemplateStatus>(`/ocr-jobs/${id}/output-layout`),
   importOutputLayout: (id: string) =>

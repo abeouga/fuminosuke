@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import UTC, datetime
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -9,6 +11,7 @@ from app.core.errors import AppError
 from app.db.models import (
     ConfirmedResult,
     DocumentFolder,
+    JobArtifact,
     LedgerDocument,
     LedgerDocumentPage,
     ProcessingJob,
@@ -17,6 +20,7 @@ from app.db.models import (
 )
 from app.db.session import Database
 from app.domain.template_config import parse_template_config
+from app.services.google_drive_service import GoogleDriveService
 from app.storage.local_storage import LocalStorageService
 
 
@@ -25,9 +29,11 @@ class DocumentLibraryService:
         self,
         database: Database,
         storage: LocalStorageService | None = None,
+        google_drive: GoogleDriveService | None = None,
     ) -> None:
         self._database = database
         self._storage = storage
+        self._google_drive = google_drive
 
     def list_library(self) -> dict[str, Any]:
         with self._database.session() as session:
@@ -38,7 +44,11 @@ class DocumentLibraryService:
                 )
             )
             documents = list(
-                session.scalars(select(LedgerDocument).order_by(LedgerDocument.updated_at.desc()))
+                session.scalars(
+                    select(LedgerDocument)
+                    .where(LedgerDocument.library_deleted_at.is_(None))
+                    .order_by(LedgerDocument.updated_at.desc())
+                )
             )
             groups: dict[str, dict[str, Any]] = {}
             document_items: list[dict[str, Any]] = []
@@ -94,6 +104,12 @@ class DocumentLibraryService:
                     continue
                 individual_id = ledger.individual_id
                 display = self._display_information(session, ledger)
+                if ledger.library_name:
+                    display = {
+                        **display,
+                        "displayTitle": ledger.library_name,
+                        "displayTitleLabel": "書類名",
+                    }
                 group = groups.setdefault(
                     individual_id,
                     {
@@ -112,6 +128,15 @@ class DocumentLibraryService:
                     group["lastUpdatedAt"] = ledger.updated_at
                     group["cattleName"] = self._cattle_name(ledger.current_document_json)
                     group.update(display)
+                current_confirmation = (
+                    session.scalar(
+                        select(ConfirmedResult).where(
+                            ConfirmedResult.job_id == ledger.current_job_id
+                        )
+                    )
+                    if ledger.current_job_id
+                    else None
+                )
                 ledger_item = {
                     "documentId": ledger.id,
                     "templateId": ledger.template_id,
@@ -123,13 +148,26 @@ class DocumentLibraryService:
                     "updatedAt": ledger.updated_at,
                     "pageCount": len(active_pages),
                     "pages": active_pages,
-                    "spreadsheetId": ledger.spreadsheet_id,
-                    "spreadsheetUrl": ledger.spreadsheet_url,
+                    "spreadsheetId": ledger.spreadsheet_id
+                    or (current_confirmation.spreadsheet_id if current_confirmation else None),
+                    "spreadsheetUrl": ledger.spreadsheet_url
+                    or (current_confirmation.spreadsheet_url if current_confirmation else None),
                     "driveFolderPath": ledger.drive_folder_path,
-                    "spreadsheetSyncStatus": ledger.spreadsheet_sync_status,
-                    "spreadsheetSyncError": ledger.spreadsheet_sync_error,
+                    "spreadsheetSyncStatus": ledger.spreadsheet_sync_status
+                    or (
+                        current_confirmation.spreadsheet_sync_status
+                        if current_confirmation
+                        else None
+                    ),
+                    "spreadsheetSyncError": ledger.spreadsheet_sync_error
+                    or (
+                        current_confirmation.spreadsheet_sync_error
+                        if current_confirmation
+                        else None
+                    ),
                     "libraryFolderId": ledger.library_folder_id,
                     "locationVersion": ledger.library_location_version,
+                    "libraryName": ledger.library_name,
                 }
                 group["ledgers"].append(ledger_item)
                 document_items.append(ledger_item)
@@ -207,7 +245,7 @@ class DocumentLibraryService:
     ) -> dict[str, Any]:
         with self._database.session() as session:
             document = session.get(LedgerDocument, document_id)
-            if document is None:
+            if document is None or document.library_deleted_at is not None:
                 raise self._not_found("書類が見つかりません。")
             if document.library_location_version != expected_version:
                 raise AppError(
@@ -227,6 +265,169 @@ class DocumentLibraryService:
                 "folderId": document.library_folder_id,
                 "locationVersion": document.library_location_version,
             }
+
+    def rename_document(self, document_id: str, *, name: str) -> dict[str, Any]:
+        cleaned = self._document_name(name)
+        with self._database.session() as session:
+            document = session.get(LedgerDocument, document_id)
+            if document is None or document.library_deleted_at is not None:
+                raise self._not_found("書類が見つかりません。")
+            confirmed = (
+                session.scalar(
+                    select(ConfirmedResult).where(
+                        ConfirmedResult.job_id == document.current_job_id
+                    )
+                )
+                if document.current_job_id
+                else None
+            )
+            spreadsheet_id = document.spreadsheet_id or (
+                confirmed.spreadsheet_id if confirmed is not None else None
+            )
+        renamed = cleaned
+        if spreadsheet_id:
+            if self._google_drive is None:
+                raise AppError(
+                    status=409,
+                    code="GOOGLE_DRIVE_RENAME_UNAVAILABLE",
+                    title="Google Drive rename is unavailable",
+                    detail="Googleアカウントへ再接続してから名前を変更してください。",
+                )
+            renamed = self._google_drive.rename_spreadsheet(spreadsheet_id, cleaned)
+        with self._database.session() as session:
+            document = session.get(LedgerDocument, document_id)
+            if document is None or document.library_deleted_at is not None:
+                raise self._not_found("書類が見つかりません。")
+            document.library_name = renamed
+            if document.current_job_id:
+                confirmed = session.scalar(
+                    select(ConfirmedResult).where(
+                        ConfirmedResult.job_id == document.current_job_id
+                    )
+                )
+                if confirmed is not None and confirmed.spreadsheet_id == spreadsheet_id:
+                    confirmed.spreadsheet_name = renamed
+            session.commit()
+        return {
+            "documentId": document_id,
+            "name": renamed,
+            "spreadsheetRenamed": spreadsheet_id is not None,
+        }
+
+    def export_spreadsheet_pdf(
+        self,
+        document_id: str,
+        *,
+        paper_size: str = "A4",
+        orientation: str = "portrait",
+    ) -> bytes:
+        with self._database.session() as session:
+            document = session.get(LedgerDocument, document_id)
+            if document is None or document.library_deleted_at is not None:
+                raise self._not_found("書類が見つかりません。")
+            confirmed = (
+                session.scalar(
+                    select(ConfirmedResult).where(
+                        ConfirmedResult.job_id == document.current_job_id
+                    )
+                )
+                if document.current_job_id
+                else None
+            )
+            spreadsheet_id = document.spreadsheet_id or (
+                confirmed.spreadsheet_id if confirmed is not None else None
+            )
+        if not spreadsheet_id:
+            raise AppError(
+                status=409,
+                code="DOCUMENT_SPREADSHEET_NOT_READY",
+                title="Document spreadsheet is not ready",
+                detail="この書類には印刷できる構造化済みスプレッドシートがありません。",
+            )
+        if self._google_drive is None:
+            raise AppError(
+                status=409,
+                code="GOOGLE_DRIVE_EXPORT_UNAVAILABLE",
+                title="Google Drive export is unavailable",
+                detail="Googleアカウントへ再接続してから印刷してください。",
+            )
+        return self._google_drive.export_spreadsheet_pdf(
+            spreadsheet_id,
+            paper_size=paper_size,
+            orientation=orientation,
+        )
+
+    def first_page_source(self, document_id: str) -> tuple[bytes, str]:
+        with self._database.session() as session:
+            document = session.get(LedgerDocument, document_id)
+            if document is None or document.library_deleted_at is not None:
+                raise self._not_found("書類が見つかりません。")
+            page = session.scalar(
+                select(LedgerDocumentPage)
+                .where(
+                    LedgerDocumentPage.ledger_document_id == document.id,
+                    LedgerDocumentPage.active.is_(True),
+                    LedgerDocumentPage.confirmed_at.is_not(None),
+                )
+                .order_by(LedgerDocumentPage.page_number)
+                .limit(1)
+            )
+            if page is None:
+                raise AppError(
+                    status=409,
+                    code="DOCUMENT_IMAGE_NOT_READY",
+                    title="Document image is not ready",
+                    detail="印刷できる書類画像がありません。",
+                )
+            artifact = session.scalar(
+                select(JobArtifact).where(
+                    JobArtifact.job_id == page.job_id,
+                    JobArtifact.artifact_name == "alignedSource",
+                )
+            )
+            if artifact is None or self._storage is None:
+                raise AppError(
+                    status=409,
+                    code="DOCUMENT_IMAGE_NOT_READY",
+                    title="Document image is not ready",
+                    detail="印刷できる書類画像がありません。",
+                )
+            relative_path = artifact.relative_path
+            media_type = artifact.media_type
+        if not self._storage.exists(relative_path):
+            raise AppError(
+                status=409,
+                code="DOCUMENT_IMAGE_NOT_READY",
+                title="Document image is not ready",
+                detail="印刷する書類画像が保存されていません。",
+            )
+        return self._storage.read_bytes(relative_path), media_type
+
+    def delete_documents(self, document_ids: list[str]) -> dict[str, int | bool]:
+        unique_ids = list(dict.fromkeys(document_ids))
+        if not unique_ids or len(unique_ids) > 100:
+            raise AppError(
+                status=422,
+                code="DOCUMENT_DELETE_SELECTION_INVALID",
+                title="Document delete selection is invalid",
+                detail="削除する書類を1件以上100件以内で選択してください。",
+            )
+        with self._database.session() as session:
+            documents = list(
+                session.scalars(
+                    select(LedgerDocument).where(
+                        LedgerDocument.id.in_(unique_ids),
+                        LedgerDocument.library_deleted_at.is_(None),
+                    )
+                )
+            )
+            if len(documents) != len(unique_ids):
+                raise self._not_found("選択した書類の一部が見つかりません。")
+            deleted_at = datetime.now(UTC)
+            for document in documents:
+                document.library_deleted_at = deleted_at
+            session.commit()
+        return {"deletedCount": len(documents), "driveFilesPreserved": True}
 
     @staticmethod
     def _folder_payload(folder: DocumentFolder, document_count: int) -> dict[str, Any]:
@@ -250,6 +451,22 @@ class DocumentLibraryService:
                 detail="フォルダ名は1〜100文字で入力し、/ と \\ は使用しないでください。",
             )
         return cleaned, cleaned.casefold()
+
+    @staticmethod
+    def _document_name(name: str) -> str:
+        cleaned = " ".join(name.split())
+        if (
+            not cleaned
+            or len(cleaned) > 180
+            or re.search(r'[\\/:*?"<>|\x00-\x1f]', cleaned)
+        ):
+            raise AppError(
+                status=422,
+                code="DOCUMENT_LIBRARY_NAME_INVALID",
+                title="Invalid document name",
+                detail='書類名は1〜180文字で入力し、\\ / : * ? " < > | は使用しないでください。',
+            )
+        return cleaned
 
     @staticmethod
     def _assert_unique_name(
@@ -306,8 +523,23 @@ class DocumentLibraryService:
                     current_document_json=confirmed.confirmed_json,
                     created_at=confirmed.confirmed_at,
                     updated_at=confirmed.confirmed_at,
+                    spreadsheet_id=confirmed.spreadsheet_id,
+                    spreadsheet_url=confirmed.spreadsheet_url,
+                    spreadsheet_sync_status=confirmed.spreadsheet_sync_status,
+                    spreadsheet_sync_error=confirmed.spreadsheet_sync_error,
+                    library_name=confirmed.spreadsheet_name,
                 )
                 session.add(ledger)
+            else:
+                if confirmed.spreadsheet_id and not ledger.spreadsheet_id:
+                    ledger.spreadsheet_id = confirmed.spreadsheet_id
+                    ledger.spreadsheet_url = confirmed.spreadsheet_url
+                    ledger.spreadsheet_sync_status = confirmed.spreadsheet_sync_status
+                    ledger.spreadsheet_sync_error = confirmed.spreadsheet_sync_error
+                    changed = True
+                if confirmed.spreadsheet_name and not ledger.library_name:
+                    ledger.library_name = confirmed.spreadsheet_name
+                    changed = True
             session.add(
                 LedgerDocumentPage(
                     ledger_document_id=ledger.id,

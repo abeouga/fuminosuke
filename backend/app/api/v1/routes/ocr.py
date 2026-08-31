@@ -39,6 +39,8 @@ class OcrFieldPreview(ApiModel):
     record_group_id: str | None = None
     field_key: str | None = None
     mapping_type: Literal["text", "mark"] = "text"
+    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
+    mark_selection_mode: Literal["single", "multiple"] = "multiple"
     mark_options: list[dict[str, str]] = Field(default_factory=list)
 
 
@@ -74,6 +76,10 @@ class OcrCorrectionRequest(ApiModel):
 
 class OcrConfirmationRequest(ApiModel):
     base_revision: int = Field(ge=1)
+
+
+class SpreadsheetNameRequest(ApiModel):
+    file_name: str = Field(min_length=1, max_length=185)
 
 
 class DocumentResolutionRequest(ApiModel):
@@ -217,6 +223,15 @@ def retry_spreadsheet_sync(request: Request, job_id: str) -> dict[str, Any]:
     return get_ocr_result_service(request).sync_spreadsheet(job_id)
 
 
+@router.put("/ocr-jobs/{job_id}/spreadsheet-name")
+def rename_spreadsheet(
+    request: Request,
+    job_id: str,
+    body: SpreadsheetNameRequest,
+) -> dict[str, object | None]:
+    return get_ocr_result_service(request).rename_spreadsheet(job_id, body.file_name)
+
+
 @router.get(
     "/ocr-jobs/{job_id}/output-layout",
     response_model=OutputLayoutTemplateResponse,
@@ -248,8 +263,7 @@ def get_google_sheets_status(
     sheets = get_google_sheets(request)
     if job_id is None:
         return sheets.target_status().payload()
-    document_id = get_ocr_result_service(request).document_id(job_id)
-    return sheets.status(job_id, document_id).payload()
+    return get_ocr_result_service(request).spreadsheet_status(job_id)
 
 
 @router.get("/ocr-jobs/{job_id}/excel-table")

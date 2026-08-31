@@ -18,7 +18,11 @@ from app.domain.field_targets import (
     custom_field_key,
     is_supported_field_path,
 )
-from app.domain.template_config import FieldMappingConfig, MarkOptionConfig
+from app.domain.template_config import (
+    CompositeSubfieldConfig,
+    FieldMappingConfig,
+    MarkOptionConfig,
+)
 from app.domain.template_fields import parse_legacy_spreadsheet_metadata
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.line_detection import LineDetector, adaptive_ink_mask
@@ -62,12 +66,13 @@ class _VerificationInputs:
 class _HandwritingFinalization:
     detector: str
     clean_artifact_id: str
-    mask_artifact_id: str
+    mask_artifact_id: str | None
     mask_source: str
     edited_mask_applied: bool
     edited_mask_applied_sha256: str | None
     input_cell_count: int
     coverage_ratio: float
+    opencv_applied: bool
     paddle_ocr_available: bool
     candidate_count: int
 
@@ -135,6 +140,11 @@ class LayoutService:
                     canonical_height=version.canonical_height,
                 )
             )
+            spreadsheet_source_path = (
+                version.quality_json.get("spreadsheetSourcePath")
+                if version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
+                else None
+            )
             source_job = JobRepository(session).get(version.source_job_id or "")
             artifact = (
                 ArtifactRepository(session).get_by_name(
@@ -155,6 +165,34 @@ class LayoutService:
                     detail="帳票整形画像がまだ生成されていません。",
                 )
             relative_path = artifact.relative_path
+        if isinstance(spreadsheet_source_path, str) and spreadsheet_source_path:
+            from app.services.spreadsheet_template_import_service import (
+                SpreadsheetTemplateImportService,
+            )
+
+            encoded = np.frombuffer(self._storage.read_bytes(relative_path), dtype=np.uint8)
+            preview_image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            restored = SpreadsheetTemplateImportService(
+                self._database,
+                self._storage,
+            ).restore_layout(
+                self._storage.read_bytes(spreadsheet_source_path),
+                preview_image=preview_image,
+            )
+            label_pool_by_path = {
+                entry.target_path: entry
+                for entry in [*restored.label_pool, *current_layout.label_pool]
+            }
+            return restored.model_copy(
+                update={
+                    "label_pool": list(label_pool_by_path.values()),
+                    "warnings": [
+                        *restored.warnings,
+                        "XLSXの内部セル構造を復元しました。原本ファイルは変更していません。",
+                    ],
+                },
+                deep=True,
+            )
         encoded = np.frombuffer(self._storage.read_bytes(relative_path), dtype=np.uint8)
         bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -279,14 +317,13 @@ class LayoutService:
             if mappings and not has_unassigned_fields:
                 self._require_verified_record_structure(layout)
                 mapping_finalized = True
-            elif has_unassigned_fields:
-                mappings = []
         except AppError as error:
             # A draft layout must remain resumable even while a mark field or
             # repeated-record binding is still being configured. Invalid
             # targets and duplicate mappings remain hard errors.
             if error.code not in {
                 "MARK_OPTIONS_REQUIRED",
+                "MARK_TARGET_REQUIRED",
                 "RECORD_STRUCTURE_REQUIRED",
                 "RECORD_PARENT_LABEL_REQUIRED",
                 "RECORD_KEY_REQUIRED",
@@ -338,7 +375,11 @@ class LayoutService:
                 detail="矩形の区分と保存先を意味づけしてから再検出してください。",
             )
         self._require_verified_record_structure(layout)
-        finalization = self._finalize_handwriting(version_id, layout)
+        finalization = (
+            self._finalize_spreadsheet_layout(version_id, layout)
+            if self._is_spreadsheet_template(version_id)
+            else self._finalize_handwriting(version_id, layout)
+        )
         self._complete_verification(
             version_id,
             inputs.fingerprint,
@@ -399,13 +440,18 @@ class LayoutService:
             version.mask_artifact_id = finalization.mask_artifact_id
             version.quality_json = {
                 **version.quality_json,
+                **(
+                    {"structureReviewRequired": False}
+                    if finalization.detector == "xlsx-structure"
+                    else {}
+                ),
                 "handwritingMaskSource": finalization.mask_source,
                 "maskSource": finalization.mask_source,
                 "editedMaskApplied": finalization.edited_mask_applied,
                 "editedMaskAppliedSha256": finalization.edited_mask_applied_sha256,
                 "handwritingInputCellCount": finalization.input_cell_count,
                 "handwritingCoverageRatio": finalization.coverage_ratio,
-                "layoutVerificationOpenCv": True,
+                "layoutVerificationOpenCv": finalization.opencv_applied,
                 "layoutVerificationPaddleOcr": finalization.paddle_ocr_available,
                 "layoutVerificationCandidateCount": finalization.candidate_count,
                 "layoutVerified": True,
@@ -514,6 +560,71 @@ class LayoutService:
                 detail="Save the edited handwriting mask again before verification.",
             )
         return edited_mask_artifact
+
+    def _is_spreadsheet_template(self, version_id: str) -> bool:
+        with self._database.session() as session:
+            version = TemplateRepository(session).get_version(version_id)
+            if version is None:
+                raise self._not_found()
+            return version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
+
+    def _finalize_spreadsheet_layout(
+        self,
+        version_id: str,
+        layout: LayoutDefinition,
+    ) -> _HandwritingFinalization:
+        with self._database.session() as session:
+            version = TemplateRepository(session).get_version(version_id)
+            if version is None:
+                raise self._not_found()
+            source_job = JobRepository(session).get(version.source_job_id or "")
+            if source_job is None:
+                raise AppError(
+                    status=409,
+                    code="SPREADSHEET_PREVIEW_NOT_READY",
+                    title="Spreadsheet preview is not ready",
+                    detail="XLSXの印刷プレビューが生成されていません。",
+                )
+            clean_artifact = (
+                session.get(JobArtifact, version.clean_template_artifact_id)
+                if version.clean_template_artifact_id
+                else None
+            )
+            if clean_artifact is None:
+                clean_artifact = ArtifactRepository(session).get_by_name(
+                    job_id=source_job.id,
+                    attempt_number=source_job.attempt_number,
+                    artifact_name="cleanTemplate",
+                )
+            if clean_artifact is None:
+                raise AppError(
+                    status=409,
+                    code="SPREADSHEET_PREVIEW_NOT_READY",
+                    title="Spreadsheet preview is not ready",
+                    detail="XLSXの印刷プレビューが生成されていません。",
+                )
+            clean_artifact_id = clean_artifact.id
+
+        cells = {cell.id: cell for cell in layout.cells}
+        input_ids = {
+            relation.input_cell_id
+            for relation in layout.relations
+            if cells.get(relation.input_cell_id) is not None
+            and cells[relation.input_cell_id].role == "input"
+        }
+        return _HandwritingFinalization(
+            detector="xlsx-structure",
+            clean_artifact_id=clean_artifact_id,
+            mask_artifact_id=None,
+            mask_source="XLSX_STRUCTURE",
+            edited_mask_applied=False,
+            edited_mask_applied_sha256=None,
+            input_cell_count=len(input_ids),
+            coverage_ratio=0.0,
+            opencv_applied=False,
+            paddle_ocr_available=False,
+            candidate_count=0,
+        )
 
     def _finalize_handwriting(
         self, version_id: str, layout: LayoutDefinition
@@ -823,6 +934,7 @@ class LayoutService:
             edited_mask_applied_sha256=edited_mask_sha256,
             input_cell_count=len(input_ids),
             coverage_ratio=float((mask > 0).mean()),
+            opencv_applied=True,
             paddle_ocr_available=verified_layout.ocr_available,
             candidate_count=len(candidates),
         )
@@ -949,6 +1061,15 @@ class LayoutService:
         return bool(printed) and normalize(detected_text) == printed
 
     @staticmethod
+    def _composite_target_path(parent_target_path: str, semantic_type: str) -> str:
+        base_key = custom_field_key(parent_target_path).strip() or "複合項目"
+        suffix = {
+            "address_prefecture": "都道府県",
+            "address_municipality": "市区町村",
+        }[semantic_type]
+        return f"customFields.{base_key}_{suffix}"[:200]
+
+    @staticmethod
     def _as_field_mappings(layout: LayoutDefinition) -> list[FieldMappingConfig]:
         cell_by_id = {cell.id: cell for cell in layout.cells}
         relations_by_input: dict[str, list[LayoutRelation]] = {}
@@ -1017,6 +1138,22 @@ class LayoutService:
                     enabled=True,
                     model_detail="high",
                     printed_label_text=input_cell.printed_label_text.strip(),
+                    composite_subfields=[
+                        CompositeSubfieldConfig(
+                            id=subfield.id,
+                            semantic_type=subfield.semantic_type,
+                            target_path=LayoutService._composite_target_path(
+                                target_path,
+                                subfield.semantic_type,
+                            ),
+                            label=subfield.label,
+                            x_ratio=subfield.x_ratio,
+                            y_ratio=subfield.y_ratio,
+                            width_ratio=subfield.width_ratio,
+                            height_ratio=subfield.height_ratio,
+                        )
+                        for subfield in input_cell.composite_subfields
+                    ],
                 )
             )
         for cell in layout.cells:
@@ -1041,6 +1178,20 @@ class LayoutService:
                 )
             for mark_set in cell.mark_sets:
                 target_path = mark_set.target_path
+                if not target_path:
+                    raise AppError(
+                        status=422,
+                        code="MARK_TARGET_REQUIRED",
+                        title="Mark target is required",
+                        detail=f"{cell.id} の保存先を設定してください。",
+                    )
+                if not mark_set.options:
+                    raise AppError(
+                        status=422,
+                        code="MARK_OPTIONS_REQUIRED",
+                        title="Mark options are required",
+                        detail=f"{cell.id} の選択肢を設定してください。",
+                    )
                 if not is_supported_field_path(target_path):
                     raise AppError(
                         status=422,
@@ -1076,6 +1227,7 @@ class LayoutService:
                         enabled=True,
                         model_detail="high",
                         mapping_type="mark",
+                        mark_recognition_mode=mark_set.recognition_mode,
                         mark_selection_mode=mark_set.selection_mode,
                         mark_options=[
                             MarkOptionConfig.model_validate(

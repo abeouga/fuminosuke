@@ -178,6 +178,9 @@ class TemplateDefinitionService:
                         else ""
                     ),
                     mapping_type="mark" if mark_set is not None else "text",
+                    mark_recognition_mode=(
+                        mark_set.recognition_mode if mark_set is not None else "automatic"
+                    ),
                     mark_selection_mode=(
                         mark_set.selection_mode if mark_set is not None else "single"
                     ),

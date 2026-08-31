@@ -26,7 +26,7 @@ class TemplateBox(TemplateDefinitionModel):
 
 class TemplateMarkOption(TemplateDefinitionModel):
     id: str = Field(min_length=1, max_length=100)
-    label: str = Field(min_length=1, max_length=20)
+    label: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=100)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -42,8 +42,9 @@ class TemplateMarkOption(TemplateDefinitionModel):
 class TemplateMarkSet(TemplateDefinitionModel):
     id: str = Field(min_length=1, max_length=100)
     target_path: str = Field(min_length=1, max_length=200)
+    recognition_mode: Literal["automatic", "manual"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
-    options: list[TemplateMarkOption] = Field(min_length=1, max_length=20)
+    options: list[TemplateMarkOption] = Field(min_length=1, max_length=50)
 
 
 class NormalizedBox(TemplateDefinitionModel):

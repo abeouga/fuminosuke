@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastViewport } from "../components/Toast";
 import type { Template } from "../types";
@@ -194,7 +194,13 @@ test("shows a retry action when template mappings cannot be loaded", async () =>
 });
 
 test("selects a template with a graphical card without exposing implementation details", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    if (String(input).includes("/jobs/template-job/artifacts")) {
+      return new Response(JSON.stringify({
+        items: [{ name: "cleanPreview", url: "/api/v1/jobs/template-job/artifacts/cleanPreview" }],
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
     canonicalWidth: 1400,
     canonicalHeight: 990,
     mappings: [
@@ -214,7 +220,9 @@ test("selects a template with a graphical card without exposing implementation d
     targets: [],
     validForOcr: true,
     warnings: [],
-  }), { status: 200 })));
+    }), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
   const { container } = render(
     <OcrPage
       templates={templates}
@@ -226,7 +234,8 @@ test("selects a template with a graphical card without exposing implementation d
 
   const card = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
   expect(card).toHaveAttribute("aria-pressed", "true");
-  expect(card.querySelector("img")).toHaveAttribute("src", expect.stringContaining("/template-jobs/template-job/boundary-image"));
+  await waitFor(() => expect(card.querySelector("img")).toHaveAttribute("src", "/api/v1/jobs/template-job/artifacts/cleanPreview"));
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes("boundary-image"))).toBe(false);
   await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   expect(screen.queryByText(/OpenAIへ送信/)).not.toBeInTheDocument();
   expect(screen.queryByText("document.cattleName · field_cattle_name")).not.toBeInTheDocument();
@@ -238,8 +247,176 @@ test("selects a template with a graphical card without exposing implementation d
   });
 
   fireEvent.click(screen.getByRole("button", { name: "内容確認へ" }));
-  expect(screen.getByText("帳票上の個体識別番号と牛名も読み取ります")).toBeInTheDocument();
+  expect(screen.getByText("テンプレートに設定した項目を読み取ります")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "読み取りを開始" })).toBeEnabled();
+});
+
+test("opens template creation inside reading and reuses the existing segments", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("/artifacts")) {
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [],
+      targets: [],
+      validForOcr: false,
+      warnings: [],
+    }), { status: 200 });
+  }));
+  render(
+    <OcrPage
+      templates={templates}
+      refreshTemplates={vi.fn().mockResolvedValue(undefined)}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "新しいテンプレート" }));
+
+  expect(screen.getByRole("heading", { name: "テンプレート作成・編集" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "新規作成" })).toHaveAttribute("aria-selected", "true");
+  const manageTab = screen.getByRole("tab", { name: /既存を確認・修正/ });
+  fireEvent.click(manageTab);
+  expect(manageTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("繁殖台帳A")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "← 読み取りへ戻る" }));
+  expect(screen.getByRole("heading", { name: "書類を読み取る" })).toBeInTheDocument();
+});
+
+test("keeps the reading draft while directly editing a template from its card", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.includes("/artifacts")) {
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }
+    if (path.endsWith("/layout")) {
+      return new Response(JSON.stringify({ code: "NOT_READY", detail: "準備中" }), { status: 503 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [{
+        mappingId: "field_cattle_name",
+        targetPath: "document.cattleName",
+        label: "牛名",
+        x: 120,
+        y: 20,
+        width: 240,
+        height: 80,
+        padding: 4,
+        enabled: true,
+        modelDetail: "high",
+      }],
+      targets: [],
+      validForOcr: true,
+      warnings: [],
+    }), { status: 200 });
+  }));
+  const refreshTemplates = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(
+    <OcrPage
+      templates={templates}
+      refreshTemplates={refreshTemplates}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  const selection = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
+  const card = selection.closest("article")!;
+  expect(within(card).getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "繁殖台帳Aを削除" })).toBeInTheDocument();
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
+  fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+    target: { files: [new File(["image"], "kept-reading.png", { type: "image/png" })] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "戻る" }));
+  fireEvent.click(screen.getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" }));
+
+  expect(screen.getByRole("heading", { name: "読み取る欄を設定" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "← 読み取りへ戻る" }));
+  await waitFor(() => expect(screen.getByRole("heading", { name: "書類を読み取る" })).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));
+  expect(screen.getByText("選択中:")).toHaveTextContent("kept-reading.png");
+});
+
+test("does not delete a template when the card confirmation is cancelled", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    if (String(input).includes("/artifacts")) {
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [],
+      targets: [],
+      validForOcr: false,
+      warnings: [],
+    }), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <OcrPage
+      templates={templates}
+      refreshTemplates={vi.fn().mockResolvedValue(undefined)}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "繁殖台帳Aを削除" }));
+
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+  expect(screen.getByRole("button", { name: "繁殖台帳A v3を選択" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("reports an archived deletion accurately and clears the selected template", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      return new Response(JSON.stringify({ outcome: "archived" }), { status: 200 });
+    }
+    if (String(input).includes("/artifacts")) {
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [],
+      targets: [],
+      validForOcr: false,
+      warnings: [],
+    }), { status: 200 });
+  }));
+  const refreshTemplates = vi.fn().mockResolvedValue(undefined);
+  render(
+    <>
+      <OcrPage
+        templates={templates}
+        refreshTemplates={refreshTemplates}
+        rememberJob={() => undefined}
+        openReview={() => undefined}
+      />
+      <ToastViewport />
+    </>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "繁殖台帳Aを削除" }));
+
+  expect(await screen.findByText("テンプレートを読み取り一覧から削除しました")).toBeInTheDocument();
+  expect(screen.getByText(/テンプレート本体はアーカイブされています/)).toBeInTheDocument();
+  expect(refreshTemplates).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "繁殖台帳A v3を選択" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
 });
 
 test("starts OCR without sending a manually entered individual id", async () => {

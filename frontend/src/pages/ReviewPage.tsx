@@ -14,6 +14,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { CSS, useCombinedRefs } from "@dnd-kit/utilities";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
+import { ExcelExportActions } from "../components/ExcelExportActions";
 import {
   automaticJapaneseEraDatePatch,
   formatJapaneseEraDate,
@@ -223,6 +224,7 @@ export function ReviewPage({
   const [previewRatio, setPreviewRatio] = useState(38);
   const [interactionMode, setInteractionMode] = useState<ReviewInteractionMode>("edit");
   const [markEditorRow, setMarkEditorRow] = useState<number | null>(null);
+  const [choiceEditorPath, setChoiceEditorPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [previewWarning, setPreviewWarning] = useState<string | null>(null);
@@ -237,6 +239,7 @@ export function ReviewPage({
     setSelectedPath(null);
     setSelectedMappingId(null);
     setMarkEditorRow(null);
+    setChoiceEditorPath(null);
     setPreviewWarning(null);
     let next = await api.result(jobId);
     if (autoReopenConfirmed && next.confirmed) {
@@ -289,8 +292,21 @@ export function ReviewPage({
       setLoadError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
     });
   }, [autoReopenConfirmed, jobId, initialSelectedPath]);
+  const previews = result?.fieldPreviews ?? [];
+  const isCattleReview =
+    previews.length === 0 ||
+    previews.some(
+      ({ targetPath }) =>
+        targetPath.startsWith("document.") ||
+        targetPath.startsWith("pedigree.") ||
+        targetPath.startsWith("saleCalves.") ||
+        targetPath.startsWith("calvings."),
+    );
   useEffect(() => {
-    if (!selectedPath || (requireIdentityConfirmation && !identityStepComplete && !result?.confirmed)) {
+    if (
+      !selectedPath ||
+      (isCattleReview && requireIdentityConfirmation && !identityStepComplete && !result?.confirmed)
+    ) {
       return;
     }
     window.setTimeout(() => {
@@ -299,13 +315,12 @@ export function ReviewPage({
       ).find((element) => element.dataset.reviewPath === selectedPath);
       cell?.scrollIntoView?.({ behavior: "smooth", block: "center" });
     }, 0);
-  }, [identityStepComplete, requireIdentityConfirmation, result?.confirmed, selectedPath]);
+  }, [identityStepComplete, isCattleReview, requireIdentityConfirmation, result?.confirmed, selectedPath]);
   useEffect(() => {
     if (!result && !revisionConflict) return;
     onNavigationGuardChange?.(Boolean((result && !result.confirmed) || revisionConflict));
     return () => onNavigationGuardChange?.(false);
   }, [onNavigationGuardChange, result?.confirmed, revisionConflict]);
-  const previews = result?.fieldPreviews ?? [];
   const mappedPaths = useMemo(
     () => previews.length > 0
       ? new Set(previews.map((preview) => preview.targetPath))
@@ -313,9 +328,17 @@ export function ReviewPage({
     [previews],
   );
   const reviewPaths = useMemo(() => {
-    if (!mappedPaths || !result?.individualId) return mappedPaths;
+    if (!mappedPaths || !result?.individualId || !isCattleReview) return mappedPaths;
     return new Set([...mappedPaths, "document.unifiedEarTag"]);
-  }, [mappedPaths, result?.individualId]);
+  }, [isCattleReview, mappedPaths, result?.individualId]);
+  const choicePaths = useMemo(
+    () => new Set(
+      previews
+        .filter((preview) => preview.mappingType === "mark")
+        .map((preview) => preview.targetPath),
+    ),
+    [previews],
+  );
   const entries = useMemo(
     () => draft ? collectReadings(draft, reviewPaths) : [],
     [draft, reviewPaths],
@@ -386,9 +409,13 @@ export function ReviewPage({
     setSelectedPath(entry.path);
     setSelectedMappingId(preview?.mappingId ?? null);
     const markMatch = preview?.mappingType === "mark"
+      && preview.markRecognitionMode !== "manual"
       ? /^calvings\.(\d+)\.(?:outcome|sex)$/.exec(entry.path)
       : null;
     setMarkEditorRow(markMatch ? Number(markMatch[1]) : null);
+    setChoiceEditorPath(
+      preview?.mappingType === "mark" && !markMatch ? entry.path : null,
+    );
   };
   const selectNextWarning = () => {
     if (warningEntries.length === 0) return;
@@ -550,7 +577,8 @@ export function ReviewPage({
     setError(null);
     setMessage("最新結果を採用しました。");
   };
-  const identityReady = hasConfirmableIndividualId(draft, result?.individualId);
+  const identityReady =
+    !isCattleReview || hasConfirmableIndividualId(draft, result?.individualId);
   if (loadError) return <div className="empty-state large"><h2>結果を開けません</h2><p>{loadError}</p><button className="secondary" onClick={onClose}>戻る</button></div>;
   if (!result || !draft) return <div className="empty-state large">結果を読み込んでいます…</div>;
   const identityReading = draft.document.unifiedEarTag;
@@ -587,7 +615,12 @@ export function ReviewPage({
     setError(null);
     setMessage(null);
   };
-  if (requireIdentityConfirmation && !identityStepComplete && !result.confirmed) {
+  if (
+    isCattleReview &&
+    requireIdentityConfirmation &&
+    !identityStepComplete &&
+    !result.confirmed
+  ) {
     return (
       <div className="page-stack identity-confirm-page">
         <header className="page-header split">
@@ -769,8 +802,8 @@ export function ReviewPage({
           </details>
         </aside>
       )}
-      {!identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
-      {result.confirmed && result.individualId && <aside className="notice external compact"><strong>登録データへ保存済み</strong><span>データ検索から個体識別番号 {result.individualId} で検索できます。</span></aside>}
+      {isCattleReview && !identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
+      {isCattleReview && result.confirmed && result.individualId && <aside className="notice external compact"><strong>登録データへ保存済み</strong><span>データ検索から個体識別番号 {result.individualId} で検索できます。</span></aside>}
       {result.spreadsheetSync?.enabled && (
         <aside className={`notice compact ${result.spreadsheetSync.status === "failed" ? "external" : ""}`}>
           <strong>{result.spreadsheetSync.status === "failed" ? "スプレッドシート同期に失敗" : result.spreadsheetSync.status === "synced" ? "Googleスプレッドシートへ同期済み" : "Googleスプレッドシート連携設定済み"}</strong>
@@ -956,6 +989,7 @@ export function ReviewPage({
                     setSelectedPath(null);
                     setSelectedMappingId(null);
                     setMarkEditorRow(null);
+                    setChoiceEditorPath(null);
                   }}
                 >
                   <PointerModeIcon />
@@ -1000,27 +1034,29 @@ export function ReviewPage({
             <div className="empty-state">テンプレートで意味づけされた読み取りセルがありません。</div>
           ) : (
             <div className="ocr-edit-tables">
-              {documentEntries.length > 0 && <ReviewTableSection title="基本情報">
+              {isCattleReview && documentEntries.length > 0 && <ReviewTableSection title="基本情報">
                 <KeyValueReviewTable
                   entries={documentEntries}
                   selectedPath={selectedPath}
                   warningPaths={warningPaths}
+                  choicePaths={choicePaths}
                   confirmed={editingLocked || interactionMode === "reorder"}
                   onSelect={selectEntry}
                   onEdit={replaceEntryText}
                 />
               </ReviewTableSection>}
-              {pedigreeEntries.length > 0 && <ReviewTableSection title="血統">
+              {isCattleReview && pedigreeEntries.length > 0 && <ReviewTableSection title="血統">
                 <KeyValueReviewTable
                   entries={pedigreeEntries}
                   selectedPath={selectedPath}
                   warningPaths={warningPaths}
+                  choicePaths={choicePaths}
                   confirmed={editingLocked || interactionMode === "reorder"}
                   onSelect={selectEntry}
                   onEdit={replaceEntryText}
                 />
               </ReviewTableSection>}
-              <CollectionReviewTable
+              {isCattleReview && <CollectionReviewTable
                 title="売却子牛一覧"
                 root="saleCalves"
                 rowCount={draft.saleCalves.length}
@@ -1028,6 +1064,7 @@ export function ReviewPage({
                 entryByPath={entryByPath}
                 selectedPath={selectedPath}
                 warningPaths={warningPaths}
+                choicePaths={choicePaths}
                 recordKeyByRow={recordKeyByRow}
                 confirmed={editingLocked}
                 interactionMode={interactionMode}
@@ -1036,8 +1073,8 @@ export function ReviewPage({
                 canShiftColumn={columnCanShift}
                 onShiftColumn={shiftColumn}
                 onReorderColumn={reorderColumn}
-              />
-              <CollectionReviewTable
+              />}
+              {isCattleReview && <CollectionReviewTable
                 title="繁殖履歴"
                 root="calvings"
                 rowCount={draft.calvings.length}
@@ -1045,6 +1082,7 @@ export function ReviewPage({
                 entryByPath={entryByPath}
                 selectedPath={selectedPath}
                 warningPaths={warningPaths}
+                choicePaths={choicePaths}
                 recordKeyByRow={recordKeyByRow}
                 confirmed={editingLocked}
                 interactionMode={interactionMode}
@@ -1053,12 +1091,13 @@ export function ReviewPage({
                 canShiftColumn={columnCanShift}
                 onShiftColumn={shiftColumn}
                 onReorderColumn={reorderColumn}
-              />
-              {customEntries.length > 0 && <ReviewTableSection title="追加項目">
+              />}
+              {customEntries.length > 0 && <ReviewTableSection title={isCattleReview ? "追加項目" : "読み取り項目"}>
                 <KeyValueReviewTable
                   entries={customEntries}
                   selectedPath={selectedPath}
                   warningPaths={warningPaths}
+                  choicePaths={choicePaths}
                   confirmed={editingLocked || interactionMode === "reorder"}
                   onSelect={selectEntry}
                   onEdit={replaceEntryText}
@@ -1123,7 +1162,7 @@ export function ReviewPage({
         </section>
       )}
       {error && <p className="error-box">{error}</p>}{message && <p className="success-box">{message}</p>}
-      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? "確定結果はGoogleスプレッドシートの同じ行へ反映されました。" : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? (result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null) : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。データ検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
+      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? (result.spreadsheetSync?.status === "synced" ? "確定結果を保存し、Googleスプレッドシートへ反映しました。" : "確定結果から入力済みExcelを保存できます。") : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? <div className="job-action-buttons"><ExcelExportActions jobId={jobId} compact driveFileName={result.spreadsheetSync?.fileName} />{result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null}</div> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady} onClick={async () => { if (!window.confirm("この内容を確定します。データ検索から再編集できます。よろしいですか？")) return; setBusy(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision); setResult(confirmed); setDraft(confirmed.result); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果を確定し、スプレッドシートへ反映しました。" : "結果を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setBusy(false); } }}>内容を確定</button></>}</div>
       {markEditorRow !== null && (
         <CalvingMarkModal
           rowIndex={markEditorRow}
@@ -1161,6 +1200,129 @@ export function ReviewPage({
           }}
         />
       )}
+      {choiceEditorPath !== null && selectedEntry && selectedPreview?.mappingType === "mark" && (
+        <GenericChoiceModal
+          entry={selectedEntry}
+          preview={selectedPreview}
+          imageUrl={regionImage}
+          confirmed={editingLocked}
+          onClose={() => setChoiceEditorPath(null)}
+          onChange={(patch) => setDraft((current) => (
+            current ? updateReading(current, choiceEditorPath, patch) : current
+          ))}
+        />
+      )}
+    </div>
+  );
+}
+
+function GenericChoiceModal({
+  entry,
+  preview,
+  imageUrl,
+  confirmed,
+  onClose,
+  onChange,
+}: {
+  entry: ReadingEntry;
+  preview: OcrFieldPreview;
+  imageUrl?: string;
+  confirmed: boolean;
+  onClose: () => void;
+  onChange: (patch: Partial<FieldReading>) => void;
+}) {
+  const options = preview.markOptions ?? [];
+  const selectionMode = preview.markSelectionMode ?? "multiple";
+  const currentText = entry.value.normalized ?? entry.value.raw ?? "";
+  const selectedLabels = currentText
+    .split("・")
+    .map((value) => value.trim())
+    .filter((value) => options.some((option) => option.label === value));
+  const applyLabels = (labels: string[]) => onChange(
+    labels.length > 0
+      ? {
+        raw: labels.join("・"),
+        normalized: labels.join("・"),
+        status: "readable",
+        reviewReason: null,
+      }
+      : {
+        raw: null,
+        normalized: null,
+        status: "blank",
+        reviewReason: null,
+      },
+  );
+  const toggle = (label: string) => {
+    if (confirmed) return;
+    if (selectionMode === "single") {
+      applyLabels([label]);
+      return;
+    }
+    applyLabels(
+      selectedLabels.includes(label)
+        ? selectedLabels.filter((value) => value !== label)
+        : [...selectedLabels, label],
+    );
+  };
+  return (
+    <div className="calving-mark-modal generic-choice-modal" role="dialog" aria-modal="true" aria-labelledby="generic-choice-title">
+      <section className="calving-mark-dialog">
+        <header>
+          <div>
+            <span className="eyebrow">MANUAL CHOICE REVIEW</span>
+            <h2 id="generic-choice-title">{entry.label}を選択</h2>
+            <p>
+              帳票画像を確認し、該当する選択肢を
+              {selectionMode === "single" ? "1つ" : "必要な数だけ"}選択してください。
+            </p>
+          </div>
+          <button type="button" className="ghost" onClick={onClose}>閉じる</button>
+        </header>
+        {imageUrl && <div className="calving-mark-source"><img src={imageUrl} alt={`${entry.label}の選択欄`} /></div>}
+        <div className="calving-mark-layout generic-choice-layout" aria-label={`${entry.label}の選択肢`}>
+          {options.map((option) => {
+            const selected = selectedLabels.includes(option.label);
+            return (
+              <button
+                type="button"
+                key={option.value}
+                className={selected ? "selected" : ""}
+                aria-pressed={selected}
+                disabled={confirmed}
+                onClick={() => toggle(option.label)}
+              >
+                <span className="mark-circle">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        {options.length === 0 && <p className="error-box">テンプレートに選択肢が設定されていません。</p>}
+        <footer>
+          <button
+            type="button"
+            className="secondary"
+            disabled={confirmed}
+            onClick={() => applyLabels([])}
+          >
+            未記入
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={confirmed}
+            onClick={() => onChange({
+              raw: null,
+              normalized: null,
+              status: "uncertain",
+              reviewReason: "MANUAL_CHOICE_UNRESOLVED",
+            })}
+          >
+            判別不能
+          </button>
+          <button type="button" className="primary" onClick={onClose}>この選択を反映</button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -1485,6 +1647,7 @@ function KeyValueReviewTable({
   entries,
   selectedPath,
   warningPaths,
+  choicePaths,
   confirmed,
   onSelect,
   onEdit,
@@ -1492,6 +1655,7 @@ function KeyValueReviewTable({
   entries: ReadingEntry[];
   selectedPath: string | null;
   warningPaths: ReadonlySet<string>;
+  choicePaths: ReadonlySet<string>;
   confirmed: boolean;
   onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
@@ -1510,6 +1674,7 @@ function KeyValueReviewTable({
                   entry={entry}
                   selected={selectedPath === entry.path}
                   warning={warningPaths.has(entry.path)}
+                  choice={choicePaths.has(entry.path)}
                   confirmed={confirmed}
                   onSelect={onSelect}
                   onEdit={onEdit}
@@ -1528,6 +1693,7 @@ function ReviewLabelAndCell({
   entry,
   selected,
   warning,
+  choice,
   confirmed,
   onSelect,
   onEdit,
@@ -1535,6 +1701,7 @@ function ReviewLabelAndCell({
   entry: ReadingEntry;
   selected: boolean;
   warning: boolean;
+  choice: boolean;
   confirmed: boolean;
   onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
@@ -1546,6 +1713,7 @@ function ReviewLabelAndCell({
         entry={entry}
         selected={selected}
         warning={warning}
+        choice={choice}
         confirmed={confirmed}
         onSelect={onSelect}
         onEdit={onEdit}
@@ -1574,6 +1742,7 @@ function CollectionReviewTable({
   entryByPath,
   selectedPath,
   warningPaths,
+  choicePaths,
   recordKeyByRow,
   confirmed,
   interactionMode,
@@ -1590,6 +1759,7 @@ function CollectionReviewTable({
   entryByPath: ReadonlyMap<string, ReadingEntry>;
   selectedPath: string | null;
   warningPaths: ReadonlySet<string>;
+  choicePaths: ReadonlySet<string>;
   recordKeyByRow: ReadonlyMap<string, string>;
   confirmed: boolean;
   interactionMode: ReviewInteractionMode;
@@ -1723,6 +1893,7 @@ function CollectionReviewTable({
                         entry={entry}
                         selected={selectedPath === entry.path}
                         warning={warningPaths.has(entry.path)}
+                        choice={choicePaths.has(entry.path)}
                         confirmed={confirmed}
                         onSelect={onSelect}
                         onEdit={onEdit}
@@ -1833,6 +2004,7 @@ function ReviewValueCell({
   entry,
   selected,
   warning,
+  choice,
   confirmed,
   onSelect,
   onEdit,
@@ -1840,6 +2012,7 @@ function ReviewValueCell({
   entry: ReadingEntry;
   selected: boolean;
   warning: boolean;
+  choice: boolean;
   confirmed: boolean;
   onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
@@ -1879,13 +2052,13 @@ function ReviewValueCell({
         <button
           type="button"
           aria-label={`${entry.label} ${entry.path} を編集`}
-          title={confirmed ? undefined : "ダブルクリックで直接編集"}
+          title={confirmed || choice ? undefined : "ダブルクリックで直接編集"}
           onClick={() => onSelect(entry)}
           onDoubleClick={(event) => {
             if (confirmed) return;
             event.preventDefault();
             onSelect(entry);
-            if (/^calvings\.\d+\.(?:outcome|sex)$/.test(entry.path)) return;
+            if (choice) return;
             setEditValue(value ?? "");
             setEditing(true);
           }}

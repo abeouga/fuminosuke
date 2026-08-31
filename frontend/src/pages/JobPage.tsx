@@ -17,7 +17,7 @@ export function JobPage({
   jobId: string;
   onClose: () => void;
   onOpenReview: (jobId: string) => void;
-  onOpenTemplates: () => void;
+  onOpenTemplates: (workspace: "create" | "manage") => void;
   onStartNewReading: () => void;
 }) {
   const [refreshToken, setRefreshToken] = useState(0);
@@ -92,7 +92,7 @@ export function JobPage({
                 className="primary"
                 type="button"
                 onClick={job.jobType === "PREPARE_TEMPLATE"
-                  ? onOpenTemplates
+                  ? () => onOpenTemplates("create")
                   : onStartNewReading}
               >
                 {job.jobType === "PREPARE_TEMPLATE"
@@ -111,7 +111,7 @@ export function JobPage({
               </button>
             )}
             {job.status === "REVIEW_REQUIRED" && job.jobType === "PREPARE_TEMPLATE" && (
-              <button className="primary" type="button" onClick={onOpenTemplates}>
+              <button className="primary" type="button" onClick={() => onOpenTemplates("manage")}>
                 テンプレートを確認
               </button>
             )}

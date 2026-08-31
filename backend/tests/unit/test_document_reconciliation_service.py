@@ -29,6 +29,84 @@ def _document(name: str, individual_id: str = "1234567890") -> dict[str, object]
     return document
 
 
+def _generic_document(name: str) -> dict[str, object]:
+    document = blank_ocr_document(provider="mock", source_regions=[]).model_dump(
+        mode="json", by_alias=True
+    )
+    document["document"]["cattleName"].update(raw=name, normalized=name, status="readable")
+    return document
+
+
+def test_spreadsheet_document_can_be_resolved_without_cattle_identity(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    settings = settings_factory()
+    database = Database(settings.database)
+    Base.metadata.create_all(database.engine)
+    service = DocumentReconciliationService(DeterministicValidator())
+    try:
+        with database.session() as session:
+            template = Template(name="面接カード", document_type="spreadsheet")
+            session.add(template)
+            session.flush()
+            version = TemplateVersion(
+                template_id=template.id,
+                version_number=1,
+                mode="SPREADSHEET_TEMPLATE",
+                status="ACTIVE",
+                canonical_width=1000,
+                canonical_height=1400,
+                config_relative_path="templates/interview.json",
+                quality_json={},
+                layout_json={},
+            )
+            session.add(version)
+            session.flush()
+            job = ProcessingJob(
+                job_type=JobType.EXTRACT_DOCUMENT.value,
+                status=JobStatus.REVIEW_REQUIRED.value,
+                template_version_id=version.id,
+                request_hash="f" * 64,
+                config_snapshot_json={},
+            )
+            session.add(job)
+            session.flush()
+            document = _generic_document("応募者")
+            result = OcrResult(
+                job_id=job.id,
+                schema_version="1.0",
+                provider="mock",
+                raw_candidate_json=document,
+                current_corrected_json=document,
+                validation_json={},
+                revision=1,
+                api_call_count=0,
+            )
+            session.add(result)
+            session.flush()
+
+            service.resolve(
+                session,
+                job=job,
+                stored=result,
+                action="NEW_DOCUMENT",
+                target_document_id=None,
+                target_job_id=None,
+                target_page_id=None,
+                configured_paths={"genericValues.fullName"},
+            )
+            session.commit()
+
+            ledger = session.get(LedgerDocument, job.id)
+            page = session.query(LedgerDocumentPage).filter_by(job_id=job.id).one()
+            assert ledger is not None
+            assert ledger.individual_id == service.document_key(job.id)
+            assert len(ledger.individual_id) == 10
+            assert page.relation_type == "NEW_DOCUMENT"
+    finally:
+        database.dispose()
+
+
 def test_same_identity_requires_choice_and_add_page_merges_into_one_document(
     settings_factory: Callable[..., Settings],
 ) -> None:

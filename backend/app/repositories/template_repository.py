@@ -68,13 +68,20 @@ class TemplateRepository:
         return version
 
     def list_templates(self) -> list[Template]:
-        return list(self._session.scalars(select(Template).order_by(Template.created_at.desc())))
+        statement = (
+            select(Template)
+            .where(Template.archived_at.is_(None))
+            .order_by(Template.created_at.desc())
+        )
+        return list(self._session.scalars(statement))
 
     def name_exists(self, name: str) -> bool:
         normalized = self.normalize_name(name)
         return any(
             self.normalize_name(template.name) == normalized
-            for template in self._session.scalars(select(Template))
+            for template in self._session.scalars(
+                select(Template).where(Template.archived_at.is_(None))
+            )
         )
 
     @staticmethod
@@ -106,7 +113,11 @@ class TemplateRepository:
             raise self._invalid_state("元ジョブがREVIEW_REQUIREDではありません。")
         if not version.clean_template_artifact_id or not version.quality_json:
             raise self._invalid_state("必須生成物または品質情報が不足しています。")
-        if has_full_image_boundary_fallback(version.quality_json):
+        is_spreadsheet_template = version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
+        if (
+            not is_spreadsheet_template
+            and has_full_image_boundary_fallback(version.quality_json)
+        ):
             raise AppError(
                 status=409,
                 code="TEMPLATE_DOCUMENT_BOUNDARY_NOT_VERIFIED",
@@ -118,14 +129,27 @@ class TemplateRepository:
             )
         relations = version.layout_json.get("relations")
         generic_approved = has_approved_generic_definition(version.quality_json)
+        spreadsheet_layout_ready = (
+            is_spreadsheet_template
+            and version.quality_json.get("layoutVerified") is True
+            and version.quality_json.get("layoutVerificationDetector") == "xlsx-structure"
+            and int(version.quality_json.get("fieldMappingCount") or 0) > 0
+        )
+        required_layout_ready = (
+            spreadsheet_layout_ready
+            if is_spreadsheet_template
+            else version.quality_json.get("layoutFinalized") is True
+        )
         if not generic_approved and (
             not isinstance(relations, list)
             or not relations
-            or version.quality_json.get("layoutFinalized") is not True
+            or not required_layout_ready
             or version.quality_json.get("layoutVerified") is not True
         ):
             raise self._invalid_state(
-                "意味づけを保存し、OpenCVによる記入欄の再検出を完了してから承認してください。"
+                "意味づけとXLSXセル構造を確定してから承認してください。"
+                if is_spreadsheet_template
+                else "意味づけを保存し、OpenCVによる記入欄の再検出を完了してから承認してください。"
             )
         template = self.get_template(version.template_id)
         if template is None:
