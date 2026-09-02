@@ -501,6 +501,20 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
             model_id="gpt-5-mini",
             prompt_version="test",
             api_call_count=1,
+            diagnostics=(
+                {
+                    "schemaVersion": 1,
+                    "batchNumber": 1,
+                    "requestManifest": [
+                        {
+                            "compactId": "c0",
+                            "originalMappingId": request.regions[0].region_id,
+                        }
+                    ],
+                    "rawItems": [],
+                    "expandedItems": [],
+                },
+            ),
         )
 
     monkeypatch.setattr(OpenAIOcrProvider, "extract", fake_extract)
@@ -596,6 +610,23 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         assert mapped_cells["cells"][0]["openAiMappingId"] == mapping_id
         assert mapped_cells["cells"][0]["targetPath"] == "document.cattleName"
         assert mapped_cells["cells"][0]["response"]["raw"] == "こよみ"
+
+        diagnostics = openai_client.get(
+            f"/api/v1/jobs/{job_id}/artifacts/openAiMappingDiagnostics"
+        ).json()
+        assert diagnostics["schemaVersion"] == 1
+        assert diagnostics["calls"][0]["batchNumber"] == 1
+        assert diagnostics["calls"][0]["requestManifest"][0]["originalMappingId"] == (
+            mapping_id
+        )
+        assert diagnostics["mappedCellsResponses"] == [
+            {
+                "mappingId": mapping_id,
+                "openAiMappingId": mapping_id,
+                "targetPath": "document.cattleName",
+                "response": mapped_cells["cells"][0]["response"],
+            }
+        ]
 
         result = openai_client.get(f"/api/v1/ocr-jobs/{job_id}/result").json()
         assert result["fieldPreviews"] == [

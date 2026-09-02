@@ -18,15 +18,19 @@ import {
   LAYOUT_ROLE_STYLE,
   LayoutEditor,
   linkLaneCells,
-  matchRowKeyCells,
+  meaningLinkLaneCells,
   mergeLabelRelations,
+  normalizeLayout,
   recordRowsFromColumnLabels,
+  recordSectionAtPoint,
+  recordSectionDisplayName,
   repairDuplicateCalvingMarkRows,
   resolveAvailableLinkTargetPaths,
   resolveLabelPoolTargetPath,
   segmentIntersectsRect,
   targetPathsFromRecordGroups,
   targetPathsForInputs,
+  unassignedMeaningCellIds,
 } from "./LayoutEditor";
 import type { DocumentIdentity, FieldMappingTarget, LayoutCell, LayoutDefinition, LayoutMarkSet, LayoutRecordGroup, LayoutRecordSection, LayoutRelation } from "../types";
 
@@ -53,14 +57,76 @@ const allSaleTargets: FieldMappingTarget[] = Array.from(
   })),
 ).flat();
 
-test("uses distinct high-contrast styles for every rectangle role", () => {
-  const styles = Object.values(LAYOUT_ROLE_STYLE);
+test("uses distinct high-contrast styles for active roles and input styling for legacy numbers", () => {
+  const styles = [
+    LAYOUT_ROLE_STYLE.label,
+    LAYOUT_ROLE_STYLE.parent_label,
+    LAYOUT_ROLE_STYLE.input,
+    LAYOUT_ROLE_STYLE.mark,
+    LAYOUT_ROLE_STYLE.ignored,
+  ];
   expect(new Set(styles.map((style) => style.stroke)).size).toBe(styles.length);
   expect(LAYOUT_ROLE_STYLE.label.stroke).toBe("#d13c2f");
   expect(LAYOUT_ROLE_STYLE.input.stroke).toBe("#0067c0");
   expect(LAYOUT_ROLE_STYLE.label.stroke).not.toBe(LAYOUT_ROLE_STYLE.input.stroke);
   expect(LAYOUT_ROLE_STYLE.parent_label.dash).not.toEqual(LAYOUT_ROLE_STYLE.input.dash);
-  expect(LAYOUT_ROLE_STYLE.record_key_cell.dash).not.toEqual(LAYOUT_ROLE_STYLE.column_key_cell.dash);
+  expect(LAYOUT_ROLE_STYLE.record_key_cell).toEqual(LAYOUT_ROLE_STYLE.input);
+  expect(LAYOUT_ROLE_STYLE.column_key_cell).toEqual(LAYOUT_ROLE_STYLE.input);
+});
+
+test("finds only input and mark cells without a valid save destination", () => {
+  const cells: LayoutCell[] = [
+    {
+      id: "assigned_input", role: "input", x: 0, y: 0, width: 80, height: 30,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+    },
+    {
+      id: "unassigned_input", role: "input", x: 90, y: 0, width: 80, height: 30,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+    },
+    {
+      id: "assigned_mark", role: "mark", x: 0, y: 40, width: 80, height: 30,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+      markSets: [{
+        id: "choice", targetPath: "customFields.choice",
+        recognitionMode: "manual", selectionMode: "single", options: [],
+      }],
+    },
+    {
+      id: "unassigned_mark", role: "mark", x: 90, y: 40, width: 80, height: 30,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+      markSets: [{
+        id: "choice", targetPath: "",
+        recognitionMode: "manual", selectionMode: "single", options: [],
+      }],
+    },
+    {
+      id: "ignored", role: "ignored", x: 180, y: 0, width: 80, height: 30,
+      confidence: 1, text: "", textConfidence: null, source: "manual",
+    },
+  ];
+  const current: LayoutDefinition = {
+    canonicalWidth: 300,
+    canonicalHeight: 100,
+    detector: "test",
+    ocrAvailable: false,
+    cells,
+    relations: [{
+      id: "assigned_relation",
+      inputCellId: "assigned_input",
+      labelCellIds: [],
+      axis: "horizontal",
+      order: 1,
+      targetPath: "document.cattleName",
+    }],
+    allowCrossAxisLabels: false,
+    warnings: [],
+  };
+
+  expect([...unassignedMeaningCellIds(current)]).toEqual([
+    "unassigned_input",
+    "unassigned_mark",
+  ]);
 });
 
 test("detects a compact two-row choice area before the handwriting space", () => {
@@ -424,7 +490,7 @@ describe("generic repeated table rows", () => {
   ];
   const rowKeys: LayoutCell[] = [1, 2].map((value, index) => ({
     id: `row_key_${value}`,
-    role: "record_key_cell",
+    role: "input",
     x: 60,
     y: 30 + index * 40,
     width: 40,
@@ -455,7 +521,6 @@ describe("generic repeated table rows", () => {
     );
     expect(result).toEqual({
       collectionPath: null,
-      rowKeyStrategyHint: "position",
       rows: [
         { order: 1, inputCellIds: ["vehicle_1", "chassis_1"] },
         { order: 2, inputCellIds: ["vehicle_2", "chassis_2"] },
@@ -463,17 +528,7 @@ describe("generic repeated table rows", () => {
     });
   });
 
-  test("matches printed row numbers to the corresponding input bands", () => {
-    const rows = recordRowsFromColumnLabels(
-      labels.map((cell) => cell.id),
-      [...labels, ...rowKeys, ...inputs],
-      relations,
-    )!.rows;
-    expect(matchRowKeyCells(rows, [...labels, ...rowKeys, ...inputs])?.map((cell) => cell?.text))
-      .toEqual(["1", "2"]);
-  });
-
-  test("uses a selected record-key column as the row identifier", () => {
+  test("includes a numbered column as ordinary meaning-assigned inputs", () => {
     const rankLabel: LayoutCell = {
       id: "rank_label",
       role: "label",
@@ -489,16 +544,24 @@ describe("generic repeated table rows", () => {
     const result = recordRowsFromColumnLabels(
       [rankLabel.id, ...labels.map((cell) => cell.id)],
       [rankLabel, ...labels, ...rowKeys, ...inputs],
-      relations,
+      [
+        ...relations,
+        ...rowKeys.map((cell, index): LayoutRelation => ({
+          id: `rank_relation_${index + 1}`,
+          inputCellId: cell.id,
+          labelCellIds: [rankLabel.id],
+          axis: "vertical",
+          order: index + 1,
+          targetPath: `customFields.希望順位_${index + 1}`,
+        })),
+      ],
     );
 
     expect(result).toEqual({
       collectionPath: null,
-      rowKeyLabelCellId: "rank_label",
-      rowKeyCellIds: ["row_key_1", "row_key_2"],
       rows: [
-        { order: 1, inputCellIds: ["vehicle_1", "chassis_1"] },
-        { order: 2, inputCellIds: ["vehicle_2", "chassis_2"] },
+        { order: 1, inputCellIds: ["row_key_1", "vehicle_1", "chassis_1"] },
+        { order: 2, inputCellIds: ["row_key_2", "vehicle_2", "chassis_2"] },
       ],
     });
   });
@@ -1132,6 +1195,244 @@ describe("linkLaneCells", () => {
       "saleDate",
       "notes",
     ]);
+  });
+
+  test("ignores an intervening selection field when the drag ends on an input", () => {
+    const targetInput: LayoutCell = {
+      ...priceCells[0],
+      id: "municipality_input",
+      x: 220,
+      y: 100,
+    };
+    const interveningMark: LayoutCell = {
+      ...priceCells[0],
+      id: "prefecture_choice",
+      role: "mark",
+      x: 120,
+      y: 100,
+    };
+
+    expect(meaningLinkLaneCells(
+      { x: 40, y: 120 },
+      { x: 260, y: 120 },
+      [interveningMark, targetInput],
+      targetInput,
+    ).map((cell) => cell.id)).toEqual([targetInput.id]);
+  });
+
+  test("ignores an intervening input when the drag ends on a selection field", () => {
+    const interveningInput: LayoutCell = {
+      ...priceCells[0],
+      id: "address_input",
+      x: 120,
+      y: 100,
+    };
+    const targetMark: LayoutCell = {
+      ...priceCells[0],
+      id: "municipality_choice",
+      role: "mark",
+      x: 220,
+      y: 100,
+    };
+
+    expect(meaningLinkLaneCells(
+      { x: 40, y: 120 },
+      { x: 260, y: 120 },
+      [interveningInput, targetMark],
+      targetMark,
+    ).map((cell) => cell.id)).toEqual([targetMark.id]);
+  });
+});
+
+describe("record section display names", () => {
+  const labels: LayoutCell[] = [
+    {
+      id: "year_label", role: "label", x: 100, y: 80, width: 80, height: 30,
+      confidence: 1, text: "年", textConfidence: 1, source: "manual",
+    },
+    {
+      id: "school_label", role: "label", x: 240, y: 80, width: 80, height: 30,
+      confidence: 1, text: "学校名", textConfidence: 1, source: "manual",
+    },
+  ];
+  const inputs: LayoutCell[] = [0, 1].flatMap((row) => labels.map((label, column) => ({
+    id: `input_${row}_${column}`,
+    role: "input" as const,
+    x: label.x,
+    y: 130 + row * 50,
+    width: label.width,
+    height: 35,
+    confidence: 1,
+    text: "",
+    textConfidence: null,
+    source: "manual" as const,
+  })));
+  const relations: LayoutRelation[] = inputs.map((cell, index) => ({
+    id: `relation_${cell.id}`,
+    inputCellId: cell.id,
+    labelCellIds: [labels[index % labels.length].id],
+    axis: "vertical",
+    order: Math.floor(index / labels.length) + 1,
+    targetPath: `customFields.${index % labels.length === 0 ? "年" : "学校名"}_${Math.floor(index / labels.length) + 1}`,
+  }));
+
+  test("opens the anchored name editor after creation and preserves the name and identity on save/reload", async () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const initial: LayoutDefinition = {
+      canonicalWidth: 500,
+      canonicalHeight: 300,
+      detector: "test",
+      ocrAvailable: false,
+      cells: [...labels, ...inputs],
+      relations,
+      allowCrossAxisLabels: true,
+      warnings: [],
+    };
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={initial}
+        targets={[]}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+    const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 500, bottom: 300,
+      width: 500, height: 300, toJSON: () => ({}),
+    });
+    fireEvent.click(editor.getByRole("button", { name: "繰り返し部分をまとめる" }));
+    expect(canvas).toHaveClass("layout-mode-record");
+
+    fireEvent.pointerDown(canvas, { clientX: 140, clientY: 95, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
+
+    const popover = editor.getByRole("form", { name: "繰り返し表の名称編集" });
+    expect(popover).toBeInTheDocument();
+    fireEvent.change(within(popover).getByLabelText("繰り返し表の表示名"), {
+      target: { value: "学歴" },
+    });
+    fireEvent.click(within(popover).getByRole("button", { name: "保存" }));
+    expect(editor.getByRole("button", { name: /学歴.*2レコード/ })).toBeInTheDocument();
+
+    fireEvent.pointerDown(canvas, { clientX: 210, clientY: 107, pointerId: 2 });
+    fireEvent.pointerUp(canvas, { clientX: 210, clientY: 107, pointerId: 2 });
+    const reopened = editor.getByRole("form", { name: "繰り返し表の名称編集" });
+    expect(within(reopened).getByLabelText("繰り返し表の表示名")).toHaveValue("学歴");
+    fireEvent.change(within(reopened).getByLabelText("繰り返し表の表示名"), {
+      target: { value: "学歴・職歴" },
+    });
+    fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
+
+    const sidePanelName = editor.getByLabelText("表の表示名");
+    fireEvent.change(sidePanelName, { target: { value: "学歴" } });
+    fireEvent.blur(sidePanelName);
+    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved.recordSections).toHaveLength(1);
+    expect(saved.recordSections?.[0]).toEqual(expect.objectContaining({
+      displayName: "学歴",
+      parentLabelCellId: null,
+    }));
+    const originalId = saved.recordSections?.[0].id;
+
+    view.unmount();
+    const reloaded = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={saved}
+        targets={[]}
+        onDetect={vi.fn()}
+        onSave={vi.fn(async (current: LayoutDefinition) => current)}
+      />,
+    );
+    expect(within(reloaded.container).getByRole("button", { name: /学歴.*2レコード/ }))
+      .toBeInTheDocument();
+    expect(saved.recordSections?.[0].id).toBe(originalId);
+    reloaded.unmount();
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
+  test("keeps legacy titles as fallback and maps three same-title sections by ID", () => {
+    const sections: LayoutRecordSection[] = ["学歴", "職歴", "資格"].map((displayName, index) => ({
+      id: `section_${index + 1}`,
+      title: "明細",
+      displayName,
+      collectionPath: `genericRecords.section_${index + 1}`,
+      recordType: "generic",
+      recordLabelCellIds: labels.map((label) => `${label.id}_${index + 1}`),
+      parentLabelCellId: null,
+      source: "manual",
+    }));
+    const legacy = { ...sections[0], id: "legacy", displayName: undefined };
+
+    expect(recordSectionDisplayName(legacy)).toBe("明細");
+    expect(sections.map(recordSectionDisplayName)).toEqual(["学歴", "職歴", "資格"]);
+    expect(new Set(sections.map((section) => section.id)).size).toBe(3);
+  });
+
+  test("uses a wider hit area than the visible record line without changing section identity", () => {
+    const section: LayoutRecordSection = {
+      id: "education",
+      title: "明細",
+      displayName: "学歴",
+      collectionPath: "genericRecords.education",
+      recordType: "generic",
+      recordLabelCellIds: labels.map((label) => label.id),
+      parentLabelCellId: null,
+      source: "manual",
+    };
+
+    expect(recordSectionAtPoint({ x: 210, y: 108 }, [section], labels, 16)?.id)
+      .toBe("education");
+    expect(recordSectionAtPoint({ x: 210, y: 125 }, [section], labels, 16)).toBeNull();
+  });
+
+  test("allows duplicate display names while retaining distinct internal IDs", async () => {
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          canonicalWidth: 500,
+          canonicalHeight: 300,
+          detector: "test",
+          ocrAvailable: false,
+          cells: [],
+          relations: [],
+          allowCrossAxisLabels: false,
+          warnings: [],
+        }}
+        targets={[]}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+    fireEvent.click(editor.getByRole("button", { name: "繰り返し表を追加" }));
+    fireEvent.click(editor.getByRole("button", { name: "繰り返し表を追加" }));
+    expect(editor.getAllByRole("button", { name: /明細.*0レコード/ })).toHaveLength(2);
+
+    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const sections = onSave.mock.calls[0]![0].recordSections ?? [];
+    expect(sections.map(recordSectionDisplayName)).toEqual(["明細", "明細"]);
+    expect(new Set(sections.map((section) => section.id)).size).toBe(2);
+    expect(new Set(sections.map((section) => section.collectionPath)).size).toBe(2);
   });
 });
 
@@ -1863,6 +2164,214 @@ describe("editing safety regressions", () => {
     warnings: [],
   });
 
+  test("normalizes obsolete number roles and repairs adjacent legacy labels", () => {
+    const heading: LayoutCell = {
+      ...labelCell,
+      id: "section_heading",
+      role: "parent_label",
+      x: 10,
+      y: 0,
+      width: 280,
+      text: "申請情報",
+    };
+    const staleLabel: LayoutCell = {
+      ...labelCell,
+      id: "stale_label",
+      role: "parent_label",
+      source: "detected",
+      y: 40,
+      text: "申請理由",
+    };
+    const adjacentInput: LayoutCell = {
+      ...inputCell,
+      id: "adjacent_input",
+      x: 80,
+      y: 40,
+    };
+    const legacyRowNumber: LayoutCell = {
+      ...inputCell,
+      id: "legacy_row_number",
+      role: "record_key_cell",
+      x: 10,
+      y: 75,
+      width: 40,
+      text: "1",
+    };
+    const legacyColumnNumber: LayoutCell = {
+      ...inputCell,
+      id: "legacy_column_number",
+      role: "column_key_cell",
+      x: 55,
+      y: 75,
+      width: 40,
+      text: "2",
+    };
+    const normalized = normalizeLayout({
+      ...layout([
+        heading,
+        staleLabel,
+        adjacentInput,
+        legacyRowNumber,
+        legacyColumnNumber,
+      ], [{
+        id: "existing_relation",
+        inputCellId: adjacentInput.id,
+        labelCellIds: [staleLabel.id],
+        parentLabelCellId: heading.id,
+        axis: "horizontal",
+        order: 1,
+        targetPath: scalarTarget.path,
+      }]),
+      recordSections: [{
+        id: "section",
+        title: "明細",
+        collectionPath: "genericRecords.lines",
+        recordType: "generic",
+        recordLabelCellIds: [staleLabel.id],
+        parentLabelCellId: heading.id,
+        rowKeyStrategy: "printed",
+        rowKeyCellIds: [legacyRowNumber.id],
+        source: "manual",
+      }],
+      recordGroups: [{
+        id: "group",
+        sectionId: "section",
+        order: 1,
+        x: 10,
+        y: 40,
+        width: 190,
+        height: 65,
+        inputCellIds: [adjacentInput.id],
+        recordKeyField: "rowNumber",
+        recordKeyValue: "1",
+        recordKeyCellId: legacyRowNumber.id,
+        source: "manual",
+      }],
+      detector: "xlsx-structure",
+    });
+    const roles = new Map(normalized.cells.map((cell) => [cell.id, cell.role]));
+
+    expect(roles.get(heading.id)).toBe("parent_label");
+    expect(roles.get(staleLabel.id)).toBe("label");
+    expect(roles.get(legacyRowNumber.id)).toBe("input");
+    expect(roles.get(legacyColumnNumber.id)).toBe("input");
+    expect(normalized.recordSections?.[0]).toEqual(expect.objectContaining({
+      rowKeyStrategy: "position",
+      rowKeyCellIds: [],
+    }));
+    expect(normalized.recordGroups?.[0]).toEqual(expect.objectContaining({
+      inputCellIds: [adjacentInput.id, legacyRowNumber.id],
+      recordKeyCellId: null,
+    }));
+  });
+
+  test("keeps non-spreadsheet and manually classified parent labels unchanged", () => {
+    const adjacentInput: LayoutCell = {
+      ...inputCell,
+      id: "adjacent_input",
+      x: 80,
+    };
+    const detectedParent: LayoutCell = {
+      ...labelCell,
+      id: "detected_parent",
+      role: "parent_label",
+      source: "detected",
+    };
+    const manualParent: LayoutCell = {
+      ...detectedParent,
+      id: "manual_parent",
+      source: "manual",
+    };
+
+    const imageLayout = normalizeLayout({
+      ...layout([detectedParent, adjacentInput], []),
+      detector: "opencv",
+    });
+    const spreadsheetLayout = normalizeLayout({
+      ...layout([manualParent, adjacentInput], []),
+      detector: "xlsx-structure",
+    });
+
+    expect(imageLayout.cells.find((cell) => cell.id === detectedParent.id)?.role)
+      .toBe("parent_label");
+    expect(spreadsheetLayout.cells.find((cell) => cell.id === manualParent.id)?.role)
+      .toBe("parent_label");
+  });
+
+  test("links a stale imported heading-like label after generic normalization", () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const staleLabel = {
+      ...labelCell,
+      role: "parent_label" as const,
+      source: "detected" as const,
+    };
+    const touchingInput = { ...inputCell, x: 80 };
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          ...layout([staleLabel, touchingInput], []),
+          detector: "xlsx-structure",
+        }}
+        workflowStep="meaning"
+        targets={[scalarTarget]}
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    const editor = within(view.container);
+    const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 100,
+      width: 300,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(editor.getByRole("button", { name: "意味付け" }));
+    fireEvent.pointerDown(canvas, { clientX: 45, clientY: 25, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 120, clientY: 25, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 120, clientY: 25, pointerId: 1 });
+
+    expect(editor.getByText(/から1個の手書き文字欄へ/)).toBeInTheDocument();
+    expect(within(view.container.querySelector(".relation-table")!).getByText(touchingInput.id))
+      .toBeInTheDocument();
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
+  test("does not expose obsolete row or column number classifications", () => {
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout()}
+        workflowStep="classify"
+        targets={[scalarTarget]}
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    const editor = within(view.container);
+
+    expect(editor.queryByRole("button", { name: "行番号" })).not.toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "列番号" })).not.toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "行番号にする" })).not.toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "列番号にする" })).not.toBeInTheDocument();
+  });
+
   test("deduplicates repeated JSON rows into a reusable label candidate pool", () => {
     const pool = buildLabelPoolEntries(allSaleTargets);
 
@@ -1896,10 +2405,12 @@ describe("editing safety regressions", () => {
     expect(editor.getByRole("button", { name: "区分変更" })).toBeInTheDocument();
     expect(editor.getByRole("button", { name: "枠を追加" })).toBeInTheDocument();
     expect(editor.getByRole("button", { name: "消しゴム" })).toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: /未設定/ })).not.toBeInTheDocument();
 
     view.rerender(<LayoutEditor {...commonProps} workflowStep="meaning" />);
     expect(editor.getByRole("button", { name: "意味付け" })).toBeInTheDocument();
     expect(editor.getByText("読み取る内容の保存先")).toBeInTheDocument();
+    expect(editor.getByRole("button", { name: "未設定なし" })).toBeDisabled();
     expect(editor.queryByRole("button", { name: "繰り返し部分をまとめる" })).not.toBeInTheDocument();
 
     view.rerender(<LayoutEditor {...commonProps} workflowStep="records" />);
@@ -1918,7 +2429,58 @@ describe("editing safety regressions", () => {
     expect(editor.getByRole("button", { name: "拡大鏡をオンにする" })).toBeInTheDocument();
     expect(editor.getAllByText("確認・保存")).toHaveLength(2);
     expect(editor.getByText("保存判定")).toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: /未設定/ })).not.toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "繰り返し部分をまとめる" })).not.toBeInTheDocument();
+  });
+
+  test("strongly focuses unassigned meaning cells without making the layout dirty", async () => {
+    const secondInput: LayoutCell = {
+      ...inputCell,
+      id: "input_name_second",
+      y: 55,
+    };
+    const onDirtyChange = vi.fn();
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={layout([labelCell, inputCell, secondInput], [relation])}
+        targets={[scalarTarget]}
+        workflowStep="meaning"
+        onDetect={vi.fn()}
+        onSave={vi.fn(async (current: LayoutDefinition) => current)}
+        onDirtyChange={onDirtyChange}
+      />,
+    );
+    const editor = within(view.container);
+    const toggle = editor.getByRole("button", {
+      name: "未設定の記入欄を強調（1件）",
+    });
+
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(view.container.querySelector(".mapping-canvas-wrap"))
+      .toHaveClass("unassigned-highlight-active");
+    expect(editor.getByLabelText("セル一覧から選択")).toHaveValue(secondInput.id);
+    expect(editor.getByRole("option", { name: /input_name_second.*未設定/ }))
+      .toBeInTheDocument();
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true);
+
+    fireEvent.change(
+      view.container.querySelector(".property-select select") as HTMLSelectElement,
+      { target: { value: scalarTarget.path } },
+    );
+
+    await waitFor(() => {
+      expect(editor.getByRole("button", { name: "未設定なし" })).toBeDisabled();
+    });
+    expect(view.container.querySelector(".mapping-canvas-wrap"))
+      .not.toHaveClass("unassigned-highlight-active");
+    expect(editor.getByText(
+      "読み取る内容が未設定の記入欄はありません",
+      { exact: false },
+    )).toBeInTheDocument();
   });
 
   test("keeps the XLSX cell restore action available from the meaning step", () => {

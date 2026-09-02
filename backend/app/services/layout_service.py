@@ -31,6 +31,7 @@ from app.layout_analysis.models import (
     LayoutCell,
     LayoutDefinition,
     LayoutLabelPoolEntry,
+    LayoutRecordGroup,
     LayoutRelation,
 )
 from app.repositories.artifact_repository import ArtifactRepository
@@ -298,6 +299,7 @@ class LayoutService:
                     detail="レイアウト寸法がテンプレート画像と一致しません。",
                 )
 
+        layout = self._increment_duplicate_target_paths(layout)
         layout = layout.model_copy(
             update={
                 "record_structure_verified": self._record_structure_is_complete(layout)
@@ -361,6 +363,257 @@ class LayoutService:
             }
             session.commit()
         return layout
+
+    @staticmethod
+    def _increment_duplicate_target_paths(layout: LayoutDefinition) -> LayoutDefinition:
+        """Give distinct output paths to fields assigned to the same destination.
+
+        One input can have more than one visual label relation; those relations are
+        one logical mapping and must continue to share a path.  Separate input cells
+        and mark sets are separate mappings, so later occurrences receive the next
+        available collection row or a numbered custom-field path.
+        """
+
+        relations_by_input: dict[str, list[LayoutRelation]] = {}
+        for relation in layout.relations:
+            relations_by_input.setdefault(relation.input_cell_id, []).append(relation)
+
+        assigned_paths = {relation.target_path for relation in layout.relations}
+        assigned_paths.update(
+            mark_set.target_path
+            for cell in layout.cells
+            for mark_set in cell.mark_sets
+            if mark_set.target_path
+        )
+        reserved_paths = set(assigned_paths)
+        used_paths: set[str] = set()
+        replacement_by_input: dict[str, str] = {}
+        replacement_by_mark_set: dict[tuple[str, str], str] = {}
+        generated_paths: list[tuple[str, str, int]] = []
+
+        def allocate(requested_path: str) -> str:
+            if requested_path not in used_paths:
+                used_paths.add(requested_path)
+                return requested_path
+
+            collection_parts = requested_path.split(".")
+            if (
+                len(collection_parts) == 3
+                and collection_parts[0] in {"saleCalves", "calvings"}
+                and collection_parts[1].isdigit()
+            ):
+                collection, index_text, field = collection_parts
+                index = int(index_text) + 1
+                while True:
+                    candidate = f"{collection}.{index}.{field}"
+                    if not is_supported_field_path(candidate):
+                        break
+                    if candidate not in reserved_paths and candidate not in used_paths:
+                        used_paths.add(candidate)
+                        reserved_paths.add(candidate)
+                        return candidate
+                    index += 1
+
+            custom_key = custom_field_key(requested_path)
+            if custom_key is not None:
+                stem, separator, suffix = custom_key.rpartition("_")
+                if separator and suffix.isdigit() and stem:
+                    base_key = stem
+                    next_number = max(2, int(suffix) + 1)
+                else:
+                    base_key = custom_key
+                    next_number = 2
+            else:
+                base_key = requested_path.replace(".", "_")
+                next_number = 2
+
+            for number in range(next_number, next_number + 2000):
+                suffix = f"_{number}"
+                truncated_base = base_key[: max(1, 100 - len(suffix))]
+                candidate = f"customFields.{truncated_base}{suffix}"
+                if candidate in reserved_paths or candidate in used_paths:
+                    continue
+                used_paths.add(candidate)
+                reserved_paths.add(candidate)
+                generated_paths.append((requested_path, candidate, number))
+                return candidate
+            raise AppError(
+                status=422,
+                code="FIELD_TARGET_SEQUENCE_EXHAUSTED",
+                title="Field target sequence exhausted",
+                detail=f"保存先の連番を作成できませんでした: {requested_path}",
+            )
+
+        for cell in layout.cells:
+            input_relations = relations_by_input.get(cell.id, [])
+            if input_relations and cell.role != "mark":
+                replacement_by_input[cell.id] = allocate(input_relations[0].target_path)
+            if cell.role == "mark":
+                for mark_set in cell.mark_sets:
+                    if mark_set.target_path:
+                        replacement_by_mark_set[(cell.id, mark_set.id)] = allocate(
+                            mark_set.target_path
+                        )
+                if input_relations:
+                    relation_target = input_relations[0].target_path
+                    matching_set = next(
+                        (
+                            mark_set
+                            for mark_set in cell.mark_sets
+                            if mark_set.target_path == relation_target
+                        ),
+                        None,
+                    )
+                    if matching_set is not None:
+                        replacement_by_input[cell.id] = replacement_by_mark_set[
+                            (cell.id, matching_set.id)
+                        ]
+
+        relations = [
+            relation.model_copy(
+                update={
+                    "target_path": replacement_by_input.get(
+                        relation.input_cell_id,
+                        relation.target_path,
+                    )
+                }
+            )
+            for relation in layout.relations
+        ]
+        cells = [
+            cell.model_copy(
+                update={
+                    "mark_sets": [
+                        mark_set.model_copy(
+                            update={
+                                "target_path": replacement_by_mark_set.get(
+                                    (cell.id, mark_set.id),
+                                    mark_set.target_path,
+                                )
+                            }
+                        )
+                        for mark_set in cell.mark_sets
+                    ]
+                }
+            )
+            if cell.role == "mark"
+            else cell
+            for cell in layout.cells
+        ]
+
+        cell_by_id = {cell.id: cell for cell in cells}
+        groups = [group.model_copy(deep=True) for group in layout.record_groups]
+        group_by_input = {input_id: group for group in groups for input_id in group.input_cell_ids}
+        for input_id, replacement_path in replacement_by_input.items():
+            original_relations = relations_by_input.get(input_id, [])
+            original_path = original_relations[0].target_path if original_relations else ""
+            if replacement_path == original_path:
+                continue
+            original_parts = original_path.split(".")
+            replacement_parts = replacement_path.split(".")
+            if not (
+                len(original_parts) == 3
+                and len(replacement_parts) == 3
+                and original_parts[0] == replacement_parts[0]
+                and original_parts[0] in {"saleCalves", "calvings"}
+                and replacement_parts[1].isdigit()
+            ):
+                continue
+            source_group = group_by_input.get(input_id)
+            input_cell = cell_by_id.get(input_id)
+            if source_group is None or input_cell is None:
+                continue
+            target_order = int(replacement_parts[1]) + 1
+            source_group.input_cell_ids = [
+                candidate for candidate in source_group.input_cell_ids if candidate != input_id
+            ]
+            target_group = next(
+                (
+                    group
+                    for group in groups
+                    if group.section_id == source_group.section_id
+                    and group.order == target_order
+                    and group is not source_group
+                ),
+                None,
+            )
+            if target_group is None:
+                digest = hashlib.sha256(
+                    f"{source_group.section_id}:{target_order}".encode()
+                ).hexdigest()[:12]
+                target_group = LayoutRecordGroup(
+                    id=f"record_incremented_{digest}",
+                    section_id=source_group.section_id,
+                    order=target_order,
+                    x=input_cell.x,
+                    y=input_cell.y,
+                    width=input_cell.width,
+                    height=input_cell.height,
+                    input_cell_ids=[input_id],
+                    record_key_field=source_group.record_key_field,
+                    record_key_value=str(target_order),
+                    source="inferred",
+                )
+                groups.append(target_group)
+            else:
+                target_group.input_cell_ids.append(input_id)
+                left = min(target_group.x, input_cell.x)
+                top = min(target_group.y, input_cell.y)
+                right = max(
+                    target_group.x + target_group.width,
+                    input_cell.x + input_cell.width,
+                )
+                bottom = max(
+                    target_group.y + target_group.height,
+                    input_cell.y + input_cell.height,
+                )
+                target_group.x = left
+                target_group.y = top
+                target_group.width = right - left
+                target_group.height = bottom - top
+            group_by_input[input_id] = target_group
+        groups = [group for group in groups if group.input_cell_ids]
+
+        pool_by_path = {entry.target_path: entry for entry in layout.label_pool}
+        label_pool = list(layout.label_pool)
+        for original_path, generated_path, number in generated_paths:
+            if generated_path in pool_by_path or len(label_pool) >= 500:
+                continue
+            original_entry = pool_by_path.get(original_path)
+            known_target = FIELD_TARGET_BY_PATH.get(original_path)
+            base_label = (
+                original_entry.label
+                if original_entry is not None
+                else known_target.label
+                if known_target is not None
+                else custom_field_key(original_path) or original_path
+            )
+            digest = hashlib.sha256(generated_path.encode("utf-8")).hexdigest()[:16]
+            entry = LayoutLabelPoolEntry(
+                id=f"label_incremented_{digest}",
+                label=f"{base_label} {number}"[:100],
+                target_path=generated_path,
+                section=original_entry.section if original_entry is not None else "自動追加",
+                aliases=(
+                    list(dict.fromkeys([base_label, *original_entry.aliases]))
+                    if original_entry is not None
+                    else [base_label[:100]]
+                ),
+                source=original_entry.source if original_entry is not None else "manual",
+            )
+            label_pool.append(entry)
+            pool_by_path[generated_path] = entry
+
+        normalized = layout.model_copy(
+            update={
+                "cells": cells,
+                "relations": relations,
+                "label_pool": label_pool,
+                "record_groups": groups,
+            },
+            deep=True,
+        )
+        return LayoutDefinition.model_validate(normalized.model_dump(mode="json", by_alias=True))
 
     def verify(self, version_id: str) -> LayoutDefinition:
         inputs = self._begin_verification(version_id)

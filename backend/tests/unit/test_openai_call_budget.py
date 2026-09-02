@@ -1,8 +1,11 @@
 import asyncio
+import hashlib
+import io
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from pydantic import SecretStr
 
 from app.core.config import OcrSettings
@@ -328,7 +331,7 @@ def test_uncertain_cells_are_retried_alone_at_high_detail(
 
 def test_compact_wire_item_expands_to_internal_review_model() -> None:
     item = _expand_compact_item(
-        CompactTranscriptionItem(i="c0", v="123", s="u", c=None),
+        CompactTranscriptionItem(i="c0", a="000000", v="123", s="u", c=None),
         "layout_cell_0123",
     )
 
@@ -343,12 +346,23 @@ def test_openai_call_uses_short_ids_compact_schema_and_configured_detail(
 ) -> None:
     provider = OpenAIOcrProvider(_settings(max_calls=2, max_retries=0))
     captured: dict[str, object] = {}
+    image_png = _png_bytes(40)
 
     async def fake_parse(**kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)
         return SimpleNamespace(
             output_parsed=CompactTranscriptionBatch(
-                items=[CompactTranscriptionItem(i="unexpected", v="123", s="r", c=None)]
+                items=[
+                    CompactTranscriptionItem(
+                        i="unexpected",
+                        a=_expected_association_token(
+                            "c0", image_png
+                        ),
+                        v="123",
+                        s="r",
+                        c=None,
+                    )
+                ]
             ),
             incomplete_details=None,
             usage=SimpleNamespace(input_tokens=100, output_tokens=20),
@@ -361,7 +375,7 @@ def test_openai_call_uses_short_ids_compact_schema_and_configured_detail(
         regions=[
             OcrRegionInput(
                 region_id="layout_cell_very_long_identifier",
-                image_png=b"crop",
+                image_png=image_png,
                 target_path="customFields.value",
             )
         ]
@@ -383,12 +397,22 @@ def test_openai_call_preserves_missing_mapping_as_uncertain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = OpenAIOcrProvider(_settings(max_calls=2, max_retries=0))
+    missing_image = _png_bytes(80)
+    returned_image = _png_bytes(120)
 
     async def fake_parse(**kwargs: object) -> SimpleNamespace:
         del kwargs
         return SimpleNamespace(
             output_parsed=CompactTranscriptionBatch(
-                items=[CompactTranscriptionItem(i="c1", v="456", s="r", c=None)]
+                items=[
+                    CompactTranscriptionItem(
+                        i="c1",
+                        a=_expected_association_token("c1", returned_image),
+                        v="456",
+                        s="r",
+                        c=None,
+                    )
+                ]
             ),
             incomplete_details=None,
             usage=SimpleNamespace(input_tokens=100, output_tokens=20),
@@ -401,12 +425,12 @@ def test_openai_call_preserves_missing_mapping_as_uncertain(
         regions=[
             OcrRegionInput(
                 region_id="missing_cell",
-                image_png=b"missing",
+                image_png=missing_image,
                 target_path="customFields.missing",
             ),
             OcrRegionInput(
                 region_id="returned_cell",
-                image_png=b"returned",
+                image_png=returned_image,
                 target_path="customFields.returned",
             ),
         ]
@@ -420,6 +444,142 @@ def test_openai_call_preserves_missing_mapping_as_uncertain(
     assert by_id["returned_cell"].raw == "456"
     assert by_id["missing_cell"].status is ReadingStatus.UNCERTAIN
     assert by_id["missing_cell"].review_reason == "OCR_MAPPING_MISSING"
+
+
+def test_openai_call_records_request_raw_and_expanded_mapping_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAIOcrProvider(_settings(max_calls=2, max_retries=0))
+    image_png = _png_bytes(160)
+
+    async def fake_parse(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        return SimpleNamespace(
+            output_parsed=CompactTranscriptionBatch(
+                items=[
+                    CompactTranscriptionItem(
+                        i="c0",
+                        a=_expected_association_token("c0", image_png),
+                        v="関東",
+                        s="r",
+                        c=None,
+                    )
+                ]
+            ),
+            incomplete_details=None,
+            usage=SimpleNamespace(input_tokens=100, output_tokens=20),
+            id="response-diagnostic",
+            status="completed",
+        )
+
+    monkeypatch.setattr(provider._client.responses, "parse", fake_parse)
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="layout_xlsx_S76",
+                image_png=image_png,
+                target_path="customFields.region",
+                source_region_id="xlsx_S76",
+            )
+        ]
+    )
+    try:
+        response = asyncio.run(provider._call(request, "primary", 2))
+    finally:
+        asyncio.run(provider._client.close())
+
+    manifest = response.diagnostic["requestManifest"]
+    assert len(manifest) == 1
+    assert manifest[0]["sequence"] == 0
+    assert manifest[0]["compactId"] == "c0"
+    assert manifest[0]["originalMappingId"] == "layout_xlsx_S76"
+    assert manifest[0]["targetPath"] == "customFields.region"
+    assert manifest[0]["sourceRegionId"] == "xlsx_S76"
+    assert manifest[0]["associationToken"] == _expected_association_token("c0", image_png)
+    assert manifest[0]["sourceImageSha256"] == hashlib.sha256(image_png).hexdigest()
+    assert manifest[0]["preparedImageSha256"] == manifest[0]["requestImageSha256"]
+    assert manifest[0]["imageMatchesPreparedRequest"] is True
+    assert manifest[0]["contentTextIndex"] == 1
+    assert manifest[0]["contentImageIndex"] == 2
+    assert manifest[0]["imageDetail"] == "high"
+    assert response.diagnostic["rawItems"] == [
+        {
+            "responseIndex": 0,
+            "compactId": "c0",
+            "associationToken": _expected_association_token("c0", image_png),
+            "expectedAssociationToken": _expected_association_token("c0", image_png),
+            "associationMatches": True,
+            "value": "関東",
+            "status": "r",
+        }
+    ]
+    assert response.diagnostic["expandedItems"] == [
+        {
+            "expandedIndex": 0,
+            "compactId": "c0",
+            "originalMappingId": "layout_xlsx_S76",
+            "value": "関東",
+            "status": "readable",
+            "reviewReason": None,
+        }
+    ]
+    assert response.diagnostic["batchNumber"] == 2
+    assert response.diagnostic["requestId"] == "response-diagnostic"
+
+
+def test_openai_call_rejects_value_whose_visual_association_token_is_shifted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAIOcrProvider(_settings(max_calls=2, max_retries=0))
+    first_image = _png_bytes(180)
+    second_image = _png_bytes(220)
+    first_token = _expected_association_token("c0", first_image)
+
+    async def fake_parse(**kwargs: object) -> SimpleNamespace:
+        del kwargs
+        return SimpleNamespace(
+            output_parsed=CompactTranscriptionBatch(
+                items=[
+                    CompactTranscriptionItem(
+                        i="c0", a=first_token, v=None, s="u", c=None
+                    ),
+                    CompactTranscriptionItem(
+                        i="c1", a=first_token, v="関東", s="r", c=None
+                    ),
+                ]
+            ),
+            incomplete_details=None,
+            usage=SimpleNamespace(input_tokens=100, output_tokens=20),
+            id="response-shifted",
+            status="completed",
+        )
+
+    monkeypatch.setattr(provider._client.responses, "parse", fake_parse)
+    request = OcrProviderRequest(
+        regions=[
+            OcrRegionInput(
+                region_id="first",
+                image_png=first_image,
+                target_path="customFields.first",
+            ),
+            OcrRegionInput(
+                region_id="second",
+                image_png=second_image,
+                target_path="customFields.second",
+            ),
+        ]
+    )
+    try:
+        response = asyncio.run(provider._call(request, "primary", 1))
+    finally:
+        asyncio.run(provider._client.close())
+
+    by_id = {item.mapping_id: item for item in response.batch.items}
+    assert by_id["first"].status is ReadingStatus.UNCERTAIN
+    assert by_id["second"].raw is None
+    assert by_id["second"].status is ReadingStatus.UNCERTAIN
+    assert by_id["second"].review_reason == "OCR_ASSOCIATION_MISMATCH"
+    assert response.diagnostic["associationMismatchCompactIds"] == ["c1"]
 
 
 def test_batch_count_must_fit_call_budget() -> None:
@@ -490,3 +650,14 @@ def _response(
         request_id="response-id",
         duration_ms=1.0,
     )
+
+
+def _expected_association_token(compact_id: str, image_png: bytes) -> str:
+    digest_prefix = hashlib.sha256(compact_id.encode("ascii") + image_png).hexdigest()[:12]
+    return f"{int(digest_prefix, 16) % 1_000_000:06d}"
+
+
+def _png_bytes(gray: int) -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (40, 20), (gray, gray, gray)).save(output, format="PNG")
+    return output.getvalue()

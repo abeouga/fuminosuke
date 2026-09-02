@@ -1,18 +1,4 @@
-import {
-  closestCenter,
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
-import { CSS, useCombinedRefs } from "@dnd-kit/utilities";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, api } from "../api";
 import { ExcelExportActions } from "../components/ExcelExportActions";
 import {
@@ -28,28 +14,77 @@ import {
   navigateToSpreadsheet,
   type SpreadsheetNavigator,
 } from "../spreadsheetNavigation";
-import type { Artifact, FieldReading, OcrDocument, OcrFieldPreview, OcrResult, OutputLayoutTemplateStatus } from "../types";
+import type {
+  Artifact,
+  FieldReading,
+  OcrDocument,
+  OcrFieldPreview,
+  OcrResult,
+  OutputLayoutTemplateStatus,
+  ReviewStructure,
+} from "../types";
 
 const LEGACY_DOCUMENT_NAME = "__legacy_document_name__";
 
 type ReadingEntry = { path: string; label: string; value: FieldReading };
+type ReviewDisplayRecordSection = {
+  id: string;
+  title: string;
+  collectionPath: string;
+  columns: Array<{ id: string; label: string }>;
+  rows: Array<{
+    id: string;
+    cells: Array<{ columnId: string; entry: ReadingEntry | null }>;
+  }>;
+};
+type ReviewDisplayModel = {
+  recordSections: ReviewDisplayRecordSection[];
+  parentSections: Array<{ id: string; title: string; entries: ReadingEntry[] }>;
+  independentEntries: ReadingEntry[];
+  independentGroups: Array<{ id: string; label: string; entries: ReadingEntry[] }>;
+};
+type RectBounds = { left: number; top: number; right: number; bottom: number };
+type PopoverSize = { width: number; height: number };
+export type ReviewPopoverPosition = {
+  left: number;
+  top: number;
+  placement: "above" | "below";
+};
 type ReviewColumn = { key: string; label: string };
 type CollectionRoot = "saleCalves" | "calvings";
-type ColumnShiftDirection = "up" | "down";
 type ReviewInteractionMode = "edit" | "reorder";
-type CellDndData = {
-  root: CollectionRoot;
-  columnKey: string;
-  columnLabel: string;
-  rowIndex: number;
-  value: string;
-};
 type RevisionConflictBackup = {
   draft: OcrDocument;
   baseRevision: number;
   latestLoaded: boolean;
 };
 const SALE_NOTE_SEX_SYMBOLS = ["♂", "♀"];
+
+export function positionReviewPopover(
+  anchor: RectBounds,
+  popover: PopoverSize,
+  boundary: RectBounds,
+  gap = 8,
+): ReviewPopoverPosition {
+  const availableAbove = anchor.top - boundary.top;
+  const availableBelow = boundary.bottom - anchor.bottom;
+  const placement = availableAbove >= popover.height + gap || availableAbove >= availableBelow
+    ? "above"
+    : "below";
+  const desiredTop = placement === "above"
+    ? anchor.top - popover.height - gap
+    : anchor.bottom + gap;
+  const maxLeft = Math.max(boundary.left, boundary.right - popover.width);
+  const maxTop = Math.max(boundary.top, boundary.bottom - popover.height);
+  return {
+    left: Math.min(
+      Math.max(anchor.left + (anchor.right - anchor.left - popover.width) / 2, boundary.left),
+      maxLeft,
+    ),
+    top: Math.min(Math.max(desiredTop, boundary.top), maxTop),
+    placement,
+  };
+}
 
 function saleNoteNeedsSymbol(entry: ReadingEntry) {
   if (
@@ -122,19 +157,6 @@ function PointerModeIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M6 3l11.5 10.2-5.2.8 2.7 5.2-2.5 1.3-2.7-5.2L6 19V3z" />
-    </svg>
-  );
-}
-
-function DragHandleIcon() {
-  return (
-    <svg viewBox="0 0 16 20" aria-hidden="true">
-      <circle cx="5" cy="4" r="1.3" />
-      <circle cx="11" cy="4" r="1.3" />
-      <circle cx="5" cy="10" r="1.3" />
-      <circle cx="11" cy="10" r="1.3" />
-      <circle cx="5" cy="16" r="1.3" />
-      <circle cx="11" cy="16" r="1.3" />
     </svg>
   );
 }
@@ -222,6 +244,7 @@ export function ReviewPage({
   const [draft, setDraft] = useState<OcrDocument | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [lastSelectedPath, setLastSelectedPath] = useState<string | null>(null);
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null);
   const [previewRatio, setPreviewRatio] = useState(38);
   const [interactionMode, setInteractionMode] = useState<ReviewInteractionMode>("edit");
@@ -241,6 +264,7 @@ export function ReviewPage({
   const [outputLayout, setOutputLayout] = useState<OutputLayoutTemplateStatus | null>(null);
   const load = async () => {
     setSelectedPath(null);
+    setLastSelectedPath(null);
     setSelectedMappingId(null);
     setMarkEditorRow(null);
     setChoiceEditorPath(null);
@@ -269,6 +293,7 @@ export function ReviewPage({
           || item.mappingId === initialEntry.value.sourceRegionId,
       );
       setSelectedPath(initialEntry.path);
+      setLastSelectedPath(initialEntry.path);
       setSelectedMappingId(preview?.mappingId ?? null);
     }
     setArtifacts(artifactList?.items ?? []);
@@ -398,7 +423,9 @@ export function ReviewPage({
     ? byName.get(`fieldCrop.${selectedPreview.mappingId}.alignedColor`)
       ?? selectedPreview.artifactUrl
     : (legacyRegionId ? byName.get(`fieldCrop.${legacyRegionId}.alignedColor`) : undefined);
-  const suggestedPath = entries[0]?.path ?? null;
+  const suggestedPath = lastSelectedPath && entryByPath.has(lastSelectedPath)
+    ? lastSelectedPath
+    : entries[0]?.path ?? null;
   const handlePreviewLoadError = () => {
     setPreviewWarning(
       "保存された画像ファイルが見つかりません。DBを別PCから移した旧データは、元画像の再登録が必要です。",
@@ -406,7 +433,41 @@ export function ReviewPage({
   };
   const documentEntries = orderedEntries(entryByPath, "document", DOCUMENT_ORDER);
   const pedigreeEntries = orderedEntries(entryByPath, "pedigree", PEDIGREE_ORDER);
-  const customEntries = entries.filter((entry) => entry.path.startsWith("customFields."));
+  const reviewDisplay = useMemo(
+    () => buildReviewDisplayModel(entries, previews, result?.reviewStructure),
+    [entries, previews, result?.reviewStructure],
+  );
+  const isStructuredEntry = (entry: ReadingEntry) => (
+    !isCattleReview || entry.path.startsWith("customFields.")
+  );
+  const structuredRecordSections = reviewDisplay.recordSections
+    .filter((section) => section.collectionPath.startsWith("genericRecords."))
+    .map((section) => ({
+      ...section,
+      rows: section.rows.map((row) => ({
+        ...row,
+        cells: row.cells.map((cell) => ({
+          ...cell,
+          entry: cell.entry && isStructuredEntry(cell.entry) ? cell.entry : null,
+        })),
+      })),
+    }))
+    .filter((section) => section.rows.some(
+      (row) => row.cells.some((cell) => cell.entry !== null),
+    ));
+  const parentSections = reviewDisplay.parentSections
+    .map((section) => ({
+      ...section,
+      entries: section.entries.filter(isStructuredEntry),
+    }))
+    .filter((section) => section.entries.length > 0);
+  const independentEntries = reviewDisplay.independentEntries.filter(isStructuredEntry);
+  const independentGroups = reviewDisplay.independentGroups
+    .map((group) => ({
+      ...group,
+      entries: group.entries.filter(isStructuredEntry),
+    }))
+    .filter((group) => group.entries.length > 0);
   const recordKeyByRow = useMemo(
     () => collectRecordKeys(result?.recordStructure),
     [result?.recordStructure],
@@ -414,6 +475,7 @@ export function ReviewPage({
   const selectEntry = (entry: ReadingEntry) => {
     const preview = resolveFieldPreview(entry, previewByPath, previewByMappingId);
     setSelectedPath(entry.path);
+    setLastSelectedPath(entry.path);
     setSelectedMappingId(preview?.mappingId ?? null);
     const markMatch = preview?.mappingType === "mark"
       && preview.markRecognitionMode !== "manual"
@@ -437,38 +499,42 @@ export function ReviewPage({
     }, 0);
   };
   const editingLocked = Boolean(result?.confirmed || revisionConflict);
-  const columnCanShift = (
-    root: CollectionRoot,
-    field: string,
-    direction: ColumnShiftDirection,
-  ) => interactionMode === "reorder"
-    && !editingLocked
-    && draft !== null
-    && canShiftCollectionColumn(draft, root, field, direction);
-  const shiftColumn = (
-    root: CollectionRoot,
-    column: ReviewColumn,
-    direction: ColumnShiftDirection,
-  ) => {
-    if (!draft || editingLocked || !canShiftCollectionColumn(draft, root, column.key, direction)) return;
-    setDraft(shiftCollectionColumn(draft, root, column.key, direction));
+  const closeSelectedCell = () => {
     setSelectedPath(null);
     setSelectedMappingId(null);
-    setError(null);
-    setMessage(`${column.label}列を${direction === "up" ? "上" : "下"}へ1行移動しました。`);
+    setMarkEditorRow(null);
+    setChoiceEditorPath(null);
   };
-  const reorderColumn = (
+  const canMoveCollectionRow = (
     root: CollectionRoot,
-    column: ReviewColumn,
+    fromIndex: number,
+    toIndex: number,
+  ) => Boolean(draft && canSwapCollectionRows(draft, root, fromIndex, toIndex));
+  const moveCollectionRow = (
+    root: CollectionRoot,
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    if (!draft || editingLocked || interactionMode !== "reorder") return;
+    const next = swapCollectionRowsAtFixedRegions(draft, root, fromIndex, toIndex);
+    if (next === draft) return;
+    setDraft(next);
+    closeSelectedCell();
+    setError(null);
+    setMessage(`${fromIndex + 1}行目を${toIndex + 1}行目と交換しました。`);
+  };
+  const moveGenericRow = (
+    section: ReviewDisplayRecordSection,
     fromIndex: number,
     toIndex: number,
   ) => {
     if (!draft || editingLocked || interactionMode !== "reorder" || fromIndex === toIndex) return;
-    setDraft(reorderCollectionColumn(draft, root, column.key, fromIndex, toIndex));
-    setSelectedPath(null);
-    setSelectedMappingId(null);
+    const next = swapGenericRecordRowsAtFixedRegions(draft, section, fromIndex, toIndex);
+    if (next === draft) return;
+    setDraft(next);
+    closeSelectedCell();
     setError(null);
-    setMessage(`${column.label}セルを${fromIndex + 1}行目から${toIndex + 1}行目へ移動しました。`);
+    setMessage(`${section.title}の${fromIndex + 1}行目を${toIndex + 1}行目と交換しました。`);
   };
   const replaceEntryText = (entry: ReadingEntry, text: string) => {
     if (!draft || editingLocked) return;
@@ -814,48 +880,26 @@ export function ReviewPage({
       )}
       {result.provider === "mock" && <aside className="notice compact"><strong>試運転データ</strong><span>現在の候補は固定fixtureから作られています。</span></aside>}
       {result.provider === "openai" && <aside className="notice compact"><strong>{result.modelId ?? "OpenAI OCR"}</strong><span>入力 {result.inputTokens?.toLocaleString() ?? "-"} / 出力 {result.outputTokens?.toLocaleString() ?? "-"} tokens · API推定 {result.estimatedCost == null ? "計算不可" : `$${result.estimatedCost.toFixed(6)}`} · prompt {result.promptVersion ?? "-"}</span></aside>}
-      {mappedPaths && <aside className="notice compact"><strong>意味づけ済み項目のみ表示</strong><span>テンプレートで設定された {mappedPaths.size} 項目を表示しています。</span></aside>}
-      {result.documentResolution?.resolved && result.documentResolution.changes.length > 0 && (
-        <aside className="notice external compact">
-          <strong>以前の台帳との差分 {result.documentResolution.changes.length}件</strong>
-          <span>追加または変更された項目を下の結果表で確認し、「内容を確定」を押すまでスプレッドシートには反映されません。</span>
-          <details>
-            <summary>変更箇所を表示</summary>
-            <ul className="document-change-list">
-              {result.documentResolution.changes.slice(0, 50).map((change) => (
-                <li key={change.path}><code>{change.path}</code>：{change.previousValue || "空欄"} → {change.currentValue || "空欄"}</li>
-              ))}
-            </ul>
-          </details>
-        </aside>
-      )}
       {isCattleReview && !identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
       {isCattleReview && result.confirmed && result.individualId && <aside className="notice external compact"><strong>登録データへ保存済み</strong><span>データ検索から個体識別番号 {result.individualId} で検索できます。</span></aside>}
-      {result.spreadsheetSync?.enabled && (
-        <aside className={`notice compact ${result.spreadsheetSync.status === "failed" ? "external" : ""}`}>
-          <strong>{result.spreadsheetSync.status === "failed" ? "スプレッドシート同期に失敗" : result.spreadsheetSync.status === "synced" ? "Googleスプレッドシートへ同期済み" : "Googleスプレッドシート連携設定済み"}</strong>
-          <span>{result.spreadsheetSync.lastError ?? (result.spreadsheetSync.status === "synced" ? "保存した修正は同じ明細行へ反映されます。" : "次回の保存・確定時に同じ明細行へ反映します。")}</span>
-          {result.spreadsheetSync.status === "failed" && (
-            <button type="button" className="secondary compact" disabled={busy} onClick={async () => {
-              setBusy(true);
-              try {
-                const synced = await api.syncSpreadsheet(jobId);
-                setResult(synced);
-                setMessage(synced.spreadsheetSync?.status === "synced" ? "スプレッドシートへ再同期しました。" : synced.spreadsheetSync?.lastError ?? "再同期できませんでした。");
-                if (
-                  synced.spreadsheetSync?.status === "synced"
-                  && synced.spreadsheetSync.spreadsheetUrl
-                ) {
-                  onNavigationGuardChange?.(false);
-                  onSpreadsheetNavigate(synced.spreadsheetSync.spreadsheetUrl);
-                }
-              } catch (reason) {
-                setError(reason instanceof Error ? reason.message : "再同期できませんでした。");
-              } finally {
-                setBusy(false);
+      {result.spreadsheetSync?.enabled && result.spreadsheetSync.status === "failed" && (
+        <aside className="notice compact external">
+          <button type="button" className="secondary compact" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              const synced = await api.syncSpreadsheet(jobId);
+              setResult(synced);
+              setMessage(synced.spreadsheetSync?.status === "synced" ? "スプレッドシートへ再同期しました。" : synced.spreadsheetSync?.lastError ?? "再同期できませんでした。");
+              if (synced.spreadsheetSync?.status === "synced" && synced.spreadsheetSync.spreadsheetUrl) {
+                onNavigationGuardChange?.(false);
+                onSpreadsheetNavigate(synced.spreadsheetSync.spreadsheetUrl);
               }
-            }}>再同期</button>
-          )}
+            } catch (reason) {
+              setError(reason instanceof Error ? reason.message : "再同期できませんでした。");
+            } finally {
+              setBusy(false);
+            }
+          }}>再同期</button>
           {result.spreadsheetSync.spreadsheetUrl && <a className="secondary compact" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>}
         </aside>
       )}
@@ -1007,9 +1051,9 @@ export function ReviewPage({
                 <button
                   type="button"
                   className={interactionMode === "reorder" ? "active" : ""}
-                  aria-label="ドラッグアンドドロップ移動モード"
+                  aria-label="行移動モード"
                   aria-pressed={interactionMode === "reorder"}
-                  title="カーソルでセルを移動"
+                  title="繰り返し表の行全体を移動"
                   disabled={editingLocked}
                   onClick={() => {
                     setInteractionMode("reorder");
@@ -1036,27 +1080,10 @@ export function ReviewPage({
               <span>{result.confirmed
                 ? "確定済み"
                 : interactionMode === "reorder"
-                  ? "セル移動モード"
+                  ? "行移動モード"
                   : `${entries.length}セルを編集中`}</span>
             </div>
           </div>
-          {interactionMode === "edit" && selectedEntry && selectedPreview?.mappingType !== "mark" && (
-            <CellEditor
-              entry={selectedEntry}
-              confirmed={editingLocked}
-              warning={warningPaths.has(selectedEntry.path)}
-              suggestedValues={
-                selectedEntry.path.endsWith(".sireName")
-                  ? sireCandidates
-                  : selectedEntry.path.startsWith("saleCalves.")
-                    && selectedEntry.path.endsWith(".notes")
-                    ? SALE_NOTE_SEX_SYMBOLS
-                    : []
-              }
-              onChange={(patch) => setDraft(updateReading(draft, selectedEntry.path, patch))}
-              onClose={() => { setSelectedPath(null); setSelectedMappingId(null); }}
-            />
-          )}
           {entries.length === 0 ? (
             <div className="empty-state">テンプレートで意味づけされた読み取りセルがありません。</div>
           ) : (
@@ -1067,7 +1094,7 @@ export function ReviewPage({
                   selectedPath={selectedPath}
                   warningPaths={warningPaths}
                   choicePaths={choicePaths}
-                  confirmed={editingLocked || interactionMode === "reorder"}
+                  confirmed={editingLocked}
                   onSelect={selectEntry}
                   onEdit={replaceEntryText}
                 />
@@ -1097,9 +1124,8 @@ export function ReviewPage({
                 interactionMode={interactionMode}
                 onSelect={selectEntry}
                 onEdit={replaceEntryText}
-                canShiftColumn={columnCanShift}
-                onShiftColumn={shiftColumn}
-                onReorderColumn={reorderColumn}
+                canMoveRow={canMoveCollectionRow}
+                onMoveRow={moveCollectionRow}
               />}
               {isCattleReview && <CollectionReviewTable
                 title="繁殖履歴"
@@ -1115,13 +1141,39 @@ export function ReviewPage({
                 interactionMode={interactionMode}
                 onSelect={selectEntry}
                 onEdit={replaceEntryText}
-                canShiftColumn={columnCanShift}
-                onShiftColumn={shiftColumn}
-                onReorderColumn={reorderColumn}
+                canMoveRow={canMoveCollectionRow}
+                onMoveRow={moveCollectionRow}
               />}
-              {customEntries.length > 0 && <ReviewTableSection title={isCattleReview ? "追加項目" : "読み取り項目"}>
-                <KeyValueReviewTable
-                  entries={customEntries}
+              {structuredRecordSections.map((section) => (
+                <GenericRecordReviewTable
+                  key={section.id}
+                  section={section}
+                  selectedPath={selectedPath}
+                  warningPaths={warningPaths}
+                  choicePaths={choicePaths}
+                  confirmed={editingLocked}
+                  interactionMode={interactionMode}
+                  onSelect={selectEntry}
+                  onEdit={replaceEntryText}
+                  onMoveRow={moveGenericRow}
+                />
+              ))}
+              {parentSections.map((section) => (
+                <ReviewTableSection key={section.id} title={section.title}>
+                  <KeyValueReviewTable
+                    entries={section.entries}
+                    selectedPath={selectedPath}
+                    warningPaths={warningPaths}
+                    choicePaths={choicePaths}
+                    confirmed={editingLocked || interactionMode === "reorder"}
+                    onSelect={selectEntry}
+                    onEdit={replaceEntryText}
+                  />
+                </ReviewTableSection>
+              ))}
+              {independentEntries.length > 0 && <ReviewTableSection title={isCattleReview ? "追加項目" : "独立項目"}>
+                <IndependentReviewGroups
+                  groups={independentGroups}
                   selectedPath={selectedPath}
                   warningPaths={warningPaths}
                   choicePaths={choicePaths}
@@ -1131,6 +1183,38 @@ export function ReviewPage({
                 />
               </ReviewTableSection>}
             </div>
+          )}
+          {interactionMode === "edit" && selectedEntry && selectedPreview?.mappingType !== "mark" && (
+            <AnchoredReviewPopover
+              path={selectedEntry.path}
+              wide={requiresDedicatedCellEditor(selectedEntry)}
+              onClose={() => { setSelectedPath(null); setSelectedMappingId(null); }}
+            >
+              {requiresDedicatedCellEditor(selectedEntry) ? (
+                <CellEditor
+                  entry={selectedEntry}
+                  confirmed={editingLocked}
+                  warning={warningPaths.has(selectedEntry.path)}
+                  suggestedValues={
+                    selectedEntry.path.endsWith(".sireName")
+                      ? sireCandidates
+                      : selectedEntry.path.startsWith("saleCalves.")
+                        && selectedEntry.path.endsWith(".notes")
+                        ? SALE_NOTE_SEX_SYMBOLS
+                        : []
+                  }
+                  onChange={(patch) => setDraft(updateReading(draft, selectedEntry.path, patch))}
+                  onClose={() => { setSelectedPath(null); setSelectedMappingId(null); }}
+                />
+              ) : (
+                <CellStatusPopover
+                  entry={selectedEntry}
+                  confirmed={editingLocked}
+                  onChange={(patch) => setDraft(updateReading(draft, selectedEntry.path, patch))}
+                  onClose={() => { setSelectedPath(null); setSelectedMappingId(null); }}
+                />
+              )}
+            </AnchoredReviewPopover>
           )}
         </main>
       </div>
@@ -1452,6 +1536,148 @@ function CalvingMarkModal({
   );
 }
 
+function requiresDedicatedCellEditor(entry: ReadingEntry) {
+  return isJapaneseEraDatePath(entry.path)
+    || entry.path.endsWith(".sireName")
+    || (entry.path.startsWith("saleCalves.") && entry.path.endsWith(".notes"));
+}
+
+function AnchoredReviewPopover({
+  path,
+  wide = false,
+  children,
+  onClose,
+}: {
+  path: string;
+  wide?: boolean;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  const [position, setPosition] = useState<ReviewPopoverPosition | null>(null);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useLayoutEffect(() => {
+    const updatePosition = () => {
+      const anchor = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-review-path]"),
+      ).find((candidate) => candidate.dataset.reviewPath === path);
+      const popover = popoverRef.current;
+      if (!anchor || !popover) {
+        onCloseRef.current();
+        return;
+      }
+      const anchorRect = anchor.getBoundingClientRect();
+      const paneRect = anchor.closest<HTMLElement>(".field-pane")?.getBoundingClientRect();
+      const viewport = {
+        left: 8,
+        top: 8,
+        right: Math.max(8, window.innerWidth - 8),
+        bottom: Math.max(8, window.innerHeight - 8),
+      };
+      const hasUsablePane = Boolean(
+        paneRect && paneRect.right > paneRect.left && paneRect.bottom > paneRect.top,
+      );
+      const boundary = hasUsablePane && paneRect
+        ? {
+          left: Math.max(viewport.left, paneRect.left + 8),
+          top: Math.max(viewport.top, paneRect.top + 8),
+          right: Math.min(viewport.right, paneRect.right - 8),
+          bottom: Math.min(viewport.bottom, paneRect.bottom - 8),
+        }
+        : viewport;
+      setPosition(positionReviewPopover(
+        anchorRect,
+        {
+          width: popover.offsetWidth || (wide ? 520 : 260),
+          height: popover.offsetHeight || (wide ? 220 : 96),
+        },
+        boundary,
+      ));
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [path, wide]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCloseRef.current();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
+
+  return (
+    <div
+      ref={popoverRef}
+      className={`ocr-review-popover${wide ? " ocr-review-popover-wide" : ""}`}
+      data-placement={position?.placement}
+      style={{
+        left: position?.left ?? 0,
+        top: position?.top ?? 0,
+        visibility: position ? "visible" : "hidden",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CellStatusPopover({
+  entry,
+  confirmed,
+  onChange,
+  onClose,
+}: {
+  entry: ReadingEntry;
+  confirmed: boolean;
+  onChange: (patch: Partial<FieldReading>) => void;
+  onClose: () => void;
+}) {
+  const setStatus = (status: FieldReading["status"]) => {
+    onChange(status === "blank"
+      ? { status, raw: null, normalized: null, reviewReason: null }
+      : status === "uncertain"
+        ? { status, normalized: null, raw: entry.value.raw ?? "" }
+        : { status, raw: entry.value.raw ?? "", reviewReason: null });
+  };
+  return (
+    <section className="ocr-cell-status-popover" aria-label="選択セルの判定">
+      <header>
+        <strong>{entry.label}</strong>
+        <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
+      </header>
+      <div role="group" aria-label={`${entry.label}の判定`}>
+        {([
+          ["readable", "読めた"],
+          ["uncertain", "不確実"],
+          ["blank", "空欄"],
+        ] as const).map(([status, label]) => (
+          <button
+            type="button"
+            key={status}
+            className={entry.value.status === status ? "active" : ""}
+            aria-pressed={entry.value.status === status}
+            disabled={confirmed}
+            onClick={() => setStatus(status)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function CellEditor({
   entry,
   confirmed,
@@ -1677,10 +1903,116 @@ function ReviewTableSection({
 }) {
   if (!children) return null;
   return (
-    <section className="ocr-edit-section">
+    <section className="ocr-edit-section" aria-label={title}>
       <header><h3>{title}</h3></header>
       {children}
     </section>
+  );
+}
+
+function GenericRecordReviewTable({
+  section,
+  selectedPath,
+  warningPaths,
+  choicePaths,
+  confirmed,
+  interactionMode,
+  onSelect,
+  onEdit,
+  onMoveRow,
+}: {
+  section: ReviewDisplayRecordSection;
+  selectedPath: string | null;
+  warningPaths: ReadonlySet<string>;
+  choicePaths: ReadonlySet<string>;
+  confirmed: boolean;
+  interactionMode: ReviewInteractionMode;
+  onSelect: (entry: ReadingEntry) => void;
+  onEdit: (entry: ReadingEntry, text: string) => void;
+  onMoveRow: (
+    section: ReviewDisplayRecordSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => void;
+}) {
+  return (
+    <ReviewTableSection title={section.title}>
+      <div className="ocr-edit-table-wrap">
+        <table
+          className="ocr-edit-table ocr-collection-table ocr-generic-record-table"
+          aria-label={`${section.title}のレコード`}
+        >
+          <thead>
+            <tr>
+              <th scope="col">行</th>
+              {section.columns.map((column) => (
+                <th scope="col" key={column.id}>{column.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {section.rows.map((row, rowIndex) => (
+              <tr key={row.id}>
+                <th scope="row" aria-label={`${rowIndex + 1}行目`}>
+                  <div className="ocr-row-heading">
+                    <span>{rowIndex + 1}</span>
+                    {interactionMode === "reorder" && (
+                      <span className="ocr-row-shift-controls">
+                        <button
+                          type="button"
+                          aria-label={`${section.title} ${rowIndex + 1}行目を上へ移動`}
+                          title="この行の読み取り結果を一行上へ移動"
+                          disabled={confirmed || !canSwapGenericRecordRows(section, rowIndex, rowIndex - 1)}
+                          onClick={() => onMoveRow(section, rowIndex, rowIndex - 1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${section.title} ${rowIndex + 1}行目を下へ移動`}
+                          title="この行の読み取り結果を一行下へ移動"
+                          disabled={confirmed || !canSwapGenericRecordRows(section, rowIndex, rowIndex + 1)}
+                          onClick={() => onMoveRow(section, rowIndex, rowIndex + 1)}
+                        >
+                          ↓
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </th>
+                {section.columns.map((column) => {
+                  const cell = row.cells.find((item) => item.columnId === column.id);
+                  const entry = cell?.entry;
+                  if (!entry) {
+                    return (
+                      <td
+                        className="ocr-unmapped-cell"
+                        key={column.id}
+                        aria-label={`${rowIndex + 1}行目 ${column.label} 未設定`}
+                      >
+                        —
+                      </td>
+                    );
+                  }
+                  return (
+                    <ReviewValueCell
+                      key={column.id}
+                      entry={entry}
+                      selected={selectedPath === entry.path}
+                      warning={warningPaths.has(entry.path)}
+                      choice={choicePaths.has(entry.path)}
+                      confirmed={confirmed || interactionMode === "reorder"}
+                      onSelect={onSelect}
+                      onEdit={onEdit}
+                    />
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </ReviewTableSection>
   );
 }
 
@@ -1730,6 +2062,52 @@ function KeyValueReviewTable({
   );
 }
 
+function IndependentReviewGroups({
+  groups,
+  selectedPath,
+  warningPaths,
+  choicePaths,
+  confirmed,
+  onSelect,
+  onEdit,
+}: {
+  groups: ReviewDisplayModel["independentGroups"];
+  selectedPath: string | null;
+  warningPaths: ReadonlySet<string>;
+  choicePaths: ReadonlySet<string>;
+  confirmed: boolean;
+  onSelect: (entry: ReadingEntry) => void;
+  onEdit: (entry: ReadingEntry, text: string) => void;
+}) {
+  return (
+    <div className="ocr-independent-groups">
+      {groups.map((group) => (
+        <section className="ocr-independent-group" key={group.id}>
+          <h4 className="ocr-independent-label">{group.label}</h4>
+          <table className="ocr-edit-table ocr-independent-values">
+            <tbody>
+              <tr>
+                {group.entries.map((entry) => (
+                  <ReviewValueCell
+                    key={entry.path}
+                    entry={entry}
+                    selected={selectedPath === entry.path}
+                    warning={warningPaths.has(entry.path)}
+                    choice={choicePaths.has(entry.path)}
+                    confirmed={confirmed}
+                    onSelect={onSelect}
+                    onEdit={onEdit}
+                  />
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function ReviewLabelAndCell({
   entry,
   selected,
@@ -1763,18 +2141,6 @@ function ReviewLabelAndCell({
   );
 }
 
-const sameColumnCollision: CollisionDetection = (args) => {
-  const activeData = args.active.data.current as CellDndData | undefined;
-  if (!activeData) return [];
-  return closestCenter({
-    ...args,
-    droppableContainers: args.droppableContainers.filter((container) => {
-      const target = container.data.current as CellDndData | undefined;
-      return target?.root === activeData.root && target.columnKey === activeData.columnKey;
-    }),
-  });
-};
-
 function CollectionReviewTable({
   title,
   root,
@@ -1789,9 +2155,8 @@ function CollectionReviewTable({
   interactionMode,
   onSelect,
   onEdit,
-  canShiftColumn,
-  onShiftColumn,
-  onReorderColumn,
+  canMoveRow,
+  onMoveRow,
 }: {
   title: string;
   root: CollectionRoot;
@@ -1806,221 +2171,212 @@ function CollectionReviewTable({
   interactionMode: ReviewInteractionMode;
   onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
-  canShiftColumn: (
+  canMoveRow: (root: CollectionRoot, fromIndex: number, toIndex: number) => boolean;
+  onMoveRow: (
     root: CollectionRoot,
-    field: string,
-    direction: ColumnShiftDirection,
-  ) => boolean;
-  onShiftColumn: (
-    root: CollectionRoot,
-    column: ReviewColumn,
-    direction: ColumnShiftDirection,
-  ) => void;
-  onReorderColumn: (
-    root: CollectionRoot,
-    column: ReviewColumn,
     fromIndex: number,
     toIndex: number,
   ) => void;
 }) {
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor),
-  );
-  const [activeCell, setActiveCell] = useState<CellDndData | null>(null);
   const visibleColumns = columns.filter((column) => (
     Array.from({ length: rowCount }, (_, index) => `${root}.${index}.${column.key}`)
       .some((path) => entryByPath.has(path))
   ));
   const visibleRows = Array.from({ length: rowCount }, (_, index) => index)
     .filter((index) => visibleColumns.some((column) => entryByPath.has(`${root}.${index}.${column.key}`)));
-  const handleDragStart = ({ active }: DragStartEvent) => {
-    setActiveCell(active.data.current as CellDndData | null);
-  };
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    setActiveCell(null);
-    if (!over) return;
-    const source = active.data.current as CellDndData | undefined;
-    const destination = over.data.current as CellDndData | undefined;
-    if (
-      !source
-      || !destination
-      || source.root !== destination.root
-      || source.columnKey !== destination.columnKey
-      || source.rowIndex === destination.rowIndex
-    ) return;
-    const column = columns.find((candidate) => candidate.key === source.columnKey);
-    if (column) onReorderColumn(root, column, source.rowIndex, destination.rowIndex);
-  };
   if (visibleColumns.length === 0 || visibleRows.length === 0) return null;
   return (
     <ReviewTableSection title={title}>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={sameColumnCollision}
-        accessibility={{
-          screenReaderInstructions: {
-            draggable: "スペースキーでセルを持ち上げ、上下キーで移動先を選び、もう一度スペースキーで確定します。",
-          },
-        }}
-        onDragStart={handleDragStart}
-        onDragCancel={() => setActiveCell(null)}
-        onDragEnd={handleDragEnd}
-      >
-        <div className="ocr-edit-table-wrap">
-          <table className="ocr-edit-table ocr-collection-table">
-            <thead>
-              <tr>
-                <th>レコード</th>
+      <div className="ocr-edit-table-wrap">
+        <table className="ocr-edit-table ocr-collection-table" aria-label={`${title}のレコード`}>
+          <thead>
+            <tr>
+              <th>レコード</th>
+              {visibleColumns.map((column) => <th key={column.key}>{column.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((index, visibleIndex) => (
+              <tr key={index}>
+                <th scope="row">
+                  <div className="ocr-row-heading">
+                    <span>{recordKeyByRow.get(`${root}.${index}`) ?? index + 1}産次</span>
+                    {interactionMode === "reorder" && (
+                      <span className="ocr-row-shift-controls">
+                        <button
+                          type="button"
+                          aria-label={`${title} ${index + 1}行目を上へ移動`}
+                          title="この行の読み取り結果を一行上へ移動"
+                          disabled={
+                            confirmed
+                            || visibleIndex === 0
+                            || index - visibleRows[visibleIndex - 1] !== 1
+                            || !canMoveRow(root, index, visibleRows[visibleIndex - 1])
+                          }
+                          onClick={() => onMoveRow(root, index, visibleRows[visibleIndex - 1])}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${title} ${index + 1}行目を下へ移動`}
+                          title="この行の読み取り結果を一行下へ移動"
+                          disabled={
+                            confirmed
+                            || visibleIndex === visibleRows.length - 1
+                            || visibleRows[visibleIndex + 1] - index !== 1
+                            || !canMoveRow(root, index, visibleRows[visibleIndex + 1])
+                          }
+                          onClick={() => onMoveRow(root, index, visibleRows[visibleIndex + 1])}
+                        >
+                          ↓
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </th>
                 {visibleColumns.map((column) => {
-                  const upDisabled = !canShiftColumn(root, column.key, "up");
-                  const downDisabled = !canShiftColumn(root, column.key, "down");
+                  const entry = entryByPath.get(`${root}.${index}.${column.key}`);
+                  if (!entry) return <td className="ocr-unmapped-cell" key={column.key}>—</td>;
                   return (
-                    <th key={column.key}>
-                      <div className="ocr-column-heading">
-                        <span>{column.label}</span>
-                        {interactionMode === "reorder" && (
-                          <span className="ocr-column-shift-controls">
-                            <button
-                              type="button"
-                              aria-label={`${column.label}列を上へ1行移動`}
-                              title={upDisabled && !confirmed
-                                ? "先頭セルに値があるため上へ移動できません"
-                                : `${column.label}列を上へ1行移動`}
-                              disabled={upDisabled}
-                              onClick={() => onShiftColumn(root, column, "up")}
-                            >
-                              ↑
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={`${column.label}列を下へ1行移動`}
-                              title={downDisabled && !confirmed
-                                ? "末尾セルに値があるため下へ移動できません"
-                                : `${column.label}列を下へ1行移動`}
-                              disabled={downDisabled}
-                              onClick={() => onShiftColumn(root, column, "down")}
-                            >
-                              ↓
-                            </button>
-                          </span>
-                        )}
-                      </div>
-                    </th>
+                    <ReviewValueCell
+                      key={column.key}
+                      entry={entry}
+                      selected={selectedPath === entry.path}
+                      warning={warningPaths.has(entry.path)}
+                      choice={choicePaths.has(entry.path)}
+                      confirmed={confirmed || interactionMode === "reorder"}
+                      onSelect={onSelect}
+                      onEdit={onEdit}
+                    />
                   );
                 })}
               </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((index) => (
-                <tr key={index}>
-                  <th scope="row">{recordKeyByRow.get(`${root}.${index}`) ?? index + 1}産次</th>
-                  {visibleColumns.map((column) => {
-                    const entry = entryByPath.get(`${root}.${index}.${column.key}`);
-                    if (!entry) return <td className="ocr-unmapped-cell" key={column.key}>—</td>;
-                    return interactionMode === "reorder" ? (
-                      <DraggableReviewValueCell
-                        key={column.key}
-                        root={root}
-                        column={column}
-                        rowIndex={index}
-                        entry={entry}
-                        warning={warningPaths.has(entry.path)}
-                        confirmed={confirmed}
-                      />
-                    ) : (
-                      <ReviewValueCell
-                        key={column.key}
-                        entry={entry}
-                        selected={selectedPath === entry.path}
-                        warning={warningPaths.has(entry.path)}
-                        choice={choicePaths.has(entry.path)}
-                        confirmed={confirmed}
-                        onSelect={onSelect}
-                        onEdit={onEdit}
-                      />
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <DragOverlay>
-          {activeCell ? (
-            <div className="ocr-drag-overlay">
-              <DragHandleIcon />
-              <strong>{activeCell.columnLabel}</strong>
-              <span>{activeCell.value}</span>
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </ReviewTableSection>
   );
 }
 
-function DraggableReviewValueCell({
-  root,
-  column,
-  rowIndex,
-  entry,
-  warning,
-  confirmed,
-}: {
-  root: CollectionRoot;
-  column: ReviewColumn;
-  rowIndex: number;
-  entry: ReadingEntry;
-  warning: boolean;
-  confirmed: boolean;
-}) {
-  const value = entry.value.normalized ?? entry.value.raw;
-  const displayValue = value || (entry.value.status === "blank" ? "空欄" : "未入力");
-  const id = `${root}:${column.key}:${rowIndex}`;
-  const data: CellDndData = {
-    root,
-    columnKey: column.key,
-    columnLabel: column.label,
-    rowIndex,
-    value: displayValue,
-  };
-  const {
-    attributes,
-    isDragging,
-    listeners,
-    setNodeRef: setDraggableNodeRef,
-    transform,
-  } = useDraggable({ id, data, disabled: confirmed });
-  const {
-    isOver,
-    setNodeRef: setDroppableNodeRef,
-  } = useDroppable({ id, data, disabled: confirmed });
-  const setNodeRef = useCombinedRefs(setDraggableNodeRef, setDroppableNodeRef);
+export function buildReviewDisplayModel(
+  entries: readonly ReadingEntry[],
+  previews: readonly OcrFieldPreview[],
+  structure: ReviewStructure | undefined,
+): ReviewDisplayModel {
+  if (!structure) {
+    const independentEntries = [...entries];
+    return {
+      recordSections: [],
+      parentSections: [],
+      independentEntries,
+      independentGroups: independentEntries.map((entry) => ({
+        id: `path:${entry.path}`,
+        label: entry.label,
+        entries: [entry],
+      })),
+    };
+  }
 
-  return (
-    <td
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform) }}
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${isDragging ? "ocr-cell-dragging" : ""} ${isOver && !isDragging ? "ocr-cell-drop-target" : ""}`}
-      data-review-path={entry.path}
-    >
-      <button
-        type="button"
-        className="ocr-drag-handle"
-        title={`${column.label}セルを同じ列内で移動`}
-        disabled={confirmed}
-        {...attributes}
-        {...listeners}
-        aria-label={`${column.label} ${entry.path} を移動`}
-        aria-roledescription="並び替え可能なセル"
-      >
-        <DragHandleIcon />
-        <span>{displayValue}</span>
-        <small>{warning ? "要確認 · 移動" : "移動"}</small>
-      </button>
-    </td>
+  const entryByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const entriesBySource = new Map<string, ReadingEntry[]>();
+  entries.forEach((entry) => {
+    if (entry.value.sourceRegionId !== "unmapped") {
+      const candidates = entriesBySource.get(entry.value.sourceRegionId) ?? [];
+      candidates.push(entry);
+      entriesBySource.set(entry.value.sourceRegionId, candidates);
+    }
+  });
+  const previewByMappingId = new Map(
+    previews.map((preview) => [preview.mappingId, preview]),
   );
+  const fieldById = new Map(structure.fields.map((field) => [field.id, field]));
+  const consumedPaths = new Set<string>();
+  const resolveField = (fieldId: string | null): ReadingEntry | null => {
+    if (!fieldId) return null;
+    const field = fieldById.get(fieldId);
+    if (!field) return null;
+    const sourceCandidates = entriesBySource.get(field.mappingId) ?? [];
+    const entry = (sourceCandidates.length === 1 ? sourceCandidates[0] : undefined)
+      ?? sourceCandidates.find((candidate) => candidate.path === field.targetPath)
+      ?? sourceCandidates.find(
+        (candidate) => candidate.path === previewByMappingId.get(field.mappingId)?.targetPath,
+      )
+      ?? entryByPath.get(previewByMappingId.get(field.mappingId)?.targetPath ?? "")
+      ?? entryByPath.get(field.targetPath);
+    if (!entry || consumedPaths.has(entry.path)) return null;
+    consumedPaths.add(entry.path);
+    return { ...entry, label: field.label || entry.label };
+  };
+
+  const recordTitleCounts = new Map<string, number>();
+  structure.recordSections.forEach((section) => {
+    recordTitleCounts.set(section.title, (recordTitleCounts.get(section.title) ?? 0) + 1);
+  });
+  const recordTitleIndexes = new Map<string, number>();
+  const recordSections = structure.recordSections.map((section) => {
+    const titleIndex = (recordTitleIndexes.get(section.title) ?? 0) + 1;
+    recordTitleIndexes.set(section.title, titleIndex);
+    return {
+      id: section.id,
+      title: (recordTitleCounts.get(section.title) ?? 0) > 1
+        ? `${section.title} ${titleIndex}`
+        : section.title,
+      collectionPath: section.collectionPath,
+      columns: section.columns.map((column) => ({ ...column })),
+      rows: section.rows.map((row) => ({
+        id: row.id,
+        cells: row.cells.map((cell) => ({
+          columnId: cell.columnId,
+          entry: resolveField(cell.fieldId),
+        })),
+      })),
+    };
+  });
+  const parentSections = structure.parentSections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    entries: section.fieldIds
+      .map((fieldId) => resolveField(fieldId))
+      .filter((entry): entry is ReadingEntry => entry !== null),
+  }));
+
+  const independentEntries: ReadingEntry[] = [];
+  const independentGroups: ReviewDisplayModel["independentGroups"] = [];
+  const independentGroupById = new Map<string, ReviewDisplayModel["independentGroups"][number]>();
+  const appendIndependent = (
+    entry: ReadingEntry,
+    groupId: string,
+    label: string,
+  ) => {
+    independentEntries.push(entry);
+    const existing = independentGroupById.get(groupId);
+    if (existing) {
+      existing.entries.push(entry);
+      return;
+    }
+    const group = { id: groupId, label, entries: [entry] };
+    independentGroupById.set(groupId, group);
+    independentGroups.push(group);
+  };
+  for (const fieldId of [
+    ...structure.independentFieldIds,
+    ...structure.fields.map((field) => field.id),
+  ]) {
+    const entry = resolveField(fieldId);
+    const field = fieldById.get(fieldId);
+    if (entry && field) {
+      appendIndependent(entry, field.groupId ?? `field:${field.id}`, field.label || entry.label);
+    }
+  }
+  entries.forEach((entry) => {
+    if (!consumedPaths.has(entry.path)) {
+      consumedPaths.add(entry.path);
+      appendIndependent(entry, `path:${entry.path}`, entry.label);
+    }
+  });
+  return { recordSections, parentSections, independentEntries, independentGroups };
 }
 
 function collectRecordKeys(
@@ -2254,131 +2610,166 @@ export function hydrateMappedReadings(
   return next;
 }
 
-function isEmptyReading(reading: FieldReading | undefined): boolean {
-  return !reading || (
-    reading.status === "blank"
-    && !reading.raw?.trim()
-    && !reading.normalized?.trim()
-  );
+type ReadingPathPair = { firstPath: string; secondPath: string };
+
+function readingAtPath(document: OcrDocument, path: string): FieldReading | undefined {
+  const parts = path.split(".");
+  if (parts.length === 2 && parts[0] === "customFields") {
+    return document.customFields[parts[1]];
+  }
+  if (
+    parts.length === 3
+    && (parts[0] === "saleCalves" || parts[0] === "calvings")
+  ) {
+    const index = Number(parts[1]);
+    return Number.isInteger(index) ? document[parts[0]][index]?.[parts[2]] : undefined;
+  }
+  return undefined;
 }
 
-export function canShiftCollectionColumn(
-  document: OcrDocument,
-  root: CollectionRoot,
-  field: string,
-  direction: ColumnShiftDirection,
-): boolean {
-  const rows = document[root];
-  if (rows.length < 2) return false;
-  const boundaryIndex = direction === "up" ? 0 : rows.length - 1;
-  return isEmptyReading(rows[boundaryIndex]?.[field]);
+function setReadingAtPath(document: OcrDocument, path: string, value: FieldReading): boolean {
+  const parts = path.split(".");
+  if (parts.length === 2 && parts[0] === "customFields") {
+    document.customFields[parts[1]] = value;
+    return true;
+  }
+  if (
+    parts.length === 3
+    && (parts[0] === "saleCalves" || parts[0] === "calvings")
+  ) {
+    const index = Number(parts[1]);
+    const row = Number.isInteger(index) ? document[parts[0]][index] : undefined;
+    if (!row) return false;
+    row[parts[2]] = value;
+    return true;
+  }
+  return false;
 }
 
-export function shiftCollectionColumn(
+function swapReadingsAtFixedRegions(
   document: OcrDocument,
-  root: CollectionRoot,
-  field: string,
-  direction: ColumnShiftDirection,
+  pairs: readonly ReadingPathPair[],
 ): OcrDocument {
-  if (!canShiftCollectionColumn(document, root, field, direction)) return document;
-
-  const next = structuredClone(document);
-  const rows = next[root];
-  const fixedRegions = rows.map((row) => structuredClone(
-    row[field] ?? blankReading(),
-  ));
-  if (direction === "up") {
-    for (let index = 0; index < rows.length - 1; index += 1) {
-      rows[index][field] = readingValueAtFixedRegion(
-        rows[index + 1]?.[field] ?? blankReading(),
-        fixedRegions[index],
-      );
-    }
-    rows[rows.length - 1][field] = readingValueAtFixedRegion(
-      blankReading(),
-      fixedRegions[rows.length - 1],
-    );
-  } else {
-    for (let index = rows.length - 1; index > 0; index -= 1) {
-      rows[index][field] = readingValueAtFixedRegion(
-        rows[index - 1]?.[field] ?? blankReading(),
-        fixedRegions[index],
-      );
-    }
-    rows[0][field] = readingValueAtFixedRegion(blankReading(), fixedRegions[0]);
+  if (pairs.length === 0) return document;
+  const paths = pairs.flatMap(({ firstPath, secondPath }) => [firstPath, secondPath]);
+  if (new Set(paths).size !== paths.length) return document;
+  const snapshots = new Map<string, FieldReading>();
+  for (const path of paths) {
+    const reading = readingAtPath(document, path);
+    if (!reading) return document;
+    snapshots.set(path, structuredClone(reading));
   }
 
-  const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pathPattern = new RegExp(`^${escapedRoot}\\.(\\d+)\\.${escapedField}$`);
-  next.reviewItems = next.reviewItems.flatMap((item) => {
-    const match = pathPattern.exec(item.path);
-    if (!match) return [item];
-    const sourceIndex = Number(match[1]);
-    const destinationIndex = direction === "up" ? sourceIndex - 1 : sourceIndex + 1;
-    if (destinationIndex < 0 || destinationIndex >= rows.length) return [];
-    return [{
+  const next = structuredClone(document);
+  const destinationBySource = new Map<string, string>();
+  for (const { firstPath, secondPath } of pairs) {
+    const first = snapshots.get(firstPath);
+    const second = snapshots.get(secondPath);
+    if (!first || !second) return document;
+    setReadingAtPath(next, firstPath, readingValueAtFixedRegion(second, first));
+    setReadingAtPath(next, secondPath, readingValueAtFixedRegion(first, second));
+    destinationBySource.set(firstPath, secondPath);
+    destinationBySource.set(secondPath, firstPath);
+  }
+  next.reviewItems = next.reviewItems.map((item) => {
+    const destinationPath = destinationBySource.get(item.path);
+    if (!destinationPath) return item;
+    return {
       ...item,
-      path: `${root}.${destinationIndex}.${field}`,
-      sourceRegionId: rows[destinationIndex][field].sourceRegionId,
-    }];
+      path: destinationPath,
+      sourceRegionId: readingAtPath(next, destinationPath)?.sourceRegionId ?? null,
+    };
   });
-
   return next;
 }
 
-export function reorderCollectionColumn(
+function collectionRowPairs(
   document: OcrDocument,
   root: CollectionRoot,
-  field: string,
   fromIndex: number,
   toIndex: number,
-): OcrDocument {
+): ReadingPathPair[] | null {
   const rows = document[root];
   if (
-    fromIndex === toIndex
+    Math.abs(fromIndex - toIndex) !== 1
     || fromIndex < 0
     || toIndex < 0
     || fromIndex >= rows.length
     || toIndex >= rows.length
-  ) return document;
+  ) return null;
+  const fields = Array.from(new Set([
+    ...Object.keys(rows[fromIndex]),
+    ...Object.keys(rows[toIndex]),
+  ]));
+  const pairs = fields.map((field) => ({
+    firstPath: `${root}.${fromIndex}.${field}`,
+    secondPath: `${root}.${toIndex}.${field}`,
+  }));
+  return pairs.length > 0 && pairs.every(({ firstPath, secondPath }) => (
+    readingAtPath(document, firstPath) && readingAtPath(document, secondPath)
+  )) ? pairs : null;
+}
 
-  const next = structuredClone(document);
-  const nextRows = next[root];
-  const fixedRegions = nextRows.map((row) => structuredClone(
-    row[field] ?? blankReading(),
-  ));
-  const reorderedReadings = arrayMove(
-    nextRows.map((row) => structuredClone(row[field] ?? blankReading())),
-    fromIndex,
-    toIndex,
-  );
-  nextRows.forEach((row, index) => {
-    row[field] = readingValueAtFixedRegion(reorderedReadings[index], fixedRegions[index]);
-  });
+export function canSwapCollectionRows(
+  document: OcrDocument,
+  root: CollectionRoot,
+  fromIndex: number,
+  toIndex: number,
+): boolean {
+  return collectionRowPairs(document, root, fromIndex, toIndex) !== null;
+}
 
-  const originalIndexes = Array.from({ length: nextRows.length }, (_, index) => index);
-  const reorderedIndexes = arrayMove(originalIndexes, fromIndex, toIndex);
-  const destinationBySource = new Map(
-    reorderedIndexes.map((sourceIndex, destinationIndex) => [sourceIndex, destinationIndex]),
-  );
-  const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pathPattern = new RegExp(`^${escapedRoot}\\.(\\d+)\\.${escapedField}$`);
-  next.reviewItems = next.reviewItems.map((item) => {
-    const match = pathPattern.exec(item.path);
-    if (!match) return item;
-    const destinationIndex = destinationBySource.get(Number(match[1]));
-    return destinationIndex === undefined
-      ? item
-      : {
-        ...item,
-        path: `${root}.${destinationIndex}.${field}`,
-        sourceRegionId: nextRows[destinationIndex][field].sourceRegionId,
-      };
-  });
+export function swapCollectionRowsAtFixedRegions(
+  document: OcrDocument,
+  root: CollectionRoot,
+  fromIndex: number,
+  toIndex: number,
+): OcrDocument {
+  const pairs = collectionRowPairs(document, root, fromIndex, toIndex);
+  return pairs ? swapReadingsAtFixedRegions(document, pairs) : document;
+}
 
-  return next;
+function genericRecordRowPairs(
+  section: ReviewDisplayRecordSection,
+  fromIndex: number,
+  toIndex: number,
+): ReadingPathPair[] | null {
+  if (
+    Math.abs(fromIndex - toIndex) !== 1
+    || fromIndex < 0
+    || toIndex < 0
+    || fromIndex >= section.rows.length
+    || toIndex >= section.rows.length
+  ) return null;
+  const fromRow = section.rows[fromIndex];
+  const toRow = section.rows[toIndex];
+  const pairs: ReadingPathPair[] = [];
+  for (const column of section.columns) {
+    const firstPath = fromRow.cells.find((cell) => cell.columnId === column.id)?.entry?.path;
+    const secondPath = toRow.cells.find((cell) => cell.columnId === column.id)?.entry?.path;
+    if (!firstPath || !secondPath) return null;
+    pairs.push({ firstPath, secondPath });
+  }
+  const paths = pairs.flatMap(({ firstPath, secondPath }) => [firstPath, secondPath]);
+  return new Set(paths).size === paths.length ? pairs : null;
+}
+
+export function canSwapGenericRecordRows(
+  section: ReviewDisplayRecordSection,
+  fromIndex: number,
+  toIndex: number,
+): boolean {
+  return genericRecordRowPairs(section, fromIndex, toIndex) !== null;
+}
+
+export function swapGenericRecordRowsAtFixedRegions(
+  document: OcrDocument,
+  section: ReviewDisplayRecordSection,
+  fromIndex: number,
+  toIndex: number,
+): OcrDocument {
+  const pairs = genericRecordRowPairs(section, fromIndex, toIndex);
+  return pairs ? swapReadingsAtFixedRegions(document, pairs) : document;
 }
 
 function readingValueAtFixedRegion(

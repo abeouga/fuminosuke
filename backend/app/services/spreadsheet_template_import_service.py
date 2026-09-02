@@ -709,7 +709,13 @@ class SpreadsheetTemplateImportService:
                     if (row, column) != top_left:
                         merged_covered.add((row, column))
 
-        record_keys = self._sequential_key_cells(worksheet, min_row, max_row, min_col, max_col)
+        sequential_numbers = self._sequential_number_cells(
+            worksheet,
+            min_row,
+            max_row,
+            min_col,
+            max_col,
+        )
         layout_cells: list[LayoutCell] = []
         print_cells: list[dict[str, Any]] = []
         canvas = np.full((canonical_height, canonical_width, 3), 255, dtype=np.uint8)
@@ -750,8 +756,8 @@ class SpreadsheetTemplateImportService:
                     max_row=max_row,
                     max_column=max_col,
                 )
-                has_record_key_below = end_row < max_row and any(
-                    (end_row + 1, candidate_column) in record_keys
+                has_sequential_number_below = end_row < max_row and any(
+                    (end_row + 1, candidate_column) in sequential_numbers
                     for candidate_column in range(column, end_col + 1)
                 )
                 role = self._infer_role(
@@ -759,9 +765,9 @@ class SpreadsheetTemplateImportService:
                     text=text,
                     merged=(end_row, end_col) != (row, column),
                     has_validation=has_validation,
-                    record_key=(row, column) in record_keys,
+                    sequential_number=(row, column) in sequential_numbers,
                     has_adjacent_input=has_adjacent_input,
-                    has_record_key_below=has_record_key_below,
+                    has_sequential_number_below=has_sequential_number_below,
                     width=width,
                     height=height,
                 )
@@ -795,7 +801,7 @@ class SpreadsheetTemplateImportService:
                             y=y,
                             width=width,
                             height=height,
-                            confidence=0.9 if role == "record_key_cell" else 0.72,
+                            confidence=0.72,
                             text=text[:300],
                             printed_label_text=text[:300] if role in {"label", "parent_label"} else "",
                             text_confidence=1.0 if text else None,
@@ -1134,14 +1140,14 @@ class SpreadsheetTemplateImportService:
         text: str,
         merged: bool,
         has_validation: bool,
-        record_key: bool,
+        sequential_number: bool,
         width: int,
         height: int,
         has_adjacent_input: bool = False,
-        has_record_key_below: bool = False,
+        has_sequential_number_below: bool = False,
     ) -> str:
-        if record_key:
-            return "record_key_cell"
+        if sequential_number:
+            return "input"
 
         scores = {
             "label": 0,
@@ -1161,7 +1167,7 @@ class SpreadsheetTemplateImportService:
             scores["label"] += 6
             if has_adjacent_input:
                 scores["label"] += 8
-            if has_record_key_below:
+            if has_sequential_number_below:
                 scores["label"] += 8
             if cell.data_type == "f":
                 scores["label"] += 2
@@ -1296,7 +1302,7 @@ class SpreadsheetTemplateImportService:
         return "left" if text else "center"
 
     @staticmethod
-    def _sequential_key_cells(
+    def _sequential_number_cells(
         worksheet: Any,
         min_row: int,
         max_row: int,

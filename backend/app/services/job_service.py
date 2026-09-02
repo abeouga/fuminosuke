@@ -40,6 +40,7 @@ from app.jobs.runner import JobRunner
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.review_display_structure import build_review_display_structure
 from app.services.sire_name_service import SireNameService
 from app.services.template_candidate_service import TemplateCandidateService
 from app.storage.local_storage import LocalStorageService, StoragePathError
@@ -916,6 +917,7 @@ class JobService:
             "groups": [],
             "fieldBindings": [],
         }
+        review_structure = build_review_display_structure(None, serialized)
         if version.layout_json:
             layout = LayoutDefinition.model_validate(version.layout_json)
             if (
@@ -972,10 +974,12 @@ class JobService:
                     and target_by_input.get(input_id)
                 ],
             }
+            review_structure = build_review_display_structure(layout, serialized)
         canonical = json.dumps(
             {
                 "fieldMappings": serialized,
                 "recordStructure": record_structure,
+                "reviewStructure": review_structure,
                 "genericTemplateDefinition": generic_definition,
             },
             ensure_ascii=False,
@@ -990,6 +994,7 @@ class JobService:
             "mappingCanonicalWidth": config.canonical_width,
             "mappingCanonicalHeight": config.canonical_height,
             "recordStructure": record_structure,
+            "reviewStructure": review_structure,
             "genericTemplateDefinition": generic_definition,
         }
 

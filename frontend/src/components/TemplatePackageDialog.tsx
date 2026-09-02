@@ -30,8 +30,8 @@ export function TemplatePackageDialog({
   version?: TemplateVersion;
   refreshTemplates: () => Promise<void>;
   onClose: () => void;
-  onReviewImported: (versionId: string) => void;
-  onActivated: (versionId: string) => void;
+  onReviewImported?: (versionId: string) => void;
+  onActivated?: (versionId: string) => void;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -268,7 +268,7 @@ export function TemplatePackageDialog({
 
   const activateImported = async () => {
     const result = operation?.result;
-    if (!result) return;
+    if (!result || !onActivated) return;
     setBusy(true);
     setError(null);
     try {
@@ -289,7 +289,7 @@ export function TemplatePackageDialog({
 
   const reviewImported = async () => {
     const versionId = operation?.result?.localTemplateVersionId;
-    if (!versionId) return;
+    if (!versionId || !onReviewImported) return;
     await refreshTemplates();
     onReviewImported(versionId);
     onClose();

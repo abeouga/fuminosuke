@@ -14,6 +14,7 @@ from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, Readin
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
 from app.domain.template_candidates import normalize_candidate_target
 from app.domain.template_config import FieldMappingConfig
+from app.extraction.region_cropper import RegionCrops
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.ocr.base import (
     OcrProvider,
@@ -260,18 +261,7 @@ class OcrWorkflowService:
                     local_resolution_by_id[mapping.mapping_id] = "mark_detector"
                     continue
                 openai_mark_ids.add(mapping.mapping_id)
-                all_regions.append(
-                    OcrRegionInput(
-                        region_id=mapping.mapping_id,
-                        image_png=encode_png(mark_crop.aligned_color),
-                        handwriting_png=encode_png(mark_crop.handwriting_only),
-                        target_path=mapping.target_path,
-                        source_region_id=mapping.mapping_id,
-                        bounding_box=crop.bbox,
-                        candidates=tuple(option.label for option in mapping.mark_options),
-                        candidate_type="mark_choice",
-                    )
-                )
+                all_regions.append(self._mark_region_input(mapping, mark_crop))
         mapped_cells_payload: dict[str, object] | None = None
         if provider_name == "openai":
             if (not all_regions and not mark_mappings) or any(
@@ -331,18 +321,7 @@ class OcrWorkflowService:
                 preview_crop = extraction.crops.get(mapping.mapping_id)
                 if preview_crop is None:
                     continue
-                preview_regions.append(
-                    OcrRegionInput(
-                        region_id=mapping.mapping_id,
-                        image_png=encode_png(preview_crop.aligned_color),
-                        handwriting_png=encode_png(preview_crop.handwriting_only),
-                        target_path=mapping.target_path,
-                        source_region_id=mapping.mapping_id,
-                        bounding_box=crop.bbox,
-                        candidates=tuple(option.label for option in mapping.mark_options),
-                        candidate_type="mark_choice",
-                    )
-                )
+                preview_regions.append(self._mark_region_input(mapping, preview_crop))
             mapped_cells_payload = self._mapped_cells_payload(
                 extraction,
                 preview_regions,
@@ -387,6 +366,14 @@ class OcrWorkflowService:
             if provider_name == "openai" and not all_regions
             else asyncio.run(provider.extract(request))
         )
+        openai_mapping_diagnostics: dict[str, object] | None = None
+        if response.provider == "openai" and response.diagnostics:
+            openai_mapping_diagnostics = {
+                "schemaVersion": 1,
+                "jobId": extraction.job_id,
+                "attemptNumber": extraction.attempt_number,
+                "calls": list(response.diagnostics),
+            }
         if response.provider == "openai":
             total_tokens = (
                 response.input_tokens + response.output_tokens
@@ -435,11 +422,7 @@ class OcrWorkflowService:
                     alternatives=[],
                     review_reason=None,
                     source_region_id=(fixed_region.source_region_id or fixed_region.region_id),
-                    bounding_box=(
-                        BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3])
-                        if box
-                        else None
-                    ),
+                    bounding_box=self._bounding_box(box),
                 ),
             )
         for mapping in mark_mappings:
@@ -456,11 +439,9 @@ class OcrWorkflowService:
                     alternatives=[],
                     review_reason=review_reason,
                     source_region_id=mapping.mapping_id,
-                    bounding_box=BoundingBox(
-                        x=mapping.x,
-                        y=mapping.y,
-                        width=mapping.width,
-                        height=mapping.height,
+                    bounding_box=self._mark_bounding_box(
+                        mapping,
+                        extraction.crops.get(mapping.mapping_id),
                     ),
                 ),
             )
@@ -526,6 +507,29 @@ class OcrWorkflowService:
                 value=mapped_cells_payload,
                 replace=True,
             )
+        if openai_mapping_diagnostics is not None:
+            mapped_responses: list[dict[str, object]] = []
+            if mapped_cells_payload is not None:
+                cells = mapped_cells_payload.get("cells")
+                if isinstance(cells, list):
+                    mapped_responses = [
+                        {
+                            "mappingId": cell.get("mappingId"),
+                            "openAiMappingId": cell.get("openAiMappingId"),
+                            "targetPath": cell.get("targetPath"),
+                            "response": cell.get("response"),
+                        }
+                        for cell in cells
+                        if isinstance(cell, dict) and cell.get("sentToOpenAi") is True
+                    ]
+            openai_mapping_diagnostics["mappedCellsResponses"] = mapped_responses
+            self._writer.json(
+                job_id=extraction.job_id,
+                attempt_number=extraction.attempt_number,
+                name="openAiMappingDiagnostics",
+                file_name="openai_mapping_diagnostics.json",
+                value=openai_mapping_diagnostics,
+            )
         response = response.__class__(
             document=response_document,
             provider=response.provider,
@@ -537,6 +541,7 @@ class OcrWorkflowService:
             estimated_cost=response.estimated_cost,
             request_id=response.request_id,
             duration_ms=response.duration_ms,
+            diagnostics=response.diagnostics,
         )
         with self._database.session() as session:
             stored = OcrResultRepository(session).save_provider_result(
@@ -871,6 +876,48 @@ class OcrWorkflowService:
             )
             added.add(target_path)
         return added
+
+    @staticmethod
+    def _mark_region_input(
+        mapping: FieldMappingConfig,
+        crop: RegionCrops,
+    ) -> OcrRegionInput:
+        """Build OCR and review metadata from the same canonical mark crop."""
+
+        return OcrRegionInput(
+            region_id=mapping.mapping_id,
+            image_png=encode_png(crop.aligned_color),
+            handwriting_png=encode_png(crop.handwriting_only),
+            target_path=mapping.target_path,
+            source_region_id=mapping.mapping_id,
+            bounding_box=crop.bbox,
+            candidates=tuple(option.label for option in mapping.mark_options),
+            candidate_type="mark_choice",
+        )
+
+    @staticmethod
+    def _bounding_box(box: tuple[int, int, int, int] | None) -> BoundingBox | None:
+        if box is None:
+            return None
+        return BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3])
+
+    @classmethod
+    def _mark_bounding_box(
+        cls,
+        mapping: FieldMappingConfig,
+        crop: RegionCrops | None,
+    ) -> BoundingBox:
+        """Use the actual canonical crop, including configured padding, for review."""
+
+        box = crop.bbox if crop is not None else (
+            mapping.x,
+            mapping.y,
+            mapping.width,
+            mapping.height,
+        )
+        bounding_box = cls._bounding_box(box)
+        assert bounding_box is not None
+        return bounding_box
 
     @staticmethod
     def _mapped_cells_payload(

@@ -40,7 +40,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("guides the user to settings when every active template needs verification", () => {
+test("keeps a previously active template visible while editing and blocks OCR use", () => {
   const openTemplates = vi.fn();
   const unverified = templates.map((template) => ({
     ...template,
@@ -61,14 +61,49 @@ test("guides the user to settings when every active template needs verification"
     />,
   );
 
-  expect(screen.getByRole("heading", {
-    name: "テンプレートの設定確認が必要です",
-  })).toBeInTheDocument();
-  expect(screen.getByText(/「記入欄を再検出」を実行してください/)).toBeInTheDocument();
-  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("編集中のテンプレートが 1 件あります");
+  expect(screen.getByText("編集中")).toBeInTheDocument();
+  expect(screen.getByText(/OCR利用不可/)).toBeInTheDocument();
+  expect(screen.getByRole("button", {
+    name: "繁殖台帳A v3は編集中のためOCRに使用できません",
+  })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "テンプレート設定を開く" }));
   expect(openTemplates).toHaveBeenCalledOnce();
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(fetchMock.mock.calls.every(([input]) => String(input).includes("/artifacts"))).toBe(true);
+});
+
+test("keeps an active template with a newer draft visible but unavailable for OCR", () => {
+  const activeWithDraft: Template[] = [{
+    ...templates[0],
+    versions: [
+      templates[0].versions[0],
+      {
+        ...templates[0].versions[0],
+        id: "draft-version",
+        versionNumber: 4,
+        status: "DRAFT",
+        sourceJobId: "draft-job",
+        quality: { layoutVerified: false },
+      },
+    ],
+  }];
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 })));
+
+  render(
+    <OcrPage
+      templates={activeWithDraft}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  expect(screen.getByRole("button", {
+    name: "繁殖台帳A v3は編集中のためOCRに使用できません",
+  })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" }))
+    .toBeEnabled();
+  expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
 });
 
 test("shows unverified active templates but does not allow selecting them", async () => {
@@ -79,10 +114,16 @@ test("shows unverified active templates but does not allow selecting them", asyn
     versionNumber: 4,
     quality: { layoutVerified: false },
   };
-  const mixedTemplates = [{
-    ...templates[0],
-    versions: [...templates[0].versions, unverifiedVersion],
-  }];
+  const mixedTemplates = [
+    templates[0],
+    {
+      ...templates[0],
+      id: "template-2",
+      name: "面接カード",
+      activeVersionId: unverifiedVersion.id,
+      versions: [unverifiedVersion],
+    },
+  ];
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
     canonicalWidth: 1400,
     canonicalHeight: 990,
@@ -102,14 +143,15 @@ test("shows unverified active templates but does not allow selecting them", asyn
   );
 
   expect(screen.getByRole("status")).toHaveTextContent(
-    "読み取り欄を変更したテンプレートは選択できません",
+    "一覧には表示されますが、設定確認が完了するまでOCRには使用できません",
   );
   fireEvent.click(screen.getByRole("button", { name: "テンプレート設定を開く" }));
   expect(openTemplates).toHaveBeenCalledOnce();
   const selectedCard = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
   expect(selectedCard).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "繁殖台帳A v4を選択" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", {
+    name: "面接カード v4は編集中のためOCRに使用できません",
+  })).toBeDisabled();
 });
 
 test("blocks progress when the active template has no mapped cells", async () => {
@@ -247,7 +289,6 @@ test("selects a template with a graphical card without exposing implementation d
   });
 
   fireEvent.click(screen.getByRole("button", { name: "内容確認へ" }));
-  expect(screen.getByText("テンプレートに設定した項目を読み取ります")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "読み取りを開始" })).toBeEnabled();
 });
 
@@ -274,10 +315,15 @@ test("opens template creation inside reading and reuses the existing segments", 
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "新しいテンプレート" }));
+  const addTemplate = screen.getByRole("button", { name: "テンプレートを追加" });
+  expect(addTemplate).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(addTemplate);
+  expect(screen.getByRole("group", { name: "テンプレートの追加方法" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "新しく作成" }));
 
   expect(screen.getByRole("heading", { name: "テンプレート作成・編集" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "新規作成" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByRole("button", { name: "テンプレートを取り込む" })).not.toBeInTheDocument();
   const manageTab = screen.getByRole("tab", { name: /既存を確認・修正/ });
   fireEvent.click(manageTab);
   expect(manageTab).toHaveAttribute("aria-selected", "true");
@@ -285,6 +331,107 @@ test("opens template creation inside reading and reuses the existing segments", 
 
   fireEvent.click(screen.getByRole("button", { name: "← 読み取りへ戻る" }));
   expect(screen.getByRole("heading", { name: "書類を読み取る" })).toBeInTheDocument();
+});
+
+test("hides a never-activated draft from the reading list", () => {
+  const draftOnly: Template[] = [{
+    ...templates[0],
+    id: "draft-template",
+    name: "未完成テンプレート",
+    activeVersionId: null,
+    versions: [{
+      ...templates[0].versions[0],
+      id: "draft-version",
+      status: "DRAFT",
+      quality: { layoutVerified: false },
+    }],
+  }];
+  vi.stubGlobal("fetch", vi.fn());
+
+  render(
+    <OcrPage
+      templates={draftOnly}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  expect(screen.queryByText("未完成テンプレート")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "テンプレートを追加" })).toBeInTheDocument();
+  expect(screen.getByText(/有効化済みのテンプレートはありません/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeDisabled();
+});
+
+test("uses the actual active version when a legacy active pointer is stale", () => {
+  const stalePointerTemplate: Template[] = [{
+    ...templates[0],
+    activeVersionId: "archived-version",
+    versions: [
+      {
+        ...templates[0].versions[0],
+        id: "active-version",
+        versionNumber: 2,
+        sourceJobId: null,
+      },
+      {
+        ...templates[0].versions[0],
+        id: "archived-version",
+        versionNumber: 1,
+        status: "ARCHIVED",
+        sourceJobId: null,
+      },
+    ],
+  }];
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    canonicalWidth: 1400,
+    canonicalHeight: 990,
+    mappings: [],
+    targets: [],
+    validForOcr: false,
+    warnings: [],
+  }), { status: 200 })));
+
+  render(
+    <OcrPage
+      templates={stalePointerTemplate}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  expect(screen.getByRole("button", { name: "繁殖台帳A v2を選択" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByText("編集中")).not.toBeInTheDocument();
+});
+
+test("opens the existing template import dialog from the add card", () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("/artifacts")) {
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      canonicalWidth: 1400,
+      canonicalHeight: 990,
+      mappings: [],
+      targets: [],
+      validForOcr: false,
+      warnings: [],
+    }), { status: 200 });
+  }));
+  render(
+    <OcrPage
+      templates={templates}
+      refreshTemplates={vi.fn().mockResolvedValue(undefined)}
+      rememberJob={() => undefined}
+      openReview={() => undefined}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "テンプレートを追加" }));
+  fireEvent.click(screen.getByRole("button", { name: "テンプレートを取り込む" }));
+
+  expect(screen.getByRole("dialog", { name: "テンプレートを取り込む" })).toBeInTheDocument();
 });
 
 test("keeps the reading draft while directly editing a template from its card", async () => {
@@ -328,8 +475,9 @@ test("keeps the reading draft while directly editing a template from its card", 
 
   const selection = screen.getByRole("button", { name: "繁殖台帳A v3を選択" });
   const card = selection.closest("article")!;
-  expect(within(card).getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" })).toBeInTheDocument();
-  expect(within(card).getByRole("button", { name: "繁殖台帳Aを削除" })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "繁殖台帳Aを配布用に書き出す" }).querySelector("svg")).not.toBeNull();
+  expect(within(card).getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" }).querySelector("svg")).not.toBeNull();
+  expect(within(card).getByRole("button", { name: "繁殖台帳Aを削除" }).querySelector("svg")).not.toBeNull();
 
   await waitFor(() => expect(screen.getByRole("button", { name: "画像の準備へ" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "画像の準備へ" }));

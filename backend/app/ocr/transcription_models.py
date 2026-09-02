@@ -44,6 +44,7 @@ class CompactTranscriptionItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     i: str = Field(min_length=1, max_length=12)
+    a: str = Field(min_length=6, max_length=6)
     v: str | None = Field(max_length=500)
     s: Literal["r", "b", "u"]
     c: str | None = Field(max_length=120)

@@ -50,6 +50,7 @@ from app.services.document_reconciliation_service import (
 from app.services.excel_export_service import ExcelExportService
 from app.services.google_drive_service import GoogleDriveService
 from app.services.google_sheets_sync_service import GoogleSheetsSyncService, SpreadsheetEdit
+from app.services.review_display_structure import build_review_display_structure
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
@@ -1271,6 +1272,7 @@ class OcrResultService:
                 stored.current_corrected_json,
             ),
             "recordStructure": self._record_structure(job),
+            "reviewStructure": self._review_structure(job),
             "documentResolution": resolution,
             "documentName": document_name,
             "spreadsheetSync": self._spreadsheet_status_payload(
@@ -1720,6 +1722,16 @@ class OcrResultService:
                 "fieldBindings": [],
             }
         )
+
+    def _review_structure(self, job: ProcessingJob) -> dict[str, object]:
+        snapshot = job.config_snapshot_json
+        raw = snapshot.get("reviewStructure")
+        if isinstance(raw, dict):
+            return dict(raw)
+        # Old jobs do not contain a frozen review layout. Reading the current,
+        # mutable template version here could regroup historical results using a
+        # layout that did not exist when the job ran, so preserve their flat view.
+        return build_review_display_structure(None, snapshot.get("fieldMappings"))
 
     @staticmethod
     def _configured_paths(job: ProcessingJob) -> set[str] | None:

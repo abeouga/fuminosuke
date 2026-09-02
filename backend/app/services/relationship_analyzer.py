@@ -579,7 +579,7 @@ def _from_legacy_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> 
                     if section.record_type == "generic"
                     else f"section_{index:03d}"
                 ),
-                name=section.title,
+                name=section.resolved_display_name,
                 parent_label_cell_id=section.parent_label_cell_id,
                 bbox=_union_box(boxes),
                 records=records,

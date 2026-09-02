@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import io
 import json
 import logging
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, cast
 
@@ -17,6 +19,7 @@ from openai import (
     RateLimitError,
 )
 from openai.types.responses import ResponseInputParam
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import ValidationError
 
 from app.core.config import OcrSettings
@@ -48,6 +51,7 @@ class _TranscriptionResponse:
     estimated_cost: Decimal | None
     request_id: str
     duration_ms: float
+    diagnostic: dict[str, object] = field(default_factory=dict)
 
 
 class OpenAIOcrProvider:
@@ -213,6 +217,7 @@ class OpenAIOcrProvider:
             ),
             request_id=responses[-1].request_id,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            diagnostics=tuple(item.diagnostic for item in responses if item.diagnostic),
         )
 
     def _batched_requests(self, request: OcrProviderRequest) -> list[OcrProviderRequest]:
@@ -278,10 +283,20 @@ class OpenAIOcrProvider:
         *,
         image_detail: str,
     ) -> _TranscriptionResponse:
-        api_request, original_id_by_compact_id = _compact_request_ids(request)
+        (
+            api_request,
+            original_id_by_compact_id,
+            association_token_by_compact_id,
+        ) = _compact_request_ids(request)
         content = build_mapped_input_content(
             api_request,
             image_detail=image_detail,
+        )
+        request_manifest = _build_request_manifest(
+            request,
+            api_request,
+            content,
+            association_token_by_compact_id,
         )
         started = time.perf_counter()
         response_input = cast(ResponseInputParam, [{"role": "user", "content": content}])
@@ -360,7 +375,22 @@ class OpenAIOcrProvider:
                 502, "OCR_SCHEMA_INVALID", "OCR転記結果の形式が一致しません。"
             )
         requested_ids = set(original_id_by_compact_id)
-        compact_items = _repair_single_compact_id(parsed.items, requested_ids)
+        compact_id_by_original_id = {
+            original_id: compact_id
+            for compact_id, original_id in original_id_by_compact_id.items()
+        }
+        repaired_items = _repair_single_compact_id(parsed.items, requested_ids)
+        association_mismatch_compact_ids = {
+            item.i
+            for item in repaired_items
+            if item.i in requested_ids
+            and item.a != association_token_by_compact_id[item.i]
+        }
+        compact_items = [
+            item
+            for item in repaired_items
+            if item.i not in association_mismatch_compact_ids
+        ]
         returned_ids = [item.i for item in compact_items]
         requested_items = [
             _expand_compact_item(item, original_id_by_compact_id[item.i])
@@ -391,7 +421,12 @@ class OpenAIOcrProvider:
                     raw=None,
                     status=ReadingStatus.UNCERTAIN,
                     alternatives=[],
-                    review_reason="OCR_MAPPING_MISSING",
+                    review_reason=(
+                        "OCR_ASSOCIATION_MISMATCH"
+                        if compact_id_by_original_id.get(mapping_id)
+                        in association_mismatch_compact_ids
+                        else "OCR_MAPPING_MISSING"
+                    ),
                     matched_candidate=None,
                     is_ditto=False,
                 )
@@ -436,6 +471,46 @@ class OpenAIOcrProvider:
         usage = response.usage
         input_tokens = usage.input_tokens if usage else None
         output_tokens = usage.output_tokens if usage else None
+        diagnostic: dict[str, object] = {
+            "schemaVersion": 1,
+            "batchNumber": call_count,
+            "callNumber": call_count,
+            "modelId": model,
+            "requestId": response.id,
+            "responseStatus": response.status,
+            "imageDetail": image_detail,
+            "requestManifest": request_manifest,
+            "associationMismatchCompactIds": sorted(
+                association_mismatch_compact_ids,
+                key=lambda item: int(item[1:]) if item[1:].isdigit() else item,
+            ),
+            "rawItems": [
+                {
+                    "responseIndex": index,
+                    "compactId": item.i,
+                    "associationToken": item.a,
+                    "expectedAssociationToken": association_token_by_compact_id.get(item.i),
+                    "associationMatches": (
+                        item.i in association_token_by_compact_id
+                        and item.a == association_token_by_compact_id[item.i]
+                    ),
+                    "value": item.v,
+                    "status": item.s,
+                }
+                for index, item in enumerate(parsed.items)
+            ],
+            "expandedItems": [
+                {
+                    "expandedIndex": index,
+                    "compactId": compact_id_by_original_id.get(item.mapping_id),
+                    "originalMappingId": item.mapping_id,
+                    "value": item.raw,
+                    "status": item.status.value,
+                    "reviewReason": item.review_reason,
+                }
+                for index, item in enumerate(filtered_batch.items)
+            ],
+        }
         return _TranscriptionResponse(
             batch=filtered_batch,
             model_id=model,
@@ -444,6 +519,7 @@ class OpenAIOcrProvider:
             estimated_cost=_estimate_cost(model, input_tokens, output_tokens),
             request_id=response.id,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            diagnostic=diagnostic,
         )
 
     @staticmethod
@@ -453,16 +529,24 @@ class OpenAIOcrProvider:
 
 def _compact_request_ids(
     request: OcrProviderRequest,
-) -> tuple[OcrProviderRequest, dict[str, str]]:
+) -> tuple[OcrProviderRequest, dict[str, str], dict[str, str]]:
     compact_ids = [f"c{index}" for index in range(len(request.regions))]
     original_id_by_compact_id = {
         compact_id: region.region_id
         for compact_id, region in zip(compact_ids, request.regions, strict=True)
     }
+    association_token_by_compact_id = _association_tokens(compact_ids, request.regions)
     return (
         OcrProviderRequest(
             regions=[
-                replace(region, region_id=compact_id)
+                replace(
+                    region,
+                    region_id=compact_id,
+                    image_png=_add_association_banner(
+                        region.image_png,
+                        association_token_by_compact_id[compact_id],
+                    ),
+                )
                 for compact_id, region in zip(compact_ids, request.regions, strict=True)
             ],
             full_document_png=request.full_document_png,
@@ -471,6 +555,7 @@ def _compact_request_ids(
             should_cancel=request.should_cancel,
         ),
         original_id_by_compact_id,
+        association_token_by_compact_id,
     )
 
 
@@ -524,7 +609,10 @@ def build_mapped_input_content(
     content: list[dict[str, Any]] = [
         {
             "type": "input_text",
-            "text": "各IDの画像を1件ずつ転記。r=読取可、b=空欄、u=不明。",
+            "text": (
+                "各IDの画像を1件ずつ転記。画像上部のASSOC 6桁数字をaへ転記し、"
+                "vにはバナー下だけを転記。iはc0形式。r=読取可、b=空欄、u=不明。"
+            ),
         }
     ]
     if request.full_document_png is not None:
@@ -614,6 +702,113 @@ def build_mapped_input_content(
             }
         )
     return content
+
+
+def _build_request_manifest(
+    original_request: OcrProviderRequest,
+    compact_request: OcrProviderRequest,
+    content: list[dict[str, Any]],
+    association_token_by_compact_id: dict[str, str],
+) -> list[dict[str, object]]:
+    manifest: list[dict[str, object]] = []
+    for sequence, (original_region, compact_region) in enumerate(
+        zip(original_request.regions, compact_request.regions, strict=True)
+    ):
+        metadata_prefix = f"mappingId:{compact_region.region_id}"
+        text_index = next(
+            (
+                index
+                for index, item in enumerate(content)
+                if item.get("type") == "input_text"
+                and isinstance(item.get("text"), str)
+                and str(item["text"]).startswith(metadata_prefix)
+            ),
+            None,
+        )
+        image_index = text_index + 1 if text_index is not None else None
+        image_item = (
+            content[image_index]
+            if image_index is not None
+            and image_index < len(content)
+            and content[image_index].get("type") == "input_image"
+            else None
+        )
+        source_sha256 = hashlib.sha256(original_region.image_png).hexdigest()
+        prepared_sha256 = hashlib.sha256(compact_region.image_png).hexdigest()
+        request_sha256 = _data_url_sha256(image_item.get("image_url")) if image_item else None
+        manifest.append(
+            {
+                "sequence": sequence,
+                "compactId": compact_region.region_id,
+                "originalMappingId": original_region.region_id,
+                "targetPath": original_region.target_path,
+                "sourceRegionId": (
+                    original_region.source_region_id or original_region.region_id
+                ),
+                "associationToken": association_token_by_compact_id[compact_region.region_id],
+                "sourceImageSha256": source_sha256,
+                "preparedImageSha256": prepared_sha256,
+                "requestImageSha256": request_sha256,
+                "imageMatchesPreparedRequest": request_sha256 == prepared_sha256,
+                "contentTextIndex": text_index,
+                "contentImageIndex": image_index,
+                "imageDetail": image_item.get("detail") if image_item else None,
+            }
+        )
+    return manifest
+
+
+def _association_tokens(
+    compact_ids: list[str],
+    regions: list[OcrRegionInput],
+) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    used: set[str] = set()
+    for compact_id, region in zip(compact_ids, regions, strict=True):
+        salt = 0
+        while True:
+            payload = compact_id.encode("ascii") + region.image_png
+            if salt:
+                payload += salt.to_bytes(2, "big")
+            digest_prefix = hashlib.sha256(payload).hexdigest()[:12]
+            token = f"{int(digest_prefix, 16) % 1_000_000:06d}"
+            if token not in used:
+                break
+            salt += 1
+        tokens[compact_id] = token
+        used.add(token)
+    return tokens
+
+
+def _add_association_banner(image_png: bytes, token: str) -> bytes:
+    with Image.open(io.BytesIO(image_png)) as image:
+        source = image.convert("RGB")
+        width = max(source.width, 280)
+        if source.width < width:
+            height = max(1, round(source.height * width / source.width))
+            source = source.resize((width, height), Image.Resampling.LANCZOS)
+        banner_height = 66
+        banner = Image.new("RGB", (width, banner_height), "white")
+        draw = ImageDraw.Draw(banner)
+        font = ImageFont.load_default(size=30)
+        draw.rectangle((0, 0, width - 1, banner_height - 1), outline="black", width=3)
+        draw.text((12, 14), f"ASSOC {token}", fill="black", font=font)
+        combined = Image.new("RGB", (width, banner_height + source.height), "white")
+        combined.paste(banner, (0, 0))
+        combined.paste(source, (0, banner_height))
+        output = io.BytesIO()
+        combined.save(output, format="PNG")
+        return output.getvalue()
+
+
+def _data_url_sha256(value: object) -> str | None:
+    if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
+        return None
+    try:
+        payload = base64.b64decode(value.split(",", 1)[1], validate=True)
+    except (ValueError, TypeError):
+        return None
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _deduplicate_requested_items(

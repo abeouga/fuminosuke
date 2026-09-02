@@ -4,9 +4,11 @@ import numpy as np
 
 from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import ReadingStatus
-from app.domain.template_config import FieldMappingConfig
-from app.ocr.base import OcrRegionInput
-from app.ocr.deterministic_mapper import assign_mapped_reading
+from app.domain.template_config import FieldMappingConfig, MarkOptionConfig
+from app.ocr.base import OcrProviderRequest, OcrRegionInput
+from app.ocr.deterministic_mapper import assign_mapped_reading, build_mapped_document
+from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
+from app.services.ocr_result_service import OcrResultService
 from app.services.ocr_workflow_service import OcrWorkflowService
 
 
@@ -118,6 +120,87 @@ def test_nonblank_local_mark_keeps_its_row_and_only_skips_rows_below_it() -> Non
     }
 
     assert OcrWorkflowService._trailing_blank_rows(extraction, states) == {("calvings", 2)}
+
+
+def test_mark_crop_and_review_preview_keep_the_same_canonical_box() -> None:
+    mapping = FieldMappingConfig(
+        mapping_id="choice-city",
+        target_path="customFields.cityType",
+        label="市区町村",
+        x=383,
+        y=519,
+        width=66,
+        height=51,
+        mapping_type="mark",
+        mark_options=[
+            MarkOptionConfig(
+                id="city",
+                label="市",
+                value="city",
+                x=0,
+                y=0,
+                width=33,
+                height=51,
+            ),
+            MarkOptionConfig(
+                id="ward",
+                label="区",
+                value="ward",
+                x=33,
+                y=0,
+                width=33,
+                height=51,
+            ),
+        ],
+    )
+    image = np.full((59, 74, 3), 255, dtype=np.uint8)
+    crop = SimpleNamespace(
+        bbox=(379, 515, 74, 59),
+        aligned_color=image,
+        handwriting_only=image.copy(),
+    )
+
+    region = OcrWorkflowService._mark_region_input(mapping, crop)
+    local_box = OcrWorkflowService._mark_bounding_box(mapping, crop)
+    document = build_mapped_document(
+        OcrProviderRequest(regions=[region]),
+        TranscriptionBatch(
+            items=[
+                TranscriptionItem(
+                    mapping_id=mapping.mapping_id,
+                    raw="市",
+                    status=ReadingStatus.READABLE,
+                )
+            ]
+        ),
+    )
+    job = SimpleNamespace(
+        id="job-choice",
+        config_snapshot_json={
+            "fieldMappings": [mapping.model_dump(mode="json", by_alias=True)],
+            "recordStructure": {"fieldBindings": []},
+        },
+    )
+
+    previews = OcrResultService._field_previews(
+        job,
+        document.model_dump(mode="json", by_alias=True),
+    )
+
+    assert region.bounding_box == crop.bbox
+    assert local_box.model_dump() == {
+        "x": 379,
+        "y": 515,
+        "width": 74,
+        "height": 59,
+    }
+    assert previews[0]["mappingId"] == mapping.mapping_id
+    assert previews[0]["boundingBox"] == {
+        "x": 379,
+        "y": 515,
+        "width": 74,
+        "height": 59,
+    }
 
 
 def test_local_ink_turns_openai_blank_into_uncertain_review() -> None:

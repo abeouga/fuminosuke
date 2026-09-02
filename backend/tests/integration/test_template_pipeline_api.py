@@ -274,6 +274,78 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     ).json()
     assert draft_mappings["mappings"] == []
     assert draft_mappings["validForOcr"] is False
+    duplicate_target_layout = {
+        **draft_layout.json(),
+        "cells": [
+            *draft_layout.json()["cells"],
+            {
+                "id": "draft_input_second",
+                "role": "input",
+                "x": min(200, original_width - 121),
+                "y": min(80, original_height - 51),
+                "width": 120,
+                "height": min(50, original_height - 20),
+                "confidence": 0.9,
+                "text": "",
+                "textConfidence": None,
+                "source": "manual",
+            },
+        ],
+        "relations": [
+            {
+                "id": "draft_language_first",
+                "inputCellId": "draft_input",
+                "labelCellIds": ["draft_label"],
+                "axis": "horizontal",
+                "order": 1,
+                "targetPath": "customFields.languageTest",
+            },
+            {
+                "id": "draft_language_second",
+                "inputCellId": "draft_input_second",
+                "labelCellIds": ["draft_label"],
+                "axis": "vertical",
+                "order": 2,
+                "targetPath": "customFields.languageTest",
+            },
+        ],
+        "labelPool": [
+            {
+                "id": "language_test",
+                "label": "語学試験",
+                "targetPath": "customFields.languageTest",
+                "section": "面接",
+                "aliases": [],
+                "source": "manual",
+            }
+        ],
+        "allowCrossAxisLabels": True,
+    }
+    duplicate_target_save = client.put(
+        f"/api/v1/template-versions/{version_id}/layout",
+        json=duplicate_target_layout,
+    )
+    assert duplicate_target_save.status_code == 200
+    assert [relation["targetPath"] for relation in duplicate_target_save.json()["relations"]] == [
+        "customFields.languageTest",
+        "customFields.languageTest_2",
+    ]
+    assert [entry["targetPath"] for entry in duplicate_target_save.json()["labelPool"]] == [
+        "customFields.languageTest",
+        "customFields.languageTest_2",
+    ]
+    persisted_incremented_layout = client.get(f"/api/v1/template-versions/{version_id}/layout")
+    assert persisted_incremented_layout.status_code == 200
+    assert [
+        relation["targetPath"] for relation in persisted_incremented_layout.json()["relations"]
+    ] == ["customFields.languageTest", "customFields.languageTest_2"]
+    incremented_mappings = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
+    assert [mapping["targetPath"] for mapping in incremented_mappings["mappings"]] == [
+        "customFields.languageTest",
+        "customFields.languageTest_2",
+    ]
 
     ungrouped_layout = {
         **draft_layout.json(),

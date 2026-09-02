@@ -66,6 +66,7 @@ class OcrResultResponse(ApiModel):
     individual_id: str | None
     field_previews: list[OcrFieldPreview]
     record_structure: dict[str, Any]
+    review_structure: dict[str, Any]
     spreadsheet_sync: dict[str, Any]
     document_resolution: dict[str, Any]
     document_name: str

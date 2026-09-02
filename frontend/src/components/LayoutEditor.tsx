@@ -18,6 +18,7 @@ import { showToast } from "./Toast";
 
 export type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
+type RecordNamePopoverState = Point & { sectionId: string };
 type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity";
 type OcrLabelAlignment = "auto" | "left" | "center" | "right";
 export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
@@ -48,6 +49,148 @@ type LayoutEditorProps = {
 
 const DEFAULT_MAGNIFIER_SCALE = 2.5;
 const DEFAULT_MAGNIFIER_SIZE = 220;
+
+export function recordSectionDisplayName(section: LayoutRecordSection): string {
+  return section.displayName?.trim()
+    || section.title?.trim()
+    || "名称未設定の繰り返し表";
+}
+
+function recordSectionBand(
+  section: LayoutRecordSection,
+  cells: readonly LayoutCell[],
+): { start: Point; end: Point; anchor: Point } | null {
+  const cellById = new Map(cells.map((cell) => [cell.id, cell]));
+  const anchors = section.recordLabelCellIds
+    .map((labelId) => cellById.get(labelId))
+    .filter((cell): cell is LayoutCell => Boolean(cell))
+    .sort((first, second) => first.x - second.x || first.y - second.y);
+  if (anchors.length === 0) return null;
+  const y = anchors.reduce(
+    (total, cell) => total + cell.y + cell.height / 2,
+    0,
+  ) / anchors.length;
+  const start = {
+    x: anchors[0].x + anchors[0].width / 2,
+    y,
+  };
+  const last = anchors[anchors.length - 1];
+  const end = { x: last.x + last.width / 2, y };
+  return {
+    start,
+    end,
+    anchor: { x: (start.x + end.x) / 2, y },
+  };
+}
+
+export function recordSectionAtPoint(
+  location: Point,
+  sections: readonly LayoutRecordSection[],
+  cells: readonly LayoutCell[],
+  tolerance: number,
+): LayoutRecordSection | null {
+  return [...sections].reverse().find((section) => {
+    const band = recordSectionBand(section, cells);
+    return band
+      && location.x >= Math.min(band.start.x, band.end.x) - tolerance
+      && location.x <= Math.max(band.start.x, band.end.x) + tolerance
+      && Math.abs(location.y - band.start.y) <= tolerance;
+  }) ?? null;
+}
+
+export function unassignedMeaningCellIds(layout: LayoutDefinition): Set<string> {
+  const assignedInputIds = new Set(
+    layout.relations
+      .filter((relation) => relation.targetPath.trim().length > 0)
+      .map((relation) => relation.inputCellId),
+  );
+  return new Set(
+    layout.cells
+      .filter((cell) => {
+        if (cell.role === "input") return !assignedInputIds.has(cell.id);
+        if (cell.role !== "mark") return false;
+        return !(cell.markSets ?? []).some(
+          (markSet) => markSet.targetPath.trim().length > 0,
+        );
+      })
+      .map((cell) => cell.id),
+  );
+}
+
+function drawUnassignedMeaningOverlay(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  cells: LayoutCell[],
+  canonicalWidth: number,
+  canonicalHeight: number,
+) {
+  context.save();
+  context.fillStyle = "rgba(10, 20, 29, 0.68)";
+  context.fillRect(0, 0, canonicalWidth, canonicalHeight);
+  context.restore();
+
+  cells.forEach((cell, index) => {
+    context.save();
+    context.drawImage(
+      image,
+      cell.x,
+      cell.y,
+      cell.width,
+      cell.height,
+      cell.x,
+      cell.y,
+      cell.width,
+      cell.height,
+    );
+    context.fillStyle = "rgba(255, 214, 10, 0.28)";
+    context.fillRect(cell.x, cell.y, cell.width, cell.height);
+    context.beginPath();
+    context.rect(cell.x, cell.y, cell.width, cell.height);
+    context.clip();
+    context.strokeStyle = "rgba(120, 25, 15, 0.58)";
+    context.lineWidth = Math.max(2, canonicalWidth / 900);
+    const stripeGap = Math.max(12, canonicalWidth / 120);
+    for (
+      let offset = -cell.height;
+      offset < cell.width + cell.height;
+      offset += stripeGap
+    ) {
+      context.beginPath();
+      context.moveTo(cell.x + offset, cell.y + cell.height);
+      context.lineTo(cell.x + offset + cell.height, cell.y);
+      context.stroke();
+    }
+    context.restore();
+
+    context.save();
+    context.strokeStyle = "#b42318";
+    context.lineWidth = Math.max(7, canonicalWidth / 240);
+    context.setLineDash([]);
+    context.strokeRect(cell.x, cell.y, cell.width, cell.height);
+    context.strokeStyle = "#fff3b0";
+    context.lineWidth = Math.max(2, canonicalWidth / 800);
+    context.strokeRect(
+      cell.x + Math.max(4, canonicalWidth / 600),
+      cell.y + Math.max(4, canonicalWidth / 600),
+      Math.max(1, cell.width - Math.max(8, canonicalWidth / 300)),
+      Math.max(1, cell.height - Math.max(8, canonicalWidth / 300)),
+    );
+    const fontSize = Math.max(13, Math.min(24, canonicalWidth / 70));
+    const badgeText = `未設定 ${index + 1}`;
+    context.font = `900 ${fontSize}px sans-serif`;
+    const badgeHeight = fontSize + 12;
+    const badgeWidth = Math.max(82, context.measureText(badgeText).width + 20);
+    const badgeX = Math.max(0, Math.min(cell.x, canonicalWidth - badgeWidth));
+    const badgeY = Math.max(0, cell.y - badgeHeight);
+    context.fillStyle = "#b42318";
+    context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+    context.fillStyle = "#ffffff";
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    context.fillText(badgeText, badgeX + 10, badgeY + badgeHeight / 2);
+    context.restore();
+  });
+}
 
 function pointToSegmentDistance(point: Point, start: Point, end: Point) {
   const dx = end.x - start.x;
@@ -433,8 +576,10 @@ export const LAYOUT_ROLE_STYLE = {
   parent_label: { stroke: "#a21caf", fill: "#a21caf", dash: [12, 5] },
   input: { stroke: "#0067c0", fill: "#0067c0", dash: [] },
   mark: { stroke: "#6d28d9", fill: "#6d28d9", dash: [7, 4] },
-  record_key_cell: { stroke: "#00875a", fill: "#00875a", dash: [14, 4, 3, 4] },
-  column_key_cell: { stroke: "#9a6700", fill: "#9a6700", dash: [3, 3] },
+  // Legacy layouts are normalized to input before display. Keep defensive
+  // styles so an old browser draft never fails while it is being migrated.
+  record_key_cell: { stroke: "#0067c0", fill: "#0067c0", dash: [] },
+  column_key_cell: { stroke: "#0067c0", fill: "#0067c0", dash: [] },
   ignored: { stroke: "#59636e", fill: "#59636e", dash: [12, 8] },
 } as const;
 
@@ -717,15 +862,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [magnifierScale, setMagnifierScale] = useState(DEFAULT_MAGNIFIER_SCALE);
   const [magnifierSize, setMagnifierSize] = useState(DEFAULT_MAGNIFIER_SIZE);
   const [message, setMessage] = useState<string | null>(null);
+  const [highlightUnassigned, setHighlightUnassigned] = useState(false);
   const [historyDepth, setHistoryDepth] = useState(0);
   const [customLabel, setCustomLabel] = useState("");
   const [customTargetPlacement, setCustomTargetPlacement] = useState<"sidebar" | "catalog" | null>(null);
   const [meaningCatalogQuery, setMeaningCatalogQuery] = useState("");
   const [meaningCatalogSection, setMeaningCatalogSection] = useState("all");
   const [recordSectionTitle, setRecordSectionTitle] = useState("明細");
-  const [rowKeyStrategy, setRowKeyStrategy] = useState<"printed" | "position">("printed");
   const [selectedRecordSectionId, setSelectedRecordSectionId] = useState("");
+  const [recordNamePopover, setRecordNamePopover] = useState<RecordNamePopoverState | null>(null);
+  const [recordNameDraft, setRecordNameDraft] = useState("");
+  const recordNameInputRef = useRef<HTMLInputElement>(null);
   const currentSignature = useMemo(() => layoutSignature(layout), [layout]);
+  const unassignedMeaningIds = useMemo(
+    () => unassignedMeaningCellIds(layout),
+    [layout],
+  );
+  const unassignedMeaningCount = unassignedMeaningIds.size;
   const dirty = currentSignature !== baselineSignature;
   const dirtyRef = useRef(dirty);
 
@@ -859,6 +1012,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setLayout(normalized);
     setBaselineSignature(layoutSignature(normalized));
     setSelectedRecordSectionId(normalized.recordSections?.[0]?.id ?? "");
+    setRecordNamePopover(null);
     setSelectedId(null);
     setSelectedIds(new Set());
     relationHistory.current = [];
@@ -912,6 +1066,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setDraft(null);
     setLinkPoint(null);
   }, [workflowStep]);
+  useEffect(() => {
+    if (workflowStep !== "meaning") {
+      setHighlightUnassigned(false);
+      return;
+    }
+    if (highlightUnassigned && unassignedMeaningCount === 0) {
+      setHighlightUnassigned(false);
+      setMessage("読み取る内容が未設定の記入欄はありません。");
+    }
+  }, [highlightUnassigned, unassignedMeaningCount, workflowStep]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
   useEffect(() => {
     if (mode === "link") {
@@ -952,6 +1116,36 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     () => new Map(recordSections.map((section) => [section.id, section])),
     [recordSections],
   );
+  const openRecordNameEditor = useCallback((section: LayoutRecordSection, anchor: Point) => {
+    setSelectedRecordSectionId(section.id);
+    setRecordNameDraft(recordSectionDisplayName(section));
+    setRecordNamePopover({ sectionId: section.id, ...anchor });
+  }, []);
+  const saveRecordDisplayName = useCallback(() => {
+    if (!recordNamePopover) return;
+    const displayName = recordNameDraft.trim();
+    if (!displayName) {
+      setMessage("表の表示名を入力してください。");
+      recordNameInputRef.current?.focus();
+      return;
+    }
+    const sectionId = recordNamePopover.sectionId;
+    setLayout((current) => ({
+      ...current,
+      recordSections: (current.recordSections ?? []).map((section) => (
+        section.id === sectionId
+          ? { ...section, displayName, source: "manual" as const }
+          : section
+      )),
+    }));
+    setRecordNamePopover(null);
+    setMessage(`繰り返し表の表示名を「${displayName}」に設定しました。`);
+  }, [recordNameDraft, recordNamePopover]);
+  useEffect(() => {
+    if (!recordNamePopover) return;
+    recordNameInputRef.current?.focus();
+    recordNameInputRef.current?.select();
+  }, [recordNamePopover]);
   const hasIncompleteLegacyRecordSection = recordGroups.some((group) => {
     const section = recordSectionById.get(group.sectionId);
     return section?.recordType !== "generic" && !section?.parentLabelCellId;
@@ -1772,6 +1966,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         context.globalAlpha = 1;
       }
     }
+    if (highlightUnassigned && workflowStep === "meaning") {
+      const unassignedCells = layout.cells.filter(
+        (cell) => unassignedMeaningIds.has(cell.id),
+      );
+      drawUnassignedMeaningOverlay(
+        context,
+        image,
+        unassignedCells,
+        layout.canonicalWidth,
+        layout.canonicalHeight,
+      );
+    }
   };
 
   useEffect(redraw, [
@@ -1790,6 +1996,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     selectedIdentityByPath,
     eraserTrail,
     showMeaningStep,
+    highlightUnassigned,
+    unassignedMeaningIds,
+    workflowStep,
   ]);
   useEffect(() => {
     const image = new Image();
@@ -2050,7 +2259,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         cells: current.cells.map((cell) => {
           if (!idSet.has(cell.id)) return cell;
           if (role !== "mark" || (cell.markSets?.length ?? 0) > 0) {
-            return { ...cell, role };
+            return { ...cell, role, source: "manual" };
           }
           const relatedPath = current.relations.find(
             (relation) => relation.inputCellId === cell.id
@@ -2071,6 +2280,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           return {
             ...cell,
             role,
+            source: "manual",
             markSets: (
               relatedPath?.startsWith("calvings.")
               || section?.collectionPath === "calvings"
@@ -2503,10 +2713,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const axis: LayoutRelation["axis"] = Math.abs(resolvedEnd.x - start.x) >= Math.abs(resolvedEnd.y - start.y)
       ? "horizontal"
       : "vertical";
-    const inputs = linkLaneCells(
+    const inputs = meaningLinkLaneCells(
       start,
       resolvedEnd,
       layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
+      endCell,
     );
     if (inputs.length === 0) {
       setMessage("スライド経路に手書き文字欄がありません。記入欄を通過するようにドラッグしてください。");
@@ -2673,34 +2884,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       (candidate) => candidate.collectionPath === collectionPath
         && candidate.parentLabelCellId,
     )?.parentLabelCellId ?? null;
-    const inferredRowKeys = rows.rowKeyCellIds?.map((id) => cellById.get(id) ?? null);
-    const effectiveRowKeyStrategy = rows.rowKeyLabelCellId
-      ? "printed"
-      : existingSection?.rowKeyStrategy
-        ?? rows.rowKeyStrategyHint
-        ?? (genericRows ? rowKeyStrategy : "position");
-    const matchedRowKeys = effectiveRowKeyStrategy === "printed"
-      ? inferredRowKeys?.length === rows.rows.length && inferredRowKeys.every((cell) => cell !== null)
-        ? inferredRowKeys
-        : matchRowKeyCells(rows.rows, layout.cells)
-      : rows.rows.map(() => null);
-    if (effectiveRowKeyStrategy === "printed" && !matchedRowKeys) {
-      setMessage("行番号の数または位置が表の行と一致しません。ステップ1で1～9などの番号セルを「行番号」にするか、行の決め方を「上から順番」に変更してください。");
-      return;
-    }
     const section: LayoutRecordSection = existingSection ?? {
       id: `section_${collectionPath.replace(/[^A-Za-z0-9_]/g, "_")}_${Date.now()}_${recordSections.length + 1}`,
       title: genericRows
         ? recordSectionTitle.trim() || "明細"
         : collectionPath === "saleCalves" ? "売却子牛一覧" : "繁殖履歴",
+      displayName: null,
       collectionPath,
       recordType: genericRows
         ? "generic"
         : collectionPath === "saleCalves" ? "saleCalf" : "calving",
       recordLabelCellIds: labelIds,
       parentLabelCellId: genericRows ? null : inheritedParentLabelCellId,
-      rowKeyStrategy: effectiveRowKeyStrategy,
-      rowKeyCellIds: (matchedRowKeys ?? []).flatMap((cell) => cell ? [cell.id] : []),
+      rowKeyStrategy: "position",
+      rowKeyCellIds: [],
       includeEmptyRows: false,
       source: "manual",
     };
@@ -2709,42 +2906,37 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         .filter((group) => group.sectionId === section.id)
         .map((group) => [group.order, group]),
     );
-    const groups: LayoutRecordGroup[] = rows.rows.map((row, index) => {
+    const groups: LayoutRecordGroup[] = rows.rows.map((row) => {
       const inputs = row.inputCellIds
         .map((inputId) => cellById.get(inputId))
         .filter((cell): cell is LayoutCell => Boolean(cell));
       const previous = previousByOrder.get(row.order);
-      const rowKeyCell = matchedRowKeys?.[index] ?? null;
-      const geometryCells = rowKeyCell ? [rowKeyCell, ...inputs] : inputs;
       return {
         id: previous?.id ?? `record_${section.id}_${row.order}`,
         sectionId: section.id,
         order: row.order,
-        ...boundingRect(geometryCells, layout.canonicalWidth, layout.canonicalHeight),
+        ...boundingRect(inputs, layout.canonicalWidth, layout.canonicalHeight),
         inputCellIds: row.inputCellIds,
         recordKeyField: genericRows ? "rowNumber" : "parity",
-        recordKeyValue: rowKeyCell?.text.trim()
-          || previous?.recordKeyValue
-          || String(row.order),
-        recordKeyCellId: rowKeyCell?.id ?? null,
+        recordKeyValue: previous?.recordKeyValue || String(row.order),
+        recordKeyCellId: null,
         source: "manual",
       };
     });
-    const nextSection = {
+    const nextSection: LayoutRecordSection = {
       ...section,
       recordLabelCellIds: labelIds,
       parentLabelCellId: labelIds.includes(section.parentLabelCellId ?? "")
         ? null
         : section.parentLabelCellId,
-      rowKeyStrategy: effectiveRowKeyStrategy,
-      rowKeyCellIds: (matchedRowKeys ?? []).flatMap((cell) => cell ? [cell.id] : []),
+      rowKeyStrategy: "position",
+      rowKeyCellIds: [],
       includeEmptyRows: section.includeEmptyRows ?? false,
       source: "manual" as const,
     };
     const genericEntriesByInput = new Map<string, LayoutLabelPoolEntry>();
     if (genericRows) {
       labels.forEach((label) => {
-        if (label.id === rows.rowKeyLabelCellId) return;
         const columnInputs = layout.relations
           .filter((relation) => relation.labelCellIds.includes(label.id))
           .flatMap((relation) => {
@@ -2812,11 +3004,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedRecordSectionId(section.id);
     setSelectedId(labelIds[0] ?? null);
     setSelectedIds(new Set(labelIds));
+    const nameAnchor = recordSectionBand(nextSection, layout.cells)?.anchor;
+    if (nameAnchor) openRecordNameEditor(nextSection, nameAnchor);
     const labelNames = labels.map((label) => label.text.trim() || label.id).join(" / ");
     setMessage(
-      `${labelNames}を「${nextSection.title}」の列として指定し、${groups.length}行・`
+      `${labelNames}を「${recordSectionDisplayName(nextSection)}」の列として指定し、${groups.length}行・`
       + `${groups.reduce((total, group) => total + group.inputCellIds.length, 0)}個の記入欄を自動編成しました。`
-      + `${nextSection.rowKeyStrategy === "printed" ? `${nextSection.rowKeyCellIds?.length ?? 0}個の行番号を使用します。` : "上からの順番を行番号として使用します。"}`
+      + "上からの順番で各行を編成します。"
       + `${nextSection.recordType === "generic" ? "帳票上の見出しはなくても保存できます。" : nextSection.parentLabelCellId ? "親ラベルとの定義も維持されています。" : "次に親ラベルへ接続してください。"}`,
     );
   };
@@ -2935,7 +3129,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       };
     });
     setSelectedRecordSectionId(section.id);
-    setMessage(`${label?.text || labelId}を${section.title}の帳票上の見出しに設定しました。`);
+    setMessage(`${label?.text || labelId}を${recordSectionDisplayName(section)}の帳票上の見出しに設定しました。`);
   };
 
   const roleCounts = {
@@ -2972,25 +3166,53 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     layout.recordStructureVerified === true
     && [...structuredInputIds].every((inputId) => groupedInputIds.has(inputId))
   );
-  const hasMeaningAssignments = layout.relations.length > 0 || layout.cells.some(
-    (cell) => cell.role === "mark" && (cell.markSets?.length ?? 0) > 0,
-  );
-  const meaningAssignedCellIds = new Set([
-    ...layout.relations.map((relation) => relation.inputCellId),
-    ...layout.cells
-      .filter((cell) => cell.role === "mark" && (cell.markSets?.length ?? 0) > 0)
+  const meaningAssignedCellIds = new Set(
+    layout.cells
+      .filter((cell) => (
+        (cell.role === "input" || cell.role === "mark")
+        && !unassignedMeaningIds.has(cell.id)
+      ))
       .map((cell) => cell.id),
-  ]);
-  const hasUnassignedFields = layout.cells.some(
-    (cell) => (cell.role === "input" || cell.role === "mark")
-      && !meaningAssignedCellIds.has(cell.id),
   );
+  const hasMeaningAssignments = meaningAssignedCellIds.size > 0;
+  const hasUnassignedFields = unassignedMeaningCount > 0;
   const layoutReadyForOcr = hasMeaningAssignments
     && recordStructureReady
     && !hasUnassignedFields;
   const templateReadyForOcr = layoutReadyForOcr
     && identityConfigurationReady
     && documentNameReady;
+  const toggleUnassignedHighlight = () => {
+    if (highlightUnassigned) {
+      setHighlightUnassigned(false);
+      setMessage("未設定の記入欄の強調表示を解除しました。");
+      return;
+    }
+    const firstUnassigned = layout.cells.find(
+      (cell) => unassignedMeaningIds.has(cell.id),
+    );
+    if (!firstUnassigned) return;
+    setHighlightUnassigned(true);
+    setSelectedId(firstUnassigned.id);
+    setSelectedIds(new Set([firstUnassigned.id]));
+    setMessage(
+      `読み取る内容が未設定の記入欄を${unassignedMeaningCount}件強調しています。`,
+    );
+    window.requestAnimationFrame(() => {
+      const wrapper = canvasWrapRef.current;
+      const canvas = canvasRef.current;
+      if (!wrapper || !canvas) return;
+      const renderedWidth = canvas.getBoundingClientRect().width;
+      const scale = renderedWidth > 0
+        ? renderedWidth / layout.canonicalWidth
+        : 1;
+      const centerX = (firstUnassigned.x + firstUnassigned.width / 2) * scale;
+      const centerY = (firstUnassigned.y + firstUnassigned.height / 2) * scale;
+      wrapper.scrollLeft = Math.max(0, centerX - wrapper.clientWidth / 2);
+      wrapper.scrollTop = Math.max(0, centerY - wrapper.clientHeight / 2);
+      canvas.focus({ preventScroll: true });
+    });
+  };
 
   return (
     <div className="layout-editor" aria-busy={busy}>
@@ -3052,6 +3274,39 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           />
         )}
         {showMeaningStep && <ModeButton current={mode} mode="parent" label="親項目を接続" onChange={setMode} />}
+        {showMeaningStep && (
+          <button
+            type="button"
+            className={highlightUnassigned
+              ? "unassigned-meaning-toggle active"
+              : "unassigned-meaning-toggle"}
+            aria-pressed={highlightUnassigned}
+            aria-controls="layout-mapping-canvas"
+            aria-label={highlightUnassigned
+              ? `未設定の記入欄の強調を解除（${unassignedMeaningCount}件）`
+              : unassignedMeaningCount > 0
+                ? `未設定の記入欄を強調（${unassignedMeaningCount}件）`
+                : "未設定なし"}
+            disabled={unassignedMeaningCount === 0}
+            onClick={toggleUnassignedHighlight}
+          >
+            <span aria-hidden="true">◎</span>
+            {unassignedMeaningCount > 0
+              ? <>未設定を強調 <strong>{unassignedMeaningCount}件</strong></>
+              : "未設定なし"}
+          </button>
+        )}
+        {showMeaningStep && (
+          <span
+            id="unassigned-meaning-status"
+            className="sr-only"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            読み取る内容が未設定の記入欄は{unassignedMeaningCount}件です。
+            {highlightUnassigned ? "強調表示中です。" : ""}
+          </span>
+        )}
         {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="record-parent" label="見出しへ接続" onChange={setMode} />}
         {workflowStep !== "identity" && workflowStep !== "review" && (
@@ -3129,8 +3384,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       )}
 
       <div className="layout-workbench">
-        <div ref={canvasWrapRef} className="mapping-canvas-wrap" aria-busy={detecting}>
+        <div
+          ref={canvasWrapRef}
+          className={highlightUnassigned
+            ? "mapping-canvas-wrap unassigned-highlight-active"
+            : "mapping-canvas-wrap"}
+          aria-busy={detecting}
+        >
           <canvas
+            id="layout-mapping-canvas"
             ref={canvasRef}
             width={layout.canonicalWidth}
             height={layout.canonicalHeight}
@@ -3203,6 +3465,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 return;
               }
               if (mode === "record") {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                const hitTolerance = Math.max(
+                  10,
+                  16 * layout.canonicalWidth / Math.max(1, bounds.width),
+                  16 * layout.canonicalHeight / Math.max(1, bounds.height),
+                );
+                const recordSectionHit = recordSectionAtPoint(
+                  location,
+                  recordSections,
+                  layout.cells,
+                  hitTolerance,
+                );
+                if (recordSectionHit) {
+                  const anchor = recordSectionBand(recordSectionHit, layout.cells)?.anchor ?? location;
+                  openRecordNameEditor(recordSectionHit, anchor);
+                  return;
+                }
                 if (!hit || hit.role !== "label") {
                   setMessage("レコード作成では、最初の列ラベルから最後の列ラベルまで横方向にドラッグしてください。");
                   return;
@@ -3365,6 +3644,40 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               setEraserTrail([]);
             }}
           />
+          {recordNamePopover && recordSectionById.has(recordNamePopover.sectionId) && (
+            <form
+              className="record-name-popover"
+              aria-label="繰り返し表の名称編集"
+              style={{
+                left: `${Math.min(95, Math.max(5, recordNamePopover.x / layout.canonicalWidth * 100))}%`,
+                top: `${Math.min(95, Math.max(5, recordNamePopover.y / layout.canonicalHeight * 100))}%`,
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveRecordDisplayName();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setRecordNamePopover(null);
+              }}
+            >
+              <span>繰り返し表</span>
+              <label>
+                表示名
+                <input
+                  ref={recordNameInputRef}
+                  aria-label="繰り返し表の表示名"
+                  value={recordNameDraft}
+                  maxLength={200}
+                  onChange={(event) => setRecordNameDraft(event.target.value)}
+                />
+              </label>
+              <div>
+                <button type="submit" className="primary compact">保存</button>
+                <button type="button" className="secondary compact" onClick={() => setRecordNamePopover(null)}>閉じる</button>
+              </div>
+            </form>
+          )}
           <div
             ref={magnifierRef}
             className="layout-magnifier"
@@ -3418,14 +3731,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       : cell.role === "parent_label"
                         ? "見出し"
                       : cell.role === "input"
+                        || cell.role === "record_key_cell"
+                        || cell.role === "column_key_cell"
                         ? "記入欄"
                           : cell.role === "mark"
                             ? "選択欄"
-                          : cell.role === "record_key_cell"
-                            ? "行番号"
-                            : cell.role === "column_key_cell"
-                              ? "列番号"
                             : "読み取らない"} · {cell.text || cell.id}
+                    {unassignedMeaningIds.has(cell.id) ? " · 未設定" : ""}
                   </option>
                 ))}
               </select>
@@ -3447,22 +3759,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <button type="button" className="parent-label-role" onClick={() => setRoles(selectedIds, "parent_label")}>見出しにする</button>
                 <button type="button" className="input-role" onClick={() => setRoles(selectedIds, "input")}>記入欄にする</button>
                 <button type="button" className="mark-role" onClick={() => setRoles(selectedIds, "mark")}>選択欄にする</button>
-                <button
-                  type="button"
-                  className="column-key-role"
-                  title="表の各行を識別する「1、2、3…」などの印刷済みセル"
-                  onClick={() => setRoles(selectedIds, "record_key_cell")}
-                >
-                  行番号にする
-                </button>
-                <button
-                  type="button"
-                  className="record-key-role"
-                  title="表の各列を識別する印刷済みセル"
-                  onClick={() => setRoles(selectedIds, "column_key_cell")}
-                >
-                  列番号にする
-                </button>
                 <button type="button" onClick={() => setRoles(selectedIds, "ignored")}>選択した枠を読み取らない</button>
               </div>
               <button
@@ -3502,20 +3798,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     <button className={selected.role === "parent_label" ? "active parent-label-role" : ""} onClick={() => setRole(selected.id, "parent_label")}>見出し</button>
                     <button className={selected.role === "input" ? "active input-role" : ""} onClick={() => setRole(selected.id, "input")}>記入欄</button>
                     <button className={selected.role === "mark" ? "active mark-role" : ""} onClick={() => setRole(selected.id, "mark")}>選択欄</button>
-                    <button
-                      className={selected.role === "record_key_cell" ? "active record-key-role" : "record-key-role"}
-                      title="表の各行を識別する「1、2、3…」などの印刷済みセル"
-                      onClick={() => setRole(selected.id, "record_key_cell")}
-                    >
-                      行番号
-                    </button>
-                    <button
-                      className={selected.role === "column_key_cell" ? "active column-key-role" : "column-key-role"}
-                      title="表の各列を識別する印刷済みセル"
-                      onClick={() => setRole(selected.id, "column_key_cell")}
-                    >
-                      列番号
-                    </button>
                     <button className={selected.role === "ignored" ? "active" : ""} onClick={() => setRole(selected.id, "ignored")}>読み取らない</button>
                   </div>
                 </fieldset>
@@ -3682,7 +3964,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           {workflowStep === "records" && (
             <div className="wizard-side-summary">
               <strong>列ラベルをまとめる</strong>
-              <p>複数の列見出しを横断すると、行番号または上からの順番で各行を自動編成します。帳票上の見出しは任意です。</p>
+              <p>複数の列見出しを横断すると、上からの順番で各行を自動編成します。帳票上の見出しは任意です。</p>
               <span>{recordGroups.length}レコードを定義済み</span>
             </div>
           )}
@@ -3808,7 +4090,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <div><dt>項目名・見出し</dt><dd>{roleCounts.label + roleCounts.parentLabel}</dd></div>
                 <div><dt>記入欄</dt><dd>{roleCounts.input + roleCounts.mark}</dd></div>
                 <div><dt>内容設定済み</dt><dd>{meaningAssignedCellIds.size}</dd></div>
-                <div><dt>未割当</dt><dd>{hasUnassignedFields ? "あり" : "なし"}</dd></div>
+                <div><dt>未割当</dt><dd>{unassignedMeaningCount}件</dd></div>
                 <div><dt>繰り返し部分</dt><dd>{recordGroups.length}</dd></div>
                 <div><dt>照合グループ</dt><dd>{new Set(documentIdentityFields.map((field) => field.matchGroupId).filter(Boolean)).size}件</dd></div>
                 <div><dt>照合条件</dt><dd>{usesGroupedIdentity ? "すべてのグループが一致" : usesCombinedConfirmation ? "従来の複合確認" : primaryIdentityField?.label ?? "未選択"}</dd></div>
@@ -3922,7 +4204,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           <div>
             <span className="eyebrow">RECORD STRUCTURE</span>
             <h3>繰り返し表の行と列</h3>
-            <p>車種名・車台番号などの列をまとめ、印刷された行番号または上からの順番で各行を編成します。帳票上の見出しは任意です。</p>
+            <p>車種名・車台番号などの列をまとめ、上からの順番で各行を編成します。帳票上の見出しは任意です。</p>
           </div>
           <div className="record-structure-status">
             <span className={layout.recordStructureVerified ? "structure-verified" : "structure-unverified"}>
@@ -3943,37 +4225,21 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               onChange={(event) => setRecordSectionTitle(event.target.value)}
             />
           </label>
-          <label>行の決め方
-            <select
-              value={rowKeyStrategy}
-              onChange={(event) => setRowKeyStrategy(event.target.value as "printed" | "position")}
-            >
-              <option value="printed">印刷された行番号を使う</option>
-              <option value="position">上から順番に行を作る</option>
-            </select>
-          </label>
           <button
             type="button"
             className="secondary"
             disabled={!recordSectionTitle.trim()}
             onClick={() => {
               const collectionPath = `genericRecords.${genericRecordCollectionKey(recordSectionTitle, recordSections)}`;
-              const existing = recordSections.find(
-                (section) => section.recordType === "generic" && section.title === recordSectionTitle.trim(),
-              );
-              if (existing) {
-                setSelectedRecordSectionId(existing.id);
-                setMessage(`${existing.title}は作成済みです。`);
-                return;
-              }
               const section: LayoutRecordSection = {
                 id: `section_${collectionPath.replace(/[^A-Za-z0-9_]/g, "_")}_${Date.now()}`,
                 title: recordSectionTitle.trim(),
+                displayName: recordSectionTitle.trim(),
                 collectionPath,
                 recordType: "generic",
                 recordLabelCellIds: [],
                 parentLabelCellId: null,
-                rowKeyStrategy,
+                rowKeyStrategy: "position",
                 rowKeyCellIds: [],
                 includeEmptyRows: false,
                 source: "manual",
@@ -3985,7 +4251,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 recordStructureVerified: false,
               }));
               setSelectedRecordSectionId(section.id);
-              setMessage(`${section.title}を作成しました。次に「繰り返し部分をまとめる」で、表に含める列ラベルを横方向に横断してください。`);
+              setMessage(`${recordSectionDisplayName(section)}を作成しました。次に「繰り返し部分をまとめる」で、表に含める列ラベルを横方向に横断してください。`);
             }}
           >
             繰り返し表を追加
@@ -4001,7 +4267,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 className={selectedRecordSectionId === section.id ? "active" : ""}
                 onClick={() => setSelectedRecordSectionId(section.id)}
               >
-                {section.title}
+                {recordSectionDisplayName(section)}
                 <small>{recordGroups.filter((group) => group.sectionId === section.id).length}レコード</small>
               </button>
             ))}
@@ -4015,41 +4281,29 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               <div className="record-section-properties">
                 <label>表の表示名
                   <input
-                    value={section.title}
+                    value={section.displayName ?? section.title}
                     maxLength={200}
                     onChange={(event) => setLayout((current) => ({
                       ...current,
                       recordSections: (current.recordSections ?? []).map((item) => (
                         item.id === section.id
-                          ? { ...item, title: event.target.value, source: "manual" }
+                          ? { ...item, displayName: event.target.value, source: "manual" }
                           : item
                       )),
                       recordStructureVerified: current.recordStructureVerified,
                     }))}
+                    onBlur={(event) => {
+                      const displayName = event.target.value.trim();
+                      setLayout((current) => ({
+                        ...current,
+                        recordSections: (current.recordSections ?? []).map((item) => (
+                          item.id === section.id
+                            ? { ...item, displayName: displayName || null, source: "manual" as const }
+                            : item
+                        )),
+                      }));
+                    }}
                   />
-                </label>
-                <label>行の決め方
-                  <select
-                    value={section.rowKeyStrategy ?? "position"}
-                    onChange={(event) => setLayout((current) => ({
-                      ...current,
-                      recordSections: (current.recordSections ?? []).map((item) => (
-                        item.id === section.id
-                          ? {
-                            ...item,
-                            rowKeyStrategy: event.target.value as "printed" | "position",
-                            rowKeyCellIds: event.target.value === "position"
-                              ? []
-                              : item.rowKeyCellIds ?? [],
-                            source: "manual" as const,
-                          }
-                          : item
-                      )),
-                    }))}
-                  >
-                    <option value="printed">印刷された行番号を使う</option>
-                    <option value="position">上から順番に行を作る</option>
-                  </select>
                 </label>
                 <label>帳票上の見出し（任意）
                   <select
@@ -4152,7 +4406,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <p>
                   {section.recordLabelCellIds.length > 0
                     ? section.recordType === "generic"
-                      ? `${section.rowKeyStrategy === "printed" ? `${section.rowKeyCellIds?.length ?? 0}個の行番号` : "上からの順番"}で各行を定義しています。帳票上の見出しは任意です。`
+                      ? "上からの順番で各行を定義しています。帳票上の見出しは任意です。"
                     : section.parentLabelCellId
                       ? "選択した複数列が1レコードとして定義されています。行ごとの紐は表示しません。"
                       : "次に「親ラベル接続」で、親ラベルから青線でまとめた列ラベルのいずれかへ線を引いてください。"
@@ -5559,6 +5813,9 @@ function normalizeLayoutCell(cell: LayoutCell): LayoutCell {
       : "horizontal");
   return {
     ...cell,
+    role: cell.role === "record_key_cell" || cell.role === "column_key_cell"
+      ? "input"
+      : cell.role,
     printedLabelText: cell.printedLabelText ?? "",
     compositeSubfields: cell.compositeSubfields ?? [],
     textDirection,
@@ -5571,7 +5828,88 @@ function normalizeLayoutCell(cell: LayoutCell): LayoutCell {
   };
 }
 
-function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
+function hasAdjacentMeaningField(
+  label: LayoutCell,
+  cells: LayoutCell[],
+  legacyNumberIds: ReadonlySet<string>,
+): boolean {
+  const isInput = (cell: LayoutCell) => (
+    cell.role === "input"
+    || cell.role === "mark"
+    || legacyNumberIds.has(cell.id)
+  );
+  const gapTolerance = Math.max(2, Math.min(12, Math.round(
+    Math.min(label.width, label.height) * 0.35,
+  )));
+  return cells.some((candidate) => {
+    if (candidate.id === label.id || !isInput(candidate)) return false;
+    const horizontalOverlap = intervalOverlap(
+      label.y,
+      label.height,
+      candidate.y,
+      candidate.height,
+    );
+    const horizontalGap = candidate.x - (label.x + label.width);
+    if (
+      horizontalGap >= -gapTolerance
+      && horizontalGap <= gapTolerance
+      && horizontalOverlap >= Math.min(label.height, candidate.height) * 0.5
+    ) return true;
+
+    const verticalOverlap = intervalOverlap(
+      label.x,
+      label.width,
+      candidate.x,
+      candidate.width,
+    );
+    const verticalGap = candidate.y - (label.y + label.height);
+    const similarWidth = candidate.width >= label.width * 0.65
+      && candidate.width <= label.width * 1.5;
+    return verticalGap >= -gapTolerance
+      && verticalGap <= gapTolerance
+      && similarWidth
+      && verticalOverlap >= Math.min(label.width, candidate.width) * 0.65;
+  });
+}
+
+export function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
+  // Keep the legacy schema readable, but migrate its special number cells to
+  // ordinary inputs as soon as the editor loads the layout.
+  const legacyNumberIds = new Set(layout.cells.flatMap((cell) => (
+    cell.role === "record_key_cell" || cell.role === "column_key_cell"
+      ? [cell.id]
+      : []
+  )));
+  (layout.recordSections ?? []).forEach((section) => {
+    (section.rowKeyCellIds ?? []).forEach((cellId) => legacyNumberIds.add(cellId));
+  });
+  (layout.recordGroups ?? []).forEach((group) => {
+    if (group.recordKeyCellId) legacyNumberIds.add(group.recordKeyCellId);
+  });
+  const explicitParentIds = new Set([
+    ...layout.relations.flatMap((relation) => (
+      relation.parentLabelCellId ? [relation.parentLabelCellId] : []
+    )),
+    ...(layout.recordSections ?? []).flatMap((section) => (
+      section.parentLabelCellId ? [section.parentLabelCellId] : []
+    )),
+  ]);
+  const repairDetectedSpreadsheetLabels = layout.detector === "xlsx-structure";
+  // Older spreadsheet imports could persist a field label as parent_label.
+  // Repair only unused parent candidates that geometrically own an adjacent
+  // input; explicit parent links and record-section headings remain intact.
+  const cells = layout.cells.map((cell) => normalizeLayoutCell({
+    ...cell,
+    role: legacyNumberIds.has(cell.id)
+      ? "input"
+      : cell.role === "parent_label"
+        && repairDetectedSpreadsheetLabels
+        && cell.source === "detected"
+        && !explicitParentIds.has(cell.id)
+        && hasAdjacentMeaningField(cell, layout.cells, legacyNumberIds)
+        ? "label"
+        : cell.role,
+  }));
   const recordSections = (layout.recordSections ?? []).map((section) => {
     const { recordLabelCellId, ...current } = section;
     return {
@@ -5580,12 +5918,24 @@ function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
         section.recordLabelCellIds
         ?? (recordLabelCellId ? [recordLabelCellId] : []),
       )],
-      rowKeyStrategy: section.rowKeyStrategy ?? "position",
-      rowKeyCellIds: [...new Set(section.rowKeyCellIds ?? [])],
+      rowKeyStrategy: "position" as const,
+      rowKeyCellIds: [],
       includeEmptyRows: section.includeEmptyRows ?? false,
     };
   });
-  const recordGroups = layout.recordGroups ?? [];
+  const recordGroups = (layout.recordGroups ?? []).map((group) => {
+    const legacyInputId = group.recordKeyCellId && legacyNumberIds.has(group.recordKeyCellId)
+      ? group.recordKeyCellId
+      : null;
+    return {
+      ...group,
+      inputCellIds: [...new Set([
+        ...group.inputCellIds,
+        ...(legacyInputId ? [legacyInputId] : []),
+      ])],
+      recordKeyCellId: null,
+    };
+  });
   const activeCellIds = new Set(layout.cells.map((cell) => cell.id));
   return {
     ...layout,
@@ -5607,7 +5957,7 @@ function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
     // connected to its parent label. Derive the UI state from the saved
     // structure so the user can save and continue to verification.
     recordStructureVerified: recordStructureIsLinked(recordSections, recordGroups),
-    cells: layout.cells.map(normalizeLayoutCell),
+    cells,
   };
 }
 
@@ -6023,17 +6373,11 @@ export function recordRowsFromColumnLabels(
 ): {
   collectionPath: "saleCalves" | "calvings" | null;
   rows: Array<{ order: number; inputCellIds: string[] }>;
-  rowKeyLabelCellId?: string;
-  rowKeyCellIds?: string[];
-  rowKeyStrategyHint?: "position";
 } | null {
   const cellById = new Map(cells.map((cell) => [cell.id, cell]));
   const genericRows = (): {
     collectionPath: null;
     rows: Array<{ order: number; inputCellIds: string[] }>;
-    rowKeyLabelCellId?: string;
-    rowKeyCellIds?: string[];
-    rowKeyStrategyHint?: "position";
   } | null => {
     const columns = [...new Set(labelIds)].map((labelId) => ({
       labelId,
@@ -6066,36 +6410,7 @@ export function recordRowsFromColumnLabels(
       order: index + 1,
       inputCellIds: valueColumns.map((column) => column.cells[index].id),
     }));
-    if (emptyColumns.length === 0) {
-      return { collectionPath: null, rows, rowKeyStrategyHint: "position" };
-    }
-
-    const rowKeyLabel = cellById.get(emptyColumns[0].labelId);
-    if (!rowKeyLabel) return null;
-    const horizontalMargin = Math.max(8, rowKeyLabel.width * 0.1);
-    const rowKeyCells = cells.filter((cell) => {
-      if (cell.role !== "record_key_cell") return false;
-      const centerX = cell.x + cell.width / 2;
-      const centerY = cell.y + cell.height / 2;
-      return centerX >= rowKeyLabel.x - horizontalMargin
-        && centerX <= rowKeyLabel.x + rowKeyLabel.width + horizontalMargin
-        && centerY > rowKeyLabel.y + rowKeyLabel.height / 2;
-    });
-    const scopedCells = [
-      ...rowKeyCells,
-      ...rows.flatMap((row) => row.inputCellIds.flatMap((inputId) => {
-        const input = cellById.get(inputId);
-        return input ? [input] : [];
-      })),
-    ];
-    const matchedRowKeys = matchRowKeyCells(rows, scopedCells);
-    if (!matchedRowKeys || matchedRowKeys.some((cell) => !cell)) return null;
-    return {
-      collectionPath: null,
-      rows,
-      rowKeyLabelCellId: rowKeyLabel.id,
-      rowKeyCellIds: matchedRowKeys.map((cell) => cell!.id),
-    };
+    return { collectionPath: null, rows };
   };
   const parse = (targetPath: string): {
     collectionPath: "saleCalves" | "calvings";
@@ -6174,42 +6489,6 @@ export function recordRowsFromColumnLabels(
     rows.push({ order: rowIndex + 1, inputCellIds: orderedIds });
   }
   return rows.length > 0 ? { collectionPath, rows } : null;
-}
-
-export function matchRowKeyCells(
-  rows: Array<{ order: number; inputCellIds: string[] }>,
-  cells: LayoutCell[],
-): Array<LayoutCell | null> | null {
-  const cellById = new Map(cells.map((cell) => [cell.id, cell]));
-  const rowKeys = cells
-    .filter((cell) => cell.role === "record_key_cell")
-    .sort((first, second) => first.y - second.y || first.x - second.x);
-  if (rowKeys.length < rows.length) return null;
-  const unused = new Set(rowKeys.map((cell) => cell.id));
-  const matches: Array<LayoutCell | null> = [];
-  for (const row of rows) {
-    const inputs = row.inputCellIds
-      .map((inputId) => cellById.get(inputId))
-      .filter((cell): cell is LayoutCell => Boolean(cell));
-    if (inputs.length === 0) return null;
-    const rowCenter = inputs.reduce(
-      (total, cell) => total + cell.y + cell.height / 2,
-      0,
-    ) / inputs.length;
-    const candidate = rowKeys
-      .filter((cell) => unused.has(cell.id))
-      .sort((first, second) => (
-        Math.abs(first.y + first.height / 2 - rowCenter)
-        - Math.abs(second.y + second.height / 2 - rowCenter)
-      ))[0];
-    if (!candidate) return null;
-    const rowHeight = Math.max(...inputs.map((cell) => cell.height));
-    const distance = Math.abs(candidate.y + candidate.height / 2 - rowCenter);
-    if (distance > Math.max(rowHeight, candidate.height) * 1.5) return null;
-    unused.delete(candidate.id);
-    matches.push(candidate);
-  }
-  return matches;
 }
 
 function genericRecordCollectionKey(
@@ -6300,6 +6579,25 @@ export function linkLaneCells(
       + (b.y + b.height / 2 - start.y) * deltaY;
     return aProgress - bProgress;
   });
+}
+
+export function meaningLinkLaneCells(
+  start: Point,
+  end: Point,
+  cells: LayoutCell[],
+  endCell: LayoutCell | undefined,
+): LayoutCell[] {
+  const endRole = endCell?.role === "input" || endCell?.role === "mark"
+    ? endCell.role
+    : null;
+  // The release target expresses the kind of field the user intends to link.
+  // Rectangles of another kind may overlap or sit across the drag lane, but
+  // they must not become assignment targets or block the intended endpoint.
+  return linkLaneCells(
+    start,
+    end,
+    endRole ? cells.filter((cell) => cell.role === endRole) : cells,
+  );
 }
 
 function distanceToCenterSquared(cell: LayoutCell, point: Point): number {

@@ -41,6 +41,40 @@ def test_record_section_migrates_the_legacy_single_label_anchor() -> None:
     ]
 
 
+def test_record_section_keeps_display_name_separate_from_nullable_parent_and_identity() -> None:
+    section = LayoutRecordSection.model_validate(
+        {
+            "id": "education",
+            "title": "明細",
+            "displayName": "学歴",
+            "collectionPath": "genericRecords.education",
+            "recordType": "generic",
+            "recordLabelCellIds": ["year_label", "school_label"],
+            "parentLabelCellId": None,
+        }
+    )
+
+    dumped = section.model_dump(mode="json", by_alias=True)
+    assert section.resolved_display_name == "学歴"
+    assert dumped["id"] == "education"
+    assert dumped["displayName"] == "学歴"
+    assert dumped["parentLabelCellId"] is None
+
+
+def test_record_section_without_display_name_uses_legacy_title() -> None:
+    section = LayoutRecordSection.model_validate(
+        {
+            "id": "legacy-lines",
+            "title": "車両明細",
+            "collectionPath": "genericRecords.vehicleLines",
+            "recordType": "generic",
+        }
+    )
+
+    assert section.display_name is None
+    assert section.resolved_display_name == "車両明細"
+
+
 def test_layout_preserves_a_reusable_label_candidate_pool() -> None:
     layout = LayoutDefinition(
         canonical_width=300,
@@ -676,6 +710,230 @@ def test_custom_json_target_is_accepted_from_layout_editor() -> None:
 
     assert mappings[0].target_path == "customFields.treatmentHistory"
     assert mappings[0].label == "治療歴"
+
+
+def test_duplicate_custom_targets_are_incremented_per_distinct_input() -> None:
+    cells = [
+        LayoutCell(
+            id="language_label",
+            role="label",
+            x=10,
+            y=10,
+            width=100,
+            height=30,
+            confidence=1,
+            text="語学試験",
+        ),
+        *[
+            LayoutCell(
+                id=f"language_{index}",
+                role="input",
+                x=120,
+                y=10 + index * 40,
+                width=140,
+                height=30,
+                confidence=1,
+            )
+            for index in range(1, 4)
+        ],
+    ]
+    relations = [
+        LayoutRelation(
+            id=f"language_{index}_horizontal",
+            input_cell_id=f"language_{index}",
+            label_cell_ids=["language_label"],
+            axis="horizontal",
+            order=index,
+            target_path="customFields.languageTest",
+        )
+        for index in range(1, 4)
+    ]
+    relations.append(
+        LayoutRelation(
+            id="language_2_vertical",
+            input_cell_id="language_2",
+            label_cell_ids=["language_label"],
+            axis="vertical",
+            order=2,
+            target_path="customFields.languageTest",
+        )
+    )
+    layout = LayoutDefinition(
+        canonical_width=300,
+        canonical_height=160,
+        cells=cells,
+        relations=relations,
+        label_pool=[
+            LayoutLabelPoolEntry(
+                id="language_test",
+                label="語学試験",
+                target_path="customFields.languageTest",
+                section="面接",
+            )
+        ],
+        allow_cross_axis_labels=True,
+    )
+
+    normalized = LayoutService._increment_duplicate_target_paths(layout)
+
+    paths_by_input = {
+        input_id: {
+            relation.target_path
+            for relation in normalized.relations
+            if relation.input_cell_id == input_id
+        }
+        for input_id in ("language_1", "language_2", "language_3")
+    }
+    assert paths_by_input == {
+        "language_1": {"customFields.languageTest"},
+        "language_2": {"customFields.languageTest_2"},
+        "language_3": {"customFields.languageTest_3"},
+    }
+    assert [entry.target_path for entry in normalized.label_pool] == [
+        "customFields.languageTest",
+        "customFields.languageTest_2",
+        "customFields.languageTest_3",
+    ]
+    assert [mapping.target_path for mapping in LayoutService._as_field_mappings(normalized)] == [
+        "customFields.languageTest",
+        "customFields.languageTest_2",
+        "customFields.languageTest_3",
+    ]
+
+
+def test_duplicate_target_increment_skips_reserved_suffixes_and_preserves_unique_paths() -> None:
+    layout = LayoutDefinition(
+        canonical_width=400,
+        canonical_height=120,
+        cells=[
+            LayoutCell(
+                id="first",
+                role="input",
+                x=10,
+                y=10,
+                width=100,
+                height=30,
+                confidence=1,
+            ),
+            LayoutCell(
+                id="second",
+                role="input",
+                x=120,
+                y=10,
+                width=100,
+                height=30,
+                confidence=1,
+            ),
+            LayoutCell(
+                id="reserved",
+                role="input",
+                x=230,
+                y=10,
+                width=100,
+                height=30,
+                confidence=1,
+            ),
+        ],
+        relations=[
+            LayoutRelation(
+                id="first_relation",
+                input_cell_id="first",
+                axis="horizontal",
+                order=1,
+                target_path="customFields.hobby",
+            ),
+            LayoutRelation(
+                id="second_relation",
+                input_cell_id="second",
+                axis="horizontal",
+                order=2,
+                target_path="customFields.hobby",
+            ),
+            LayoutRelation(
+                id="reserved_relation",
+                input_cell_id="reserved",
+                axis="horizontal",
+                order=3,
+                target_path="customFields.hobby_2",
+            ),
+        ],
+    )
+
+    normalized = LayoutService._increment_duplicate_target_paths(layout)
+
+    assert [relation.target_path for relation in normalized.relations] == [
+        "customFields.hobby",
+        "customFields.hobby_3",
+        "customFields.hobby_2",
+    ]
+
+
+def test_duplicate_collection_and_scalar_targets_use_supported_incremented_paths() -> None:
+    layout = LayoutDefinition(
+        canonical_width=500,
+        canonical_height=160,
+        cells=[
+            LayoutCell(
+                id=cell_id,
+                role="input",
+                x=10 + index * 110,
+                y=10,
+                width=100,
+                height=30,
+                confidence=1,
+            )
+            for index, cell_id in enumerate(("price_1", "price_2", "name_1", "name_2"))
+        ],
+        relations=[
+            LayoutRelation(
+                id="price_1_relation",
+                input_cell_id="price_1",
+                axis="horizontal",
+                order=1,
+                target_path="saleCalves.0.priceYen",
+            ),
+            LayoutRelation(
+                id="price_2_relation",
+                input_cell_id="price_2",
+                axis="horizontal",
+                order=2,
+                target_path="saleCalves.0.priceYen",
+            ),
+            LayoutRelation(
+                id="name_1_relation",
+                input_cell_id="name_1",
+                axis="horizontal",
+                order=1,
+                target_path="document.cattleName",
+            ),
+            LayoutRelation(
+                id="name_2_relation",
+                input_cell_id="name_2",
+                axis="horizontal",
+                order=2,
+                target_path="document.cattleName",
+            ),
+        ],
+    )
+
+    normalized = LayoutService._increment_duplicate_target_paths(layout)
+
+    assert [relation.target_path for relation in normalized.relations] == [
+        "saleCalves.0.priceYen",
+        "saleCalves.1.priceYen",
+        "document.cattleName",
+        "customFields.document_cattleName_2",
+    ]
+    assert all(
+        mapping.target_path
+        in {
+            "saleCalves.0.priceYen",
+            "saleCalves.1.priceYen",
+            "document.cattleName",
+            "customFields.document_cattleName_2",
+        }
+        for mapping in LayoutService._as_field_mappings(normalized)
+    )
 
 
 def test_legacy_array_paths_are_migrated_to_explicit_record_groups() -> None:

@@ -70,8 +70,7 @@ export function TemplatePage({
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [changingOutputTemplateId, setChangingOutputTemplateId] = useState<string | null>(null);
   const [packageDialog, setPackageDialog] = useState<
-    | { mode: "import" }
-    | { mode: "export"; template: Template; version: TemplateVersion }
+    | { template: Template; version: TemplateVersion }
     | null
   >(null);
   const [candidateEditor, setCandidateEditor] = useState<{
@@ -303,7 +302,6 @@ export function TemplatePage({
       <header className="page-header split">
         <div><span className="eyebrow">READING / TEMPLATE MANAGEMENT</span><h1>テンプレート作成・編集</h1><p>新しい帳票の型を作成するか、既存の設定を確認・修正します。</p></div>
         <div className="template-page-header-actions">
-          <button type="button" className="secondary" onClick={() => setPackageDialog({ mode: "import" })}>テンプレートを取り込む</button>
           {onClose && <button type="button" className="ghost" onClick={closeWorkspace}>← 読み取りへ戻る</button>}
         </div>
       </header>
@@ -485,7 +483,7 @@ export function TemplatePage({
                       className="secondary compact"
                       aria-label={`${template.name} v${primaryVersion.versionNumber}を配布用に書き出す`}
                       disabled={primaryVersion.status !== "ACTIVE" || isDeletingCurrentTemplate || openingReview}
-                      onClick={() => setPackageDialog({ mode: "export", template, version: primaryVersion })}
+                      onClick={() => setPackageDialog({ template, version: primaryVersion })}
                     >
                       配布用に書き出す
                     </button>
@@ -607,34 +605,11 @@ export function TemplatePage({
       </section>
       {packageDialog && (
         <TemplatePackageDialog
-          mode={packageDialog.mode}
-          template={packageDialog.mode === "export" ? packageDialog.template : undefined}
-          version={packageDialog.mode === "export" ? packageDialog.version : undefined}
+          mode="export"
+          template={packageDialog.template}
+          version={packageDialog.version}
           refreshTemplates={refresh}
           onClose={() => setPackageDialog(null)}
-          onReviewImported={(importedVersionId) => {
-            void api.templates().then((items) => Promise.all(
-              items.map((item) => api.template(item.id)),
-            )).then((details) => {
-              const imported = details
-                .flatMap((item) => item.versions)
-                .find((item) => item.id === importedVersionId);
-              if (imported?.sourceJobId) {
-                setReview({
-                  version: imported,
-                  jobId: imported.sourceJobId,
-                  origin: "manage",
-                });
-              }
-            }).catch((error) => {
-              setMessage(errorMessage(error, "取り込んだ版を開けませんでした。"));
-            });
-            setPackageDialog(null);
-          }}
-          onActivated={(activatedVersionId) => {
-            setPackageDialog(null);
-            onTemplateActivated?.(activatedVersionId);
-          }}
         />
       )}
     </div>

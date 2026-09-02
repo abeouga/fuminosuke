@@ -1,12 +1,13 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { OcrDocument, OcrFieldPreview } from "../types";
+import type { OcrDocument, OcrFieldPreview, ReviewStructure } from "../types";
 import {
-  canShiftCollectionColumn,
+  buildReviewDisplayModel,
   hydrateMappedReadings,
-  reorderCollectionColumn,
+  positionReviewPopover,
   ReviewPage,
-  shiftCollectionColumn,
+  swapCollectionRowsAtFixedRegions,
+  swapGenericRecordRowsAtFixedRegions,
 } from "./ReviewPage";
 
 const reading = {
@@ -54,106 +55,289 @@ test("materializes configured collection fields omitted by the OCR provider", ()
   expect(document.saleCalves).toHaveLength(0);
 });
 
-test("shifts one collection column without changing adjacent columns or losing review paths", () => {
-  const readable = (value: string, sourceRegionId: string) => ({
-    ...reading,
-    raw: value,
-    normalized: value,
-    status: "readable" as const,
-    reviewReason: null,
-    sourceRegionId,
+test("builds an additive review model in record, parent, independent priority", () => {
+  const field = (path: string, mappingId: string, label: string) => ({
+    path,
+    label,
+    value: { ...reading, sourceRegionId: mappingId },
   });
-  const blank = {
-    ...reading,
-    raw: null,
-    normalized: null,
-    status: "blank" as const,
-    reviewReason: null,
-    sourceRegionId: "sale-date-0",
-  };
-  const document = {
-    schemaVersion: "1.0",
-    templateId: "template-1",
-    templateVersion: "1",
-    document: {},
-    saleCalves: [
-      { saleDate: blank, priceYen: readable("100", "price-0") },
-      { saleDate: readable("2026/01/10", "sale-date-1"), priceYen: readable("200", "price-1") },
-      { saleDate: readable("2026/02/20", "sale-date-2"), priceYen: readable("300", "price-2") },
+  const entries = [
+    field("customFields.record_city", "mapping-record", "市区町村"),
+    field("customFields.parent_a_city", "mapping-parent-a", "市区町村"),
+    field("customFields.parent_a_city_detail", "mapping-parent-a", "市区町村詳細"),
+    field("customFields.parent_b_city", "mapping-parent-b", "市区町村"),
+    field("customFields.unclassified", "mapping-unclassified", "未分類"),
+  ];
+  const structure = {
+    schemaVersion: 1,
+    fields: [
+      { id: "mapping-record", mappingId: "mapping-record", targetPath: "customFields.record_city", label: "市区町村", inputCellId: "record-cell", relationId: "record-relation" },
+      { id: "mapping-parent-a", mappingId: "mapping-parent-a", targetPath: "customFields.parent_a_city", label: "市区町村", inputCellId: "parent-a-cell", relationId: "parent-a-relation" },
+      { id: "mapping-parent-b", mappingId: "mapping-parent-b", targetPath: "customFields.parent_b_city", label: "市区町村", inputCellId: "parent-b-cell", relationId: "parent-b-relation" },
     ],
-    pedigree: {},
-    calvings: [],
-    customFields: {},
-    reviewItems: [{
-      code: "CHECK_DATE",
-      path: "saleCalves.1.saleDate",
-      message: "確認",
-      severity: "warning" as const,
-      sourceRegionId: "sale-date-1",
+    recordSections: [{
+      id: "record-section",
+      title: "訪問履歴",
+      collectionPath: "genericRecords.visits",
+      columns: [{ id: "column-city", label: "市区町村" }, { id: "column-note", label: "備考" }],
+      rows: [{
+        id: "row-1",
+        order: 1,
+        cells: [
+          { columnId: "column-city", fieldId: "mapping-record" },
+          { columnId: "column-note", fieldId: null },
+        ],
+      }],
     }],
-    processingMetadata: {},
-  } satisfies OcrDocument;
+    parentSections: [
+      { id: "parent-a", title: "帰省先", fieldIds: ["mapping-parent-a"] },
+      { id: "parent-b", title: "緊急連絡先", fieldIds: ["mapping-parent-b"] },
+    ],
+    independentFieldIds: [],
+  } satisfies ReviewStructure;
 
-  expect(canShiftCollectionColumn(document, "saleCalves", "saleDate", "up")).toBe(true);
-  const shifted = shiftCollectionColumn(document, "saleCalves", "saleDate", "up");
+  const model = buildReviewDisplayModel(entries, [], structure);
 
-  expect(shifted.saleCalves.map((row) => row.saleDate.raw)).toEqual([
-    "2026/01/10",
-    "2026/02/20",
-    null,
+  expect(model.recordSections[0].rows[0].cells[0].entry?.path).toBe(
+    "customFields.record_city",
+  );
+  expect(model.recordSections[0].rows[0].cells[1].entry).toBeNull();
+  expect(model.parentSections.map((section) => [
+    section.id,
+    section.entries[0]?.path,
+  ])).toEqual([
+    ["parent-a", "customFields.parent_a_city"],
+    ["parent-b", "customFields.parent_b_city"],
   ]);
-  expect(shifted.saleCalves.map((row) => row.priceYen.raw)).toEqual(["100", "200", "300"]);
-  expect(shifted.saleCalves[0].saleDate.sourceRegionId).toBe("sale-date-0");
-  expect(shifted.reviewItems[0].path).toBe("saleCalves.0.saleDate");
-  expect(document.saleCalves[0].saleDate.raw).toBeNull();
-  expect(canShiftCollectionColumn(shifted, "saleCalves", "saleDate", "up")).toBe(false);
-  expect(canShiftCollectionColumn(shifted, "saleCalves", "saleDate", "down")).toBe(true);
-  expect(shiftCollectionColumn(shifted, "saleCalves", "saleDate", "down").saleCalves
-    .map((row) => row.saleDate.raw)).toEqual([null, "2026/01/10", "2026/02/20"]);
+  expect(model.independentEntries.map((entry) => entry.path)).toEqual([
+    "customFields.parent_a_city_detail",
+    "customFields.unclassified",
+  ]);
+  expect(entries[0].label).toBe("市区町村");
+
+  const repeatedTitleModel = buildReviewDisplayModel(entries, [], {
+    ...structure,
+    recordSections: [
+      structure.recordSections[0],
+      { ...structure.recordSections[0], id: "record-section-2" },
+    ],
+  });
+  expect(repeatedTitleModel.recordSections.map((section) => section.title)).toEqual([
+    "訪問履歴 1",
+    "訪問履歴 2",
+  ]);
 });
 
-test("reorders only the dragged column and follows its review metadata", () => {
-  const readable = (value: string, sourceRegionId: string) => ({
-    ...reading,
+test("groups independent values by structural group id without merging equal labels", () => {
+  const entries = [
+    ["customFields.furigana_1", "mapping-1", "ヤマダ"],
+    ["customFields.furigana_2", "mapping-2", "タロウ"],
+    ["customFields.other_furigana", "mapping-3", "ベツジン"],
+  ].map(([path, sourceRegionId, raw]) => ({
+    path,
+    label: "フリガナ",
+    value: { ...reading, raw, normalized: raw, sourceRegionId },
+  }));
+  const structure = {
+    schemaVersion: 1,
+    fields: [
+      ["mapping-1", "customFields.furigana_1", "label-cell-a"],
+      ["mapping-2", "customFields.furigana_2", "label-cell-a"],
+      ["mapping-3", "customFields.other_furigana", "label-cell-b"],
+    ].map(([id, targetPath, groupId]) => ({
+      id,
+      mappingId: id,
+      targetPath,
+      label: "フリガナ",
+      groupId,
+      inputCellId: `${id}-cell`,
+      relationId: `${id}-relation`,
+    })),
+    recordSections: [],
+    parentSections: [],
+    independentFieldIds: ["mapping-1", "mapping-2", "mapping-3"],
+  } satisfies ReviewStructure;
+
+  const model = buildReviewDisplayModel(entries, [], structure);
+
+  expect(model.independentGroups.map((group) => [
+    group.id,
+    group.entries.map((entry) => [entry.path, entry.value.sourceRegionId]),
+  ])).toEqual([
+    ["label-cell-a", [
+      ["customFields.furigana_1", "mapping-1"],
+      ["customFields.furigana_2", "mapping-2"],
+    ]],
+    ["label-cell-b", [["customFields.other_furigana", "mapping-3"]]],
+  ]);
+});
+
+test("positions the selected-cell popover inside the visible boundary", () => {
+  expect(positionReviewPopover(
+    { left: 180, top: 4, right: 220, bottom: 24 },
+    { width: 100, height: 60 },
+    { left: 8, top: 8, right: 300, bottom: 200 },
+  )).toEqual({ left: 150, top: 32, placement: "below" });
+  expect(positionReviewPopover(
+    { left: 275, top: 170, right: 295, bottom: 190 },
+    { width: 100, height: 60 },
+    { left: 8, top: 8, right: 300, bottom: 200 },
+  )).toEqual({ left: 200, top: 102, placement: "above" });
+});
+
+test("swaps every fixed-format row value while keeping each physical crop identity", () => {
+  const located = (value: string, sourceRegionId: string, y: number) => ({
     raw: value,
     normalized: value,
     status: "readable" as const,
+    alternatives: [`${value}-candidate`],
     reviewReason: null,
     sourceRegionId,
+    boundingBox: { x: 10, y, width: 80, height: 20 },
   });
+  const row = (label: string, index: number) => Object.fromEntries(
+    ["parity", "ageDays", "weightKg", "priceYen", "sireName", "saleDate", "notes"]
+      .map((field, fieldIndex) => [
+        field,
+        located(`${label}-${field}`, `${field}-${index}`, index * 100 + fieldIndex * 20),
+      ]),
+  );
   const document = {
     schemaVersion: "1.0",
     templateId: "template-1",
     templateVersion: "1",
     document: {},
     saleCalves: [
-      { saleDate: readable("A", "date-0"), priceYen: readable("100", "price-0") },
-      { saleDate: readable("B", "date-1"), priceYen: readable("200", "price-1") },
-      { saleDate: readable("C", "date-2"), priceYen: readable("300", "price-2") },
-      { saleDate: readable("D", "date-3"), priceYen: readable("400", "price-3") },
+      row("A", 0),
+      row("B", 1),
+      row("C", 2),
     ],
     pedigree: {},
     calvings: [],
     customFields: {},
     reviewItems: [{
-      code: "CHECK_DATE",
-      path: "saleCalves.1.saleDate",
+      code: "CHECK_PRICE",
+      path: "saleCalves.1.priceYen",
       message: "確認",
       severity: "warning" as const,
-      sourceRegionId: "date-1",
+      sourceRegionId: "priceYen-1",
     }],
     processingMetadata: {},
   } satisfies OcrDocument;
 
-  const reordered = reorderCollectionColumn(document, "saleCalves", "saleDate", 3, 1);
+  const swapped = swapCollectionRowsAtFixedRegions(document, "saleCalves", 1, 0);
 
-  expect(reordered.saleCalves.map((row) => row.saleDate.raw)).toEqual(["A", "D", "B", "C"]);
-  expect(reordered.saleCalves.map((row) => row.priceYen.raw)).toEqual(["100", "200", "300", "400"]);
-  expect(reordered.saleCalves[1].saleDate.sourceRegionId).toBe("date-1");
-  expect(reordered.reviewItems[0].path).toBe("saleCalves.2.saleDate");
-  expect(reordered.reviewItems[0].sourceRegionId).toBe("date-2");
-  expect(document.saleCalves.map((row) => row.saleDate.raw)).toEqual(["A", "B", "C", "D"]);
-  expect(reorderCollectionColumn(document, "saleCalves", "saleDate", 1, 1)).toBe(document);
+  expect(Object.values(swapped.saleCalves[0]).map((value) => value.raw))
+    .toEqual(Object.values(document.saleCalves[1]).map((value) => value.raw));
+  expect(Object.values(swapped.saleCalves[1]).map((value) => value.raw))
+    .toEqual(Object.values(document.saleCalves[0]).map((value) => value.raw));
+  expect(swapped.saleCalves[0].priceYen).toMatchObject({
+    raw: "B-priceYen",
+    normalized: "B-priceYen",
+    alternatives: ["B-priceYen-candidate"],
+    status: "readable",
+    sourceRegionId: "priceYen-0",
+    boundingBox: document.saleCalves[0].priceYen.boundingBox,
+  });
+  expect(swapped.saleCalves[1].priceYen.sourceRegionId).toBe("priceYen-1");
+  expect(swapped.reviewItems[0]).toMatchObject({
+    path: "saleCalves.0.priceYen",
+    sourceRegionId: "priceYen-0",
+  });
+  expect(document.saleCalves[0].priceYen.raw).toBe("A-priceYen");
+  expect(swapCollectionRowsAtFixedRegions(swapped, "saleCalves", 0, 1).saleCalves
+    .map((item) => item.priceYen.raw)).toEqual(["A-priceYen", "B-priceYen", "C-priceYen"]);
+  expect(swapCollectionRowsAtFixedRegions(document, "saleCalves", 1, 2).saleCalves
+    .map((item) => item.priceYen.raw)).toEqual(["A-priceYen", "C-priceYen", "B-priceYen"]);
+  expect(swapCollectionRowsAtFixedRegions(document, "saleCalves", 0, 3)).toBe(document);
+  const incompatibleRows = structuredClone(document);
+  delete incompatibleRows.saleCalves[1].notes;
+  expect(swapCollectionRowsAtFixedRegions(incompatibleRows, "saleCalves", 0, 1))
+    .toBe(incompatibleRows);
+});
+
+test("swaps generic record recognition payloads without changing row identities", () => {
+  const readable = (value: string, sourceRegionId: string, y: number) => ({
+    ...reading,
+    raw: value,
+    normalized: value,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+    boundingBox: { x: 10, y, width: 80, height: 20 },
+  });
+  const document = {
+    schemaVersion: "1.0",
+    templateId: "template-1",
+    templateVersion: "1",
+    document: {},
+    saleCalves: [],
+    pedigree: {},
+    calvings: [],
+    customFields: {
+      city_1: readable("札幌市", "city-1", 10),
+      note_1: readable("要確認", "note-1", 30),
+      city_2: readable("旭川市", "city-2", 110),
+      note_2: readable("確認済み", "note-2", 130),
+    },
+    reviewItems: [{
+      code: "CHECK_NOTE",
+      path: "customFields.note_1",
+      message: "確認",
+      severity: "warning" as const,
+      sourceRegionId: "note-1",
+    }],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+
+  const entries = Object.entries(document.customFields).map(([key, value]) => ({
+    path: `customFields.${key}`,
+    label: key.startsWith("city") ? "市区町村" : "備考",
+    value,
+  }));
+  const section = {
+    id: "visits",
+    title: "訪問履歴",
+    collectionPath: "genericRecords.visits",
+    columns: [{ id: "city", label: "市区町村" }, { id: "note", label: "備考" }],
+    rows: [
+      { id: "record-row-1", cells: [
+        { columnId: "city", entry: entries[0] },
+        { columnId: "note", entry: entries[1] },
+      ] },
+      { id: "record-row-2", cells: [
+        { columnId: "city", entry: entries[2] },
+        { columnId: "note", entry: entries[3] },
+      ] },
+    ],
+  };
+
+  const swapped = swapGenericRecordRowsAtFixedRegions(document, section, 0, 1);
+
+  expect(swapped.customFields.city_1).toMatchObject({
+    raw: "旭川市",
+    normalized: "旭川市",
+    sourceRegionId: "city-1",
+    boundingBox: document.customFields.city_1.boundingBox,
+  });
+  expect(swapped.customFields.note_1.raw).toBe("確認済み");
+  expect(swapped.customFields.city_2.raw).toBe("札幌市");
+  expect(swapped.reviewItems[0]).toMatchObject({
+    path: "customFields.note_2",
+    sourceRegionId: "note-2",
+  });
+  expect(section.rows.map((item) => item.id)).toEqual(["record-row-1", "record-row-2"]);
+  expect(section.id).toBe("visits");
+  expect(section.title).toBe("訪問履歴");
+  expect(section.collectionPath).toBe("genericRecords.visits");
+  const sparseSection = {
+    ...section,
+    rows: [
+      section.rows[0],
+      { ...section.rows[1], cells: section.rows[1].cells.slice(0, 1) },
+    ],
+  };
+  expect(swapGenericRecordRowsAtFixedRegions(document, sparseSection, 0, 1)).toBe(document);
 });
 
 beforeEach(() => {
@@ -487,107 +671,193 @@ test("navigates to Google Sheets after a successful manual resync", async () => 
   });
 });
 
-test("moves an entire result column from its header controls", async () => {
-  const readableDate = (value: string, sourceRegionId: string) => ({
+test("moves and persists complete fixed-format rows while preserving physical crops", async () => {
+  const locatedReading = (value: string, sourceRegionId: string, y: number) => ({
     ...reading,
     raw: value,
     normalized: value,
     status: "readable" as const,
     reviewReason: null,
     sourceRegionId,
+    boundingBox: { x: 10, y, width: 80, height: 30 },
   });
-  const blankDate = {
-    ...reading,
-    raw: null,
-    normalized: null,
-    status: "blank" as const,
-    reviewReason: null,
-    sourceRegionId: "sale-date-0",
-  };
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    const path = String(input);
-    if (path.endsWith("/ocr-jobs/job-column-shift/result")) {
-      return jsonResponse({
-        jobId: "job-column-shift",
-        revision: 1,
-        result: {
-          schemaVersion: "1.0",
-          templateId: "template-1",
-          templateVersion: "1",
-          document: {},
-          saleCalves: [
-            { saleDate: blankDate },
-            { saleDate: readableDate("2026/01/10", "sale-date-1") },
-            { saleDate: readableDate("2026/02/20", "sale-date-2") },
-          ],
-          pedigree: {},
-          calvings: [],
-          customFields: {},
-          reviewItems: [],
-          processingMetadata: {},
+  const initialDocument = {
+    schemaVersion: "1.0",
+    templateId: "template-1",
+    templateVersion: "1",
+    document: {},
+    saleCalves: [
+      {
+        priceYen: locatedReading("100", "price-0", 0),
+        notes: locatedReading("一行目", "notes-0", 30),
+      },
+      {
+        priceYen: locatedReading("200", "price-1", 60),
+        notes: {
+          ...locatedReading("二行目", "notes-1", 90),
+          normalized: null,
+          status: "uncertain" as const,
+          alternatives: ["二列目"],
+          reviewReason: "OCR_LOW_CONFIDENCE",
         },
-        validation: { valid: true, issues: [] },
-        provider: "openai",
-        modelId: "gpt-5-mini",
-        promptVersion: "test",
-        apiCallCount: 1,
-        inputTokens: 1,
-        outputTokens: 1,
-        estimatedCost: 0.001,
-        confirmed: false,
-        individualId: null,
-        fieldPreviews: [0, 1, 2].map((index) => ({
-          targetPath: `saleCalves.${index}.saleDate`,
-          mappingId: `sale-date-${index}`,
-          artifactUrl: `/sale-date-${index}.png`,
-          boundingBox: { x: 10, y: index * 30, width: 80, height: 30 },
-        })),
-      });
+      },
+      {
+        priceYen: locatedReading("300", "price-2", 120),
+        notes: locatedReading("三行目", "notes-2", 150),
+      },
+    ],
+    pedigree: {},
+    calvings: [],
+    customFields: {},
+    reviewItems: [{
+      code: "CHECK_NOTE",
+      path: "saleCalves.1.notes",
+      message: "確認",
+      severity: "warning" as const,
+      sourceRegionId: "notes-1",
+    }],
+    processingMetadata: {},
+  } satisfies OcrDocument;
+  const previews = initialDocument.saleCalves.flatMap((_, index) => [
+    {
+      targetPath: `saleCalves.${index}.priceYen`,
+      mappingId: `price-${index}`,
+      artifactUrl: `/price-${index}.png`,
+      boundingBox: initialDocument.saleCalves[index].priceYen.boundingBox,
+    },
+    {
+      targetPath: `saleCalves.${index}.notes`,
+      mappingId: `notes-${index}`,
+      artifactUrl: `/notes-${index}.png`,
+      boundingBox: initialDocument.saleCalves[index].notes.boundingBox,
+    },
+  ]);
+  const persistence = { document: null as OcrDocument | null };
+  let persistedRevision = 1;
+  const resultBody = () => ({
+    jobId: "job-row-shift",
+    revision: persistedRevision,
+    result: persistence.document ?? initialDocument,
+    validation: { valid: true, issues: [] },
+    provider: "openai",
+    modelId: "gpt-5-mini",
+    promptVersion: "test",
+    apiCallCount: 1,
+    inputTokens: 1,
+    outputTokens: 1,
+    estimatedCost: 0.001,
+    confirmed: false,
+    individualId: null,
+    fieldPreviews: previews,
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-row-shift/corrections") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as {
+        baseRevision: number;
+        document: OcrDocument["document"];
+        saleCalves: OcrDocument["saleCalves"];
+        pedigree: OcrDocument["pedigree"];
+        calvings: OcrDocument["calvings"];
+        customFields: OcrDocument["customFields"];
+        reviewItems: OcrDocument["reviewItems"];
+      };
+      persistedRevision = body.baseRevision + 1;
+      persistence.document = {
+        ...initialDocument,
+        document: body.document,
+        saleCalves: body.saleCalves,
+        pedigree: body.pedigree,
+        calvings: body.calvings,
+        customFields: body.customFields,
+        reviewItems: body.reviewItems,
+      };
+      return jsonResponse(resultBody());
     }
-    if (path.endsWith("/jobs/job-column-shift/artifacts")) {
-      return jsonResponse({ items: [] });
-    }
+    if (path.endsWith("/ocr-jobs/job-row-shift/result")) return jsonResponse(resultBody());
+    if (path.endsWith("/jobs/job-row-shift/artifacts")) return jsonResponse({ items: [] });
     return jsonResponse({});
   }));
 
-  render(<ReviewPage jobId="job-column-shift" onClose={() => undefined} />);
+  const firstRender = render(<ReviewPage jobId="job-row-shift" onClose={() => undefined} />);
 
   const editMode = await screen.findByRole("button", { name: "結果編集モード" });
-  const reorderMode = screen.getByRole("button", { name: "ドラッグアンドドロップ移動モード" });
+  const reorderMode = screen.getByRole("button", { name: "行移動モード" });
   expect(editMode).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "売却日列を上へ1行移動" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "売却子牛一覧 2行目を上へ移動" }))
+    .not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "価格 saleCalves.1.priceYen を編集" }));
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "備考 saleCalves.1.notes を編集" }));
+  expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
 
   fireEvent.click(reorderMode);
 
-  expect(reorderMode).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "売却日 saleCalves.1.saleDate を編集" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "売却日 saleCalves.1.saleDate を移動" })).toBeInTheDocument();
-  const moveUp = screen.getByRole("button", { name: "売却日列を上へ1行移動" });
-  const moveDown = screen.getByRole("button", { name: "売却日列を下へ1行移動" });
-  expect(moveUp).toBeEnabled();
-  expect(moveDown).toBeDisabled();
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの編集")).not.toBeInTheDocument();
+  const firstUp = screen.getByRole("button", { name: "売却子牛一覧 1行目を上へ移動" });
+  const secondUp = screen.getByRole("button", { name: "売却子牛一覧 2行目を上へ移動" });
+  const thirdDown = screen.getByRole("button", { name: "売却子牛一覧 3行目を下へ移動" });
+  expect(firstUp).toBeDisabled();
+  expect(secondUp).toBeEnabled();
+  expect(thirdDown).toBeDisabled();
 
-  fireEvent.click(moveUp);
+  fireEvent.click(secondUp);
 
-  expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を移動" }))
-    .toHaveTextContent("2026年1月10日");
-  expect(screen.getByRole("button", { name: "売却日 saleCalves.1.saleDate を移動" }))
-    .toHaveTextContent("2026年2月20日");
-  expect(screen.getByRole("button", { name: "売却日 saleCalves.2.saleDate を移動" }))
-    .toHaveTextContent("空欄");
-  expect(screen.getByText("売却日列を上へ1行移動しました。")).toBeInTheDocument();
-  expect(moveUp).toBeDisabled();
-  expect(moveDown).toBeEnabled();
+  expect(screen.getByRole("button", { name: "価格 saleCalves.0.priceYen を編集" }))
+    .toHaveTextContent("200");
+  expect(screen.getByRole("button", { name: "備考 saleCalves.0.notes を編集" }))
+    .toHaveTextContent("二行目");
+  expect(screen.getByRole("button", { name: "備考 saleCalves.0.notes を編集" }).closest("td"))
+    .toHaveClass("ocr-cell-warning");
+  expect(screen.getByRole("button", { name: "価格 saleCalves.1.priceYen を編集" }))
+    .toHaveTextContent("100");
+  expect(screen.getByRole("button", { name: "備考 saleCalves.1.notes を編集" }))
+    .toHaveTextContent("一行目");
+  expect(screen.getByText("2行目を1行目と交換しました。")).toBeInTheDocument();
 
   fireEvent.click(editMode);
+  fireEvent.click(screen.getByRole("button", { name: "価格 saleCalves.0.priceYen を編集" }));
+  expect(await screen.findByAltText("saleCalves.0.priceYen の切り出し"))
+    .toHaveAttribute("src", "/price-0.png");
 
-  expect(editMode).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "売却日列を下へ1行移動" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }))
-    .toHaveTextContent("2026年1月10日");
-  fireEvent.click(screen.getByRole("button", { name: "売却日 saleCalves.0.saleDate を編集" }));
-  expect(screen.getByAltText("saleCalves.0.saleDate の切り出し"))
-    .toHaveAttribute("src", "/sale-date-0.png");
+  fireEvent.click(screen.getByRole("button", { name: "修正を保存" }));
+  expect(await screen.findByText("修正を保存しました。")).toBeInTheDocument();
+  expect(persistence.document).not.toBeNull();
+  expect(persistence.document?.saleCalves[0]).toMatchObject({
+    priceYen: {
+      raw: "200",
+      normalized: "200",
+      status: "readable",
+      sourceRegionId: "price-0",
+      boundingBox: { x: 10, y: 0, width: 80, height: 30 },
+    },
+    notes: {
+      raw: "二行目",
+      normalized: null,
+      status: "uncertain",
+      alternatives: ["二列目"],
+      reviewReason: "OCR_LOW_CONFIDENCE",
+      sourceRegionId: "notes-0",
+      boundingBox: { x: 10, y: 30, width: 80, height: 30 },
+    },
+  });
+  expect(persistence.document?.reviewItems[0]).toMatchObject({
+    path: "saleCalves.0.notes",
+    sourceRegionId: "notes-0",
+  });
+
+  firstRender.unmount();
+  render(<ReviewPage jobId="job-row-shift" onClose={() => undefined} />);
+  expect(await screen.findByRole("button", { name: "価格 saleCalves.0.priceYen を編集" }))
+    .toHaveTextContent("200");
+  expect(screen.getByRole("button", { name: "備考 saleCalves.0.notes を編集" }))
+    .toHaveTextContent("二行目");
+  expect(screen.getByRole("button", { name: "備考 saleCalves.0.notes を編集" }).closest("td"))
+    .toHaveClass("ocr-cell-warning");
+  fireEvent.click(screen.getByRole("button", { name: "備考 saleCalves.0.notes を編集" }));
+  expect(await screen.findByAltText("saleCalves.0.notes の切り出し"))
+    .toHaveAttribute("src", "/notes-0.png");
 });
 
 test("selects the exact crop and opens the editor when a table cell is clicked", async () => {
@@ -607,24 +877,294 @@ test("selects the exact crop and opens the editor when a table cell is clicked",
     expect(screen.getByAltText("document.cattleName の切り出し")).toHaveAttribute("src", "/correct-crop.jpg");
   });
   expect(screen.getByText(/x 120 .* y 20 .* 幅 240 .* 高さ 80/)).toBeInTheDocument();
-  expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
-  expect(screen.getAllByRole("textbox")).toHaveLength(2);
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの編集")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("選択セルの判定").closest(".ocr-review-popover")?.previousElementSibling)
+    .toHaveClass("ocr-edit-tables");
+  fireEvent.click(screen.getByRole("button", { name: "空欄" }));
+  expect(cattleCellButton).toHaveTextContent("空欄");
+  fireEvent.click(cattleCellButton);
+  fireEvent.click(screen.getByRole("button", { name: "不確実" }));
+  expect(cattleCellButton.closest("td")).toHaveClass("ocr-cell-warning");
+  fireEvent.click(cattleCellButton);
+  fireEvent.click(screen.getByRole("button", { name: "読めた" }));
+  expect(screen.getByRole("button", {
+    name: "牛名 document.cattleName を編集",
+  }).closest("td")).toHaveClass("ocr-cell-ok");
   fireEvent.change(screen.getByRole("slider", { name: "プレビュー表示幅" }), { target: { value: "50" } });
   expect(container.querySelector(".ocr-review-layout")).toHaveStyle("--preview-ratio: 50%");
-  fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "修正した牛名" } });
-  expect(cattleCellButton).toHaveTextContent("修正した牛名");
-  fireEvent.change(screen.getByRole("combobox"), { target: { value: "readable" } });
-  expect(cattleCellButton.closest("td")).toHaveClass("ocr-cell-ok");
+  fireEvent.doubleClick(cattleCellButton);
+  const inlineInput = screen.getByRole("textbox", { name: "牛名 document.cattleName を直接編集" });
+  fireEvent.change(inlineInput, { target: { value: "修正した牛名" } });
+  fireEvent.keyDown(inlineInput, { key: "Enter" });
+  expect(screen.getByRole("button", { name: "牛名 document.cattleName を編集" }))
+    .toHaveTextContent("修正した牛名");
+  expect(screen.getByRole("button", {
+    name: "牛名 document.cattleName を編集",
+  }).closest("td")).toHaveClass("ocr-cell-ok");
+
+  fireEvent.click(screen.getByRole("button", { name: "牛名 document.cattleName を編集" }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "生年月日 document.birthDate を編集" }));
   await waitFor(() => {
     expect(screen.getByAltText("document.birthDate の切り出し")).toHaveAttribute("src", "/birth-date-crop.jpg");
   });
   expect(screen.getByText(/x 380 .* y 120 .* 幅 180 .* 高さ 60/)).toBeInTheDocument();
+  expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
   expect(container.querySelectorAll(".ocr-cell-warning")).toHaveLength(0);
 
   fireEvent.click(screen.getByRole("button", { name: "帳票全体" }));
   expect(screen.getByAltText("位置合わせ済み帳票")).toHaveAttribute("src", "/full.jpg");
+  fireEvent.click(screen.getByRole("button", { name: "選択領域" }));
+  expect(await screen.findByAltText("document.birthDate の切り出し"))
+    .toHaveAttribute("src", "/birth-date-crop.jpg");
+});
+
+test("renders generic records, parent sections, and independent fields without duplication", async () => {
+  const structuredReading = (raw: string, sourceRegionId: string) => ({
+    ...reading,
+    raw,
+    normalized: raw,
+    status: "readable" as const,
+    reviewReason: null,
+    sourceRegionId,
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-structured/result")) {
+      return jsonResponse({
+        jobId: "job-structured",
+        revision: 1,
+        result: {
+          schemaVersion: "1.0",
+          templateId: "template-structured",
+          templateVersion: "1",
+          document: {},
+          saleCalves: [],
+          pedigree: {},
+          calvings: [],
+          customFields: {
+            record_city_1: structuredReading("札幌市", "mapping-record-city-1"),
+            record_note_1: structuredReading("訪問済み", "mapping-record-note-1"),
+            record_city_2: structuredReading("旭川市", "mapping-record-city-2"),
+            record_note_2: structuredReading("再訪予定", "mapping-record-note-2"),
+            sparse_city_1: structuredReading("帯広市", "mapping-sparse-city-1"),
+            sparse_note_1: structuredReading("訪問済み", "mapping-sparse-note-1"),
+            sparse_city_2: structuredReading("釧路市", "mapping-sparse-city-2"),
+            home_city: structuredReading("函館市", "mapping-home-city"),
+            emergency_city: structuredReading("小樽市", "mapping-emergency-city"),
+            memo: structuredReading("要連絡", "mapping-memo"),
+            memo_2: structuredReading("折返し希望", "mapping-memo-2"),
+            memo_3: structuredReading("別用途", "mapping-memo-3"),
+          },
+          reviewItems: [],
+          processingMetadata: {},
+        },
+        validation: { valid: false, issues: [] },
+        provider: "openai",
+        modelId: "gpt-5-mini",
+        promptVersion: "test",
+        apiCallCount: 1,
+        inputTokens: 1,
+        outputTokens: 1,
+        estimatedCost: 0.001,
+        confirmed: false,
+        individualId: null,
+        fieldPreviews: [
+          ["mapping-record-city-1", "customFields.record_city_1"],
+          ["mapping-record-note-1", "customFields.record_note_1"],
+          ["mapping-record-city-2", "customFields.record_city_2"],
+          ["mapping-record-note-2", "customFields.record_note_2"],
+          ["mapping-sparse-city-1", "customFields.sparse_city_1"],
+          ["mapping-sparse-note-1", "customFields.sparse_note_1"],
+          ["mapping-sparse-city-2", "customFields.sparse_city_2"],
+          ["mapping-home-city", "customFields.home_city"],
+          ["mapping-emergency-city", "customFields.emergency_city"],
+          ["mapping-memo", "customFields.memo"],
+          ["mapping-memo-2", "customFields.memo_2"],
+          ["mapping-memo-3", "customFields.memo_3"],
+        ].map(([mappingId, targetPath], index) => ({
+          mappingId,
+          targetPath,
+          artifactUrl: `/${mappingId}.png`,
+          boundingBox: { x: index * 10, y: index * 20, width: 80, height: 30 },
+        })),
+        reviewStructure: {
+          schemaVersion: 1,
+          fields: [
+            ["mapping-record-city-1", "customFields.record_city_1", "市区町村", "record-city"],
+            ["mapping-record-note-1", "customFields.record_note_1", "備考", "record-note"],
+            ["mapping-record-city-2", "customFields.record_city_2", "市区町村", "record-city"],
+            ["mapping-record-note-2", "customFields.record_note_2", "備考", "record-note"],
+            ["mapping-sparse-city-1", "customFields.sparse_city_1", "市区町村", "sparse-city"],
+            ["mapping-sparse-note-1", "customFields.sparse_note_1", "備考", "sparse-note"],
+            ["mapping-sparse-city-2", "customFields.sparse_city_2", "市区町村", "sparse-city"],
+            ["mapping-home-city", "customFields.home_city", "市区町村", "home-city"],
+            ["mapping-emergency-city", "customFields.emergency_city", "市区町村", "emergency-city"],
+            ["mapping-memo", "customFields.memo", "これまでに力を入れて取り組んだことを、立場・課題・具体的な行動を含めて記載してください", "memo-label-a"],
+            ["mapping-memo-2", "customFields.memo_2", "これまでに力を入れて取り組んだことを、立場・課題・具体的な行動を含めて記載してください", "memo-label-a"],
+            ["mapping-memo-3", "customFields.memo_3", "これまでに力を入れて取り組んだことを、立場・課題・具体的な行動を含めて記載してください", "memo-label-b"],
+          ].map(([id, targetPath, label, groupId]) => ({
+            id,
+            mappingId: id,
+            targetPath,
+            label,
+            groupId,
+            inputCellId: `${id}-cell`,
+            relationId: `${id}-relation`,
+          })),
+          recordSections: [
+            {
+              id: "visits",
+              title: "訪問履歴",
+              collectionPath: "genericRecords.visits",
+              columns: [
+                { id: "city-column", label: "市区町村" },
+                { id: "note-column", label: "備考" },
+              ],
+              rows: [
+                {
+                  id: "visit-1",
+                  order: 1,
+                  cells: [
+                    { columnId: "city-column", fieldId: "mapping-record-city-1" },
+                    { columnId: "note-column", fieldId: "mapping-record-note-1" },
+                  ],
+                },
+                {
+                  id: "visit-2",
+                  order: 2,
+                  cells: [
+                    { columnId: "city-column", fieldId: "mapping-record-city-2" },
+                    { columnId: "note-column", fieldId: "mapping-record-note-2" },
+                  ],
+                },
+              ],
+            },
+            {
+              id: "sparse-visits",
+              title: "疎な履歴",
+              collectionPath: "genericRecords.sparseVisits",
+              columns: [
+                { id: "sparse-city-column", label: "市区町村" },
+                { id: "sparse-note-column", label: "備考" },
+              ],
+              rows: [
+                {
+                  id: "sparse-visit-1",
+                  order: 1,
+                  cells: [
+                    { columnId: "sparse-city-column", fieldId: "mapping-sparse-city-1" },
+                    { columnId: "sparse-note-column", fieldId: "mapping-sparse-note-1" },
+                  ],
+                },
+                {
+                  id: "sparse-visit-2",
+                  order: 2,
+                  cells: [
+                    { columnId: "sparse-city-column", fieldId: "mapping-sparse-city-2" },
+                    { columnId: "sparse-note-column", fieldId: null },
+                  ],
+                },
+              ],
+            },
+          ],
+          parentSections: [
+            { id: "home", title: "帰省先", fieldIds: ["mapping-home-city"] },
+            { id: "emergency", title: "緊急連絡先", fieldIds: ["mapping-emergency-city"] },
+          ],
+          independentFieldIds: ["mapping-memo", "mapping-memo-2", "mapping-memo-3"],
+        },
+      });
+    }
+    if (path.endsWith("/jobs/job-structured/artifacts")) {
+      return jsonResponse({ items: [] });
+    }
+    return jsonResponse({});
+  }));
+
+  render(<ReviewPage jobId="job-structured" onClose={() => undefined} />);
+
+  const recordSection = await screen.findByRole("region", { name: "訪問履歴" });
+  const sparseSection = screen.getByRole("region", { name: "疎な履歴" });
+  expect(within(recordSection).getByRole("table", { name: "訪問履歴のレコード" }))
+    .toBeInTheDocument();
+  expect(within(recordSection).getByText("札幌市")).toBeInTheDocument();
+  const homeSection = screen.getByRole("region", { name: "帰省先" });
+  const emergencySection = screen.getByRole("region", { name: "緊急連絡先" });
+  expect(within(homeSection).getByText("函館市")).toBeInTheDocument();
+  expect(within(emergencySection).getByText("小樽市")).toBeInTheDocument();
+  const independentSection = screen.getByRole("region", { name: "独立項目" });
+  expect(within(independentSection).getByText("要連絡")).toBeInTheDocument();
+  const independentHeadings = within(independentSection).getAllByRole("heading", {
+    name: "これまでに力を入れて取り組んだことを、立場・課題・具体的な行動を含めて記載してください",
+  });
+  expect(independentHeadings).toHaveLength(2);
+  expect(independentHeadings[0]).toHaveClass("ocr-independent-label");
+  expect(independentHeadings[0].closest(".ocr-independent-group")?.querySelectorAll("td"))
+    .toHaveLength(2);
+  expect(screen.getAllByText("函館市")).toHaveLength(1);
+
+  expect(within(recordSection).queryByRole("button", { name: "訪問履歴 2行目を上へ移動" }))
+    .not.toBeInTheDocument();
+  expect(within(independentSection).queryByRole("button", { name: /行目を.*移動/ }))
+    .not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "行移動モード" }));
+  expect(within(recordSection).getByRole("button", { name: "訪問履歴 1行目を上へ移動" }))
+    .toBeDisabled();
+  expect(within(recordSection).getByRole("button", { name: "訪問履歴 2行目を下へ移動" }))
+    .toBeDisabled();
+  expect(within(sparseSection).getByRole("button", { name: "疎な履歴 1行目を下へ移動" }))
+    .toBeDisabled();
+  expect(within(sparseSection).getByRole("button", { name: "疎な履歴 2行目を上へ移動" }))
+    .toBeDisabled();
+  fireEvent.click(within(recordSection).getByRole("button", {
+    name: "訪問履歴 2行目を上へ移動",
+  }));
+  expect(within(recordSection).getByRole("button", {
+    name: "市区町村 customFields.record_city_1 を編集",
+  })).toHaveTextContent("旭川市");
+  expect(within(recordSection).getByRole("button", {
+    name: "備考 customFields.record_note_1 を編集",
+  })).toHaveTextContent("再訪予定");
+  expect(within(recordSection).getByRole("button", {
+    name: "市区町村 customFields.record_city_2 を編集",
+  })).toHaveTextContent("札幌市");
+  expect(within(homeSection).getByText("函館市")).toBeInTheDocument();
+  expect(within(independentSection).getByText("要連絡")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "訪問履歴" })).toBe(recordSection);
+
+  fireEvent.click(screen.getByRole("button", { name: "結果編集モード" }));
+  const firstMemo = within(independentSection).getByRole("button", {
+    name: /customFields\.memo を編集$/,
+  });
+  const secondMemo = within(independentSection).getByRole("button", {
+    name: /customFields\.memo_2 を編集$/,
+  });
+  fireEvent.click(firstMemo);
+  expect(await screen.findByAltText("customFields.memo の切り出し"))
+    .toHaveAttribute("src", "/mapping-memo.png");
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "不確実" }));
+  expect(firstMemo.closest("td")).toHaveClass("ocr-cell-warning");
+  expect(secondMemo.closest("td")).toHaveClass("ocr-cell-ok");
+  fireEvent.doubleClick(firstMemo);
+  const memoInput = screen.getByRole("textbox", { name: /customFields\.memo を直接編集$/ });
+  fireEvent.change(memoInput, { target: { value: "要連絡・修正済み" } });
+  fireEvent.keyDown(memoInput, { key: "Enter" });
+  expect(within(independentSection).getByRole("button", {
+    name: /customFields\.memo を編集$/,
+  })).toHaveTextContent("要連絡・修正済み");
+  expect(secondMemo).toHaveTextContent("折返し希望");
+
+  fireEvent.click(within(homeSection).getByRole("button", {
+    name: "市区町村 customFields.home_city を編集",
+  }));
+  expect(await screen.findByAltText("customFields.home_city の切り出し"))
+    .toHaveAttribute("src", "/mapping-home-city.png");
+  expect(screen.getAllByText(/mapping-home-city/).length).toBeGreaterThan(0);
 });
 
 test("reports a missing persisted preview image instead of showing a silent blank", async () => {
@@ -947,17 +1487,18 @@ test("keeps the normalized value in sync when a readable raw value is corrected"
   }));
 
   render(<ReviewPage jobId="job-sync" onClose={() => undefined} />);
-  fireEvent.click(await screen.findByRole("button", { name: "牛名 document.cattleName を編集" }));
-  const [rawInput, normalizedInput] = screen.getAllByRole("textbox");
-  fireEvent.change(rawInput, { target: { value: "手修正" } });
-  expect(normalizedInput).toHaveValue("手修正");
-  expect(screen.getByRole("button", { name: "牛名 document.cattleName を編集" })).toHaveTextContent("手修正");
-
-  fireEvent.click(screen.getByRole("button", { name: "正読" }));
-  expect(rawInput).toHaveValue("正読");
-  expect(normalizedInput).toHaveValue("正読");
-  expect(screen.getByRole("combobox")).toHaveValue("readable");
-  expect(screen.queryByText(/確認理由/)).not.toBeInTheDocument();
+  const cellButton = await screen.findByRole("button", { name: "牛名 document.cattleName を編集" });
+  fireEvent.doubleClick(cellButton);
+  const inlineInput = screen.getByRole("textbox", { name: "牛名 document.cattleName を直接編集" });
+  fireEvent.change(inlineInput, { target: { value: "手修正" } });
+  fireEvent.keyDown(inlineInput, { key: "Enter" });
+  expect(screen.getByRole("button", { name: "牛名 document.cattleName を編集" }))
+    .toHaveTextContent("手修正");
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "読めた" }));
+  expect(screen.getByRole("button", {
+    name: "牛名 document.cattleName を編集",
+  }).closest("td")).toHaveClass("ocr-cell-ok");
 });
 
 test("converts an era date and offers only male or female note prefixes", async () => {
@@ -1163,7 +1704,6 @@ test("allows confirmation with the manually entered individual ID", async () => 
     <ReviewPage jobId="job-manual-id" onClose={() => undefined} />,
   );
 
-  expect(await screen.findByText("意味づけ済み項目のみ表示")).toBeInTheDocument();
   expect(screen.getAllByText("統一耳標番号").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "統一耳標番号 document.unifiedEarTag を編集" }).closest("td")).toHaveClass("ocr-cell-ok");
   expect(screen.getByRole("button", { name: "牛名 document.cattleName を編集" }).closest("td")).toHaveClass("ocr-cell-ok");
@@ -1319,7 +1859,6 @@ test("shows only the twenty fields mapped by the template", async () => {
 
   const { container } = render(<ReviewPage jobId="job-20" onClose={() => undefined} />);
 
-  expect(await screen.findByText("意味づけ済み項目のみ表示")).toBeInTheDocument();
   expect(screen.queryByText("統一耳標番号")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "売却子牛一覧" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: /価格 saleCalves\.\d+\.priceYen を編集/ })).toHaveLength(10);
@@ -1333,8 +1872,8 @@ test("shows only the twenty fields mapped by the template", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "価格 saleCalves.0.priceYen を編集" }));
   expect(await screen.findByAltText("saleCalves.0.priceYen の切り出し")).toHaveAttribute("src", "/price-0.jpg");
-  expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
-  expect(screen.getAllByRole("textbox")).toHaveLength(2);
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの編集")).not.toBeInTheDocument();
 
   fireEvent.doubleClick(screen.getByRole("button", { name: "価格 saleCalves.0.priceYen を編集" }));
   const inlineInput = screen.getByRole("textbox", { name: "価格 saleCalves.0.priceYen を直接編集" });
@@ -1421,9 +1960,17 @@ test("backs up local edits and lets the user restore them on the latest revision
   fireEvent.click(await screen.findByRole("button", {
     name: "牛名 document.cattleName を編集",
   }));
-  fireEvent.change(screen.getAllByRole("textbox")[0], {
+  fireEvent.doubleClick(screen.getByRole("button", {
+    name: "牛名 document.cattleName を編集",
+  }));
+  fireEvent.change(screen.getByRole("textbox", {
+    name: "牛名 document.cattleName を直接編集",
+  }), {
     target: { value: "手元の修正" },
   });
+  fireEvent.keyDown(screen.getByRole("textbox", {
+    name: "牛名 document.cattleName を直接編集",
+  }), { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "修正を保存" }));
 
   expect(await screen.findByRole("heading", {
@@ -1431,7 +1978,6 @@ test("backs up local edits and lets the user restore them on the latest revision
   })).toBeInTheDocument();
   expect(screen.getByText(/勝手に破棄しません/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "修正を保存" })).toBeDisabled();
-  expect(screen.getAllByRole("textbox")[0]).toBeDisabled();
   fireEvent.click(screen.getByText("退避した入力内容を表示"));
   expect(screen.getByText(/"raw": "手元の修正"/)).toBeInTheDocument();
 

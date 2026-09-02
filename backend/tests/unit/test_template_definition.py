@@ -395,7 +395,7 @@ def test_generic_data_keeps_repeated_column_field_ids_scoped_to_each_record() ->
     assert values == {"sales": [{"priceYen": 540000}, {"priceYen": 770000}]}
 
 
-def test_generic_layout_uses_printed_row_numbers_and_excludes_empty_rows() -> None:
+def test_generic_layout_keeps_legacy_printed_row_numbers_compatible() -> None:
     labels = [
         LayoutCell(id="vehicle-label", role="label", x=80, y=0, width=100, height=30, confidence=1, text="車種名"),
         LayoutCell(id="chassis-label", role="label", x=180, y=0, width=100, height=30, confidence=1, text="車台番号"),
@@ -430,6 +430,7 @@ def test_generic_layout_uses_printed_row_numbers_and_excludes_empty_rows() -> No
             LayoutRecordSection(
                 id="vehicle-lines",
                 title="車両明細",
+                display_name="車両情報",
                 collection_path="genericRecords.vehicleLines",
                 record_type="generic",
                 record_label_cell_ids=["vehicle-label", "chassis-label"],
@@ -464,6 +465,7 @@ def test_generic_layout_uses_printed_row_numbers_and_excludes_empty_rows() -> No
     )
     section = draft.sections[0]
     assert section.key == "vehicleLines"
+    assert section.name == "車両情報"
     assert section.parent_label_cell_id is None
     assert [field.key for field in section.records[0].fields] == [
         field.key for field in section.records[1].fields

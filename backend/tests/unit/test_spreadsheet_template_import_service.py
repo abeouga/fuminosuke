@@ -170,8 +170,9 @@ def test_classifies_text_with_adjacent_blank_cell_as_label_not_heading(tmp_path)
     assert roles["xlsx_C2"] == "input"
     assert roles["xlsx_G2"] == "input"
     assert roles["xlsx_A4"] == "label"
-    assert roles["xlsx_A6"] == "record_key_cell"
-    assert roles["xlsx_A8"] == "record_key_cell"
+    assert roles["xlsx_A6"] == "input"
+    assert roles["xlsx_A8"] == "input"
+    assert not ({"record_key_cell", "column_key_cell"} & set(roles.values()))
 
 
 def test_aligns_xlsx_cells_to_rendered_table_bounds(tmp_path) -> None:

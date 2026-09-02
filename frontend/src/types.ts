@@ -457,7 +457,9 @@ export type LayoutLabelPoolEntry = {
 
 export type LayoutRecordSection = {
   id: string;
+  /** Legacy generated title; displayName is preferred for user-facing text. */
   title: string;
+  displayName?: string | null;
   collectionPath: string;
   recordType: "saleCalf" | "calving" | "generic";
   recordLabelCellIds: string[];
@@ -500,6 +502,38 @@ export type RecordStructure = {
   sections: LayoutRecordSection[];
   groups: LayoutRecordGroup[];
   fieldBindings: RecordFieldBinding[];
+};
+
+export type ReviewStructureField = {
+  id: string;
+  mappingId: string;
+  targetPath: string;
+  label: string;
+  groupId?: string;
+  inputCellId: string | null;
+  relationId: string | null;
+};
+
+export type ReviewStructure = {
+  schemaVersion: number;
+  fields: ReviewStructureField[];
+  recordSections: Array<{
+    id: string;
+    title: string;
+    collectionPath: string;
+    columns: Array<{ id: string; label: string }>;
+    rows: Array<{
+      id: string;
+      order: number;
+      cells: Array<{ columnId: string; fieldId: string | null }>;
+    }>;
+  }>;
+  parentSections: Array<{
+    id: string;
+    title: string;
+    fieldIds: string[];
+  }>;
+  independentFieldIds: string[];
 };
 
 export type LayoutDefinition = {
@@ -695,6 +729,7 @@ export type OcrResult = {
   individualId: string | null;
   fieldPreviews: OcrFieldPreview[];
   recordStructure?: RecordStructure;
+  reviewStructure?: ReviewStructure;
   spreadsheetSync?: SpreadsheetSyncStatus;
   documentResolution?: DocumentResolution;
   documentName: string;

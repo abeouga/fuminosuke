@@ -143,6 +143,7 @@ class LayoutLabelPoolEntry(LayoutModel):
 class LayoutRecordSection(LayoutModel):
     id: str = Field(min_length=1, max_length=120)
     title: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
     collection_path: str = Field(min_length=1, max_length=120)
     record_type: Literal["saleCalf", "calving", "generic"]
     record_label_cell_ids: list[str] = Field(default_factory=list, max_length=30)
@@ -180,10 +181,14 @@ class LayoutRecordSection(LayoutModel):
             raise ValueError("Record label cell IDs must be unique")
         return value
 
-    @field_validator("title", mode="before")
+    @field_validator("title", "display_name", mode="before")
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @property
+    def resolved_display_name(self) -> str:
+        return (self.display_name or "").strip() or self.title.strip() or "名称未設定の繰り返し表"
 
 
 class LayoutRecordGroup(LayoutModel):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
@@ -48,6 +48,7 @@ class OcrProviderResponse:
     estimated_cost: Decimal | None = None
     request_id: str | None = None
     duration_ms: float | None = None
+    diagnostics: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
 
 class OcrProvider(Protocol):
