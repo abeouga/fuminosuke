@@ -84,12 +84,18 @@ def test_blank_value_does_not_erase_fixed_source_content(
             )
             session.add(version)
             session.flush()
+            spreadsheet_output = SpreadsheetTemplateOutputService(storage).snapshot(
+                session,
+                version=version,
+            )
+            assert spreadsheet_output is not None
             job = ProcessingJob(
                 job_type=JobType.EXTRACT_DOCUMENT.value,
                 status=JobStatus.CONFIRMED.value,
                 template_version_id=version.id,
                 request_hash="e" * 64,
                 config_snapshot_json={
+                    "spreadsheetOutput": spreadsheet_output,
                     "fieldMappings": [
                         {
                             "mappingId": "layout_xlsx_B1",
@@ -124,14 +130,15 @@ def test_blank_value_does_not_erase_fixed_source_content(
                         },
                     }
                 },
+                document_name="面接カード",
                 confirmed_at=datetime(2026, 9, 1, tzinfo=UTC),
             )
 
         assert rendered is not None
         output = load_workbook(io.BytesIO(rendered.content), data_only=False, keep_links=True)
-        assert output.sheetnames == ["様式 "]
-        assert output["様式 "]["A1"].value == "固定文字"
-        assert output["様式 "]["C1"].value == "=1+1"
-        assert output["様式 "]["D2"].value == "入力値"
+        assert output.sheetnames == ["面接カード"]
+        assert output["面接カード"]["A1"].value == "固定文字"
+        assert output["面接カード"]["C1"].value == "=1+1"
+        assert output["面接カード"]["D2"].value == "入力値"
     finally:
         database.dispose()

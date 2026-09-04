@@ -1146,6 +1146,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     recordNameInputRef.current?.focus();
     recordNameInputRef.current?.select();
   }, [recordNamePopover]);
+  const recordNamePopoverPosition = (() => {
+    if (!recordNamePopover) return undefined;
+    const canvas = canvasRef.current;
+    const bounds = canvas?.getBoundingClientRect();
+    const xRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.x / layout.canonicalWidth));
+    const yRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.y / layout.canonicalHeight));
+    if (!canvas || !bounds || bounds.width <= 0 || bounds.height <= 0) {
+      return { left: `${xRatio * 100}%`, top: `${yRatio * 100}%` };
+    }
+    return {
+      left: `${canvas.offsetLeft + bounds.width * xRatio}px`,
+      top: `${canvas.offsetTop + bounds.height * yRatio}px`,
+    };
+  })();
   const hasIncompleteLegacyRecordSection = recordGroups.some((group) => {
     const section = recordSectionById.get(group.sectionId);
     return section?.recordType !== "generic" && !section?.parentLabelCellId;
@@ -3648,10 +3662,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             <form
               className="record-name-popover"
               aria-label="繰り返し表の名称編集"
-              style={{
-                left: `${Math.min(95, Math.max(5, recordNamePopover.x / layout.canonicalWidth * 100))}%`,
-                top: `${Math.min(95, Math.max(5, recordNamePopover.y / layout.canonicalHeight * 100))}%`,
-              }}
+              style={recordNamePopoverPosition}
               onPointerDown={(event) => event.stopPropagation()}
               onSubmit={(event) => {
                 event.preventDefault();

@@ -40,6 +40,7 @@ from app.domain.ocr_models import (
     ReviewItem,
     SaleCalf,
 )
+from app.domain.spreadsheet_output_name import normalize_spreadsheet_output_name
 from app.domain.template_config import load_template_config
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
@@ -934,11 +935,20 @@ class OcrResultService:
                     detail="Drive上の入力済みスプレッドシートを作成してから名前を変更してください。",
                 )
             spreadsheet_id = confirmed.spreadsheet_id
+            renamed_xlsx, _ = self._render_xlsx(
+                session,
+                job=job,
+                document=confirmed.confirmed_json,
+                individual_id=confirmed.individual_id or "",
+                document_name=normalized,
+                confirmed_at=confirmed.confirmed_at,
+            )
 
         renamed = self._google_drive.rename_spreadsheet(
             spreadsheet_id,
             normalized,
             expected_subject,
+            rename_result_sheet=True,
         )
         with self._database.session() as session:
             current = OcrResultRepository(session).get_confirmed(job_id)
@@ -956,6 +966,10 @@ class OcrResultService:
                 ledger.document_name = renamed
                 ledger.library_name = renamed
             session.commit()
+            self._storage.write_bytes(
+                f"exports/{job_id}/confirmed_result.xlsx",
+                renamed_xlsx,
+            )
             return {
                 "enabled": True,
                 "status": "synced",
@@ -1102,6 +1116,7 @@ class OcrResultService:
             job=job,
             document=serialized,
             individual_id=individual_id,
+            document_name=document_name,
             confirmed_at=confirmed_at,
         )
         self._storage.write_bytes(
@@ -1163,15 +1178,11 @@ class OcrResultService:
                     detail="確定済みのOCR結果だけをエクスポートできます。",
                 )
             if format_name == "xlsx":
-                content, file_name = self._render_xlsx(
+                content, file_name = self._final_xlsx_content(
                     session,
                     job=job,
-                    document=confirmed.confirmed_json,
-                    individual_id=confirmed.individual_id,
-                    confirmed_at=confirmed.confirmed_at,
+                    confirmed=confirmed,
                 )
-                if confirmed.spreadsheet_name:
-                    file_name = f"{confirmed.spreadsheet_name}.xlsx"
                 relative = f"exports/{job_id}/confirmed_result.xlsx"
                 self._storage.write_bytes(relative, content)
         relative = f"exports/{job_id}/confirmed_result.{format_name}"
@@ -1191,12 +1202,14 @@ class OcrResultService:
         job: ProcessingJob,
         document: dict[str, Any],
         individual_id: str,
+        document_name: str,
         confirmed_at: datetime,
     ) -> tuple[bytes, str]:
         filled_template = self._spreadsheet_template_output.render(
             session,
             job=job,
             document=document,
+            document_name=document_name,
             confirmed_at=confirmed_at,
         )
         if filled_template is not None:
@@ -1208,6 +1221,43 @@ class OcrResultService:
             confirmed_at=confirmed_at,
         )
         return self._excel.render_xlsx(table), table.file_name
+
+    def _final_xlsx_content(
+        self,
+        session: Session,
+        *,
+        job: ProcessingJob,
+        confirmed: ConfirmedResult,
+    ) -> tuple[bytes, str]:
+        if not self._is_spreadsheet_template(session, job):
+            return self._render_xlsx(
+                session,
+                job=job,
+                document=confirmed.confirmed_json,
+                individual_id=confirmed.individual_id or "",
+                document_name=confirmed.spreadsheet_name or "confirmed_result",
+                confirmed_at=confirmed.confirmed_at,
+            )
+
+        document_name = self._normalize_spreadsheet_name(
+            confirmed.spreadsheet_name
+            or self._documents.proposed_document_name(job, confirmed.confirmed_json)
+        )
+        relative = f"exports/{job.id}/confirmed_result.xlsx"
+        if self._storage.exists(relative):
+            stored = self._storage.read_bytes(relative)
+            if self._spreadsheet_template_output.is_final_output(stored, document_name):
+                return stored, f"{document_name}.xlsx"
+        content, file_name = self._render_xlsx(
+            session,
+            job=job,
+            document=confirmed.confirmed_json,
+            individual_id=confirmed.individual_id or "",
+            document_name=document_name,
+            confirmed_at=confirmed.confirmed_at,
+        )
+        self._storage.write_bytes(relative, content)
+        return content, file_name
 
     def excel_table(self, job_id: str) -> dict[str, object]:
         with self._database.session() as session:
@@ -1442,12 +1492,6 @@ class OcrResultService:
             version = session.get(TemplateVersion, job.template_version_id)
             if version is None:
                 return self._disabled_spreadsheet_status()
-            filled = self._spreadsheet_template_output.render(
-                session,
-                job=job,
-                document=confirmed.confirmed_json,
-                confirmed_at=confirmed.confirmed_at,
-            )
             template_id = version.template_id
             revision = confirmed.ocr_result_revision
             document_id = self._documents.document_id_for_job(session, job_id)
@@ -1463,12 +1507,16 @@ class OcrResultService:
                     "fileName": confirmed.spreadsheet_name,
                     "lastError": error,
                 }
-            generated_name = re.sub(
-                r"\.xlsx$", "", filled.file_name, flags=re.IGNORECASE
-            ).strip()[:180]
-            spreadsheet_name = confirmed.spreadsheet_name or generated_name
+            spreadsheet_name = self._normalize_spreadsheet_name(
+                confirmed.spreadsheet_name
+                or self._documents.proposed_document_name(job, confirmed.confirmed_json)
+            )
             file_name = f"{spreadsheet_name}.xlsx"
-            content = filled.content
+            content, _ = self._final_xlsx_content(
+                session,
+                job=job,
+                confirmed=confirmed,
+            )
         try:
             (
                 spreadsheet_id,
@@ -1549,29 +1597,7 @@ class OcrResultService:
 
     @staticmethod
     def _normalize_spreadsheet_name(file_name: str) -> str:
-        normalized = re.sub(r"\.xlsx$", "", file_name.strip(), flags=re.IGNORECASE).strip()
-        if not normalized:
-            raise AppError(
-                status=422,
-                code="OUTPUT_FILE_NAME_REQUIRED",
-                title="Output file name is required",
-                detail="出力ファイル名を入力してください。",
-            )
-        if len(normalized) > 180:
-            raise AppError(
-                status=422,
-                code="OUTPUT_FILE_NAME_TOO_LONG",
-                title="Output file name is too long",
-                detail="出力ファイル名は180文字以内で入力してください。",
-            )
-        if re.search(r'[\\/:*?"<>|\x00-\x1f]', normalized):
-            raise AppError(
-                status=422,
-                code="OUTPUT_FILE_NAME_INVALID",
-                title="Output file name is invalid",
-                detail='出力ファイル名に \\ / : * ? " < > | は使用できません。',
-            )
-        return normalized
+        return normalize_spreadsheet_output_name(file_name)
 
     @staticmethod
     def _is_spreadsheet_template(session: Session, job: ProcessingJob) -> bool:

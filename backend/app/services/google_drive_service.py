@@ -37,6 +37,7 @@ from app.db.session import Database
 _DRIVE_FILES = "https://www.googleapis.com/drive/v3/files"
 _DRIVE_UPLOAD_FILES = "https://www.googleapis.com/upload/drive/v3/files"
 _DRIVE_CHANGES = "https://www.googleapis.com/drive/v3/changes"
+_SHEETS_SPREADSHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -3774,6 +3775,7 @@ class GoogleDriveService:
         expected_subject: str | None = None,
         *,
         baseline_name: str | None = None,
+        rename_result_sheet: bool = False,
     ) -> str:
         with self._drive_operation(expected_subject) as subject:
             with self._database.session() as session:
@@ -3830,7 +3832,15 @@ class GoogleDriveService:
                         "再同期して現在の名前を確認してください。"
                     ),
                 )
-            if current_name == name:
+            sheet_snapshot = (
+                self._single_result_sheet(spreadsheet_id)
+                if rename_result_sheet
+                else None
+            )
+            if (
+                current_name == name
+                and (sheet_snapshot is None or sheet_snapshot[1] == name)
+            ):
                 return current_name
             latest = self._drive_item(spreadsheet_id)
             if not self._drive_item_matches_snapshot(latest, current):
@@ -3841,45 +3851,172 @@ class GoogleDriveService:
                     detail="名前変更直前にGoogle Drive側の書類が変更されました。",
                 )
             expected_parents = self._string_list(current.get("parents"))
-            renamed = self._request(
-                "PATCH",
-                f"{_DRIVE_FILES}/{quote(spreadsheet_id, safe='')}",
-                params={
-                    "fields": (
-                        "id,name,mimeType,parents,modifiedTime,trashed,"
-                        "explicitlyTrashed,appProperties"
-                    ),
-                    "supportsAllDrives": "true",
-                },
-                json={"name": name},
+            if not rename_result_sheet:
+                renamed = self._patch_drive_item_name(spreadsheet_id, name)
+                if (
+                    str(renamed.get("id") or "") != spreadsheet_id
+                    or renamed.get("name") != name
+                    or self._string_list(renamed.get("parents")) != expected_parents
+                    or renamed.get("trashed") is True
+                ):
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_NAME_CONFLICT",
+                        title="Drive document rename could not be verified",
+                        detail="Google Drive側の名前変更結果を確認できませんでした。",
+                    )
+                final_item = self._drive_item(spreadsheet_id)
+                if (
+                    final_item is None
+                    or not self._drive_item_matches_snapshot(final_item, renamed)
+                    or final_item.get("name") != name
+                    or self._string_list(final_item.get("parents")) != expected_parents
+                    or final_item.get("trashed") is True
+                ):
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_NAME_CONFLICT",
+                        title="Drive document changed after rename",
+                        detail="名前変更処理中にGoogle Drive側の書類が変更されました。",
+                    )
+                return name
+            renamed = current
+            drive_changed = False
+            sheet_changed = False
+            try:
+                if current_name != name:
+                    renamed = self._patch_drive_item_name(spreadsheet_id, name)
+                    if (
+                        str(renamed.get("id") or "") != spreadsheet_id
+                        or renamed.get("name") != name
+                        or self._string_list(renamed.get("parents")) != expected_parents
+                        or renamed.get("trashed") is True
+                    ):
+                        raise AppError(
+                            status=409,
+                            code="DRIVE_DOCUMENT_NAME_CONFLICT",
+                            title="Drive document rename could not be verified",
+                            detail="Google Drive側の名前変更結果を確認できませんでした。",
+                        )
+                    drive_changed = True
+                if sheet_snapshot is not None and sheet_snapshot[1] != name:
+                    self._rename_result_sheet_tab(
+                        spreadsheet_id,
+                        sheet_id=sheet_snapshot[0],
+                        title=name,
+                    )
+                    sheet_changed = True
+                final_item = self._drive_item(spreadsheet_id)
+                drive_snapshot_matches = (
+                    final_item is not None
+                    and final_item.get("name") == name
+                    and self._string_list(final_item.get("parents")) == expected_parents
+                    and final_item.get("trashed") is not True
+                )
+                if not drive_snapshot_matches:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_NAME_CONFLICT",
+                        title="Drive document changed after rename",
+                        detail="名前変更処理中にGoogle Drive側の書類が変更されました。",
+                    )
+                if rename_result_sheet and self._single_result_sheet(spreadsheet_id)[1] != name:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_NAME_CONFLICT",
+                        title="Drive result sheet rename could not be verified",
+                        detail="Googleスプレッドシート内部のsheet名を確認できませんでした。",
+                    )
+                return name
+            except Exception as exc:
+                compensation_failed = False
+                if sheet_changed and sheet_snapshot is not None:
+                    try:
+                        self._rename_result_sheet_tab(
+                            spreadsheet_id,
+                            sheet_id=sheet_snapshot[0],
+                            title=sheet_snapshot[1],
+                        )
+                    except Exception:
+                        compensation_failed = True
+                if drive_changed:
+                    try:
+                        self._patch_drive_item_name(spreadsheet_id, current_name)
+                    except Exception:
+                        compensation_failed = True
+                if compensation_failed:
+                    raise AppError(
+                        status=409,
+                        code="DRIVE_DOCUMENT_RENAME_PARTIAL",
+                        title="Drive document rename was partially applied",
+                        detail=(
+                            "Google Driveファイル名またはsheet名を元に戻せませんでした。"
+                            "再同期して現在名を確認してください。"
+                        ),
+                    ) from exc
+                raise
+
+    def _patch_drive_item_name(self, spreadsheet_id: str, name: str) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"{_DRIVE_FILES}/{quote(spreadsheet_id, safe='')}",
+            params={
+                "fields": (
+                    "id,name,mimeType,parents,modifiedTime,trashed,"
+                    "explicitlyTrashed,appProperties"
+                ),
+                "supportsAllDrives": "true",
+            },
+            json={"name": name},
+        )
+
+    def _single_result_sheet(self, spreadsheet_id: str) -> tuple[int, str]:
+        payload = self._request(
+            "GET",
+            f"{_SHEETS_SPREADSHEETS}/{quote(spreadsheet_id, safe='')}",
+            params={"fields": "sheets(properties(sheetId,title,index))"},
+        )
+        raw_sheets = payload.get("sheets")
+        if not isinstance(raw_sheets, list) or len(raw_sheets) != 1:
+            raise AppError(
+                status=409,
+                code="DRIVE_SPREADSHEET_SHEET_STRUCTURE_CONFLICT",
+                title="Drive spreadsheet sheet structure conflicts",
+                detail="結果sheetが1枚ではないため、安全に名前を同期できません。",
             )
-            if (
-                str(renamed.get("id") or "") != spreadsheet_id
-                or renamed.get("name") != name
-                or self._string_list(renamed.get("parents")) != expected_parents
-                or renamed.get("trashed") is True
-            ):
-                raise AppError(
-                    status=409,
-                    code="DRIVE_DOCUMENT_NAME_CONFLICT",
-                    title="Drive document rename could not be verified",
-                    detail="Google Drive側の名前変更結果を確認できませんでした。",
-                )
-            final_item = self._drive_item(spreadsheet_id)
-            if (
-                final_item is None
-                or not self._drive_item_matches_snapshot(final_item, renamed)
-                or final_item.get("name") != name
-                or self._string_list(final_item.get("parents")) != expected_parents
-                or final_item.get("trashed") is True
-            ):
-                raise AppError(
-                    status=409,
-                    code="DRIVE_DOCUMENT_NAME_CONFLICT",
-                    title="Drive document changed after rename",
-                    detail="名前変更処理中にGoogle Drive側の書類が変更されました。",
-                )
-            return name
+        properties = raw_sheets[0].get("properties") if isinstance(raw_sheets[0], dict) else None
+        sheet_id = properties.get("sheetId") if isinstance(properties, dict) else None
+        title = properties.get("title") if isinstance(properties, dict) else None
+        if not isinstance(sheet_id, int) or not isinstance(title, str):
+            raise AppError(
+                status=409,
+                code="DRIVE_SPREADSHEET_SHEET_STRUCTURE_CONFLICT",
+                title="Drive spreadsheet sheet structure conflicts",
+                detail="結果sheetのidentityを確認できません。",
+            )
+        return sheet_id, title
+
+    def _rename_result_sheet_tab(
+        self,
+        spreadsheet_id: str,
+        *,
+        sheet_id: int,
+        title: str,
+    ) -> None:
+        self._request(
+            "POST",
+            f"{_SHEETS_SPREADSHEETS}/{quote(spreadsheet_id, safe='')}:batchUpdate",
+            json={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {"sheetId": sheet_id, "title": title},
+                            "fields": "title",
+                        }
+                    }
+                ]
+            },
+        )
 
     def _library_roots(
         self,

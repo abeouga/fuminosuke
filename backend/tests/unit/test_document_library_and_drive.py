@@ -636,3 +636,76 @@ def test_drive_spreadsheet_name_is_updated_in_place(
         assert requests[2][1]["json"] == {"name": "面接カード_阿部桜雅"}
     finally:
         database.dispose()
+
+
+def test_drive_spreadsheet_file_and_single_result_sheet_are_renamed_idempotently(
+    settings_factory: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database(settings_factory().database)
+    Base.metadata.create_all(database.engine)
+    try:
+        def credentials_provider(_subject: str | None = None) -> Credentials:
+            raise AssertionError("テストではGoogle APIを呼び出しません。")
+
+        drive = GoogleDriveService(database, credentials_provider, lambda: "subject-1")
+        calls: list[tuple[str, str]] = []
+        current_name = "変更前"
+        current_sheet_title = "変更前"
+
+        def request(method: str, url: str, **kwargs: object) -> dict[str, object]:
+            nonlocal current_name, current_sheet_title
+            calls.append((method, url))
+            if "sheets.googleapis.com" in url:
+                if method == "POST":
+                    body = kwargs["json"]
+                    assert isinstance(body, dict)
+                    requests = body["requests"]
+                    assert isinstance(requests, list)
+                    properties = requests[0]["updateSheetProperties"]["properties"]
+                    current_sheet_title = properties["title"]
+                    return {"replies": [{}]}
+                return {
+                    "sheets": [
+                        {
+                            "properties": {
+                                "sheetId": 7,
+                                "title": current_sheet_title,
+                                "index": 0,
+                            }
+                        }
+                    ]
+                }
+            if method == "PATCH":
+                body = kwargs["json"]
+                assert isinstance(body, dict)
+                current_name = str(body["name"])
+            return {
+                "id": "spreadsheet-1",
+                "name": current_name,
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "parents": [],
+                "modifiedTime": "2026-09-03T00:00:00Z",
+                "trashed": False,
+            }
+
+        monkeypatch.setattr(drive, "_request", request)
+
+        first = drive.rename_spreadsheet(
+            "spreadsheet-1",
+            "面接テンプレート_Phase6",
+            rename_result_sheet=True,
+        )
+        calls_after_first = len(calls)
+        second = drive.rename_spreadsheet(
+            "spreadsheet-1",
+            "面接テンプレート_Phase6",
+            rename_result_sheet=True,
+        )
+
+        assert first == second == "面接テンプレート_Phase6"
+        assert current_name == current_sheet_title == "面接テンプレート_Phase6"
+        assert len(calls) == calls_after_first + 2
+        assert sum(method == "POST" for method, _url in calls) == 1
+    finally:
+        database.dispose()

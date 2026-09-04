@@ -42,6 +42,7 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.review_display_structure import build_review_display_structure
 from app.services.sire_name_service import SireNameService
+from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_candidate_service import TemplateCandidateService
 from app.storage.local_storage import LocalStorageService, StoragePathError
 
@@ -297,6 +298,12 @@ class JobService:
                 clean_template_sha256=clean_template_sha256,
                 config=template_config,
             )
+            spreadsheet_output_snapshot = SpreadsheetTemplateOutputService(
+                self._storage
+            ).snapshot(
+                session,
+                version=template_version,
+            )
             sire_name_snapshot = (
                 self._sire_name_snapshot(session)
                 if ocr_enabled
@@ -329,6 +336,11 @@ class JobService:
             "schemaVersion": self._settings.ocr.schema_version,
             "promptVersion": self._settings.ocr.prompt_version,
             "templateSnapshot": template_snapshot,
+            **(
+                {"spreadsheetOutput": spreadsheet_output_snapshot}
+                if spreadsheet_output_snapshot is not None
+                else {}
+            ),
             **mapping_snapshot,
             **sire_name_snapshot,
             **template_candidate_snapshot,

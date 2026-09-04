@@ -19,6 +19,8 @@ from app.db.models import (
     TemplateVersion,
 )
 from app.db.session import Database
+from app.domain.enums import TemplateMode
+from app.domain.spreadsheet_output_name import normalize_spreadsheet_output_name
 from app.domain.template_config import parse_template_config
 from app.services.google_drive_service import GoogleDriveService
 from app.storage.local_storage import LocalStorageService
@@ -385,6 +387,7 @@ class DocumentLibraryService:
         expected_subject: str | None = None,
     ) -> dict[str, Any]:
         cleaned = self._document_name(name)
+        spreadsheet_template_output = False
         with self._database.session() as session:
             document = session.get(LedgerDocument, document_id)
             if document is None or document.library_deleted_at is not None:
@@ -401,6 +404,22 @@ class DocumentLibraryService:
             spreadsheet_id = document.spreadsheet_id or (
                 confirmed.spreadsheet_id if confirmed is not None else None
             )
+            current_job = (
+                session.get(ProcessingJob, document.current_job_id)
+                if document.current_job_id
+                else None
+            )
+            current_version = (
+                session.get(TemplateVersion, current_job.template_version_id)
+                if current_job is not None and current_job.template_version_id
+                else None
+            )
+            spreadsheet_template_output = (
+                current_version is not None
+                and current_version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
+            )
+            if spreadsheet_template_output:
+                cleaned = normalize_spreadsheet_output_name(name)
             baseline_name = (
                 document.library_name
                 or document.document_name
@@ -425,12 +444,21 @@ class DocumentLibraryService:
                         "書類ライブラリを再同期してから名前を変更してください。"
                     ),
                 )
-            renamed = self._google_drive.rename_spreadsheet(
-                spreadsheet_id,
-                cleaned,
-                expected_subject,
-                baseline_name=baseline_name,
-            )
+            if spreadsheet_template_output:
+                renamed = self._google_drive.rename_spreadsheet(
+                    spreadsheet_id,
+                    cleaned,
+                    expected_subject,
+                    baseline_name=baseline_name,
+                    rename_result_sheet=True,
+                )
+            else:
+                renamed = self._google_drive.rename_spreadsheet(
+                    spreadsheet_id,
+                    cleaned,
+                    expected_subject,
+                    baseline_name=baseline_name,
+                )
         try:
             with self._database.session() as session:
                 document = session.get(LedgerDocument, document_id)
@@ -455,12 +483,21 @@ class DocumentLibraryService:
                 and baseline_name != renamed
             ):
                 try:
-                    self._google_drive.rename_spreadsheet(
-                        spreadsheet_id,
-                        baseline_name,
-                        expected_subject,
-                        baseline_name=renamed,
-                    )
+                    if spreadsheet_template_output:
+                        self._google_drive.rename_spreadsheet(
+                            spreadsheet_id,
+                            baseline_name,
+                            expected_subject,
+                            baseline_name=renamed,
+                            rename_result_sheet=True,
+                        )
+                    else:
+                        self._google_drive.rename_spreadsheet(
+                            spreadsheet_id,
+                            baseline_name,
+                            expected_subject,
+                            baseline_name=renamed,
+                        )
                 except Exception as compensation_error:
                     raise AppError(
                         status=409,

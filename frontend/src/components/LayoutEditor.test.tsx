@@ -1318,6 +1318,7 @@ describe("record section display names", () => {
 
     const popover = editor.getByRole("form", { name: "繰り返し表の名称編集" });
     expect(popover).toBeInTheDocument();
+    expect(popover).toHaveStyle({ left: "210px", top: "95px" });
     fireEvent.change(within(popover).getByLabelText("繰り返し表の表示名"), {
       target: { value: "学歴" },
     });
