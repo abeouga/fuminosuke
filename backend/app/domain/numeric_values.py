@@ -77,7 +77,8 @@ def normalize_document_numbers(document: OcrDocument) -> OcrDocument:
 
 
 def _normalize_birth_date(reading: FieldReading) -> FieldReading:
-    if reading.status is ReadingStatus.BLANK:
+    # A valid format is not evidence that an uncertain transcription is correct.
+    if reading.status is not ReadingStatus.READABLE:
         return reading
     raw, normalized, reason = canonical_japanese_birth_date(
         reading.raw,
@@ -103,7 +104,7 @@ def _normalize_birth_date(reading: FieldReading) -> FieldReading:
 
 
 def _normalize_sale_note(reading: FieldReading) -> FieldReading:
-    if reading.status is ReadingStatus.BLANK:
+    if reading.status is not ReadingStatus.READABLE:
         return reading
     normalized = canonical_sale_note(reading.normalized or reading.raw, None)
     if normalized is None:

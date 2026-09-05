@@ -11,6 +11,8 @@ from app.jobs.runner import JobRunner
 from app.services.artifact_recovery_service import ArtifactRecoveryService
 from app.services.data_search_service import DataSearchService
 from app.services.document_library_service import DocumentLibraryService
+from app.services.document_ocr_execution_service import DocumentOcrExecutionService
+from app.services.extraction_service import ImageExtractionService
 from app.services.google_drive_service import GoogleDriveService
 from app.services.google_oauth_service import GoogleOAuthService
 from app.services.google_sheets_edit_worker import GoogleSheetsEditWorker
@@ -18,9 +20,11 @@ from app.services.google_sheets_sync_service import GoogleSheetsSyncService
 from app.services.individual_record_service import IndividualRecordService
 from app.services.job_service import JobService
 from app.services.ocr_result_service import OcrResultService
+from app.services.ocr_workflow_service import OcrWorkflowService
 from app.services.output_layout_template_service import OutputLayoutTemplateService
 from app.services.portable_backup_service import PortableBackupService
 from app.services.portable_restore_service import PortableRestoreService
+from app.services.template_service import TemplatePreparationService
 from app.services.workspace_cloud_sync_service import WorkspaceCloudSyncService
 from app.storage.local_storage import LocalStorageService
 from app.template_packages.drive_sync_service import TemplatePackageDriveSyncService
@@ -93,16 +97,36 @@ async def start_runtime_services(app: FastAPI) -> None:
         poll_interval_seconds=settings.google_sheets.edit_poll_interval_seconds,
         mutation_notifier=workspace_cloud_sync.mark_dirty,
     )
+    template_service = TemplatePreparationService(
+        settings=settings,
+        database=database,
+        storage=storage,
+    )
+    extraction_service = ImageExtractionService(
+        settings=settings,
+        database=database,
+        storage=storage,
+    )
+    ocr_workflow_service = OcrWorkflowService(
+        settings=settings,
+        database=database,
+        storage=storage,
+    )
+    document_ocr_execution = DocumentOcrExecutionService(
+        database=database,
+        extraction_service=extraction_service,
+        ocr_workflow_service=ocr_workflow_service,
+    )
+    pipeline_handler = PipelineJobHandler(
+        database=database,
+        template_service=template_service,
+        document_ocr_execution=document_ocr_execution,
+    )
     runner = JobRunner(
         database=database,
         settings=settings,
         storage=storage,
-        handler=PipelineJobHandler(
-            settings=settings,
-            database=database,
-            storage=storage,
-            google_sheets=google_sheets,
-        ),
+        handler=pipeline_handler,
         worker_count=settings.jobs.max_concurrency,
     )
     await runner.start()

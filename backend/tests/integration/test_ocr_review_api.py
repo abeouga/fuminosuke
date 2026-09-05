@@ -609,7 +609,40 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         assert mapped_cells["cells"][0]["mappingId"] == mapping_id
         assert mapped_cells["cells"][0]["openAiMappingId"] == mapping_id
         assert mapped_cells["cells"][0]["targetPath"] == "document.cattleName"
+        assert mapped_cells["cells"][0]["boundingBox"] == {
+            "x": 120,
+            "y": 20,
+            "width": 240,
+            "height": 80,
+        }
+        assert mapped_cells["cells"][0]["alignedCellArtifact"] == (
+            f"fieldCrop.{mapping_id}.alignedColor"
+        )
+        assert mapped_cells["cells"][0]["handwritingHintArtifact"] == (
+            f"fieldCrop.{mapping_id}.handwritingOnly"
+        )
+        assert mapped_cells["cells"][0]["alignedCellSha256"] == hashlib.sha256(
+            request.regions[0].image_png
+        ).hexdigest()
+        assert mapped_cells["cells"][0]["handwritingHintSha256"] == hashlib.sha256(
+            request.regions[0].handwriting_png
+        ).hexdigest()
         assert mapped_cells["cells"][0]["response"]["raw"] == "こよみ"
+
+        aligned_crop = openai_client.get(
+            f"/api/v1/jobs/{job_id}/artifacts/fieldCrop.{mapping_id}.alignedColor"
+        )
+        handwriting_crop = openai_client.get(
+            f"/api/v1/jobs/{job_id}/artifacts/fieldCrop.{mapping_id}.handwritingOnly"
+        )
+        assert aligned_crop.status_code == 200
+        assert handwriting_crop.status_code == 200
+        assert hashlib.sha256(aligned_crop.content).hexdigest() == hashlib.sha256(
+            request.regions[0].image_png
+        ).hexdigest()
+        assert hashlib.sha256(handwriting_crop.content).hexdigest() == hashlib.sha256(
+            request.regions[0].handwriting_png
+        ).hexdigest()
 
         diagnostics = openai_client.get(
             f"/api/v1/jobs/{job_id}/artifacts/openAiMappingDiagnostics"
@@ -629,6 +662,13 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
         ]
 
         result = openai_client.get(f"/api/v1/ocr-jobs/{job_id}/result").json()
+        assert result["result"]["document"]["cattleName"]["sourceRegionId"] == mapping_id
+        assert result["result"]["document"]["cattleName"]["boundingBox"] == {
+            "x": 120,
+            "y": 20,
+            "width": 240,
+            "height": 80,
+        }
         assert result["fieldPreviews"] == [
             {
                 "targetPath": "document.cattleName",
@@ -650,6 +690,11 @@ def test_openai_uses_only_snapshotted_mapped_input_cells(
                     "markOptions": [],
                 }
         ]
+        preview = openai_client.get(result["fieldPreviews"][0]["artifactUrl"])
+        assert preview.status_code == 200
+        assert hashlib.sha256(preview.content).hexdigest() == hashlib.sha256(
+            request.regions[0].image_png
+        ).hexdigest()
 
 
 def test_openai_rejects_active_template_without_field_mappings(
@@ -725,7 +770,8 @@ def test_ocr_uses_the_template_snapshot_captured_at_acceptance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     version_id = _active_template(client)
-    extraction_service = client.app.state.job_runner._handler._extraction_service
+    execution_service = client.app.state.job_runner._handler._document_ocr_execution
+    extraction_service = execution_service._extraction_service
     original_process = extraction_service.process
     processing_started = threading.Event()
     allow_processing = threading.Event()

@@ -31,7 +31,9 @@ from app.db.models import (
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType, TemplateMode, TemplateVersionStatus
 from app.jobs.runner import JobRunner
+from app.layout_analysis.models import LayoutDefinition
 from app.services.job_service import JobService, UploadPayload
+from app.services.layout_service import LayoutService
 from app.services.ocr_result_service import OcrResultService
 from app.services.spreadsheet_template_output_service import (
     FilledSpreadsheetTemplate,
@@ -847,6 +849,217 @@ def test_rectangular_layout_merge_is_materialized_without_guessing_missing_cells
     assert "B6:C7" in {str(cell_range) for cell_range in worksheet.merged_cells.ranges}
     assert worksheet["B6"].value == "123-4567"
     assert [worksheet[cell].value for cell in ("C6", "B7", "C7")] == [None, None, None]
+
+
+def _imported_anchor_layout(*coordinates: str) -> dict[str, Any]:
+    layout = _layout()
+    layout["cellMerges"][0]["parts"] = [
+        {"cell": _layout_cell(f"xlsx_{coordinate}", x=index * 10, y=0),
+         "partType": "input", "literal": ""}
+        for index, coordinate in enumerate(coordinates)
+    ]
+    return layout
+
+
+@pytest.mark.parametrize(
+    ("coordinates", "ranges", "expected"),
+    [
+        (("AD10", "AI10"), ("AD10:AH12", "AI10:AJ12"), "AD10:AJ12"),
+        (("AD10", "AD13"), ("AD10:AH12", "AD13:AH15"), "AD10:AH15"),
+    ],
+)
+def test_imported_merged_anchors_round_trip_without_changing_identity(
+    settings_factory: Callable[..., Settings],
+    coordinates: tuple[str, ...], ranges: tuple[str, ...], expected: str,
+) -> None:
+    layout = _imported_anchor_layout(*coordinates)
+    original = copy.deepcopy(layout)
+    with _output_case(settings_factory, layout=layout, existing_merges=(*ranges, "F8:G8")) as case:
+        with case.database.session() as session:
+            job = session.get(ProcessingJob, case.job_id)
+            assert job is not None
+            snapshot = job.config_snapshot_json["spreadsheetOutput"]
+            assert snapshot["schemaVersion"] == 2
+            assert snapshot["cellMerges"][0]["parts"] == original["cellMerges"][0]["parts"]
+            assert snapshot["cells"] == original["cells"]
+            assert snapshot["cellMerges"][0]["excelRange"] == expected
+        output = _loaded_output(case)
+        assert case.storage.read_bytes(case.source_path) == case.source_bytes
+        ws = output[_OUTPUT_NAME]
+        assert ws[coordinates[0]].value == "123-4567"
+        assert expected in {str(r) for r in ws.merged_cells.ranges}
+        assert "F8:G8" in {str(r) for r in ws.merged_cells.ranges}
+        assert ws["H1"].value == "変更してはいけない固定文字"
+        assert ws["I1"].value == "=SUM(J1:J2)"
+        assert ws["H1"].border.left.style == "thin"
+        assert ws["J1"].number_format == "#,##0.00"
+    assert layout == original
+
+
+def test_imported_anchors_do_not_fill_unselected_source_range(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with pytest.raises(AppError) as caught, _output_case(
+        settings_factory, layout=_imported_anchor_layout("H16", "M16", "S16"),
+        existing_merges=("H16:K18", "L16:L18", "M16:R18", "S16:AC18"),
+    ):
+        pass
+    assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_INVALID"
+    assert "L16" in caught.value.detail
+    assert "L17" in caught.value.detail
+    assert "L18" in caught.value.detail
+
+
+def test_remerging_preserves_outer_borders_after_xlsx_reload() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet["A1"].border = Border(
+        left=Side(style="thick"), top=Side(style="dashed"), right=Side(style="thin"),
+        bottom=Side(style="double"),
+    )
+    worksheet["C1"].border = Border(
+        right=Side(style="double"), top=Side(style="dashed"), bottom=Side(style="double"),
+    )
+    worksheet.merge_cells("A1:B2")
+    worksheet.merge_cells("C1:D2")
+    merge = _imported_anchor_layout("A1", "C1")["cellMerges"][0]
+    service = SpreadsheetTemplateOutputService
+    plan = service._merge_plan(
+        merge,
+        require_snapshot_metadata=False,
+        source_ranges=service._source_ranges(worksheet, merge),
+    )
+    service._apply_merges(worksheet, [plan])
+    output = io.BytesIO()
+    workbook.save(output)
+    reloaded = load_workbook(io.BytesIO(output.getvalue())).active
+    assert str(next(iter(reloaded.merged_cells.ranges))) == "A1:D2"
+    assert reloaded["A1"].border.left.style == "thick"
+    assert reloaded["D1"].border.right.style == "double"
+    assert reloaded["D2"].border.right.style == "double"
+    assert reloaded["B1"].border.top.style == "dashed"
+    assert reloaded["B2"].border.bottom.style == "double"
+
+
+def test_imported_anchor_merge_rejects_formula_before_acceptance(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with pytest.raises(AppError) as caught, _output_case(
+        settings_factory, layout=_imported_anchor_layout("A1", "C1"),
+        existing_merges=("A1:B2", "C1:D2"), protected_formula_in_merge=True,
+    ):
+        pass
+    assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_CONFLICT"
+
+
+@pytest.mark.parametrize("tamper", ["range", "version"])
+def test_source_range_snapshot_cannot_be_reinterpreted(
+    settings_factory: Callable[..., Settings], tamper: str,
+) -> None:
+    with _output_case(
+        settings_factory, layout=_imported_anchor_layout("AD10", "AI10"),
+        existing_merges=("AD10:AH12", "AI10:AJ12"),
+    ) as case:
+        with case.database.session() as session:
+            job = session.get(ProcessingJob, case.job_id)
+            assert job is not None
+            config = copy.deepcopy(job.config_snapshot_json)
+            if tamper == "range":
+                config["spreadsheetOutput"]["cellMerges"][0]["sourceRanges"]["AD10"] = "AD10:AI12"
+            else:
+                config["spreadsheetOutput"]["schemaVersion"] = 1
+            job.config_snapshot_json = config
+            session.commit()
+        with pytest.raises(AppError):
+            _render(case)
+
+
+def test_source_range_snapshot_does_not_follow_live_template_edits(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with _output_case(
+        settings_factory, layout=_imported_anchor_layout("AD10", "AI10"),
+        existing_merges=("AD10:AH12", "AI10:AJ12"),
+    ) as case:
+        with case.database.session() as session:
+            version = session.get(TemplateVersion, case.version_id)
+            assert version is not None
+            version.layout_json = _imported_anchor_layout("H16", "S16")
+            session.commit()
+        output = _loaded_output(case)
+        assert "AD10:AJ12" in {str(r) for r in output[_OUTPUT_NAME].merged_cells.ranges}
+        assert output[_OUTPUT_NAME]["AD10"].value == "123-4567"
+
+
+def test_source_backed_plans_cannot_overlap_each_other(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    layout = _imported_anchor_layout("AD10", "AI10")
+    other = copy.deepcopy(layout["cellMerges"][0])
+    other.update(id="other", parentCellId="other_parent")
+    other["parts"].append(
+        {"cell": _layout_cell("xlsx_AK10", x=20, y=0), "partType": "input", "literal": ""}
+    )
+    layout["cellMerges"].append(other)
+    with pytest.raises(AppError) as caught, _output_case(
+        settings_factory, layout=layout,
+        existing_merges=("AD10:AH12", "AI10:AJ12", "AK10:AL12"),
+    ):
+        pass
+    assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_INVALID"
+
+
+def test_virtual_subcell_cannot_claim_entire_source_merge(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with pytest.raises(AppError), _output_case(
+        settings_factory, layout=_imported_anchor_layout("AD10_split_1", "AI10"),
+        existing_merges=("AD10:AH12", "AI10:AJ12"),
+    ):
+        pass
+
+
+def test_invalid_merge_save_leaves_template_and_source_unchanged(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    with _output_case(
+        settings_factory,
+        existing_merges=("H16:K18", "L16:L18", "M16:R18", "S16:AC18"),
+    ) as case:
+        with case.database.session() as session:
+            version = session.get(TemplateVersion, case.version_id)
+            assert version is not None
+            original = copy.deepcopy(version.layout_json)
+            quality = copy.deepcopy(version.quality_json)
+        proposed = LayoutDefinition.model_validate(_imported_anchor_layout("H16", "M16", "S16"))
+        with pytest.raises(AppError) as caught:
+            LayoutService(case.database, case.storage).save(case.version_id, proposed)
+        assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_INVALID"
+        with case.database.session() as session:
+            version = session.get(TemplateVersion, case.version_id)
+            assert version is not None
+            assert version.layout_json == original
+            assert version.quality_json == quality
+        assert case.storage.read_bytes(case.source_path) == case.source_bytes
+
+
+def test_selected_literal_is_allowed_but_input_text_is_not_discarded(
+    settings_factory: Callable[..., Settings],
+) -> None:
+    layout = _imported_anchor_layout("A1", "B1")
+    # B1 is an existing literal in the source workbook, not OCR input.
+    with pytest.raises(AppError) as caught, _output_case(
+        settings_factory, layout=layout, existing_merges=("A1:A2", "B1:B2"),
+    ):
+        pass
+    assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_CONFLICT"
+    layout["cellMerges"][0]["parts"][1].update(partType="literal", literal="-")
+    with _output_case(
+        settings_factory, layout=layout, existing_merges=("A1:A2", "B1:B2"),
+    ) as case:
+        output = _loaded_output(case)
+        assert output[_OUTPUT_NAME]["A1"].value == "123-4567"
+        assert "A1:B2" in {str(r) for r in output[_OUTPUT_NAME].merged_cells.ranges}
 
 
 def test_non_contiguous_merge_parts_are_rejected(

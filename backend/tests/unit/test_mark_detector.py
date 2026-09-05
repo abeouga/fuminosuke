@@ -10,7 +10,7 @@ from app.domain.template_config import (
     TemplateConfig,
 )
 from app.extraction.mark_detector import MarkDetector
-from app.services.ocr_workflow_service import OcrWorkflowService
+from app.services.ocr_request_preparation_service import OcrRequestPreparer
 
 
 def mark_config() -> TemplateConfig:
@@ -73,7 +73,7 @@ def test_detects_a_pencil_circle_by_comparing_with_the_blank_template() -> None:
 
 def test_combines_detected_options_in_template_order() -> None:
     mapping = mark_config().field_mappings[0]
-    state = OcrWorkflowService._mark_state(
+    state = OcrRequestPreparer._mark_state(
         mapping,
         [
             {"mappingId": "calving_outcome", "optionValue": "premature", "status": "detected"},
@@ -98,7 +98,7 @@ def test_manual_choice_is_not_detected_or_sent_to_automatic_resolution() -> None
     cv2.circle(source, (25, 20), 11, (40, 40, 40), thickness=3)
 
     assert MarkDetector(manual_config).detect_all(source, template) == []
-    assert OcrWorkflowService._mark_state(manual_mapping, []) == (
+    assert OcrRequestPreparer._mark_state(manual_mapping, []) == (
         ReadingStatus.UNCERTAIN,
         None,
         "MANUAL_CHOICE_REQUIRED",

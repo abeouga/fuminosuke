@@ -31,6 +31,7 @@ import {
   targetPathsFromRecordGroups,
   targetPathsForInputs,
   unassignedMeaningCellIds,
+  unselectedCellsInsideMerge,
 } from "./LayoutEditor";
 import type { DocumentIdentity, FieldMappingTarget, LayoutCell, LayoutDefinition, LayoutMarkSet, LayoutRecordGroup, LayoutRecordSection, LayoutRelation } from "../types";
 
@@ -56,6 +57,25 @@ const allSaleTargets: FieldMappingTarget[] = Array.from(
     section: "売却子牛",
   })),
 ).flat();
+
+test("merge rejects an unselected intervening label but permits explicitly selected cells", () => {
+  const cells: LayoutCell[] = [
+    { id: "xlsx_H16", role: "input", x: 161, y: 327, width: 53, height: 38,
+      confidence: 1, text: "", textConfidence: null, source: "manual" },
+    { id: "xlsx_L16", role: "label", x: 214, y: 327, width: 13, height: 38,
+      confidence: 1, text: "", textConfidence: null, source: "manual" },
+    { id: "xlsx_M16", role: "input", x: 227, y: 327, width: 78, height: 38,
+      confidence: 1, text: "", textConfidence: null, source: "manual" },
+    { id: "outside", role: "input", x: 305, y: 327, width: 20, height: 38,
+      confidence: 1, text: "", textConfidence: null, source: "manual" },
+  ];
+  const original = structuredClone(cells);
+  const bounds = { x: 161, y: 327, width: 144, height: 38 };
+  expect(unselectedCellsInsideMerge(cells, [cells[0], cells[2]], bounds).map((c) => c.id))
+    .toEqual(["xlsx_L16"]);
+  expect(unselectedCellsInsideMerge(cells, cells.slice(0, 3), bounds)).toEqual([]);
+  expect(cells).toEqual(original);
+});
 
 test("uses distinct high-contrast styles for active roles and input styling for legacy numbers", () => {
   const styles = [

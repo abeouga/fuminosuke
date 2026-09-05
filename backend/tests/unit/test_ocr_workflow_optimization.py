@@ -8,8 +8,9 @@ from app.domain.template_config import FieldMappingConfig, MarkOptionConfig
 from app.ocr.base import OcrProviderRequest, OcrRegionInput
 from app.ocr.deterministic_mapper import assign_mapped_reading, build_mapped_document
 from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
+from app.services.ocr_request_preparation_service import OcrRequestPreparer
+from app.services.ocr_response_finalization_service import OcrResponseFinalizer
 from app.services.ocr_result_service import OcrResultService
-from app.services.ocr_workflow_service import OcrWorkflowService
 
 
 def _mapping(
@@ -58,17 +59,19 @@ def test_fixed_calving_record_keys_exclude_sale_record_keys() -> None:
         ],
     }
 
-    assert OcrWorkflowService._fixed_calving_record_keys(structure) == {"calvings.10.parity": "11"}
+    assert OcrRequestPreparer._fixed_calving_record_keys(structure) == {
+        "calvings.10.parity": "11"
+    }
 
 
 def test_birth_calving_and_sale_dates_request_era_date_transcription() -> None:
-    assert OcrWorkflowService._transcription_format("document.birthDate") == (
+    assert OcrRequestPreparer._transcription_format("document.birthDate") == (
         "japanese_era_date_numbers"
     )
-    assert OcrWorkflowService._transcription_format("calvings.0.calvingDate") == (
+    assert OcrRequestPreparer._transcription_format("calvings.0.calvingDate") == (
         "japanese_era_date_numbers"
     )
-    assert OcrWorkflowService._transcription_format("saleCalves.0.saleDate") == (
+    assert OcrRequestPreparer._transcription_format("saleCalves.0.saleDate") == (
         "japanese_era_date_numbers"
     )
 
@@ -95,7 +98,7 @@ def test_trailing_blank_gate_keeps_leading_blanks_and_skips_only_after_last_ink(
         },
     )
 
-    skipped = OcrWorkflowService._trailing_blank_rows(extraction, {})
+    skipped = OcrRequestPreparer._trailing_blank_rows(extraction, {})
 
     assert skipped == {("saleCalves", 2)}
     assert ("saleCalves", 0) not in skipped
@@ -119,7 +122,9 @@ def test_nonblank_local_mark_keeps_its_row_and_only_skips_rows_below_it() -> Non
         "mark-2": (ReadingStatus.BLANK, None, None),
     }
 
-    assert OcrWorkflowService._trailing_blank_rows(extraction, states) == {("calvings", 2)}
+    assert OcrRequestPreparer._trailing_blank_rows(extraction, states) == {
+        ("calvings", 2)
+    }
 
 
 def test_mark_crop_and_review_preview_keep_the_same_canonical_box() -> None:
@@ -160,8 +165,8 @@ def test_mark_crop_and_review_preview_keep_the_same_canonical_box() -> None:
         handwriting_only=image.copy(),
     )
 
-    region = OcrWorkflowService._mark_region_input(mapping, crop)
-    local_box = OcrWorkflowService._mark_bounding_box(mapping, crop)
+    region = OcrRequestPreparer._mark_region_input(mapping, crop)
+    local_box = OcrResponseFinalizer._mark_bounding_box(mapping, crop)
     document = build_mapped_document(
         OcrProviderRequest(regions=[region]),
         TranscriptionBatch(
@@ -231,7 +236,7 @@ def test_local_ink_turns_openai_blank_into_uncertain_review() -> None:
         ),
     ]
 
-    OcrWorkflowService._flag_local_ink_conflicts(document, regions, extraction)
+    OcrResponseFinalizer._flag_local_ink_conflicts(document, regions, extraction)
 
     assert document.custom_fields["inked"].status is ReadingStatus.UNCERTAIN
     assert document.custom_fields["inked"].review_reason == "LOCAL_INK_OCR_BLANK"

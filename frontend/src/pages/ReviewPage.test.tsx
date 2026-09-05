@@ -1,6 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { OcrDocument, OcrFieldPreview, ReviewStructure } from "../types";
+import type {
+  FieldReading,
+  OcrDocument,
+  OcrFieldPreview,
+  OcrResult,
+  ReviewItem,
+  ReviewStructure,
+} from "../types";
 import {
   buildReviewDisplayModel,
   hydrateMappedReadings,
@@ -411,6 +418,62 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function reviewResultFixture({
+  jobId,
+  confirmed = false,
+  field = {
+    ...reading,
+    raw: "OCR初期値",
+    sourceRegionId: "value-cell",
+    boundingBox: { x: 10, y: 20, width: 100, height: 40 },
+  },
+  reviewItems = [],
+  revision = 1,
+  spreadsheetSync,
+}: {
+  jobId: string;
+  confirmed?: boolean;
+  field?: FieldReading;
+  reviewItems?: ReviewItem[];
+  revision?: number;
+  spreadsheetSync?: OcrResult["spreadsheetSync"];
+}): OcrResult {
+  return {
+    jobId,
+    revision,
+    result: {
+      schemaVersion: "1.0",
+      templateId: "template-review-completion",
+      templateVersion: "1",
+      document: {},
+      saleCalves: [],
+      pedigree: {},
+      calvings: [],
+      customFields: { value: field },
+      reviewItems,
+      processingMetadata: {},
+    },
+    validation: { valid: true, issues: [] },
+    provider: "openai",
+    modelId: "gpt-5-mini",
+    promptVersion: "test",
+    apiCallCount: 1,
+    inputTokens: 1,
+    outputTokens: 1,
+    estimatedCost: 0.001,
+    confirmed,
+    individualId: null,
+    fieldPreviews: [{
+      targetPath: "customFields.value",
+      mappingId: "value-cell",
+      artifactUrl: "/value-cell.jpg",
+      boundingBox: { x: 10, y: 20, width: 100, height: 40 },
+    }],
+    spreadsheetSync,
+    documentName: "確認書類",
+  };
 }
 
 test("imports the edited Google Sheets layout as a versioned output template", async () => {
@@ -1191,6 +1254,90 @@ test("opens the correction cell requested by a Google Sheets deep link", async (
   expect(screen.getByLabelText("選択セルの編集")).toBeInTheDocument();
 });
 
+test("keeps confirmed OCR evidence while suppressing review warnings and editors after reload", async () => {
+  const warningItem: ReviewItem = {
+    code: "OCR_LOW_CONFIDENCE",
+    path: "customFields.value",
+    message: "OCR由来の確認情報",
+    severity: "warning",
+    sourceRegionId: "value-cell",
+  };
+  const confirmedResult = reviewResultFixture({
+    jobId: "job-confirmed-reload",
+    confirmed: true,
+    reviewItems: [warningItem],
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-confirmed-reload/result")) {
+      return jsonResponse(confirmedResult);
+    }
+    if (path.endsWith("/jobs/job-confirmed-reload/artifacts")) {
+      return jsonResponse({ items: [{ name: "alignedSource", mediaType: "image/jpeg", url: "/full.jpg" }] });
+    }
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({ code: "NOT_FOUND", detail: "not found" }, 404);
+  }));
+
+  const { container } = render(
+    <ReviewPage jobId="job-confirmed-reload" onClose={() => undefined} />,
+  );
+
+  const cell = await screen.findByRole("button", { name: "value customFields.value を編集" });
+  expect(cell).toHaveTextContent("OCR初期値");
+  expect(cell).toHaveTextContent("OK");
+  expect(cell.closest("td")).toHaveClass("ocr-cell-ok");
+  expect(cell.closest("td")).not.toHaveClass("ocr-cell-warning");
+  expect(container.querySelector(".review-summary strong")).toHaveTextContent("0");
+  expect(screen.queryByRole("button", { name: /次の要確認/ })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
+  expect(confirmedResult.result.customFields.value).toMatchObject({
+    status: "uncertain",
+    reviewReason: "check",
+  });
+  expect(confirmedResult.result.reviewItems).toEqual([warningItem]);
+
+  fireEvent.click(cell);
+  expect(await screen.findByAltText("customFields.value の切り出し"))
+    .toHaveAttribute("src", "/value-cell.jpg");
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
+});
+
+test("does not render a confirmed choice editor while keeping its crop available", async () => {
+  const confirmedResult = reviewResultFixture({
+    jobId: "job-confirmed-choice",
+    confirmed: true,
+  });
+  confirmedResult.fieldPreviews[0] = {
+    ...confirmedResult.fieldPreviews[0],
+    mappingType: "mark",
+    markRecognitionMode: "manual",
+    markSelectionMode: "single",
+    markOptions: [{ label: "対象", value: "target" }],
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-confirmed-choice/result")) {
+      return jsonResponse(confirmedResult);
+    }
+    if (path.endsWith("/jobs/job-confirmed-choice/artifacts")) return jsonResponse({ items: [] });
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({ code: "NOT_FOUND", detail: "not found" }, 404);
+  }));
+
+  render(
+    <ReviewPage
+      jobId="job-confirmed-choice"
+      initialSelectedPath="customFields.value"
+      onClose={() => undefined}
+    />,
+  );
+
+  expect(await screen.findByAltText("customFields.value の切り出し"))
+    .toHaveAttribute("src", "/value-cell.jpg");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
 test("reopens a confirmed result when requested by a Google Sheets correction link", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
@@ -1249,6 +1396,10 @@ test("reopens a confirmed result when requested by a Google Sheets correction li
   expect(fetchMock.mock.calls.some(([input]) => (
     String(input).endsWith("/ocr-jobs/job-sheet-link/reopen")
   ))).toBe(true);
+  const cell = screen.getByRole("button", { name: "牛名 document.cattleName を編集" });
+  expect(cell.closest("td")).toHaveClass("ocr-cell-warning");
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "次の要確認（1件）" })).toBeInTheDocument();
 });
 
 test("opens a full-screen six-choice editor for a calving mark cell", async () => {
@@ -1704,6 +1855,9 @@ test("allows confirmation with the manually entered individual ID", async () => 
     <ReviewPage jobId="job-manual-id" onClose={() => undefined} />,
   );
 
+  await screen.findByRole("button", {
+    name: "統一耳標番号 document.unifiedEarTag を編集",
+  });
   expect(screen.getAllByText("統一耳標番号").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "統一耳標番号 document.unifiedEarTag を編集" }).closest("td")).toHaveClass("ocr-cell-ok");
   expect(screen.getByRole("button", { name: "牛名 document.cattleName を編集" }).closest("td")).toHaveClass("ocr-cell-ok");
@@ -1719,6 +1873,183 @@ test("allows confirmation with the manually entered individual ID", async () => 
     ).toBeInTheDocument();
   });
   expect(screen.queryByRole("status", { name: "スプレッドシートを作成中" })).not.toBeInTheDocument();
+  confirmDialog.mockRestore();
+});
+
+test("ends review UI after confirmation while retaining the corrected value", async () => {
+  const confirmDialog = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const initialResult = reviewResultFixture({ jobId: "job-confirm-success" });
+  const correctedField: FieldReading = {
+    ...initialResult.result.customFields.value,
+    raw: "ユーザー修正値",
+    normalized: "ユーザー修正値",
+    status: "readable",
+    reviewReason: null,
+  };
+  const correctedResult = reviewResultFixture({
+    jobId: "job-confirm-success",
+    field: correctedField,
+    revision: 2,
+  });
+  const confirmedResult = reviewResultFixture({
+    jobId: "job-confirm-success",
+    confirmed: true,
+    field: correctedField,
+    revision: 2,
+    spreadsheetSync: {
+      enabled: true,
+      status: "synced",
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/confirmed/edit",
+      lastError: null,
+    },
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-confirm-success/result")) return jsonResponse(initialResult);
+    if (path.endsWith("/ocr-jobs/job-confirm-success/corrections") && init?.method === "PUT") {
+      return jsonResponse(correctedResult);
+    }
+    if (path.endsWith("/ocr-jobs/job-confirm-success/confirm") && init?.method === "POST") {
+      return jsonResponse(confirmedResult);
+    }
+    if (path.endsWith("/jobs/job-confirm-success/artifacts")) return jsonResponse({ items: [] });
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({ code: "NOT_FOUND", detail: "not found" }, 404);
+  }));
+
+  const { container } = render(
+    <ReviewPage jobId="job-confirm-success" onClose={() => undefined} />,
+  );
+
+  const cell = await screen.findByRole("button", { name: "value customFields.value を編集" });
+  fireEvent.click(cell);
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "読めた" }));
+  fireEvent.doubleClick(cell);
+  const input = screen.getByRole("textbox", { name: "value customFields.value を直接編集" });
+  fireEvent.change(input, { target: { value: "ユーザー修正値" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  fireEvent.click(screen.getByRole("button", { name: "内容を確定" }));
+  expect(screen.getByRole("status", { name: "スプレッドシートを作成中" })).toBeInTheDocument();
+  expect(await screen.findByText("確定済みの結果です")).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "スプレッドシートを作成中" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
+  const confirmedCell = screen.getByRole("button", { name: "value customFields.value を編集" });
+  expect(confirmedCell).toHaveTextContent("ユーザー修正値");
+  expect(confirmedCell.closest("td")).not.toHaveClass("ocr-cell-selected");
+  expect(confirmedCell.closest("td")).not.toHaveClass("ocr-cell-warning");
+  expect(container.querySelector(".review-summary strong")).toHaveTextContent("0");
+  confirmDialog.mockRestore();
+});
+
+test("keeps review complete when Google Sheets sync fails after confirmation", async () => {
+  const confirmDialog = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const readableField: FieldReading = {
+    ...reading,
+    raw: "確定値",
+    normalized: "確定値",
+    status: "readable",
+    reviewReason: null,
+    sourceRegionId: "value-cell",
+    boundingBox: { x: 10, y: 20, width: 100, height: 40 },
+  };
+  const initialResult = reviewResultFixture({
+    jobId: "job-confirm-sync-failed",
+    field: readableField,
+  });
+  const confirmedResult = reviewResultFixture({
+    jobId: "job-confirm-sync-failed",
+    confirmed: true,
+    field: readableField,
+    spreadsheetSync: {
+      enabled: true,
+      status: "failed",
+      spreadsheetUrl: null,
+      lastError: "Google Sheetsへ接続できませんでした。",
+    },
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-confirm-sync-failed/result")) return jsonResponse(initialResult);
+    if (path.endsWith("/ocr-jobs/job-confirm-sync-failed/confirm") && init?.method === "POST") {
+      return jsonResponse(confirmedResult);
+    }
+    if (path.endsWith("/jobs/job-confirm-sync-failed/artifacts")) return jsonResponse({ items: [] });
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({ code: "NOT_FOUND", detail: "not found" }, 404);
+  }));
+
+  render(<ReviewPage jobId="job-confirm-sync-failed" onClose={() => undefined} />);
+
+  const cell = await screen.findByRole("button", { name: "value customFields.value を編集" });
+  fireEvent.click(cell);
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "内容を確定" }));
+
+  expect(await screen.findByText("確定済みの結果です")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "再同期" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "value customFields.value を編集" }))
+    .toHaveTextContent("確定値");
+  confirmDialog.mockRestore();
+});
+
+test("retains the selected review state and corrected value when confirmation fails", async () => {
+  const confirmDialog = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const readableField: FieldReading = {
+    ...reading,
+    raw: "OCR初期値",
+    normalized: "OCR初期値",
+    status: "readable",
+    reviewReason: null,
+    sourceRegionId: "value-cell",
+    boundingBox: { x: 10, y: 20, width: 100, height: 40 },
+  };
+  const initialResult = reviewResultFixture({
+    jobId: "job-confirm-failed",
+    field: readableField,
+  });
+  const correctedResult = reviewResultFixture({
+    jobId: "job-confirm-failed",
+    field: { ...readableField, raw: "失敗時も保持", normalized: "失敗時も保持" },
+    revision: 2,
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-confirm-failed/result")) return jsonResponse(initialResult);
+    if (path.endsWith("/ocr-jobs/job-confirm-failed/corrections") && init?.method === "PUT") {
+      return jsonResponse(correctedResult);
+    }
+    if (path.endsWith("/ocr-jobs/job-confirm-failed/confirm") && init?.method === "POST") {
+      return jsonResponse({
+        code: "CONFIRMATION_FAILED",
+        detail: "確定処理に失敗しました。",
+      }, 500);
+    }
+    if (path.endsWith("/jobs/job-confirm-failed/artifacts")) return jsonResponse({ items: [] });
+    if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
+    return jsonResponse({ code: "NOT_FOUND", detail: "not found" }, 404);
+  }));
+
+  render(<ReviewPage jobId="job-confirm-failed" onClose={() => undefined} />);
+
+  const cell = await screen.findByRole("button", { name: "value customFields.value を編集" });
+  fireEvent.click(cell);
+  fireEvent.doubleClick(cell);
+  const input = screen.getByRole("textbox", { name: "value customFields.value を直接編集" });
+  fireEvent.change(input, { target: { value: "失敗時も保持" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.click(screen.getByRole("button", { name: "内容を確定" }));
+
+  expect(screen.getByRole("status", { name: "スプレッドシートを作成中" })).toBeInTheDocument();
+  expect(await screen.findByText("確定処理に失敗しました。")).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "スプレッドシートを作成中" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("選択セルの判定")).toBeInTheDocument();
+  const retainedCell = screen.getByRole("button", { name: "value customFields.value を編集" });
+  expect(retainedCell).toHaveTextContent("失敗時も保持");
+  expect(retainedCell.closest("td")).toHaveClass("ocr-cell-selected");
+  expect(screen.getByRole("button", { name: "内容を確定" })).toBeEnabled();
   confirmDialog.mockRestore();
 });
 
@@ -1859,6 +2190,7 @@ test("shows only the twenty fields mapped by the template", async () => {
 
   const { container } = render(<ReviewPage jobId="job-20" onClose={() => undefined} />);
 
+  await screen.findByRole("heading", { name: "売却子牛一覧" });
   expect(screen.queryByText("統一耳標番号")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "売却子牛一覧" })).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: /価格 saleCalves\.\d+\.priceYen を編集/ })).toHaveLength(10);

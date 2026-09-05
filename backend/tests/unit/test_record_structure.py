@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app.domain.ocr_factory import blank_reading
 from app.domain.ocr_models import Calving, OcrDocument, SaleCalf
-from app.services.ocr_workflow_service import OcrWorkflowService
+from app.services.ocr_response_finalization_service import OcrResponseFinalizer
 
 
 def test_fixed_record_key_is_written_to_the_same_sale_calf_row() -> None:
@@ -47,7 +47,7 @@ def test_fixed_record_key_is_written_to_the_same_sale_calf_row() -> None:
         ],
     }
 
-    added = OcrWorkflowService._apply_record_keys(
+    added = OcrResponseFinalizer._apply_record_keys(
         document,
         structure,
         {"saleCalves.0.priceYen", "saleCalves.0.sireName"},
@@ -98,7 +98,7 @@ def test_fixed_record_key_corrects_ocr_parity_without_losing_crop_source() -> No
         ],
     }
 
-    added = OcrWorkflowService._apply_record_keys(
+    added = OcrResponseFinalizer._apply_record_keys(
         document,
         structure,
         {"saleCalves.0.parity", "saleCalves.0.priceYen"},
@@ -143,7 +143,7 @@ def test_fixed_record_key_does_not_turn_blank_mapped_row_into_a_record() -> None
         ],
     }
 
-    added = OcrWorkflowService._apply_record_keys(
+    added = OcrResponseFinalizer._apply_record_keys(
         document,
         structure,
         {"saleCalves.0.parity", "saleCalves.0.priceYen"},
@@ -185,7 +185,7 @@ def test_fixed_calving_parity_is_materialized_when_ocr_returns_blank() -> None:
         ],
     }
 
-    added = OcrWorkflowService._apply_record_keys(
+    added = OcrResponseFinalizer._apply_record_keys(
         document,
         structure,
         {"calvings.0.parity", "calvings.0.calvingDate"},

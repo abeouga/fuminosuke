@@ -2365,6 +2365,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       showMergeError(plan);
       return;
     }
+    const unselected = unselectedCellsInsideMerge(layout.cells, cellsToMerge, plan.bounds);
+    if (unselected.length > 0) {
+      showMergeError(`結合範囲に未選択セルがあります (${unselected.map((cell) => cell.id).join(", ")})。含めて選択するか、結合を分けてください。`);
+      return;
+    }
     const containsInput = plan.orderedCells.some((cell) => cell.role === "input");
     const roles = new Set(plan.orderedCells.map((cell) => cell.role));
     if (!containsInput && roles.size > 1) {
@@ -5977,6 +5982,15 @@ type ManualCellMergePlan = {
   orderedCells: LayoutCell[];
   bounds: Rect;
 };
+
+export function unselectedCellsInsideMerge(
+  cells: LayoutCell[], selected: LayoutCell[], bounds: Rect,
+): LayoutCell[] {
+  const selectedIds = new Set(selected.map((cell) => cell.id));
+  return cells.filter((cell) => !selectedIds.has(cell.id)
+    && Math.min(cell.x + cell.width, bounds.x + bounds.width) - Math.max(cell.x, bounds.x) > 1
+    && Math.min(cell.y + cell.height, bounds.y + bounds.height) - Math.max(cell.y, bounds.y) > 1);
+}
 
 function planManualCellMerge(
   cells: LayoutCell[],

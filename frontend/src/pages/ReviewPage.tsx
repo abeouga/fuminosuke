@@ -375,6 +375,7 @@ export function ReviewPage({
     () => draft ? collectReadings(draft, reviewPaths) : [],
     [draft, reviewPaths],
   );
+  const reviewCompleted = Boolean(result?.confirmed);
   const relevantReviewItems = draft?.reviewItems.filter(
     (item) => !reviewPaths
       || reviewPaths.has(item.path)
@@ -402,6 +403,10 @@ export function ReviewPage({
   const warningEntries = useMemo(
     () => entries.filter((entry) => warningPaths.has(entry.path)),
     [entries, warningPaths],
+  );
+  const displayedWarningPaths = useMemo<ReadonlySet<string>>(
+    () => reviewCompleted ? new Set<string>() : warningPaths,
+    [reviewCompleted, warningPaths],
   );
   const byName = useMemo(() => new Map(artifacts.map((item) => [item.name, item.url])), [artifacts]);
   const previewByPath = useMemo(
@@ -844,17 +849,19 @@ export function ReviewPage({
       </div>
     );
   }
-  const unresolved = new Set([
-    ...entries
-      .filter((entry) => (
-        entry.value.status === "uncertain"
-        || saleNoteNeedsSymbol(entry)
-      ))
-      .map((entry) => entry.path),
-    ...relevantReviewItems
-      .filter((item) => item.severity === "error")
-      .map((item) => item.path),
-  ]).size;
+  const unresolved = reviewCompleted
+    ? 0
+    : new Set([
+      ...entries
+        .filter((entry) => (
+          entry.value.status === "uncertain"
+          || saleNoteNeedsSymbol(entry)
+        ))
+        .map((entry) => entry.path),
+      ...relevantReviewItems
+        .filter((item) => item.severity === "error")
+        .map((item) => item.path),
+    ]).size;
   return (
     <div className="page-stack review-page">
       <header className="page-header split"><div><span className="eyebrow">OCR REVIEW · REVISION {result.revision}</span><h1>読み取り結果を確認</h1><p>画像と項目を見比べ、原文と整形値を必要に応じて修正してください。</p></div><button className="ghost" onClick={onClose}>← ホームへ</button></header>
@@ -1092,7 +1099,7 @@ export function ReviewPage({
                 <KeyValueReviewTable
                   entries={documentEntries}
                   selectedPath={selectedPath}
-                  warningPaths={warningPaths}
+                  warningPaths={displayedWarningPaths}
                   choicePaths={choicePaths}
                   confirmed={editingLocked}
                   onSelect={selectEntry}
@@ -1103,7 +1110,7 @@ export function ReviewPage({
                 <KeyValueReviewTable
                   entries={pedigreeEntries}
                   selectedPath={selectedPath}
-                  warningPaths={warningPaths}
+                  warningPaths={displayedWarningPaths}
                   choicePaths={choicePaths}
                   confirmed={editingLocked || interactionMode === "reorder"}
                   onSelect={selectEntry}
@@ -1117,7 +1124,7 @@ export function ReviewPage({
                 columns={SALE_COLUMNS}
                 entryByPath={entryByPath}
                 selectedPath={selectedPath}
-                warningPaths={warningPaths}
+                warningPaths={displayedWarningPaths}
                 choicePaths={choicePaths}
                 recordKeyByRow={recordKeyByRow}
                 confirmed={editingLocked}
@@ -1134,7 +1141,7 @@ export function ReviewPage({
                 columns={CALVING_COLUMNS}
                 entryByPath={entryByPath}
                 selectedPath={selectedPath}
-                warningPaths={warningPaths}
+                warningPaths={displayedWarningPaths}
                 choicePaths={choicePaths}
                 recordKeyByRow={recordKeyByRow}
                 confirmed={editingLocked}
@@ -1149,7 +1156,7 @@ export function ReviewPage({
                   key={section.id}
                   section={section}
                   selectedPath={selectedPath}
-                  warningPaths={warningPaths}
+                  warningPaths={displayedWarningPaths}
                   choicePaths={choicePaths}
                   confirmed={editingLocked}
                   interactionMode={interactionMode}
@@ -1163,7 +1170,7 @@ export function ReviewPage({
                   <KeyValueReviewTable
                     entries={section.entries}
                     selectedPath={selectedPath}
-                    warningPaths={warningPaths}
+                    warningPaths={displayedWarningPaths}
                     choicePaths={choicePaths}
                     confirmed={editingLocked || interactionMode === "reorder"}
                     onSelect={selectEntry}
@@ -1175,7 +1182,7 @@ export function ReviewPage({
                 <IndependentReviewGroups
                   groups={independentGroups}
                   selectedPath={selectedPath}
-                  warningPaths={warningPaths}
+                  warningPaths={displayedWarningPaths}
                   choicePaths={choicePaths}
                   confirmed={editingLocked || interactionMode === "reorder"}
                   onSelect={selectEntry}
@@ -1184,7 +1191,7 @@ export function ReviewPage({
               </ReviewTableSection>}
             </div>
           )}
-          {interactionMode === "edit" && selectedEntry && selectedPreview?.mappingType !== "mark" && (
+          {!reviewCompleted && interactionMode === "edit" && selectedEntry && selectedPreview?.mappingType !== "mark" && (
             <AnchoredReviewPopover
               path={selectedEntry.path}
               wide={requiresDedicatedCellEditor(selectedEntry)}
@@ -1194,7 +1201,7 @@ export function ReviewPage({
                 <CellEditor
                   entry={selectedEntry}
                   confirmed={editingLocked}
-                  warning={warningPaths.has(selectedEntry.path)}
+                  warning={displayedWarningPaths.has(selectedEntry.path)}
                   suggestedValues={
                     selectedEntry.path.endsWith(".sireName")
                       ? sireCandidates
@@ -1273,7 +1280,7 @@ export function ReviewPage({
         </section>
       )}
       {error && <p className="error-box">{error}</p>}{message && <p className="success-box">{message}</p>}
-      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !documentName.trim() ? "書類名を入力してください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? (result.spreadsheetSync?.status === "synced" ? "確定結果を保存し、Googleスプレッドシートへ反映しました。" : "確定結果から入力済みExcelを保存できます。") : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !documentName.trim() ? "書類ライブラリと出力で共用する名前が必要です。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? <div className="job-action-buttons"><ExcelExportActions jobId={jobId} compact driveFileName={result.spreadsheetSync?.fileName ?? result.documentName} />{result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null}</div> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady || !documentName.trim()} onClick={async () => { if (!window.confirm("この内容と書類名を確定します。よろしいですか？")) return; setBusy(true); setConfirming(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision, documentName.trim()); setResult(confirmed); setDraft(confirmed.result); setDocumentName(confirmed.documentName); setRevisionConflict(null); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果と書類名を確定し、スプレッドシートへ反映しました。" : "結果と書類名を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setConfirming(false); setBusy(false); } }}>内容を確定</button></>}</div>
+      <div className="decision-bar sticky"><div><strong>{result.confirmed ? "確定済みの結果です" : revisionConflict ? "競合の復旧方法を選んでください" : !documentName.trim() ? "書類名を入力してください" : !identityReady ? "個体識別番号を確認してください" : `${unresolved}件の要確認項目があります`}</strong><span>{result.confirmed ? (result.spreadsheetSync?.status === "synced" ? "確定結果を保存し、Googleスプレッドシートへ反映しました。" : "確定結果から入力済みExcelを保存できます。") : revisionConflict ? "上の復旧欄で最新結果を取得し、退避内容を復元するか選択してください。" : !documentName.trim() ? "書類ライブラリと出力で共用する名前が必要です。" : !identityReady ? "10桁の個体識別番号を入力すると確定保存できます。" : "修正を保存するとGoogleスプレッドシートも更新されます。"}</span></div>{result.confirmed ? <div className="job-action-buttons"><ExcelExportActions jobId={jobId} compact driveFileName={result.spreadsheetSync?.fileName ?? result.documentName} />{result.spreadsheetSync?.spreadsheetUrl ? <a className="primary" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く</a> : null}</div> : <><button className="secondary" disabled={busy || Boolean(revisionConflict)} onClick={async () => { setBusy(true); setError(null); setMessage(null); try { const saved = await api.correct(jobId, result.revision, draft); setResult(saved); setDraft(saved.result); setRevisionConflict(null); setMessage(saved.spreadsheetSync?.status === "synced" ? "修正を保存し、スプレッドシートへ反映しました。" : saved.spreadsheetSync?.enabled ? "修正を保存しました。スプレッドシート同期は上の状態を確認してください。" : "修正を保存しました。"); } catch (reason) { handleMutationFailure(reason, "保存できませんでした。"); } finally { setBusy(false); } }}>修正を保存</button><button className="primary" disabled={busy || Boolean(revisionConflict) || unresolved > 0 || !identityReady || !documentName.trim()} onClick={async () => { if (!window.confirm("この内容と書類名を確定します。よろしいですか？")) return; setBusy(true); setConfirming(true); setError(null); setMessage(null); let latest = result; try { if (JSON.stringify(draft) !== JSON.stringify(result.result)) { latest = await api.correct(jobId, result.revision, draft); setResult(latest); setDraft(latest.result); } const confirmed = await api.confirm(jobId, latest.revision, documentName.trim()); setResult(confirmed); setDraft(confirmed.result); setDocumentName(confirmed.documentName); setRevisionConflict(null); if (confirmed.confirmed) closeSelectedCell(); setMessage(confirmed.spreadsheetSync?.status === "synced" ? "結果と書類名を確定し、スプレッドシートへ反映しました。" : "結果と書類名を確定しました。"); } catch (reason) { handleMutationFailure(reason, "確定できませんでした。", latest, draft); } finally { setConfirming(false); setBusy(false); } }}>内容を確定</button></>}</div>
       {confirming && (
         <div
           className="review-confirm-loading-backdrop"
@@ -1288,7 +1295,7 @@ export function ReviewPage({
           </div>
         </div>
       )}
-      {markEditorRow !== null && (
+      {!reviewCompleted && markEditorRow !== null && (
         <CalvingMarkModal
           rowIndex={markEditorRow}
           draft={draft}
@@ -1325,7 +1332,7 @@ export function ReviewPage({
           }}
         />
       )}
-      {choiceEditorPath !== null && selectedEntry && selectedPreview?.mappingType === "mark" && (
+      {!reviewCompleted && choiceEditorPath !== null && selectedEntry && selectedPreview?.mappingType === "mark" && (
         <GenericChoiceModal
           entry={selectedEntry}
           preview={selectedPreview}

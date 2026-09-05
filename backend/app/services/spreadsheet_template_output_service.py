@@ -43,6 +43,7 @@ class _MergePlan:
     excel_range: str
     anchor_cell: str
     parts_by_coordinate: dict[str, dict[str, Any]]
+    source_ranges: tuple[str, ...] = ()
 
 
 class SpreadsheetTemplateOutputService:
@@ -56,6 +57,7 @@ class SpreadsheetTemplateOutputService:
         session: Session,
         *,
         version: TemplateVersion,
+        layout: dict[str, Any] | None = None,
     ) -> dict[str, object] | None:
         """Capture the XLSX output structure used by a newly accepted OCR job."""
         if version.mode != TemplateMode.SPREADSHEET_TEMPLATE.value:
@@ -91,7 +93,7 @@ class SpreadsheetTemplateOutputService:
             if isinstance(raw_source_name, str) and raw_source_name.strip()
             else Path(source_artifact.relative_path).name
         )
-        layout = version.layout_json
+        layout = version.layout_json if layout is None else layout
         raw_cells = layout.get("cells") if isinstance(layout, dict) else None
         raw_merges = layout.get("cellMerges") if isinstance(layout, dict) else None
         if not isinstance(raw_cells, list) or not isinstance(raw_merges, list):
@@ -101,14 +103,20 @@ class SpreadsheetTemplateOutputService:
         for raw_merge in raw_merges:
             if not isinstance(raw_merge, dict):
                 raise self._merge_invalid("cellMergesに不正な要素があります。")
-            plan = self._merge_plan(raw_merge, require_snapshot_metadata=False)
+            source_ranges = self._source_ranges(workbook[source_sheet_name], raw_merge)
+            plan = self._merge_plan(
+                raw_merge, require_snapshot_metadata=False, source_ranges=source_ranges
+            )
             merge = copy.deepcopy(raw_merge)
+            merge.pop("sourceRanges", None)
+            if source_ranges:
+                merge["sourceRanges"] = source_ranges
             merge["excelRange"] = plan.excel_range
             merge["anchorCell"] = plan.anchor_cell
             cell_merges.append(merge)
 
-        return {
-            "schemaVersion": 1,
+        snapshot = {
+            "schemaVersion": 2 if any("sourceRanges" in m for m in cell_merges) else 1,
             "templateVersionId": version.id,
             "sourceWorkbook": {
                 "artifactId": source_artifact.id,
@@ -120,6 +128,12 @@ class SpreadsheetTemplateOutputService:
             "cells": copy.deepcopy(raw_cells),
             "cellMerges": cell_merges,
         }
+        # New source-backed plans must also be safe to materialize, before OCR starts.
+        plans = self._merge_plans(snapshot, workbook[source_sheet_name])
+        for plan in plans:
+            if plan.source_ranges:
+                self._ensure_merge_contents_safe(workbook[source_sheet_name], plan)
+        return snapshot
 
     @staticmethod
     def is_final_output(content: bytes, document_name: str) -> bool:
@@ -198,7 +212,7 @@ class SpreadsheetTemplateOutputService:
                 detail="XLSXのセルと読み取り項目の対応を取得できません。",
             )
 
-        merge_plans = self._merge_plans(snapshot)
+        merge_plans = self._merge_plans(snapshot, worksheet)
         self._apply_merges(worksheet, merge_plans)
 
         written_cells = 0
@@ -385,7 +399,9 @@ class SpreadsheetTemplateOutputService:
         return str(value)
 
     @classmethod
-    def _merge_plans(cls, snapshot: dict[str, Any]) -> list[_MergePlan]:
+    def _merge_plans(
+        cls, snapshot: dict[str, Any], worksheet: Worksheet | None = None
+    ) -> list[_MergePlan]:
         raw_merges = snapshot.get("cellMerges")
         if not isinstance(raw_merges, list):
             raise cls._snapshot_error("固定されたcellMergesを取得できません。")
@@ -395,9 +411,25 @@ class SpreadsheetTemplateOutputService:
         for raw_merge in raw_merges:
             if not isinstance(raw_merge, dict):
                 raise cls._merge_invalid("cellMergesに不正な要素があります。")
-            plan = cls._merge_plan(raw_merge, require_snapshot_metadata=True)
+            source_ranges = None
+            if snapshot.get("schemaVersion") == 2 and "sourceRanges" in raw_merge:
+                if worksheet is None:
+                    raise cls._snapshot_error("元XLSXの結合範囲を検証できません。")
+                source_ranges = cls._source_ranges(worksheet, raw_merge)
+                if not source_ranges or source_ranges != raw_merge["sourceRanges"]:
+                    raise cls._snapshot_error("固定された元セル範囲が元XLSXと一致しません。")
+            plan = cls._merge_plan(
+                raw_merge, require_snapshot_metadata=True, source_ranges=source_ranges
+            )
             if plan.parent_cell_id in parent_ids or plan.excel_range in excel_ranges:
                 raise cls._merge_invalid("cellMergesに重複するrangeまたはparentがあります。")
+            if any(
+                cls._ranges_overlap(
+                    cls._range_bounds(plan.excel_range), cls._range_bounds(p.excel_range)
+                )
+                for p in plans
+            ):
+                raise cls._merge_invalid("別の結合範囲と重複しています。")
             parent_ids.add(plan.parent_cell_id)
             excel_ranges.add(plan.excel_range)
             plans.append(plan)
@@ -409,6 +441,7 @@ class SpreadsheetTemplateOutputService:
         merge: dict[str, Any],
         *,
         require_snapshot_metadata: bool,
+        source_ranges: dict[str, str] | None = None,
     ) -> _MergePlan:
         merge_id = merge.get("id")
         parent_cell_id = merge.get("parentCellId")
@@ -437,6 +470,22 @@ class SpreadsheetTemplateOutputService:
             columns.append(column_index_from_string(match.group(1)))
             rows.append(int(match.group(2)))
 
+        if source_ranges:
+            expanded: dict[str, dict[str, Any]] = {}
+            for coordinate, part in parts_by_coordinate.items():
+                min_col, first_row, max_col, last_row = cls._range_bounds(
+                    source_ranges[coordinate]
+                )
+                for row in range(first_row, last_row + 1):
+                    for column in range(min_col, max_col + 1):
+                        covered = f"{get_column_letter(column)}{row}"
+                        if covered in expanded:
+                            raise cls._merge_invalid("merge partの元Excel範囲が重複しています。")
+                        expanded[covered] = part
+                        rows.append(row)
+                        columns.append(column)
+            parts_by_coordinate = expanded
+
         min_column, max_column = min(columns), max(columns)
         min_row, max_row = min(rows), max(rows)
         expected_coordinates = {
@@ -445,8 +494,10 @@ class SpreadsheetTemplateOutputService:
             for column in range(min_column, max_column + 1)
         }
         if set(parts_by_coordinate) != expected_coordinates:
+            missing = ", ".join(sorted(expected_coordinates - set(parts_by_coordinate))[:12])
             raise cls._merge_invalid(
                 "merge partsが欠落セルのない連続したExcel矩形rangeを構成していません。"
+                f" 結合 {merge_id} の未選択セル: {missing}。テンプレートで結合を見直してください。"
             )
 
         anchor_cell = f"{get_column_letter(min_column)}{min_row}"
@@ -462,18 +513,51 @@ class SpreadsheetTemplateOutputService:
             excel_range=excel_range,
             anchor_cell=anchor_cell,
             parts_by_coordinate=parts_by_coordinate,
+            source_ranges=tuple(source_ranges.values()) if source_ranges else (),
         )
+
+    @classmethod
+    def _source_ranges(cls, worksheet: Worksheet, merge: dict[str, Any]) -> dict[str, str]:
+        """Resolve imported anchors only; never infer coverage from image geometry.
+
+        Fully enumerated legacy merges keep their existing validation/output policy.
+        """
+        ranges: dict[str, str] = {}
+        has_merged_source = False
+        parts = merge.get("parts")
+        if not isinstance(parts, list):
+            return {}
+        for part in parts:
+            cell = part.get("cell") if isinstance(part, dict) else None
+            cell_id = cell.get("id") if isinstance(cell, dict) else None
+            coordinate = cls._coordinate(cell_id) if isinstance(cell_id, str) else None
+            if coordinate is None:
+                return {}
+            if cell_id != f"xlsx_{coordinate}":
+                # Virtual subcells do not own the entire source Excel cell/range.
+                return {}
+            source = next((r for r in worksheet.merged_cells.ranges if coordinate in r), None)
+            if source is not None:
+                if coordinate != f"{get_column_letter(source.min_col)}{source.min_row}":
+                    return {}
+                has_merged_source = True
+            ranges[coordinate] = str(source) if source else f"{coordinate}:{coordinate}"
+        return ranges if has_merged_source else {}
 
     @classmethod
     def _apply_merges(cls, worksheet: Worksheet, plans: list[_MergePlan]) -> None:
         for plan in plans:
             exact_match = False
+            replace_ranges: list[str] = []
             for existing in worksheet.merged_cells.ranges:
                 existing_range = str(existing)
                 if existing_range == plan.excel_range:
                     exact_match = True
                     break
                 if cls._ranges_overlap(existing.bounds, cls._range_bounds(plan.excel_range)):
+                    if existing_range in plan.source_ranges:
+                        replace_ranges.append(existing_range)
+                        continue
                     raise cls._merge_conflict(
                         f"既存merge {existing_range} と要求merge "
                         f"{plan.excel_range} が重複しています。"
@@ -481,7 +565,33 @@ class SpreadsheetTemplateOutputService:
             if exact_match:
                 continue
             cls._ensure_merge_contents_safe(worksheet, plan)
+            perimeter: dict[str, dict[str, Any]] = {}
+            if replace_ranges:
+                left, top, right, bottom = cls._range_bounds(plan.excel_range)
+                for coordinate in plan.parts_by_coordinate:
+                    cell = worksheet[coordinate]
+                    edges = {}
+                    for side, applies in (
+                        ("left", cell.column == left), ("right", cell.column == right),
+                        ("top", cell.row == top), ("bottom", cell.row == bottom),
+                    ):
+                        if applies:
+                            edges[side] = copy.copy(getattr(cell.border, side))
+                    if edges:
+                        perimeter[coordinate] = edges
+                anchor_border = copy.copy(worksheet[plan.anchor_cell].border)
+                anchor_border.right = copy.copy(worksheet.cell(top, right).border.right)
+                anchor_border.bottom = copy.copy(worksheet.cell(bottom, left).border.bottom)
+            for existing_range in replace_ranges:
+                worksheet.unmerge_cells(existing_range)
+            if replace_ranges:
+                worksheet[plan.anchor_cell].border = anchor_border
             worksheet.merge_cells(plan.excel_range)
+            for coordinate, edges in perimeter.items():
+                border = copy.copy(worksheet[coordinate].border)
+                for side, value in edges.items():
+                    setattr(border, side, value)
+                worksheet[coordinate].border = border
 
     @staticmethod
     def _range_bounds(excel_range: str) -> tuple[int, int, int, int]:
@@ -825,7 +935,7 @@ class SpreadsheetTemplateOutputService:
             )
         source = raw_snapshot.get("sourceWorkbook")
         if (
-            raw_snapshot.get("schemaVersion") != 1
+            raw_snapshot.get("schemaVersion") not in (1, 2)
             or raw_snapshot.get("templateVersionId") != job.template_version_id
             or not isinstance(raw_snapshot.get("sourceSheetName"), str)
             or not isinstance(raw_snapshot.get("sourceFileName"), str)

@@ -46,6 +46,7 @@ from app.services.label_cell_ocr_service import (
     protected_label_cell_ids,
     recognize_label_cells,
 )
+from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_management_service import TemplateManagementService
 from app.services.template_mutation import (
     LAYOUT_INPUT_REVISION_KEY,
@@ -300,6 +301,15 @@ class LayoutService:
                 )
 
         layout = self._increment_duplicate_target_paths(layout)
+        if layout.cell_merges:
+            # Validate against the proposed layout before saving mappings or artifacts.
+            with self._database.session() as session:
+                version = TemplateRepository(session).get_version(version_id)
+                if version is None:
+                    raise self._not_found()
+                SpreadsheetTemplateOutputService(self._storage).snapshot(
+                    session, version=version, layout=layout.model_dump(mode="json", by_alias=True)
+                )
         layout = layout.model_copy(
             update={
                 "record_structure_verified": self._record_structure_is_complete(layout)

@@ -2,15 +2,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.core.config import Settings
 from app.db.session import Database
 from app.domain.enums import JobType
 from app.repositories.job_repository import JobRepository
-from app.services.extraction_service import ImageExtractionService
-from app.services.google_sheets_sync_service import GoogleSheetsSyncService
-from app.services.ocr_workflow_service import OcrWorkflowService
+from app.services.document_ocr_execution_service import DocumentOcrExecutionService
 from app.services.template_service import TemplatePreparationService
-from app.storage.local_storage import LocalStorageService
 
 
 class JobHandler(Protocol):
@@ -28,28 +24,13 @@ class PipelineJobHandler:
     def __init__(
         self,
         *,
-        settings: Settings,
         database: Database,
-        storage: LocalStorageService,
-        google_sheets: GoogleSheetsSyncService,
+        template_service: TemplatePreparationService,
+        document_ocr_execution: DocumentOcrExecutionService,
     ) -> None:
         self._database = database
-        self._template_service = TemplatePreparationService(
-            settings=settings,
-            database=database,
-            storage=storage,
-        )
-        self._extraction_service = ImageExtractionService(
-            settings=settings,
-            database=database,
-            storage=storage,
-        )
-        self._ocr_workflow = OcrWorkflowService(
-            settings=settings,
-            database=database,
-            storage=storage,
-            google_sheets=google_sheets,
-        )
+        self._template_service = template_service
+        self._document_ocr_execution = document_ocr_execution
 
     def __call__(self, job_id: str) -> None:
         with self._database.session() as session:
@@ -62,9 +43,4 @@ class PipelineJobHandler:
         if job_type is JobType.PREPARE_TEMPLATE:
             self._template_service.process(job_id)
             return
-        output = self._extraction_service.process(job_id)
-        with self._database.session() as session:
-            job = JobRepository(session).get(job_id)
-            if job is None or job.cancel_requested:
-                return
-        self._ocr_workflow.process(output)
+        self._document_ocr_execution.execute(job_id)

@@ -252,7 +252,7 @@ def _reading(
             review_reason = "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
             issue_code = review_reason
     elif candidate_type == "mark_choice" and status is not ReadingStatus.BLANK:
-        selected = [candidate for candidate in candidates if raw and candidate in raw]
+        selected = _selected_mark_labels(raw, candidates)
         canonical = "・".join(selected) if selected else None
         if status is ReadingStatus.READABLE and canonical is not None:
             raw = canonical
@@ -313,6 +313,19 @@ def _reading(
         issue_code,
         False,
     )
+
+
+def _selected_mark_labels(raw: str | None, candidates: tuple[str, ...]) -> list[str]:
+    if raw is None:
+        return []
+    # A label may contain another label (or a list separator). Match it whole
+    # before parsing a multi-selection; never accept only part of an unknown label.
+    if raw in candidates:
+        return [raw]
+    labels = {label.strip() for label in re.split(r"[・、,;\n]+", raw)}
+    if not labels or not labels.issubset(candidates):
+        return []
+    return [candidate for candidate in candidates if candidate in labels]
 
 
 def _looks_like_ditto(raw: str | None, target_path: str) -> bool:
