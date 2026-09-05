@@ -1,387 +1,87 @@
 # Repository Agent Instructions
 
-## OCR Safety — Critical
+## 1. 現在の開発方針
 
-このリポジトリには、複雑なOCRパイプラインがあります。
+現在は、検証済みのOCR correctness・association・mappingを維持しながら、人間側の操作体験を改善するフェーズです。優先順位は次のとおりです。
 
-OCRでは文字列そのものだけでなく、
+1. 帳票の物理セルからOCR結果、レビュー、保存・出力までの対応関係を維持する。
+2. レビューUX、テンプレート作成UX、修正・確定フローを改善し、不要な操作を減らす。
+3. 状態遷移とエラー復旧を改善し、ユーザー修正値を保護する。
+4. 将来のQuest / MR利用に備え、UI・HTTPと既存OCRユースケースの境界を保つ。
 
-- 帳票上の物理セル
-- crop画像
-- mapping
-- OpenAIへの送信内容
-- OpenAIからの応答
-- association
-- `mappedCells`
-- ReviewPage
-- 保存後の補正結果
+現在のOCRは完成・永久凍結ではありません。正常動作は作業開始時に証拠で確認するbaselineであり、過去の成功報告を現在の保証として扱わないでください。要求されていないOCR最適化・一般化・リファクタリングは行いません。
 
-の対応関係が重要です。
+## 2. 最初に読むものと作業分類
 
-これらの対応関係を意図せず変更・破壊しないでください。
+この文書は作業方針・変更境界・文書ルーティングの入口です。詳細な技術契約の正本は [OCR Safety Contract](docs/ocr-safety-contract.md) です。
 
----
+- 最初に依頼の目的、変更候補、`git status`、既存差分を確認する。
+- OCR結果、review状態、template layout、補正保存、確定・再読取、出力対応へ影響し得る変更の前に、Safety Contractを最後まで読む。
+- 表示だけの変更か、データの生成・変換・保存を変える変更かを実コードで分類する。frontendファイル内でもmapping生成や補正payload変更はOCR-sensitive。
+- ユーザーがread-onlyや特定ファイルへの限定を指定した場合は、その範囲を優先する。
 
-## OCR関連変更を行う前の必須手順
+## 3. Default Change Boundaries
 
-OCR入力、OCR出力、mapping、review結果、field identity、template layout、correction保存などに影響する可能性があるコードを変更する場合は、変更前に必ず以下を実施してください。
+UX/UIタスクは、依頼された表示・操作・一時UI状態の範囲で最小限に実装します。React側で解決できる問題のために、backend service、DB schema、OCR pipeline、provider、prompt、model、schema、mapping、association、physical identityを変更しないでください。
 
-1. `docs/ocr-safety-contract.md` を最後まで読む
-2. 今回の変更がOCRのどの不変条件へ影響する可能性があるか確認する
-3. 変更前にOCR contract testsを実行し、基準結果を記録する
-4. 必要最小限の変更だけを行う
-5. 変更後に同じOCR contract testsを再実行する
-6. OCR不変条件に回帰が発生している場合は、作業完了と報告しない
+バックエンド変更が必要な場合は、原因のfile/function、フロントエンドだけでは解決できない理由、影響する契約・検証を示します。既に明示されたタスク範囲内なら必要最小限を実装し、OCR改善など別目的への拡張が必要なら根拠を報告して指示を求めます。
 
-UI変更を容易にするためだけにOCRロジックを変更してはいけません。
+「コードが綺麗になる」「抽象化・一般化できる」「速くなりそう」「将来必要になりそう」だけでは保護領域を変更しません。Quest / MRへの備えも、新しいOCR経路やjob lifecycle迂回の理由にはしません。
 
-ユーザーからOCR変更を明示的に要求されていないUI-onlyの作業では、OCR coreの動作を変更しないでください。
+## 4. OCR Core Protected Area
 
----
+保護対象はファイル名だけでなく、以下を生成・変換・保存するすべての処理です。実装対応表はSafety Contract §2を参照してください。
 
-## OCR-sensitive areas
+- provider、model設定、prompt、structured-output schema、request manifest、compact ID展開、association検証
+- rectangle / region detection、画像前処理、boundingBox、crop / fieldPreview
+- template cell association、physical identity、mapping identity、受付時snapshot
+- `mappedCells`、`reviewStructure`、field ownership、再読取時の対応関係
+- `FieldReading`の値・判定、`status` / `reviewReason` / `reviewItems`の意味
+- 補正済み値、revision、確定snapshot、OCR出力からSpreadsheetセルへの対応
 
-以下はOCR-sensitive領域として扱ってください。
+保護対象の挙動を変えない表示編集は可能です。単に同じファイルに存在するという理由だけで、UI修正にOCRコア変更を含めないでください。
 
-- `backend/app/ocr/**`
-- OCR provider implementation
-- OCR request manifest生成
-- OCR structured-output schema
-- OCR prompt
-- compact ID mapping / expansion
-- association token生成・検証
-- `ocr_workflow_service`
-- `mappedCells`
-- `reviewStructure`
-- `FieldReading`
-- `mappingId`
-- `openAiMappingId`
-- `targetPath`
-- `sourceRegionId`
-- `boundingBox`
-- crop / `fieldPreview` 解決処理
-- correction persistence
-- OCR mapping生成に使用するtemplate layout構造
+## 5. OCRコア変更を許可する条件
 
-この一覧に含まれないファイルでも、上記データを生成・変換・保存する処理を変更する場合はOCR-sensitiveとして扱ってください。
+OCR精度・OCRロジック・対応関係の改善を明示的なタスクとして扱い、変更前に以下を満たしてください。
 
----
+1. 目的と変更範囲がユーザーの依頼で認められている。
+2. 再現可能な不具合、または同一帳票・保存response・fixtureで評価可能な精度課題を示せる。association / mapping / crop不具合は誤った対応を具体的に示す。
+3. 期待結果とbaselineを定義し、同じ入力・条件で変更前後を比較できる。
+4. Safety Contractの影響箇所を確認し、Safety Contract §8の必須検証を変更前後で実行できる。
 
-## Critical OCR invariants
+原因調査は安全なread-onlyで進められます。証拠や検証環境が足りない場合は、先に再現・fixture・環境を整え、推測修正をしないでください。不変条件を維持する不具合修正と、契約自体を意図的に変更する作業は区別します。後者にはユーザーの明示要求とSafety Contract §10の手順が必要です。
 
-以下は単なる現在の実装詳細ではなく、OCRの不変条件です。
+## 6. UXと状態管理の原則
 
-### 1. Mapping identity
+- OCR・補正データ、サーバーの業務状態、一時UI状態を分ける。ポップアップや強調表示を消すためにOCR値・判定・警告根拠を削除しない。
+- 明示的なユーザー補正では、既存の補正・revision経路で値や判定を更新できる。「データ保持」を補正禁止と解釈しない。
+- レビュー完了はサーバーの `result.confirmed` を正本とする。選択、編集中、loading、lock、表示用warningは完了判定の代わりにしない。
+- ローカル確定とGoogle Sheets / Drive同期を分ける。`confirmed=true` の結果を同期失敗だけで未確認へ戻さず、既存の再同期経路を使う。
+- confirm / reopen / retry / sync failure、再取得・再マウント・loading終了時の状態遷移を確認する。確定APIエラーでもDBが未確定とは限らないため、値を保護してサーバー状態を確認する。
+- 閲覧（セル選択・crop・結果表示）とレビュー編集を区別する。確定済みの編集UIを終了しても閲覧を維持する。
+- エラー・revision競合で修正値を失わない。OCR初期値や新しいテンプレートから補正済み結果を勝手に再構築しない。
 
-`mappingId`、`targetPath`、`sourceRegionId`、`boundingBox`の対応関係は決定的でなければなりません。
+## 7. 検証の選択
 
-理由なく別のfieldへ付け替えてはいけません。
+詳細なコマンド・対象テスト・限界はSafety Contract §8を参照します。全作業で `git diff --check` と差分範囲確認を行います。
 
----
+| 変更範囲 | 必須検証 |
+| --- | --- |
+| 文書のみ | 実コード・参照パスとの照合、文書間整合性、差分確認。動作テストは記載した仕様の確認が必要な場合のみ |
+| UX/UIのみ（OCRデータ契約を変えない） | frontend対象テスト、frontend build。状態変更は成功・失敗・再取得・再オープンなど関係する遷移を固定 |
+| 共通UI・複数画面に及ぶ状態変更 | 上記にfrontend full testsを追加 |
+| backend変更（OCR-sensitive以外） | 関連unit / integrationと該当静的検査。共有service・DB・lifecycle変更はbackend full testsも実行 |
+| OCR core / mapping / association / crop / 補正・revision・出力対応変更 | 変更前後の `scripts/verify_ocr_contract.py`、不足する境界テスト・保存response比較、backend full tests。frontendにも影響すれば対象テスト・buildを追加 |
 
-### 2. Physical cell identity
+専用スクリプトは現worktreeに存在しますが、全領域・Golden replay・frontend・backend全体を網羅するものではありません。欠落・実行不能なら関連する既存テストを実行し、未検証範囲と「OCR安全性を完全には検証できていない」ことを明記します。回帰があれば完了扱いにしません。
 
-帳票上の物理セルidentityをOCR値と混同しないでください。
+テスト通過のための削除・skip・assertion弱体化・都合のよいfixture変更は禁止です。既存の失敗と今回の回帰、対象テストと全体回帰、mockと実UI/API確認を区別してください。
 
-以下は物理セル側のidentityとして扱います。
+実外部APIは保存response・fixtureで検証できない場合のみ検討します。既存の利用許可・予算の範囲を守り、不要なOpenAI / Google API呼び出しは行いません。
 
-- `mappingId`
-- `openAiMappingId`
-- `targetPath`
-- `sourceRegionId`
-- `boundingBox`
-- crop / `fieldPreview`
-- template上のcell / region identity
+## 8. Git保護と完了報告
 
-レビュー操作などでOCR値を移動・交換する場合でも、物理位置まで一緒に移動させてはいけません。
+既存の未コミット差分を保持し、開始時と終了時のstatus/diffを確認します。明示指示なしのstaging、commit、push、reset、revert、checkoutによる変更破棄、無関係なformat/refactorは禁止です。
 
----
-
-### 3. Crop correspondence
-
-crop / `fieldPreview` は常に意図した帳票上の物理領域を指さなければなりません。
-
-値を入れ替えた結果としてcropまで別位置へ移動する実装は禁止します。
-
----
-
-### 4. OpenAI association
-
-OpenAIから返された値は、association検証を通過した場合だけ対象fieldへ受け入れてください。
-
-以下だけを根拠に値を信用してはいけません。
-
-- 配列位置
-- 応答順序
-- compact IDだけ
-- 前後の文字内容
-- 「この値ならこの項目だろう」という意味的推測
-
-association evidenceが期待値と一致しない場合は、安全側へ失敗させてください。
-
-誤った可能性がある値を別fieldへ保存してはいけません。
-
----
-
-### 5. Association mismatch
-
-association mismatchが発生した場合は、誤対応した値を保存しないでください。
-
-既存の安全側の処理を維持してください。
-
-association mismatchを無視したり、warningだけにして値を通過させたりしてはいけません。
-
----
-
-### 6. 値ずれの帳尻合わせ禁止
-
-OCR mappingのずれを修正するために以下を行ってはいけません。
-
-- 空欄OCR結果を削除する
-- 後続値を1つ前へずらす
-- 後続値を1つ後ろへずらす
-- 前後セルの値をコピーする
-- 配列indexだけを使って再割り当てする
-- 文字内容から対象fieldを推測する
-
-見た目上正しくなっても、provenanceを破壊するため禁止します。
-
----
-
-### 7. Review transformation
-
-ReviewPage向けの表示変換やグループ化は、OCR-to-cell identityを変更してはいけません。
-
-表示上まとめることと、内部field identityをまとめることを混同しないでください。
-
----
-
-### 8. Review row movement
-
-Review上で値を行移動する場合、認識結果に属するデータは一体として移動させます。
-
-例：
-
-- `raw`
-- current value
-- `normalized`
-- `status`
-- `alternatives`
-- `reviewReason`
-- warning / review item情報
-
-一方で物理セルidentityは行位置側へ固定します。
-
-認識文字列だけを移動し、判定やwarningを元位置へ残すことは禁止します。
-
----
-
-### 9. Diagnostics
-
-既存OCR diagnosticsは、明示的な置き換えを設計・実装・テストしない限り維持してください。
-
-diagnosticsを削除して原因追跡能力を低下させないでください。
-
----
-
-## Required verification
-
-OCR-sensitive変更を行う場合は、
-
-`docs/ocr-safety-contract.md`
-
-に定義されたOCR contract verificationを必ず実行してください。
-
-### 検証基盤がまだ存在しない場合
-
-`scripts/verify_ocr_contract.py`、`backend/tests/ocr_contract/`、またはGolden replay基盤がまだ存在しない場合、それらを存在するコマンドや実行済み検証として扱ってはいけません。
-
-その場合は、現在存在するOCR関連テストを変更前後で実行し、未実装の検証基盤と未検証範囲を完了報告に明記してください。将来これらが実装された後は、該当する専用検証を必須とします。
-
-最低限、変更内容に応じて以下を確認してください。
-
-- OCR unit tests
-- association tests
-- Golden replay tests
-- mapping identity tests
-- `mappedCells` tests
-- `reviewStructure` tests
-- persistence tests
-- backend regression tests
-- `git diff --check`
-
-必要な検証を実行できなかった場合は、
-
-「OCR安全性を完全には検証できていない」
-
-ことを明示してください。
-
----
-
-## Test protection
-
-OCR contract tests、Golden tests、回帰テストを、実装を通す目的だけで以下のように変更してはいけません。
-
-- 削除
-- skip
-- assertion弱体化
-- fixtureを都合のよいデータへ変更
-- expected resultを理由なく現在出力へ合わせる
-
-テストが失敗した場合は、まず実装がOCR契約を破壊していないか確認してください。
-
----
-
-## UI-only tasks
-
-UIだけの変更では、原則としてOCR coreを変更しないでください。
-
-例えば以下の変更は、通常OCR core変更を必要としません。
-
-- CSS
-- レイアウト
-- ポップオーバー
-- ボタン
-- 表示名
-- visual grouping
-- accessibility
-- frontend-only interaction
-
-UI変更のためにOCR内部のmapping、provider、association、crop、schema等を変更しようとしている場合は、本当に必要か再確認してください。
-
-OCR契約を維持した設計を優先してください。
-
----
-
-## Intentional OCR contract changes
-
-ユーザーが明示的にOCR仕様変更を要求し、その結果としてOCR不変条件やデータ契約を意図的に変更する場合は、以下を必須とします。
-
-1. `docs/ocr-safety-contract.md` を更新する
-2. 新しい契約を証明する回帰テストを追加または更新する
-3. 変更前の契約と変更後の契約を明示する
-4. 影響範囲を説明する
-5. Golden fixtureへの影響を確認する
-6. 必要に応じて実API smoke testを実施する
-7. 完了報告でOCR contract変更であることを明記する
-
-暗黙的にOCR contractを変更してはいけません。
-
----
-
-## Prompt / Model / Schema changes
-
-以下の変更もOCRロジック変更として扱ってください。
-
-- OpenAI model変更
-- OCR prompt変更
-- prompt version変更
-- structured-output schema変更
-- association schema変更
-- provider request形式変更
-- image preprocessing変更
-
-コードロジックを変更していなくてもOCR結果やmapping契約へ影響する可能性があります。
-
-必ずOCR-sensitive変更として検証してください。
-
----
-
-## Live API usage
-
-OCR contract検証では、可能な限り保存済みprovider responseやGolden fixtureを使用してください。
-
-毎回OpenAI APIを呼び出す必要はありません。
-
-推奨順序：
-
-1. unit tests
-2. Golden replay
-3. integration tests
-4. backend regression tests
-5. 必要な場合のみ実OpenAI API smoke test
-
-実APIを使用する場合は、以下を記録してください。
-
-- 呼び出し目的
-- API呼び出し回数
-- association mismatch件数
-- association誤対応件数
-- 単純な文字認識誤り
-
-文字認識誤りとmapping / association誤対応を混同しないでください。
-
----
-
-## Git protection
-
-OCR-sensitive作業では、既存の未コミット変更を保護してください。
-
-明示的な指示がない限り以下を行わないでください。
-
-- `git reset`
-- `git revert`
-- checkoutによる既存変更破棄
-- commit
-- push
-- staging
-- unrelated formatting
-- unrelated refactor
-
-変更前後で`git status`と必要なdiffを確認してください。
-
----
-
-## Completion report requirements
-
-OCR-sensitive変更を行った場合、完了報告には最低限以下を含めてください。
-
-1. 変更したOCR-sensitiveファイル
-2. 影響したOCR invariant
-3. physical identityを変更したか
-4. mapping identityを変更したか
-5. provider associationを変更したか
-6. crop / boundingBox契約を変更したか
-7. 実行したOCR contract tests
-8. Golden resultに差分があったか
-9. backend regression結果
-10. 実OpenAI APIを使用したか
-11. API使用回数
-12. association mismatch件数
-13. 残っている不確実性
-
-OCR動作を変更する意図がなかった場合は、
-
-「既存OCR contractを維持した」
-
-ことを明記してください。
-
----
-
-## 最重要原則
-
-OCRの正しさを、
-
-「画面上の文字がそれらしく見える」
-
-ことだけで判断してはいけません。
-
-このシステムでは、
-
-`document image`
-→ `crop`
-→ physical cell
-→ mapping identity
-→ provider request
-→ provider response
-→ association
-→ expanded result
-→ `mappedCells`
-→ `ReviewPage`
-→ persisted correction
-
-の対応関係が維持されて初めてOCRが正しいと判断します。
-
-文字列が正しくてもidentityが壊れていればOCR回帰です。
-
-不確かな場合は推測で補正せず、安全側へ失敗させてください。
+完了報告には変更ファイル、原因・変更境界、検証コマンドと結果、未検証範囲を記載します。OCR-sensitive変更ではSafety Contract §11の報告事項も含めます。OCR挙動を変えていない場合は、根拠とともに「既存OCR contractを維持した」と明記してください。
