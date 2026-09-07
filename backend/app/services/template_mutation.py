@@ -8,10 +8,45 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppError
+from app.db.models import TemplateVersion
+
 LAYOUT_INPUT_REVISION_KEY = "layoutInputRevision"
 LAYOUT_VERIFICATION_FINGERPRINT_KEY = "layoutVerificationFingerprint"
 
 _TEMPLATE_MUTATION_LOCK = RLock()
+
+
+def require_draft(version: TemplateVersion) -> None:
+    if version.status != "DRAFT" or version.approved_at is not None:
+        raise AppError(status=409, code="TEMPLATE_VERSION_IMMUTABLE",
+                       title="Published template cannot be edited",
+                       detail="公開済みの版は変更できません。編集から下書きを作成してください。")
+
+
+def require_isolated_ids(version: TemplateVersion, ids: list[str]) -> None:
+    protected = set(version.quality_json.get("protectedPhysicalIds", []))
+    if protected.intersection(ids):
+        raise AppError(status=409, code="TEMPLATE_PHYSICAL_ID_SHARED",
+                       title="Physical identity belongs to an earlier version",
+                       detail="過去版の矩形・mapping IDは編集用下書きで再利用できません。")
+
+
+def require_isolated_structure(version: TemplateVersion, value: Any) -> None:
+    ids: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            if isinstance(item.get("id"), str):
+                ids.append(item["id"])
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    require_isolated_ids(version, ids)
 
 
 @contextmanager

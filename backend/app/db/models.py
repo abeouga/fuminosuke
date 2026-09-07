@@ -207,6 +207,28 @@ class TemplateVersion(Base):
     rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TemplateLogicalField(Base):
+    __tablename__ = "template_logical_fields"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False
+    )
+
+
+class TemplateFieldIdentity(Base):
+    __tablename__ = "template_field_identities"
+
+    template_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("template_versions.id", ondelete="CASCADE"), primary_key=True
+    )
+    mapping_id: Mapped[str] = mapped_column(String(220), primary_key=True)
+    logical_field_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("template_logical_fields.id"), nullable=False
+    )
+    present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class TemplateDefinitionRevision(Base):
     __tablename__ = "template_definition_revisions"
     __table_args__ = (

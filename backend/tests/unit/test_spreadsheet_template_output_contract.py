@@ -1029,6 +1029,11 @@ def test_invalid_merge_save_leaves_template_and_source_unchanged(
         with case.database.session() as session:
             version = session.get(TemplateVersion, case.version_id)
             assert version is not None
+            # Layout writes now belong to an unpublished draft. Keep exercising
+            # merge validation, independently of the published-version guard.
+            version.status = "DRAFT"
+            version.approved_at = None
+            session.commit()
             original = copy.deepcopy(version.layout_json)
             quality = copy.deepcopy(version.quality_json)
         proposed = LayoutDefinition.model_validate(_imported_anchor_layout("H16", "M16", "S16"))

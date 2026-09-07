@@ -511,11 +511,26 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     approve = client.post(f"/api/v1/template-versions/{version_id}/approve")
     assert approve.status_code == 200
     assert approve.json()["status"] == "ACTIVE"
+    original_version_id = version_id
+    # Published content is immutable; subsequent edits use one isolated draft.
+    immutable = client.put(
+        f"/api/v1/template-versions/{version_id}/field-mappings",
+        json={"mappings": save_mapping.json()["mappings"]},
+    )
+    assert immutable.status_code == 409
+    assert immutable.json()["code"] == "TEMPLATE_VERSION_IMMUTABLE"
+    forked = client.post(f"/api/v1/template-versions/{version_id}/edit")
+    assert forked.status_code == 200
+    version_id = forked.json()["id"]
+    template_job_id = forked.json()["sourceJobId"]
+    draft_configuration = client.get(
+        f"/api/v1/template-versions/{version_id}/field-mappings"
+    ).json()
     active_mapping = client.put(
         f"/api/v1/template-versions/{version_id}/field-mappings",
         json={
-            "mappings": save_mapping.json()["mappings"],
-            "documentIdentity": save_mapping.json()["documentIdentity"],
+            "mappings": draft_configuration["mappings"],
+            "documentIdentity": draft_configuration["documentIdentity"],
         },
     )
     assert active_mapping.status_code == 200
@@ -533,7 +548,7 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
         files=[("file", ("filled.png", filled, "image/png"))],
     )
     assert blocked.status_code == 409
-    assert blocked.json()["code"] == "TEMPLATE_LAYOUT_NOT_VERIFIED"
+    assert blocked.json()["code"] == "INVALID_STATE_TRANSITION"
 
     reverified = client.post(
         f"/api/v1/template-versions/{version_id}/layout/verify"
@@ -552,7 +567,7 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     assert saved_mask.json()["artifactName"] == "handwritingMaskEdited"
 
     edited_state = client.get(f"/api/v1/templates/{templates[0]['id']}").json()
-    assert edited_state["versions"][0]["status"] == "ACTIVE"
+    assert edited_state["versions"][0]["status"] == "DRAFT"
     assert edited_state["versions"][0]["quality"]["layoutVerified"] is False
     assert edited_state["versions"][0]["quality"]["editedMaskApplied"] is False
 
@@ -569,7 +584,7 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
 
     verified_state = client.get(f"/api/v1/templates/{templates[0]['id']}").json()
     verified_quality = verified_state["versions"][0]["quality"]
-    assert verified_state["versions"][0]["status"] == "ACTIVE"
+    assert verified_state["versions"][0]["status"] == "DRAFT"
     assert verified_quality["layoutVerified"] is True
     assert verified_quality["layoutVerificationDetector"] == "opencv"
     assert verified_quality["handwritingMaskSource"] == "USER_EDITED"
@@ -615,6 +630,13 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     assert source_normalized is not None
     assert source_clean is not None
     assert np.any(source_normalized[edited_mask > 0] != source_clean[edited_mask > 0])
+
+    published = client.post(f"/api/v1/template-versions/{version_id}/approve")
+    assert published.status_code == 200
+    history = client.get(f"/api/v1/templates/{templates[0]['id']}").json()
+    assert history["activeVersionId"] == version_id
+    original = next(v for v in history["versions"] if v["id"] == original_version_id)
+    assert original["status"] == "ARCHIVED"
 
     extract = client.post(
         "/api/v1/ocr-jobs",

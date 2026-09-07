@@ -15,7 +15,11 @@ export function useJobPoller(
   terminalCallback.current = onTerminal;
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId) {
+      setJob(null);
+      setConnectionLost(false);
+      return;
+    }
     let stopped = false;
     let timer = 0;
     let delay = 1000;

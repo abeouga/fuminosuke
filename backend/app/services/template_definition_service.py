@@ -65,8 +65,11 @@ class TemplateDefinitionService:
             return [self._view(row) for row in rows]
 
     async def generate(self, version_id: str) -> TemplateDefinitionRevisionView:
+        from app.services.template_mutation import require_draft
+
         with self._database.session() as session:
             version = self._require_version(session, version_id)
+            require_draft(version)
             template = session.get(Template, version.template_id)
             layout = self._parse_layout(version)
             template_name = template.name if template is not None else "帳票"
@@ -213,6 +216,10 @@ class TemplateDefinitionService:
         with template_mutation_lock(), self._database.session() as session:
             begin_immediate(session)
             version = self._require_version(session, version_id)
+            from app.services.template_mutation import require_draft, require_isolated_structure
+
+            require_draft(version)
+            require_isolated_structure(version, definition.model_dump(mode="json", by_alias=True))
             layout_cell_ids = {
                 str(cell.get("id"))
                 for cell in version.layout_json.get("cells", [])

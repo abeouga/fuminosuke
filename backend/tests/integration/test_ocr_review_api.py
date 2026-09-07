@@ -714,7 +714,23 @@ def test_openai_rejects_active_template_without_field_mappings(
             f"/api/v1/template-versions/{version_id}/field-mappings",
             json={"mappings": []},
         )
-        assert cleared.status_code == 200
+        assert cleared.status_code == 409
+        assert cleared.json()["code"] == "TEMPLATE_VERSION_IMMUTABLE"
+        # Preserve the malformed legacy-template acceptance test. Public edits
+        # can no longer create this condition, so inject the corrupt disk config.
+        import yaml
+
+        with openai_client.app.state.database.session() as session:
+            version = session.get(TemplateVersion, version_id)
+            assert version is not None
+            config_path = version.config_relative_path
+        storage = openai_client.app.state.storage
+        config = yaml.safe_load(storage.read_bytes(config_path))
+        config["fieldMappings"] = []
+        config["documentIdentity"] = None
+        config["documentIdentityFields"] = []
+        config["documentName"] = None
+        storage.write_text(config_path, yaml.safe_dump(config, allow_unicode=True))
 
         image = encode_png(ledger_image(handwriting_seed=8))
         created = openai_client.post(

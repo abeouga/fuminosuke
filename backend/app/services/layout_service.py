@@ -185,7 +185,7 @@ class LayoutService:
                 entry.target_path: entry
                 for entry in [*restored.label_pool, *current_layout.label_pool]
             }
-            return restored.model_copy(
+            restored = restored.model_copy(
                 update={
                     "label_pool": list(label_pool_by_path.values()),
                     "warnings": [
@@ -195,6 +195,7 @@ class LayoutService:
                 },
                 deep=True,
             )
+            return self._isolate_detected_layout(version, restored)
         encoded = np.frombuffer(self._storage.read_bytes(relative_path), dtype=np.uint8)
         bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if bgr is None:
@@ -206,10 +207,22 @@ class LayoutService:
             )
         image_rgb = np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
         detected = self._detector.detect(image_rgb)
-        return detected.model_copy(
+        detected = detected.model_copy(
             update={"label_pool": current_layout.label_pool},
             deep=True,
         )
+        return self._isolate_detected_layout(version, detected)
+
+    @staticmethod
+    def _isolate_detected_layout(
+        version: TemplateVersion, layout: LayoutDefinition,
+    ) -> LayoutDefinition:
+        if not version.quality_json.get("forkParentVersionId"):
+            return layout
+        from app.services.template_version_service import fork_layout
+
+        raw, _ = fork_layout(layout.model_dump(mode="json", by_alias=True))
+        return LayoutDefinition.model_validate(raw)
 
     def recognize_labels(
         self,
@@ -289,6 +302,10 @@ class LayoutService:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._not_found()
+            from app.services.template_mutation import require_draft, require_isolated_structure
+
+            require_draft(version)
+            require_isolated_structure(version, layout.model_dump(mode="json", by_alias=True))
             if (
                 layout.canonical_width != version.canonical_width
                 or layout.canonical_height != version.canonical_height
@@ -656,6 +673,9 @@ class LayoutService:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._not_found()
+            from app.services.template_mutation import require_draft
+
+            require_draft(version)
             layout = (
                 LayoutDefinition.model_validate(version.layout_json)
                 if version.layout_json
@@ -677,6 +697,7 @@ class LayoutService:
                 version.quality_json,
                 bump_input_revision=False,
             )
+            version.quality_json = {**version.quality_json, "layoutVerificationInProgress": True}
             session.commit()
         return _VerificationInputs(layout=layout, fingerprint=fingerprint)
 
@@ -718,6 +739,7 @@ class LayoutService:
                 "layoutVerificationPaddleOcr": finalization.paddle_ocr_available,
                 "layoutVerificationCandidateCount": finalization.candidate_count,
                 "layoutVerified": True,
+                "layoutVerificationInProgress": False,
                 "layoutVerificationDetector": finalization.detector,
                 LAYOUT_VERIFICATION_FINGERPRINT_KEY: expected_fingerprint,
             }

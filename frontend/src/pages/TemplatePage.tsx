@@ -199,7 +199,7 @@ export function TemplatePage({
     idempotencyKeyRef.current = null;
   };
   if (review) {
-    return <TemplateReview
+    return <TemplateReviewGate
       version={review.version}
       jobId={review.jobId}
       closeLabel={review.returnToReading ? "← 読み取りへ戻る" : undefined}
@@ -395,9 +395,12 @@ export function TemplatePage({
               ? "XLSX・最初の表示シートからテンプレート案を作成"
               : "PNG / JPEG / WebP / TIFF・最大20 MB"}
             onChange={(nextFiles) => {
-            idempotencyKeyRef.current = null;
-            setFiles(nextFiles);
-          }} />
+              idempotencyKeyRef.current = null;
+              if (mode === "SPREADSHEET_TEMPLATE" && nextFiles[0]) {
+                setName(nextFiles[0].name.replace(/\.xlsx$/i, ""));
+              }
+              setFiles(nextFiles);
+            }} />
           <button className="primary full" disabled={busy || submissionLocked || !templateName || !requiredCountValid || Boolean(duplicateTemplate)} onClick={async () => {
             if (creatingRef.current || submissionLocked) return;
             creatingRef.current = true;
@@ -619,6 +622,32 @@ export function TemplatePage({
 type ReviewFeedback = { kind: "success" | "error"; text: string };
 type DecisionAction = "reject" | "reprocess" | "approve";
 
+function TemplateReviewGate(props: Parameters<typeof TemplateReview>[0]) {
+  const [draft, setDraft] = useState<TemplateVersion | null>(
+    props.version.status === "DRAFT" ? props.version : null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (props.version.status === "DRAFT") return;
+    let cancelled = false;
+    setError(null);
+    void api.editTemplateVersion(props.version.id).then((version) => {
+      if (!cancelled) setDraft(version);
+    }).catch((reason) => {
+      if (!cancelled) setError(errorMessage(reason, "編集用の下書きを開けませんでした。"));
+    });
+    return () => { cancelled = true; };
+  }, [props.version.id, props.version.status, attempt]);
+  if (!draft) return <section className="form-card">
+    {error ? <><p className="error-box" role="alert">{error}</p>
+      <button onClick={() => setAttempt((value) => value + 1)}>再試行</button></>
+      : <p role="status">編集用の下書きを準備しています…</p>}
+    <button className="ghost" onClick={props.onClose}>戻る</button>
+  </section>;
+  return <TemplateReview {...props} version={draft} jobId={draft.sourceJobId ?? props.jobId} />;
+}
+
 function TemplateReview({
   version,
   jobId,
@@ -650,6 +679,7 @@ function TemplateReview({
   const [documentNameRule, setDocumentNameRule] = useState<DocumentNameRule | null>(null);
   const [maskRequiresReprocess, setMaskRequiresReprocess] = useState(
     version.status === "DRAFT"
+      && !version.quality.forkParentVersionId
       && Boolean(version.quality.editedMaskSha256)
       && version.quality.layoutVerified !== true,
   );
@@ -824,7 +854,7 @@ function TemplateReview({
   };
   return (
     <div className="page-stack">
-      <header className="page-header split"><div><span className="eyebrow">TEMPLATE {version.status === "ACTIVE" ? "FIELD SETTINGS" : "REVIEW"} · V{version.versionNumber}</span><h1>{version.status === "ACTIVE" ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={operationBusy} onClick={closeReview}>{closeLabel}</button></header>
+      <header className="page-header split"><div><span className="eyebrow">TEMPLATE REVIEW · V{version.versionNumber}</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={operationBusy} onClick={closeReview}>{closeLabel}</button></header>
       <div className="template-lifecycle-status" aria-label="テンプレート設定の状態">
         <div className="done"><span>前処理</span><strong>画像準備済み</strong></div>
         <div className={meaningSaved ? "done" : "current"}><span>現在</span><strong>{meaningSaved ? "テンプレート設定保存済み" : `テンプレート設定中 · ${activeLayoutStep.shortTitle}`}</strong></div>
@@ -1008,7 +1038,7 @@ function TemplateReview({
       }}>{verifying ? (isSpreadsheetTemplate ? "確定中…" : "再検出中…") : (isSpreadsheetTemplate ? "XLSX構造を確定" : "記入欄を再検出")}</button></section>}
       {mask && layoutVerified && mappingFresh && <section className="form-card"><div className="section-title"><div><span className="eyebrow">DETECTION REVIEW</span><h2>再検出した文字候補の選別</h2><p>保存済みの記入欄内をOpenCVで再検証した候補です。任意の文字認識機能がある場合は候補を補助します。</p></div></div>{editorDirty && <p className="inline-warning">先にレイアウト変更を保存し、記入欄を再検出してください。</p>}<MaskEditor source={mask} background={before} candidatesSource={byName.get("handwritingCandidates")} disabled={editorDirty || editorBusy} onDirtyChange={setMaskDirty} onBusyChange={setMaskBusy} onSave={async (blob) => {
         await api.saveMask(version.id, blob);
-        if (version.status === "DRAFT") {
+        if (version.status === "DRAFT" && !version.quality.forkParentVersionId) {
           setMaskRequiresReprocess(true);
           setFeedback({ kind: "success", text: "選別結果を保存しました。「選別マスクから再生成」で新しい下書きへ反映してください。" });
         } else {
@@ -1017,7 +1047,20 @@ function TemplateReview({
         }
       }} /></section>}
       {feedback && <p className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</p>}
-      {version.status === "DRAFT" ? <div className="decision-bar"><div><strong>このテンプレート設定を採用しますか？</strong><span>{editorDirty || maskDirty || identityDirty || documentNameDirty ? "未保存の変更があります。保存してから次へ進んでください。" : maskRequiresReprocess ? "保存した選別マスクから新しい下書きを再生成してください。" : "意味づけを保存し、記入欄を再検出してから承認してください。"}</span></div><button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>{decisionBusy === "reject" ? "却下中…" : "却下"}</button><button className="secondary" disabled={operationBusy || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved} onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button><button className="primary" disabled={operationBusy || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved} onClick={() => void approveVersion()}>{decisionBusy === "approve" ? "承認中…" : "承認して有効化"}</button></div> : <div className="decision-bar"><div><strong>有効テンプレートを編集中</strong><span>{editorDirty || maskDirty || identityDirty || documentNameDirty ? "未保存の変更があります。" : "保存済みの矩形設定は次に開始するOCRから使われます。"}</span></div><button className="primary" disabled={operationBusy} onClick={closeReview}>設定を閉じる</button></div>}
+      {version.status === "DRAFT" && <div className="decision-bar">
+        <div><strong>このテンプレート設定を採用しますか？</strong>
+          <span>{editorDirty || maskDirty || identityDirty || documentNameDirty
+            ? "未保存の変更があります。保存してから次へ進んでください。"
+            : "設定を保存し、読み取り確認を完了してから承認してください。"}</span></div>
+        <button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>
+          {decisionBusy === "reject" ? "却下中…" : "却下"}</button>
+        {!version.quality.forkParentVersionId && <button className="secondary"
+          disabled={operationBusy || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved}
+          onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button>}
+        <button className="primary"
+          disabled={operationBusy || editorDirty || identityDirty || documentNameDirty || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved}
+          onClick={() => void approveVersion()}>{decisionBusy === "approve" ? "承認中…" : "承認して有効化"}</button>
+      </div>}
     </div>
   );
 }

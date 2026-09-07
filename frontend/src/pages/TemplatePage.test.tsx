@@ -171,6 +171,50 @@ async function openDraftReview() {
   await waitFor(() => expect(screen.getByRole("button", { name: "承認して有効化" })).toBeEnabled());
 }
 
+test("active editing opens and reuses the server draft without saving the active version", async () => {
+  const active = { ...draftVersion, id: "version-active", status: "ACTIVE" as const,
+    versionNumber: 1, sourceJobId: "job-active" };
+  const draft = { ...draftVersion, quality: { layoutVerified: true, forkParentVersionId: active.id } };
+  const fallback = reviewFetch();
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/version-active/edit")) return Promise.resolve(jsonResponse(draft));
+    return fallback(input, init);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const props = { templates: [{ ...draftTemplate, versions: [active], activeVersionId: active.id }],
+    refresh: vi.fn(async () => undefined), rememberJob: vi.fn(), initialEditVersionId: active.id };
+  const view = render(<TemplatePage {...props} />);
+  await screen.findByRole("button", { name: "承認して有効化" });
+  expect(screen.queryByRole("button", { name: "選別マスクから再生成" })).not.toBeInTheDocument();
+  await waitFor(() => expect(fetch.mock.calls.some(
+    ([url]) => String(url).endsWith("/version-draft/layout"),
+  )).toBe(true));
+  expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/version-active/layout"))).toBe(false);
+  view.unmount();
+  render(<TemplatePage {...props} />);
+  await screen.findByRole("button", { name: "承認して有効化" });
+  expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/version-active/edit"))).toHaveLength(2);
+});
+
+test("failed draft creation leaves the active version unopened and can be retried", async () => {
+  const active = { ...draftVersion, id: "version-active", status: "ACTIVE" as const };
+  const fallback = reviewFetch();
+  let fail = true;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/version-active/edit")) {
+      return Promise.resolve(fail ? jsonResponse({ detail: "作成失敗" }, 409) : jsonResponse(draftVersion));
+    }
+    return fallback(input, init);
+  }));
+  render(<TemplatePage templates={[{ ...draftTemplate, versions: [active] }]}
+    refresh={vi.fn(async () => undefined)} rememberJob={vi.fn()} initialEditVersionId={active.id} />);
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "承認して有効化" })).not.toBeInTheDocument();
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+  await screen.findByRole("button", { name: "承認して有効化" });
+});
+
 test("removes a stale missing-identity warning when the current compound fields are ready", () => {
   const fields: DocumentIdentity[] = [
     {
@@ -251,6 +295,27 @@ test("shows the supported image and spreadsheet creation modes in order", () => 
 
   const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
   expect(fileInput).not.toHaveAttribute("multiple");
+});
+
+test("prefills an editable template name from the selected XLSX filename", () => {
+  const { container } = render(
+    <TemplatePage templates={[]} refresh={vi.fn()} rememberJob={vi.fn()} />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: /元のExcelから/ }));
+  const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+  fireEvent.change(fileInput!, {
+    target: {
+      files: [new File(["xlsx"], "繁殖台帳.XLSX", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      })],
+    },
+  });
+
+  const nameInput = screen.getByLabelText("テンプレート名");
+  expect(nameInput).toHaveValue("繁殖台帳");
+  fireEvent.change(nameInput, { target: { value: "繁殖台帳 2026年版" } });
+  expect(nameInput).toHaveValue("繁殖台帳 2026年版");
 });
 
 test("separates new creation from existing-template maintenance", () => {
@@ -559,6 +624,54 @@ test("shows a retryable error when the prepared template cannot be found", async
 
   expect(await screen.findByRole("alert")).toHaveTextContent("確認対象のテンプレートを見つけられませんでした。");
   expect(screen.getByRole("button", { name: "確認画面を再取得" })).toBeEnabled();
+});
+
+test("clears the completed preparation progress after rejecting its draft", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const preparedVersion = { ...draftVersion, sourceJobId: "template-job-1" };
+  const preparedTemplate = { ...draftTemplate, versions: [preparedVersion] };
+  const fallback = reviewFetch(
+    "/template-versions/version-draft/reject",
+    () => Promise.resolve(jsonResponse({})),
+  );
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/template-jobs") && init?.method === "POST") {
+      return Promise.resolve(jsonResponse({ jobId: "template-job-1" }, 202));
+    }
+    if (path.endsWith("/jobs/template-job-1")) {
+      return Promise.resolve(jsonResponse(job("REVIEW_REQUIRED")));
+    }
+    if (path.endsWith("/templates") && init?.method !== "POST") {
+      return Promise.resolve(jsonResponse([preparedTemplate]));
+    }
+    if (path.endsWith("/templates/template-draft")) {
+      return Promise.resolve(jsonResponse(preparedTemplate));
+    }
+    if (path.endsWith("/jobs/template-job-1/artifacts")) {
+      return Promise.resolve(jsonResponse({
+        items: [{ name: "normalized", mediaType: "image/png", url: "/source.png" }],
+      }));
+    }
+    return fallback(input, init);
+  }));
+  const { container } = render(
+    <TemplatePage templates={[]} refresh={vi.fn().mockResolvedValue(undefined)} rememberJob={vi.fn()} />,
+  );
+
+  fireEvent.change(screen.getByLabelText("テンプレート名"), {
+    target: { value: "繁殖台帳A" },
+  });
+  selectTemplateImage(container);
+  fireEvent.click(screen.getByRole("button", { name: "テンプレート準備を開始" }));
+  await screen.findByRole("button", { name: "承認して有効化" });
+  fireEvent.click(screen.getByRole("button", { name: "却下" }));
+
+  await screen.findByRole("heading", { name: "新しいテンプレートを作成" });
+  await waitFor(() => {
+    expect(screen.queryByText("処理を準備しています")).not.toBeInTheDocument();
+    expect(container.querySelector(".progress-card")).not.toBeInTheDocument();
+  });
 });
 
 test("identifies same-day drafts by time and a short ID in their accessible names", () => {

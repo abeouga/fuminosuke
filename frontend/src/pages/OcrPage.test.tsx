@@ -437,6 +437,12 @@ test("opens the existing template import dialog from the add card", () => {
 test("keeps the reading draft while directly editing a template from its card", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
+    if (path.endsWith("/edit")) {
+      return new Response(JSON.stringify({ ...templates[0].versions[0],
+        id: "editing-draft", status: "DRAFT", versionNumber: 2,
+        quality: { layoutVerified: false, forkParentVersionId: templates[0].versions[0].id },
+      }), { status: 200 });
+    }
     if (path.includes("/artifacts")) {
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     }
@@ -487,7 +493,7 @@ test("keeps the reading draft while directly editing a template from its card", 
   fireEvent.click(screen.getByRole("button", { name: "戻る" }));
   fireEvent.click(screen.getByRole("button", { name: "繁殖台帳Aの設定を確認・修正" }));
 
-  expect(screen.getByRole("heading", { name: "読み取る欄を設定" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "読み取る欄を設定" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "← 読み取りへ戻る" }));
   await waitFor(() => expect(screen.getByRole("heading", { name: "書類を読み取る" })).toBeInTheDocument());
 

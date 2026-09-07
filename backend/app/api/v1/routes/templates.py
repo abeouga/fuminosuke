@@ -390,6 +390,31 @@ def _version_view(version: TemplateVersion) -> TemplateVersionView:
     )
 
 
+@router.post("/template-versions/{version_id}/edit", response_model=TemplateVersionView,
+             response_model_by_alias=True)
+def edit_template_version(request: Request, version_id: str) -> TemplateVersionView:
+    from app.services.template_version_service import TemplateVersionService
+
+    return _version_view(TemplateVersionService(
+        request.app.state.database, request.app.state.storage,
+    ).edit(version_id))
+
+
+@router.get("/template-versions/{version_id}/field-identities")
+def get_template_field_identities(request: Request, version_id: str) -> dict[str, str]:
+    from app.services.template_field_identity import identities
+
+    mappings = TemplateManagementService(
+        request.app.state.database, request.app.state.storage,
+    ).get_field_mappings(version_id)[2]
+    with request.app.state.database.session() as session:
+        version = TemplateRepository(session).get_version(version_id)
+        if version is None:
+            raise AppError(status=404, code="TEMPLATE_NOT_FOUND", title="Template not found",
+                           detail="テンプレート版がありません。")
+        return identities(session, version, mappings)
+
+
 @router.get("/templates", response_model=list[TemplateView], response_model_by_alias=True)
 def list_templates(request: Request) -> list[TemplateView]:
     with request.app.state.database.session() as session:
@@ -745,6 +770,13 @@ async def update_template_boundary(
     response_model_by_alias=True,
 )
 def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
+    from app.services.template_mutation import template_mutation_lock
+
+    with template_mutation_lock():
+        return _approve_template_version(request, version_id)
+
+
+def _approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
     with request.app.state.database.session() as session:
         if TemplatePackageActivationService.imported_installation_for_version(
             session,
@@ -1094,6 +1126,10 @@ async def reprocess_template_version(request: Request, version_id: str) -> JobAc
                 title="Template version cannot be reprocessed",
                 detail="DRAFTテンプレート版だけを再処理できます。",
             )
+        if version.quality_json.get("forkParentVersionId"):
+            raise AppError(status=409, code="TEMPLATE_DRAFT_REPROCESS_UNSUPPORTED",
+                           title="Verify the editing draft instead",
+                           detail="編集用下書きは記入欄の再検出で確定してください。")
         source_job_id = version.source_job_id
         job_repository = JobRepository(session)
         source_job = job_repository.get(source_job_id)

@@ -24,6 +24,8 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     assert {
         "templates",
         "template_versions",
+        "template_logical_fields",
+        "template_field_identities",
         "processing_jobs",
         "job_inputs",
         "job_artifacts",
@@ -54,7 +56,7 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0030_template_package_drive_sync"
+            "0031_template_field_identity"
         )
     package_identity_columns = {
         column["name"]
@@ -607,6 +609,48 @@ def test_drive_sync_sqlite_downgrade_preserves_ledger_page_history(
         assert connection.scalar(text(
             "SELECT COUNT(*) FROM ledger_document_pages WHERE id='page-downgrade'"
         )) == 1
+
+
+def test_field_identity_migration_preserves_legacy_version_and_job(monkeypatch, tmp_path):
+    from sqlalchemy.orm import Session
+
+    from app.db.models import ProcessingJob, Template, TemplateVersion
+
+    database_path, config = _migration_database(monkeypatch, tmp_path, "field-identity")
+    command.upgrade(config, "0030_template_package_drive_sync")
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    with Session(engine) as session:
+        template = Template(name="既存帳票", document_type="default")
+        job = ProcessingJob(
+            job_type="PREPARE_TEMPLATE", status="CONFIRMED", request_hash="a" * 64,
+            config_snapshot_json={"fieldMappings": [{"mappingId": "old"}]},
+            template_snapshot_bytes=b"legacy snapshot",
+        )
+        session.add_all([template, job])
+        session.flush()
+        version = TemplateVersion(
+            template_id=template.id, source_job_id=job.id, version_number=1,
+            mode="BLANK_TEMPLATE", status="ACTIVE", canonical_width=100,
+            canonical_height=100, clean_template_artifact_id="legacy-artifact",
+            config_relative_path="legacy.yaml", layout_json={"cells": [{"id": "old"}]},
+            quality_json={"layoutVerified": True},
+        )
+        session.add(version)
+        session.flush()
+        template.active_version_id = version.id
+        session.commit()
+    with engine.connect() as connection:
+        before = {
+            table: connection.execute(text(f"SELECT * FROM {table}")).all()
+            for table in ("templates", "template_versions", "processing_jobs")
+        }
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        for table, rows in before.items():
+            assert connection.execute(text(f"SELECT * FROM {table}")).all() == rows
+        assert connection.scalar(text("SELECT COUNT(*) FROM template_logical_fields")) == 0
+        assert connection.scalar(text("SELECT COUNT(*) FROM template_field_identities")) == 0
+    engine.dispose()
 
 
 def _migration_database(

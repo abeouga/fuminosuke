@@ -283,6 +283,18 @@ model・prompt・schema・provider request・association方式変更、または
 
 ## 10. OCR改善と意図的な契約変更
 
+### Template編集の版境界
+
+公開済みTemplateVersionのlayout・field mappings・mask・汎用定義を直接変更しない。
+ACTIVEからの編集は同じ原本のDRAFTを1つ作るか再開する。途中保存では版を増やさず、
+承認時にactiveを原子的に切り替える。旧版は既存のARCHIVED状態へ移行するが内容は不変。
+系列とlogicalFieldIdを継承し、mapping/cell/region/準備job/artifact identityは新版へ分離する。
+logical identityのsidecarをprovider associationの代用にしない。
+過去jobは受付snapshotを保持し、旧jobへlogical IDを後付けしたり新版から再構築したりしない。
+詳細と意図的なlifecycle変更は [Template Versioning](template-versioning.md) を参照する。
+
+### 契約変更の手順
+
 OCRコア変更には、AGENTS §5の明示されたタスク範囲、再現可能な問題または測定可能な精度課題、変更前後比較、§8の検証が必要である。コード整理・抽象化・美観・一般化・speculative optimization・将来用途だけでは変更しない。
 
 既存契約に戻す不具合修正は、不変条件の書換えを必要としない。発見した新しい境界違反は再現・原因を示して修正する。UXタスクで別のOCR不具合を発見しただけでは、依頼範囲を拡張する権限にはならない。

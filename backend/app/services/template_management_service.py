@@ -28,6 +28,9 @@ from app.repositories.template_repository import TemplateRepository
 from app.services.template_mutation import (
     begin_immediate,
     invalidated_layout_quality,
+    require_draft,
+    require_isolated_ids,
+    require_isolated_structure,
     template_mutation_lock,
 )
 from app.storage.local_storage import LocalStorageService
@@ -125,13 +128,11 @@ class TemplateManagementService:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._template_not_found()
-            if version.status not in {"DRAFT", "ACTIVE"}:
-                raise AppError(
-                    status=409,
-                    code="INVALID_STATE_TRANSITION",
-                    title="Field mappings cannot be edited",
-                    detail="矩形と項目ラベルはDRAFTまたはACTIVEテンプレートで編集してください。",
-                )
+            require_draft(version)
+            require_isolated_ids(version, [mapping.mapping_id for mapping in mappings])
+            require_isolated_structure(
+                version, [mapping.model_dump(mode="json", by_alias=True) for mapping in mappings]
+            )
             config_path = version.config_relative_path
             config_context = (
                 version.template_id,
@@ -243,6 +244,9 @@ class TemplateManagementService:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise RuntimeError("Template version disappeared")
+            from app.services.template_field_identity import reconcile
+
+            reconcile(session, version, config.field_mappings, mappings)
             version.quality_json = {
                 **invalidated_layout_quality(
                     version.quality_json,
@@ -335,6 +339,7 @@ class TemplateManagementService:
                     title="Template version not found",
                     detail="指定されたテンプレート版が見つかりません。",
                 )
+            require_draft(version)
             if (width, height) != (
                 version.canonical_width,
                 version.canonical_height,

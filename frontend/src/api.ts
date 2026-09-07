@@ -426,6 +426,8 @@ export const api = {
     });
   },
   approve: (id: string) => request(`/template-versions/${id}/approve`, { method: "POST" }),
+  editTemplateVersion: (id: string) =>
+    request<Template["versions"][number]>(`/template-versions/${id}/edit`, { method: "POST" }),
   reject: (id: string) => request(`/template-versions/${id}/reject`, { method: "POST" }),
   reprocess: (id: string) =>
     request<{ jobId: string }>(`/template-versions/${id}/reprocess`, { method: "POST" }),

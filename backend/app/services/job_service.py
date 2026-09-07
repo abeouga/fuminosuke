@@ -280,6 +280,11 @@ class JobService:
                 config=template_config,
                 generic_definition=generic_definition,
             )
+            from app.services.template_field_identity import identities
+
+            mapping_snapshot["logicalFieldIds"] = identities(
+                session, template_version, template_config.field_mappings,
+            )
             if template_version.quality_json.get(
                 "layoutVerified"
             ) is not True and not has_approved_generic_definition(template_version.quality_json):

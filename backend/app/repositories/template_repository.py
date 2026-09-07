@@ -103,11 +103,20 @@ class TemplateRepository:
         return self._session.get(TemplateVersion, version_id)
 
     def approve(self, version_id: str) -> TemplateVersion:
+        from app.services.template_mutation import begin_immediate, template_mutation_lock
+
+        with template_mutation_lock():
+            begin_immediate(self._session)
+            return self._approve_locked(version_id)
+
+    def _approve_locked(self, version_id: str) -> TemplateVersion:
         version = self.get_version(version_id)
         if version is None:
             raise self._not_found()
         if version.status != TemplateVersionStatus.DRAFT.value:
             raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
+        if version.quality_json.get("layoutVerificationInProgress"):
+            raise self._invalid_state("読み取り確認の完了後に承認してください。")
         source_job = self._session.get(ProcessingJob, version.source_job_id)
         if source_job is None or source_job.status != JobStatus.REVIEW_REQUIRED.value:
             raise self._invalid_state("元ジョブがREVIEW_REQUIREDではありません。")
@@ -154,6 +163,11 @@ class TemplateRepository:
         template = self.get_template(version.template_id)
         if template is None:
             raise self._not_found()
+        parent_id = version.quality_json.get("forkParentVersionId")
+        if parent_id and parent_id != template.active_version_id:
+            raise self._invalid_state(
+                "編集中に有効版が変更されました。現在の有効版を確認してください。"
+            )
         if template.active_version_id:
             previous = self.get_version(template.active_version_id)
             if previous is not None:
@@ -170,6 +184,13 @@ class TemplateRepository:
         return version
 
     def reject(self, version_id: str) -> TemplateVersion:
+        from app.services.template_mutation import begin_immediate, template_mutation_lock
+
+        with template_mutation_lock():
+            begin_immediate(self._session)
+            return self._reject_locked(version_id)
+
+    def _reject_locked(self, version_id: str) -> TemplateVersion:
         version = self.get_version(version_id)
         if version is None:
             raise self._not_found()
