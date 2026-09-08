@@ -9,8 +9,10 @@ from app.api.v1.routes import (
     drive,
     health,
     individual_records,
+    job_pages,
     jobs,
     ocr,
+    print_layout,
     sire_names,
     system_backups,
     template_packages,
@@ -24,8 +26,10 @@ router.include_router(auth.router)
 router.include_router(development.router)
 protected = APIRouter(dependencies=[Depends(require_authenticated_user)])
 protected.include_router(templates.router)
+protected.include_router(print_layout.router)
 protected.include_router(template_packages.router)
 protected.include_router(ocr.router)
+protected.include_router(job_pages.router)
 protected.include_router(data_search.router)
 protected.include_router(sire_names.router)
 protected.include_router(individual_records.router)

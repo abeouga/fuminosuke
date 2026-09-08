@@ -1,0 +1,1071 @@
+{
+  "schemaVersion": 1,
+  "environmentQualified": false,
+  "fingerprint": "62833b7c0e02e6ea6e7bb145ba6e1a3425987b6078fe0e3aae40ebd83f3dfd51",
+  "identity": {
+    "schemaVersion": 1,
+    "renderer": {
+      "type": "LibreOffice",
+      "version": "LibreOffice 26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34",
+      "adapter": "libreoffice-contained-diagnostic-v2",
+      "executableSha256": "6dc82122e9caf7e4c297885ee35e69bfe698b28684fe6eda3d016dd21370776c",
+      "executable": "C:\\Program Files\\LibreOffice\\program\\soffice.com",
+      "dpi": 150,
+      "pdfRasterizer": "pypdfium2",
+      "productionIsolationVerified": false,
+      "buildId": "70e089b17412e4cb7773e41413306b17a2328c34",
+      "installationFiles": [
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\abplo.dll",
+          "available": true,
+          "sha256": "cd2e38d24002aa95984a7855d5da914167b7843a3036b2cbb57476c250834427"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\affine_uno_uno.dll",
+          "available": true,
+          "sha256": "2a6eaa4e1093c22da183cd4f70ca22954ce41d6d793b2e5ede779731c08d3b61"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\Argon2OptDll.dll",
+          "available": true,
+          "sha256": "66752f23ae38c1964a2ef094aa464d435f0464d57aca35dd58a24236f86a8952"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\binaryurplo.dll",
+          "available": true,
+          "sha256": "5ec4bf1e57a46f61f2228b11092cbb0a93a189335fc29d11a4242d415c58c15e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\bootstraplo.dll",
+          "available": true,
+          "sha256": "f30a77ec20e9c62a07eef75f99dd53042fe6e4c5609c321c44796d8b5ada7594"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\calclo.dll",
+          "available": true,
+          "sha256": "ec08e2f8a72659770863971e41a448d488f70d2a94b086917699590df1251139"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\clewlo.dll",
+          "available": true,
+          "sha256": "9c13610ef701289239f0b87e797c30306e62d46c65c3741b9ae9d25f14935147"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\cli_uno.dll",
+          "available": true,
+          "sha256": "338ad7b4a4e359f910bc1a09f4642e9de846c51ddf05601adc1fbf2f3cfbf797"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\clucene.dll",
+          "available": true,
+          "sha256": "e1e66134bdacdee7d3263b1a584e9d423810366ea3682dab4accb85e5b88b0b0"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\CoinMP.dll",
+          "available": true,
+          "sha256": "5ff486910bfa395ecbd754b4c4ea35c11e9c2351ee100d0d1d73617c39d63d6e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\cppu3.dll",
+          "available": true,
+          "sha256": "056c5344a62aee451f400e7c3eb8ba1f67dbbf9fecf7221fce67c92e5b7e635c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\cppuhelper3MSC.dll",
+          "available": true,
+          "sha256": "ee33ea6e890a7ee3d1c91992c33313c6b2f07eca2d641795de1b445560769b2e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\dbplo.dll",
+          "available": true,
+          "sha256": "d5334611f05e51809cc5ae44b9b83f45d38b119200f2fe1486b455f8d2d36b2b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\deploymentgui.dll",
+          "available": true,
+          "sha256": "a3e70431a562c1bcd626678656eac9ad74454333b9f51c503b83c58f499da14d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\Engine12.dll",
+          "available": true,
+          "sha256": "ddb761b0a855b93bc767e2449f6cba6201a581ff744b01124c5fd80ceb59e128"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\epoxy.dll",
+          "available": true,
+          "sha256": "337aba92cbcc867d675bfcc55b3901098814eb42f59aaf0c166a14a69ea3c93a"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\etonyek.dll",
+          "available": true,
+          "sha256": "b57f4136eb0d4b79e12af53ae906ea29fe98868bf5dafecb372996e5ce950334"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\freebl3.dll",
+          "available": true,
+          "sha256": "71c32a1f1ad6f4829c27cfb0db44c128feac45515e701af2c93bbf3056db2141"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\gengal.exe",
+          "available": true,
+          "sha256": "6005573128848b4858c66f1402b9e74cf07e9e585820aae526fbaf5974d7ee83"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\gpgme-w32spawn.exe",
+          "available": true,
+          "sha256": "ad9e8a34d38d654c54a884982c29cc8279fdf9cf8d94bc779f9cb60fdebce4d3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\gpgmepp.dll",
+          "available": true,
+          "sha256": "4cc0b7f36d841636a9a73a9704b44faad443c065d4589fff1e06999b2785008a"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\hsqldb.dll",
+          "available": true,
+          "sha256": "2f2a51f6105e80423f00d7171be0b69458e761073ca64eb3a42226aa7e59d6f4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\i18nlangtag.dll",
+          "available": true,
+          "sha256": "802cc14027dc8fece31b64ef425c683977587a4916597e72d9a67704665d1116"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\icudt78.dll",
+          "available": true,
+          "sha256": "2cfad607ab5123471c26db07a50f7312bc53660794531ccde38619e8ceede5b5"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\icuin78.dll",
+          "available": true,
+          "sha256": "03e25edce165dd6d0dc3d82d70b9614c1ffa0f9bf211e775c06952af72485c7e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\icuuc78.dll",
+          "available": true,
+          "sha256": "aa5abc9dbdef57a4a131f79edaba04fcd23baef70ed91d69619c71ead70a04dd"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\ifbclient.dll",
+          "available": true,
+          "sha256": "9a8f287930b1540238fc0de7beaa41dba5ae06d137d2baead4f0dd0bf82950ca"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\inprocserv.dll",
+          "available": true,
+          "sha256": "862c0f44c7df59897b59088cadc2448e9b54c5c16ab0d3aeeb575953079adfd7"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\introspectionlo.dll",
+          "available": true,
+          "sha256": "04d40dc65d43c546a8885dc048c75f8a73ca6226478b79e840db68c1c41bc2c5"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\invocadaptlo.dll",
+          "available": true,
+          "sha256": "a1f39f9e4a98a8157a905ad92f30dfd7c1bf9a4a5c2449f7cf206d5a45b40a5d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\invocationlo.dll",
+          "available": true,
+          "sha256": "3186c7e15a627fafa2583bd6b6f2f0238c87e2cea372029a64b07970ee0dda87"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\iolo.dll",
+          "available": true,
+          "sha256": "e371ebc78600d6791b7d40928ccaf28f7bc85c74907078ceabc3477a2e8b587d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\java_uno.dll",
+          "available": true,
+          "sha256": "7752efc15b162cd539e3b075fe2611f1625efc6cdd8cb59c24ff773270948048"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\javaloaderlo.dll",
+          "available": true,
+          "sha256": "ade08c24d330a92ece5965b03e917b0dd5d4e89ee01667d4bc158595462fe940"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\javavmlo.dll",
+          "available": true,
+          "sha256": "541e351d49ba581c7ef9886d9ddc705ae978cfebf0c0fe458eee88ad10b3f048"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jdbclo.dll",
+          "available": true,
+          "sha256": "ec0f5f7b2956d7e3bb558762756804330dde524ea5a695529f1336f7469736b3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jpipe.dll",
+          "available": true,
+          "sha256": "5c1177143ef6c96b5e5658920b50c29bfdf0053ba0df9200708a8d8e5db4bc54"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jpipx.dll",
+          "available": true,
+          "sha256": "6ec0dace9313b13d0caa9ce3916e493e17977e3378f847ac9519087228e4fd0f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\juh.dll",
+          "available": true,
+          "sha256": "3d004d680a3a75527412114717c3ded2f322c8727eb1bc58445caecc8357d0e2"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\juhx.dll",
+          "available": true,
+          "sha256": "424d9eed55329dcacb7207e0dfbc534b510a086f52e35cae71296b3f44451cfe"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jumplistlo.dll",
+          "available": true,
+          "sha256": "03dfcf9c9c22f12572dd4c219a4a56e23e5f3e8e2647ed4bf824cf0d1a1570cb"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jvmaccesslo.dll",
+          "available": true,
+          "sha256": "487e592f15bc2fb1f1c1e622d67971c14c495b3535db15d6c68e705e16a0652f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\jvmfwklo.dll",
+          "available": true,
+          "sha256": "4f475881a4dfb953128dbd2d4d4f599812b7079e73ed64abb34619d72ed86b43"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\LanguageToollo.dll",
+          "available": true,
+          "sha256": "abcad3f1eef19d578aee72f8a73e6448e3f1c5006ecdf3d4271f7f93d9f4115a"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\lcms2.dll",
+          "available": true,
+          "sha256": "bc89ab7a8eb89ca569f5f1d35871d7b8c844fa9ea7f4fe3d771a425da6748768"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libcrypto-3.dll",
+          "available": true,
+          "sha256": "c4098908413d60c55c033db8f520dcb4cd9f3723e8a2bf5de81d21df3f17a747"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libcurl.dll",
+          "available": true,
+          "sha256": "c62e1af27b9dec9712f6f1cc99c217d826381a62ed571466de1f9044e87a86b8"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libexslt.dll",
+          "available": true,
+          "sha256": "d8f6af4edfec04e767726dec73ac93624c75242179c08a78d283121f3bce17ff"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libpq.dll",
+          "available": true,
+          "sha256": "84547adbc67b0462f2d1453a1da7f82e2b08964ce3f7f622e0052aa4fe635270"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\librdf.dll",
+          "available": true,
+          "sha256": "d282fc99d34a9930a9fd1ddf27fe8fea299f9c33ab004707c83805d12aa96229"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libssl-3.dll",
+          "available": true,
+          "sha256": "9e463f5ef48e486985794158c2eb541e3ff8b5ff1af09af2a28e6ef0b0b2f851"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libxml2.dll",
+          "available": true,
+          "sha256": "7500254707f276994e79e0d1e88d3283997180896d473a46f25606b691b1d755"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libxmlsec-mscng.dll",
+          "available": true,
+          "sha256": "1083645cd7b328e50aeca0199efe93b3df7f4063922470128b537f2b20baa962"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libxmlsec.dll",
+          "available": true,
+          "sha256": "0913748b8fefebdfe6368691f1c142b4c819f0a0e30b53cb68c394ec8a2cfd99"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\libxslt.dll",
+          "available": true,
+          "sha256": "9fe467181a559b9952bb9ddbb54bed4e13a5b27e7b562701bdc4481da43557d4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\localedata_en.dll",
+          "available": true,
+          "sha256": "baf372f567e65dab5c009538fbd6a16cb4106d7bd9ca15c4dfff25d6894f74f4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\localedata_es.dll",
+          "available": true,
+          "sha256": "15b1705b63fc9961610e0c5900380d62400fd8443359334d72454660a904a376"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\localedata_euro.dll",
+          "available": true,
+          "sha256": "52edd4561bad19f7dbfb7c5867ea9bf9b6303a55c8e30235d626b37570f00778"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\localedata_others.dll",
+          "available": true,
+          "sha256": "e2b761bac8f2435cad60e78edabaeac0d3c6426d2d9668d45459841ee8b4bad3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\log_uno_uno.dll",
+          "available": true,
+          "sha256": "c8ba56c80eb2a352c54fb3222017e6ab522ab27586b7d382c3f0f757d919abb0"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\lpsolve55.dll",
+          "available": true,
+          "sha256": "618e393280bbd652afd7ccfe647e7d3401554424dac1fc69a3c2bc5b4d4713bc"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\mar.exe",
+          "available": true,
+          "sha256": "2004be99940601e0daee423d2cbcd2c879b4ab86e901f3bbed3ccdf228829561"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\mergedlo.dll",
+          "available": true,
+          "sha256": "4e4311b71afcd515e06014beba2020b91c9376fc36d04d9b14b32c14474c15f3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\migrationoo2lo.dll",
+          "available": true,
+          "sha256": "146e5052437948778a26814fb040b1c5d2ec075070c938fdf8609658f92179c2"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\migrationoo3lo.dll",
+          "available": true,
+          "sha256": "da11148c07abceacf53047f67187e33690e6c4b877bd8a5e2eac19ddda77fd80"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\minidump_upload.exe",
+          "available": true,
+          "sha256": "f1c5baf851b9851e75ac82626d6837eda7519444c688d3086a13ed6d0401381f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\mscx_uno.dll",
+          "available": true,
+          "sha256": "d2fd43170856005b86dd84add0633ac5fc11234843541285641829205d748e55"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\mswordlo.dll",
+          "available": true,
+          "sha256": "4cd5a8e6eb7125c1e785e728ae279a319a117a4d2bdb84755e994c7bd0a6bd11"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\mwaw.dll",
+          "available": true,
+          "sha256": "9e0dcf2498e00e5f61217283e62e5f6ed2bdf7af983a4fca680b83bd0f88fd75"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\namingservicelo.dll",
+          "available": true,
+          "sha256": "46f5808616d859d74329d6cee6b1cf380c3e6264c89df2d129e88bd88bde80b4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\nspr4.dll",
+          "available": true,
+          "sha256": "65e467d0f7c33d0692f2b496a307091b3b36ba87e9166ebc6707f5bd269d7642"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\nss3.dll",
+          "available": true,
+          "sha256": "a95db2ec9b5d92dc784d0ba7409d8cb2c22b85872fd5de5dec912dc86f3ba5b6"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\nssckbi.dll",
+          "available": true,
+          "sha256": "fcfb96bfdb3bd14ec07800e875e3ad608b2ce9bdcb474e3c0f9ca698d28d0b01"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\nssdbm3.dll",
+          "available": true,
+          "sha256": "cf71b52ecd1d1fd7fc7926c9da139bd2eb3e50ad8887639dfe0ae78cbd06067b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\nssutil3.dll",
+          "available": true,
+          "sha256": "b6a489330f6a107759122920b844315889d9d174a513d37aae1b22c44ded3805"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\odbcconfig.exe",
+          "available": true,
+          "sha256": "5038ec2fdecc70dde5ca01c2b83d46e0aca1a3fc0d801ab0747f3137e6ffa70c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\odfgen.dll",
+          "available": true,
+          "sha256": "ac64acd532b923c014e8e514b3dffe74faa24fdcb00c148b12f19e88460c287d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\officebean.dll",
+          "available": true,
+          "sha256": "dda3f999e9ad2fa862a30415f23629e712b816983100401190e1b78442db2506"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\oleautobridgelo.dll",
+          "available": true,
+          "sha256": "0cc04528fe2ce5bd79ebd07da83bf58d8aaa78a7f4d4b138a064de644a830239"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\opencltest.exe",
+          "available": true,
+          "sha256": "cad2fc738564587300a992aa8b0a69bb28a143208686590eb30d664940bf8f85"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\orcus-parser.dll",
+          "available": true,
+          "sha256": "1b2e479a3a4c03bc4737c5fa479056cb76e7c746b6e4da2da45c465eab487689"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\orcus.dll",
+          "available": true,
+          "sha256": "08e2f52e1ce332b96abeac4b9866bb65c332c3a630bed8eb7b7523118cf11917"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\pcrlo.dll",
+          "available": true,
+          "sha256": "efed2f93f6491743936c95a59bb47cfe1bb28c542b1e71c4c5a610bbdf132a33"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\pdfimportlo.dll",
+          "available": true,
+          "sha256": "6351a60b1426e6905ab3ebc6600ea3062856f26cfc4cc0aa0c4a1ff1a208e928"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\pdfiumlo.dll",
+          "available": true,
+          "sha256": "4b3b8ac79b90c0b3fb714cb7c90f2e76d03bc576e3efce4baef30ef73d40cc58"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\plc4.dll",
+          "available": true,
+          "sha256": "ff805ca1a66f068314bbc85ae1338248e149e319aa40dcb97b56c816f5a2eefb"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\plds4.dll",
+          "available": true,
+          "sha256": "09de26f20205e79c76bf17131f7118958304fce34b292bf4c5a13bc14e21a6a0"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\postgresql-sdbc-impllo.dll",
+          "available": true,
+          "sha256": "28ad276442e13d90d41f18b203d019cf377e905618f0a5ea29a13884bed27fa5"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\PresentationMinimizerlo.dll",
+          "available": true,
+          "sha256": "dc49f23a11681a787a922da6d88365e908bc79d63f7783b1348c7db854eb4ecb"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\proxyfaclo.dll",
+          "available": true,
+          "sha256": "fc01a6dce2b9bcdf55d3373db3c4a60e3553497e088fa750986b18ec472f5a05"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\purpenvhelper3MSC.dll",
+          "available": true,
+          "sha256": "ed347247d0d1e471f6d09b29ce539426a6bc3accc0afdb9fdb9b706c515a2b0c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\python.exe",
+          "available": true,
+          "sha256": "aada0a92180fe28243df03933ddeaaa28d43d13ba23eb1f1632c9d550c4d68b9"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\python3.dll",
+          "available": true,
+          "sha256": "cb4c7cb2cf84841157da86da47ab59f0fc3c15223e8f87dd231c7ffe94599450"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\python312.dll",
+          "available": true,
+          "sha256": "ba065f40c2f1b715786311e844f1c3df4fad2b073fae8abaf072c5a73888ba01"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\pythonloaderlo.dll",
+          "available": true,
+          "sha256": "0a3f61e1da91f83092fb883cc01cd54760987321ccfab8baf1c8262732fb399e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\quickstart.exe",
+          "available": true,
+          "sha256": "90a5407b8f1936c0f4b9ec4d7b185b098a8ecb696d2b64e1124c20977f4c7d07"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\raptor2.dll",
+          "available": true,
+          "sha256": "e1bdd2dc83b97e9640776a59cd18faa11d9e726c57711a02e67d9e8a74607246"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\rasqal.dll",
+          "available": true,
+          "sha256": "e08d2816b7d6e68a08e3f1595176e93ff43b6603e9e5bf5e6844c9927b08117c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\reflectionlo.dll",
+          "available": true,
+          "sha256": "1ce6c887744c867397a2aa94e3c9f39d72167a9d24db5aabb9c7d7057f0857b0"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\reglo.dll",
+          "available": true,
+          "sha256": "92c8a106c9a2f79f1bfe4d239684056408bd58764e0cf3cac5fbe54c5ee3629d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\regview.exe",
+          "available": true,
+          "sha256": "5583a204326f5e3d4c088a71a2226fc5ffffc4aafd60655366155621dabdaa9f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\revenge.dll",
+          "available": true,
+          "sha256": "d3b326931bf7a2b18799e5ed4ad45d259f7564cb898344fe2566a30d865e8791"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sal3.dll",
+          "available": true,
+          "sha256": "199f48335788f7dae8a54632102307314eef08d9c631433d5aaf52dabbad89a5"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sal_textenclo.dll",
+          "available": true,
+          "sha256": "590a168fb904c78267c52fdbeb98e2ced86cfb2cf8409a73734a1bb54ab4b64c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\salhelper3MSC.dll",
+          "available": true,
+          "sha256": "13ebe9c604f1da9913edb38c5c9947d4c779e91b2cb7552c2226868656624c42"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sbase.exe",
+          "available": true,
+          "sha256": "87aabd77db17c98f5251a8afb54e4c117b697bf7726a03d19b424ccddbd5c053"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\scalc.exe",
+          "available": true,
+          "sha256": "1af94a39349f5c6693347d097406be74787a0102a11876483dc504602fc137e3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\scdlo.dll",
+          "available": true,
+          "sha256": "a0f643aa7b243b766c709c70de7c17cef8daa97c50c996bb87f06502c72e8959"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\scfiltlo.dll",
+          "available": true,
+          "sha256": "3ecee2a24974714af0fff90d50d2c9b0fd19a269d5bc64382696695feff2398e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sclo.dll",
+          "available": true,
+          "sha256": "766dce041b10610a8e90c79bc91c7969455fe6cefe8cb3722416d32452a0c6ce"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\scnlo.dll",
+          "available": true,
+          "sha256": "27ebef05567ea08e10de7dff2f2d1bb86b4b8883aff587471f494ca91d9d4017"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\scuilo.dll",
+          "available": true,
+          "sha256": "ef618e41c00bdb05c43558610039383f72cabba40fe71e878d0e1e1617b67f40"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sddlo.dll",
+          "available": true,
+          "sha256": "e89c767e601155c3608e170001acbd07ebadda7e67c40d7343a16b6384cfe0ee"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sdlo.dll",
+          "available": true,
+          "sha256": "5c8185596cab8ec4cd3cf2981acb18b8875346fa91d15df4462220ebb8f7780b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sdraw.exe",
+          "available": true,
+          "sha256": "5f5a5a07b18b56e2274e3962a4eb74b2480109e43b78a3579667fbfb95b123e1"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sduilo.dll",
+          "available": true,
+          "sha256": "e1997c0cb1377e903a2ddf44719e06ea127db2b8c2f16bdff051beba1f3df4fa"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\senddoc.exe",
+          "available": true,
+          "sha256": "0e3a13417ee1d08655586ea34d22711e315ff51d8de2f8eab0ca788d9586d33b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\services.rdb",
+          "available": true,
+          "sha256": "ea90dacd3cae92582dd02c03b93f73e3307d8017fa3403e38c6a07f6cc1522cb"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\simpress.exe",
+          "available": true,
+          "sha256": "88dd187cf6739f78f0b050a8c67e8e2a393cbef22917f78f5433cb472c0d51a3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\skialo.dll",
+          "available": true,
+          "sha256": "a4b349159a51f586d659af622e91f24705d8339d79c34314d83d3923477912a3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\smath.exe",
+          "available": true,
+          "sha256": "5f6dac018708ca7c6f2b9e808d772834b784dc3948b8b2f096d2cf8d1217ba21"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\smdlo.dll",
+          "available": true,
+          "sha256": "1395314eb3a98ce3a5563953eb5edd1c3f9cf0248b1778bdebfa647e6abd0f6b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\smime3.dll",
+          "available": true,
+          "sha256": "fc4428c5f5376ebeb2f6f543fe3c3484b097bce0e516e782beafdb423b461631"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\smlo.dll",
+          "available": true,
+          "sha256": "3cd3640da67e39b23e405aec7975e823a91adf9ed217cd26d2cecd06ba6f16a5"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\soffice.bin",
+          "available": true,
+          "sha256": "64faf1f03d359ac60e4b54e06ef55c6527b97f50ee42d90956c4781ddcf9c77b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\soffice.com",
+          "available": true,
+          "sha256": "6dc82122e9caf7e4c297885ee35e69bfe698b28684fe6eda3d016dd21370776c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+          "available": true,
+          "sha256": "7079eafba85109fcccb99f9ed1353bdb964c14b643f26e6a56039045f5c88ce1"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\soffice_safe.exe",
+          "available": true,
+          "sha256": "06f2680d5b1d1c08b2ae6ae0a06a2702d837ce40a0ec207bb4228daa541a6b1e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\softokn3.dll",
+          "available": true,
+          "sha256": "be72f7e69994f781e8f8d3f62779d92e7b9086eb6ec465c10345ab642f33b184"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\spsupp_helper.exe",
+          "available": true,
+          "sha256": "636799c3fe97dd2c07e52051ac6fe4415f36286453d463770f6ad6b6aa9a373c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\spsupp_x64.dll",
+          "available": true,
+          "sha256": "436fd86b2429e602e6b99e493dc4f45a59e91bc74312fddd36e7560c9db558a8"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\spsupp_x86.dll",
+          "available": true,
+          "sha256": "3fe21720d6c93b79b329e7b2232b547475992dddee059ae53c6efa4a8442ba28"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sqlite3.dll",
+          "available": true,
+          "sha256": "87c48b57b20c7f0b8a81c5580c12637831cce98cc9e7d7b363b2f4db79386ff3"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\ssl3.dll",
+          "available": true,
+          "sha256": "66bedba6c9ff9acff90d4c954bc116b034b152ac0fc3c3ef95793188342c15e7"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\staroffice.dll",
+          "available": true,
+          "sha256": "70e4c3eebd9d1db2368b2b0c1fbc55fc4dfbca3129ebfe55286b5f0733f4f324"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\stocserviceslo.dll",
+          "available": true,
+          "sha256": "52fe159ba2eaef4c75da154bf4685878621d008a2fc9a2350dd1c23eb26658ff"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\storelo.dll",
+          "available": true,
+          "sha256": "bca4481a45ad7a134b912dfaf22b64f5f7399c8a91957e874d7bc19b89365169"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sw_writerfilterlo.dll",
+          "available": true,
+          "sha256": "4ed378db8cd2f7ef15e44668aec8ddb2e70474ea9e30a572cc523829d2c79321"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\swdlo.dll",
+          "available": true,
+          "sha256": "13fd887b7827a9682406969f12f028a416edb27c9e47924a748cd6d49e4e6a77"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\sweb.exe",
+          "available": true,
+          "sha256": "18c25159bc2c5eeddb6bb61cab62b8827af93368a96ed131db28a96f96899b26"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\swlo.dll",
+          "available": true,
+          "sha256": "cd119c06c985c4440b9b4fd6105be666c3be2f1e5ffbfa4d0b339782b95f6888"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\swriter.exe",
+          "available": true,
+          "sha256": "67391cab50c743f26ff5f79f27ebbe88e34b35358aad5fdf9183626f10f9c4a8"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\swuilo.dll",
+          "available": true,
+          "sha256": "dca0a416e2264c4d05c7ae9da31ff7a8dd5190cbd98053c0958aa879b4518dec"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\twain32shim.exe",
+          "available": true,
+          "sha256": "9d26d04bc5b83adca42ea801981b8004777e93289911e6bae77b2440792331b9"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\types.rdb",
+          "available": true,
+          "sha256": "8e9bd59489af901aa4d1bfcc923a46641e0a64bea0396bc0d9acd5cc2ee3d387"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\UAccCOM.dll",
+          "available": true,
+          "sha256": "327fcc080d98c6fcc8a9961064411a7fa555c9e376365609d5e42e466565a634"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\uno.exe",
+          "available": true,
+          "sha256": "59081d6ef8d7f726a402743dc57d98c6cd7d7ac7a4ee92db7f5b5a001611798a"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unoidllo.dll",
+          "available": true,
+          "sha256": "4463922bb20e7f75ba1793554264c71e407672c8f9cc5fb00422c8e7238d64b1"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unoinfo.exe",
+          "available": true,
+          "sha256": "1ffaa1e90d12252a96f13e1a65415574fc26ac748e037315ef10d07406dc9954"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unopkg.bin",
+          "available": true,
+          "sha256": "264985fb75dbd8b1aa608bcdab23c7eea5235d9a4f82c4e3f033f358f6cc0658"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unopkg.com",
+          "available": true,
+          "sha256": "8debd5a445946012d0830aae952ab800903a2d32bbdd7cbdee0d21679b95ab7e"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unopkg.exe",
+          "available": true,
+          "sha256": "8e10432e9f0b1ac6c25551b1480d98e9b1cba65dd6daf565503512c8c92a66ce"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unopkgapp.dll",
+          "available": true,
+          "sha256": "1858edcd508c17e62c3a7b6d9ea50509952a6250981f88c9f650a6deac72f26c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\unsafe_uno_uno.dll",
+          "available": true,
+          "sha256": "7743d82c40a263b11bf1fdc9258d0924e1a968ee27c887a2fd3a7a3503d547ff"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\update_service.exe",
+          "available": true,
+          "sha256": "217c274e3ea56f79c5ff7b9f72a217d8b778e0df8bef85cf33eb7bdad1e8bd71"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\updatecheckuilo.dll",
+          "available": true,
+          "sha256": "b307eb0cbc2eaf2fd2f3720175f2c66adb1f195fa16cbdac740de7fa97aefa16"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\updater.exe",
+          "available": true,
+          "sha256": "27624754ce3378a159895a17ae7fc591aa2b296f2a46baab91a0a31c6f959b4f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\updchklo.dll",
+          "available": true,
+          "sha256": "bd8b9c991d76c5d6c11432d28826f0d0dd1d650866369a42adb349a11feba521"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\uuresolverlo.dll",
+          "available": true,
+          "sha256": "ed29118e49bdae6ed586a627d27531c895c9c3f4cb89d69468e364ec62e4c3ab"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\vbaobjlo.dll",
+          "available": true,
+          "sha256": "8880ab880877a626e6789bc15beb3fc3e25f5b541a3e2b7c72fd07b2af29a9d4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\vbaswobjlo.dll",
+          "available": true,
+          "sha256": "d3007c580b12c29106acd4d1d92efbf2c2d4048c5bcbc062dfef7124b167865c"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\vclplug_winlo.dll",
+          "available": true,
+          "sha256": "c1c850903d5f7f5ff90c53fd9502efbc9a9cc074cb5a1b50db23894a69fb921b"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\winaccessibility.dll",
+          "available": true,
+          "sha256": "9f5f153539722bb99b7c937d6d9a311e8b07682d3dd315c222df43fd83be50f9"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\WinUserInfoBelo.dll",
+          "available": true,
+          "sha256": "3078efcb36f802e29dcf19c68f0ca2061c5a08aa24ab4345ece893773fd61ada"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\wpd.dll",
+          "available": true,
+          "sha256": "0ff04595c5b8390a51e4e61fb6f4e9feafae083b2ac8020fa8f3d07ab3099c0f"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\wpg.dll",
+          "available": true,
+          "sha256": "9d85eb2f2bbd07c5e022a167908068e44f12edba52a344c1554e7b1a897e5510"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\wps.dll",
+          "available": true,
+          "sha256": "531f1d2e1dd1bf54cd7f10e7eb383ad3ee3b27310ded32955016f93ca035af8d"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\writerlo.dll",
+          "available": true,
+          "sha256": "a19b7d7d72a82f804dbb735351d82cbcd58ef569308667e95ba4b561e991f174"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\xmlreaderlo.dll",
+          "available": true,
+          "sha256": "12127d69e0d48fea51c2f69ece9f286074d51b5380b6b16f36105c72c33a89d4"
+        },
+        {
+          "path": "C:\\Program Files\\LibreOffice\\program\\xpdfimport.exe",
+          "available": true,
+          "sha256": "904e542f7491616465e6302b16f29b7cdd8b6204ce6905bbed639eb7c397143a"
+        }
+      ],
+      "installationSha256": "d4f841e4aa2e770d790288c2811e819fc870b3efbd3822f41f1c18817862b665",
+      "completeInstallationVerified": false
+    },
+    "geometry": {
+      "modelVersion": "lo-import-twip-v1",
+      "implementation": [
+        {
+          "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\workbook_geometry.py",
+          "available": true,
+          "sha256": "695307757964517528dfbb42fcfcda54126b6ffc4807c81f1d913db9abc84bbf"
+        },
+        {
+          "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\print_layout_source.py",
+          "available": true,
+          "sha256": "0347b077c525f3e833ef2fd5e2f62fb2c7f7a907714feff78fa4a912222fb982"
+        },
+        {
+          "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\domain\\print_layout.py",
+          "available": true,
+          "sha256": "495904700be49d3b1f04d9bb5fad91f68f70c5f81aab627ad47191f82911120a"
+        }
+      ]
+    },
+    "rasterizer": {
+      "type": "pypdfium2",
+      "version": "5.12.1",
+      "nativeLibraries": [
+        {
+          "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\pypdfium2_raw\\pdfium.dll",
+          "available": true,
+          "sha256": "cc2058add54b9da299a4496d526b79c375c6f0eb3a9000552a45c60f83765d55"
+        }
+      ],
+      "dpi": 150,
+      "dependencies": {
+        "PIL": {
+          "version": "11.3.0",
+          "nativeFiles": [
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_avif.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "7f993aed80d4dfcba1bae7e307e10da0fd42ae0fc46876032ac138ea511b55c3"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imaging.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "03c6629b37d514770d33bfeb1c02179e50779ae67587310310a96b2de5e7142a"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imagingcms.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "0e3dc1b806c412e07276fe4369750de020065026258810016c1bf7ababc93885"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imagingft.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "fd46b2e9e341f3ae511ab4a332a759c3d7d53b147b938c86b9d33f1680e8da7f"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imagingmath.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "7807d7ef526a05768ec10087df9a75cc58fc335ee3707b67c66c5d45fa3fe9ed"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imagingmorph.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "e8037495949f3860cc24f4a4399a2995fea595388492df34dac5948f40704fbe"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_imagingtk.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "1ed10383313c15359172ec2f224b66537ca893f8e9afa85355204826804bfbb3"
+            },
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\PIL\\_webp.cp312-win_amd64.pyd",
+              "available": true,
+              "sha256": "b279c625f07bcb2eaecc533fea418d2a538cbfb0161f09f7d50bf484958ef343"
+            }
+          ]
+        },
+        "numpy": {
+          "version": "2.2.6",
+          "nativeFiles": []
+        },
+        "cv2": {
+          "version": "4.10.0",
+          "nativeFiles": [
+            {
+              "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\.venv\\Lib\\site-packages\\cv2\\cv2.pyd",
+              "available": true,
+              "sha256": "3d45cec35e10e9889fe19fbe3ecf4459ea663009ed7bc998a9705322cc5db017"
+            }
+          ]
+        }
+      }
+    },
+    "fonts": {
+      "requestedFamily": "Calibri",
+      "normal": {
+        "family": "Calibri",
+        "sizePt": 11.0,
+        "normalXfId": 0,
+        "fontId": 1,
+        "bold": false,
+        "italic": false,
+        "installed": true,
+        "fileFamily": "Calibri",
+        "fontSha256": "57e93ff143572bcc092c1f56202d43ddc07bb119aa104c6d7af163470fb551f6",
+        "fallbackVerified": false
+      },
+      "expectedHostFamily": "Calibri",
+      "file": {
+        "path": "C:\\Windows\\Fonts\\calibri.ttf",
+        "available": true,
+        "sha256": "57e93ff143572bcc092c1f56202d43ddc07bb119aa104c6d7af163470fb551f6"
+      },
+      "unresolvedSemantics": [],
+      "actualOfficeFontVerified": false,
+      "codes": [
+        "FONT_FALLBACK_UNVERIFIED"
+      ]
+    },
+    "environment": {
+      "os": "Windows",
+      "osBuild": "10.0.26200",
+      "osRevision": {
+        "CurrentBuildNumber": "26200",
+        "UBR": 9168,
+        "DisplayVersion": "25H2"
+      },
+      "pythonVersion": "3.12.14",
+      "pythonExecutable": {
+        "path": "C:\\Users\\hanam\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe",
+        "available": true,
+        "sha256": "b7a12c3af0b4db44191eec14ea095eba731b7328917f570806183093d19ddca2"
+      },
+      "architecture": "AMD64",
+      "sandboxVersion": "windows-job-v1",
+      "networkPolicyVersion": "uncontained-v1",
+      "resourcePolicyVersion": "diagnostic-job-1g-4proc-20cpu-45s-v1",
+      "tempPolicy": "user-system-dacl-lease-v1",
+      "memoryBytes": 1073741824,
+      "activeProcesses": 4,
+      "cpuRate": 2000,
+      "wallSeconds": 45
+    },
+    "implementation": [
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\office_reference_renderer.py",
+        "available": true,
+        "sha256": "4333a89beec85cfd210f0b3dbb01a05da01e51598cb737b272b97a7b3a0b9324"
+      },
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\renderer_process.py",
+        "available": true,
+        "sha256": "63f22aaff006da4382c3401a65462fea0283ef7fed63812e08462d79f7e16ab4"
+      },
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\renderer_temp.py",
+        "available": true,
+        "sha256": "3572662bc5c62edbc970b03734c7535b53465b0b7cb19facdc7146a5904b5a02"
+      },
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\renderer_environment.py",
+        "available": true,
+        "sha256": "47977f24b9687f664eda23d4af82dd62445c188270d31e362db1d15e65b69d73"
+      },
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\reference_geometry.py",
+        "available": true,
+        "sha256": "32732d8bbaaf16c1f1eab20c14dee08733c21c10aca9244c85eefebf2f47d23b"
+      },
+      {
+        "path": "C:\\Users\\hanam\\Desktop\\llm-ocr\\backend\\app\\services\\geometry_calibration.py",
+        "available": true,
+        "sha256": "512b7fdd3c3c2ddb4ddc33d91c2abaa8e6d5fe9b7e31e1d9a466ad0c5d71bbcb"
+      }
+    ],
+    "thresholdPolicyVersion": "reference-physical-raster-proposal-v1"
+  },
+  "networkIsolation": {
+    "qualified": false,
+    "policy": "uncontained-v1"
+  },
+  "resourceIsolation": {
+    "qualified": false,
+    "policy": "diagnostic-job-1g-4proc-20cpu-45s-v1",
+    "osEnforcementImplemented": true
+  },
+  "thresholdPolicyVersion": "reference-physical-raster-proposal-v1",
+  "codes": [
+    "NETWORK_ISOLATION_UNVERIFIED",
+    "RESOURCE_POLICY_UNQUALIFIED",
+    "INSTALLATION_CLOSURE_UNVERIFIED",
+    "GEOMETRY_TOLERANCE_UNQUALIFIED",
+    "FONT_FALLBACK_UNVERIFIED"
+  ],
+  "dpiCalibration": {
+    "datasetSha256": "2c531f3895dc487605f4c0226ed213898915fecaac3e881660e302d0c5e962b7",
+    "analysisSha256": "c0f31dcae98037986a96200af06c180bcb922a87f2683c875cf9ec891a5e732e",
+    "qualified": false
+  }
+}

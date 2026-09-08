@@ -1,0 +1,267 @@
+{
+  "geometry": {
+    "page": 1,
+    "range": "B2:D12",
+    "status": "PASS",
+    "codes": [],
+    "anchorRanges": [
+      "B2:B2",
+      "D2:D2",
+      "C7:C7",
+      "B12:B12",
+      "D12:D12"
+    ],
+    "measuredCellCount": 33,
+    "anchors": [
+      {
+        "sourceRange": "B2:B2",
+        "rectangle": {
+          "x": 59,
+          "y": 59,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "D2:D2",
+        "rectangle": {
+          "x": 250,
+          "y": 59,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "C7:C7",
+        "rectangle": {
+          "x": 154,
+          "y": 309,
+          "width": 96,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "B12:B12",
+        "rectangle": {
+          "x": 59,
+          "y": 559,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "D12:D12",
+        "rectangle": {
+          "x": 250,
+          "y": 559,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "fieldCount": 1,
+    "fields": [
+      {
+        "cellId": "xlsx_C2",
+        "sourceRange": "C2:C2",
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "status": "MEASURED"
+      }
+    ],
+    "maxErrorPx": 0.0,
+    "meanErrorPx": 0.0,
+    "maxErrorNormalized": 0.0,
+    "edgeOrder": [
+      "left",
+      "right",
+      "top",
+      "bottom"
+    ],
+    "thresholdPx": 2.0,
+    "thresholdQualified": false
+  },
+  "displacedGeometry": {
+    "page": 1,
+    "range": "B2:D12",
+    "status": "FAIL",
+    "codes": [
+      "MAX_ERROR_EXCEEDED"
+    ],
+    "anchorRanges": [
+      "B2:B2",
+      "D2:D2",
+      "C7:C7",
+      "B12:B12",
+      "D12:D12"
+    ],
+    "measuredCellCount": 33,
+    "anchors": [
+      {
+        "sourceRange": "B2:B2",
+        "rectangle": {
+          "x": 59,
+          "y": 59,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "D2:D2",
+        "rectangle": {
+          "x": 250,
+          "y": 59,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "C7:C7",
+        "rectangle": {
+          "x": 154,
+          "y": 309,
+          "width": 96,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "B12:B12",
+        "rectangle": {
+          "x": 59,
+          "y": 559,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "sourceRange": "D12:D12",
+        "rectangle": {
+          "x": 250,
+          "y": 559,
+          "width": 95,
+          "height": 50
+        },
+        "edgeErrors": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "fieldCount": 1,
+    "fields": [
+      {
+        "cellId": "xlsx_C2",
+        "sourceRange": "C2:C2",
+        "edgeErrors": [
+          -20.0,
+          -20.0,
+          0.0,
+          0.0
+        ],
+        "status": "MEASURED"
+      }
+    ],
+    "maxErrorPx": 20.0,
+    "meanErrorPx": 0.29411764705882354,
+    "maxErrorNormalized": 0.011402508551881414,
+    "edgeOrder": [
+      "left",
+      "right",
+      "top",
+      "bottom"
+    ],
+    "thresholdPx": 2.0,
+    "thresholdQualified": false
+  },
+  "wide": {
+    "status": "PASS",
+    "policy": "clearance-bounded-physical-v1",
+    "components": {
+      "contentRetentionMm": 1.8,
+      "neighborExclusionMm": 1.3,
+      "fieldExtentMm": 4.8
+    },
+    "clearanceMm": 1.3,
+    "toleranceMm": 0.2693333333333333,
+    "measuredErrorMm": 0.0,
+    "dpi": 150,
+    "thresholdQualified": false,
+    "code": null
+  },
+  "narrow": {
+    "status": "FAIL",
+    "policy": "clearance-bounded-physical-v1",
+    "components": {
+      "contentRetentionMm": 0.04999999999999999,
+      "neighborExclusionMm": 1.3,
+      "fieldExtentMm": 4.8
+    },
+    "clearanceMm": 0.04999999999999999,
+    "toleranceMm": 0.2693333333333333,
+    "measuredErrorMm": 0.0,
+    "dpi": 150,
+    "thresholdQualified": false,
+    "code": "CROP_CLEARANCE_INSUFFICIENT"
+  },
+  "scope": "synthetic ink-envelope assumptions; not production handwriting evidence"
+}

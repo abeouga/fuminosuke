@@ -302,6 +302,10 @@ class TemplateVersionService:
                     )
                 )
             quality = remap(source.quality_json, {**replacements, **artifact_map, **path_map})
+            if quality.get("printLayout") is not None:
+                from app.services.print_layout_service import digest
+
+                quality["printLayout"]["layoutSha256"] = digest(layout)
             # Copy source files referenced by quality but not by an artifact.
             for key in ("spreadsheetSourcePath", "spreadsheetPrintablePdfPath"):
                 path = quality.get(key)
@@ -390,5 +394,7 @@ class TemplateVersionService:
                 "forkParentVersionId": source.id,
             }
             job.config_snapshot_json.pop("reprocessTemplateVersionId", None)
+            if quality.get("printLayout") is not None:
+                job.config_snapshot_json["printLayout"] = copy.deepcopy(quality["printLayout"])
             session.commit()
             return version

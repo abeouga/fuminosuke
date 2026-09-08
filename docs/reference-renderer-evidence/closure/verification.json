@@ -1,0 +1,39 @@
+{
+  "baselineContract": {
+    "passed": 194,
+    "seconds": 52.27
+  },
+  "baselineRelated": {
+    "passed": 131,
+    "seconds": 198.15
+  },
+  "finalContract": {
+    "passed": 194,
+    "seconds": 59.91
+  },
+  "backendFull": {
+    "passed": 696,
+    "skipped": 1,
+    "warnings": 3,
+    "seconds": 538.54
+  },
+  "finalSecurity": {
+    "passed": 12,
+    "seconds": 3.09
+  },
+  "referenceApi": {
+    "passed": 4,
+    "seconds": 77.28
+  },
+  "mypy": {
+    "existingErrors": 36,
+    "files": 6,
+    "newErrors": 0
+  },
+  "ruffNewErrors": 0,
+  "OpenAICalls": 0,
+  "GoogleCalls": 0,
+  "frontendChanged": false,
+  "environmentQualified": false,
+  "productionQualified": false
+}

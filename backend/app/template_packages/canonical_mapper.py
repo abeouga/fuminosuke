@@ -77,6 +77,11 @@ class CanonicalTemplateMapper:
         source_sheet_name: str | None,
         source_file_name: str | None,
     ) -> tuple[CanonicalTemplate, CanonicalTemplateQuality]:
+        if version.quality_json.get("printLayout") is not None:
+            raise TemplatePackageExportError(
+                "PRINT_LAYOUT_PACKAGE_UNSUPPORTED",
+                "印刷ページ設定を含む版のパッケージ書き出しは未対応です。設定を省略して書き出すことはできません。",
+            )
         try:
             config = parse_template_config(
                 self._storage.read_bytes(version.config_relative_path).decode("utf-8")

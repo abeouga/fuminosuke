@@ -75,6 +75,7 @@ class LayoutCell(LayoutModel):
     text_confidence: float | None = Field(default=None, ge=0, le=1)
     text_direction: Literal["horizontal", "vertical"] = "horizontal"
     text_alignment: Literal["left", "center", "right"] = "left"
+    text_vertical_alignment: Literal["top", "middle", "bottom"] | None = None
     source: Literal["detected", "manual"] = "detected"
     mark_sets: list[LayoutMarkSet] = Field(default_factory=list, max_length=10)
     composite_subfields: list[LayoutCompositeSubfield] = Field(

@@ -85,3 +85,21 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 既存の未コミット差分を保持し、開始時と終了時のstatus/diffを確認します。明示指示なしのstaging、commit、push、reset、revert、checkoutによる変更破棄、無関係なformat/refactorは禁止です。
 
 完了報告には変更ファイル、原因・変更境界、検証コマンドと結果、未検証範囲を記載します。OCR-sensitive変更ではSafety Contract §11の報告事項も含めます。OCR挙動を変えていない場合は、根拠とともに「既存OCR contractを維持した」と明記してください。
+
+## 9. XLSX複数ページOCR / Reference Renderer
+
+- legacy single-page OCRと新しいXLSX `printLayout` / paged OCRは別経路です。旧canonical rectangle・preview・X/Y画像合わせ補正・過去jobを新geometryで再計算しません。`lo-import-twip-v1`は新規printLayout用で、旧保存プランのgeometryも維持します。
+- `printLayout`の所有者はTemplate系列ではなくTemplateVersionです。ページ編集はDRAFTとrevision照合を守ります。現在のGUI対象は横1ページ・縦Nページです。
+- 新経路は1 logical document/jobに明示的なページidentityと入力bindingを持ちます。配列indexをidentityにせず、受付時のimmutable snapshotから実行・retryします。現在のTemplateVersionからranges・fields・mappings・基準画像・OCR設定を差し替えません。
+- ページ別実行基盤は存在しますが、新結果のレビュー・補正・確定・出力は未対応で明示拒否します。Page 1だけを旧経路へ流して完成扱いにしません。
+- Geometry / Reference QualificationとRenderer Environment Qualificationは別条件です。両方の有効なevidenceとcrop安全性が必要で、描画成功・fixture通過・保存booleanだけでは本番認定できません。
+- 現在は`environmentQualified=false`、`productionQualified=false`です。新printLayout版のACTIVE化は`PRINT_LAYOUT_OCR_NOT_AVAILABLE`、paged OCR受付は`PRINT_REFERENCE_NOT_VALIDATED`でfail-closedです。これは未認定renderer環境を本番へ流さない安全境界です。作業都合のフラグ変更やmockで解除しません。
+- AppContainerではローカル接続probeの通信拒否を実測していますが、LibreOffice 26.2.3.2のXLSX→PDFはWindows named pipe IPC互換性の問題で成立していません。Officeの完全sandbox化が済んだとは扱いません。
+- 新reference rendererのPDFium parse/rasterは専用helper process内です。native処理を安易にbackend内へ戻しません。helperのnetwork isolation、実font・runtime依存、実帳票crop clearance等も認定の残課題です。
+- renderer isolation / container方式の再設計は別infraタスクとして保留できます。gateを閉じたままlegacyや他の安全な機能開発を継続できます。再開時は下記Sandbox Closureの残条件と実コードを照合し、正式なqualificationを経てから本番開放を設計します。
+
+この領域の変更前にはSafety Contract全体（特に§12）と、以下を読みます。Phase報告の旧記述は実コードと後続evidenceで再確認し、最新仕様として無条件に採用しません。
+
+- [XLSX Print Layout](docs/xlsx-print-layout.md) / [Multi-page OCR foundation](docs/multi-page-ocr.md)
+- [Reference Renderer Qualification](docs/reference-renderer-qualification.md) / [Geometry Calibration](docs/geometry-calibration.md)
+- [Renderer Environment Qualification](docs/renderer-environment-qualification.md) / [Renderer Sandbox Closure](docs/renderer-sandbox-closure.md)

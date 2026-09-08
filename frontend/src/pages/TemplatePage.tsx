@@ -3,6 +3,7 @@ import { ApiError, api, createIdempotencyKey } from "../api";
 import { ComparisonViewer } from "../components/ComparisonViewer";
 import { DocumentBoundaryEditor } from "../components/DocumentBoundaryEditor";
 import { FilePicker } from "../components/FilePicker";
+import { PrintLayoutEditor } from "../components/PrintLayoutEditor";
 import { JobProgress } from "../components/JobProgress";
 import { LayoutEditor, type LayoutEditorHandle, type LayoutWorkflowStep } from "../components/LayoutEditor";
 import { MaskEditor } from "../components/MaskEditor";
@@ -672,6 +673,9 @@ function TemplateReview({
   const [layoutVerified, setLayoutVerified] = useState(version.quality.layoutVerified === true);
   const [verifying, setVerifying] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
+  const [printDirty, setPrintDirty] = useState(false);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [printSaved, setPrintSaved] = useState(Boolean(version.quality.printLayout));
   const [editorBusy, setEditorBusy] = useState(false);
   const [maskDirty, setMaskDirty] = useState(false);
   const [maskBusy, setMaskBusy] = useState(false);
@@ -714,6 +718,7 @@ function TemplateReview({
     return () => { cancelled = true; };
   }, [jobId, loadAttempt, version.id]);
   const navigationRisk = (
+    printDirty || printBusy ||
     editorDirty
     || editorBusy
     || maskDirty
@@ -763,12 +768,16 @@ function TemplateReview({
     && !identityDirty
     && !documentNameDirty
     && mappingFresh;
-  const operationBusy = editorBusy || maskBusy || verifying || decisionBusy !== null;
+  const operationBusy = editorBusy || maskBusy || printBusy || verifying || decisionBusy !== null;
   const layoutWorkflowIndex = LAYOUT_WIZARD_STEPS.findIndex(
     (step) => step.id === layoutWorkflowStep,
   );
   const activeLayoutStep = LAYOUT_WIZARD_STEPS[layoutWorkflowIndex] ?? LAYOUT_WIZARD_STEPS[0];
   const saveEditorBeforeLeaving = async (): Promise<boolean> => {
+    if (printDirty || printBusy) {
+      setFeedback({ kind: "error", text: "印刷ページの変更を保存または取消してから移動してください。" });
+      return false;
+    }
     if (!editorDirty) return true;
     const saved = await layoutEditorRef.current?.saveIfNeeded();
     if (saved) return true;
@@ -841,6 +850,7 @@ function TemplateReview({
     }
   };
   const approveVersion = async () => {
+    if (printSaved || printDirty || printBusy) return;
     if (!effectiveLayoutVerified || !meaningSaved || maskRequiresReprocess || editorBusy || maskDirty || maskBusy || !beginDecision("approve")) return;
     try {
       await api.approve(version.id);
@@ -879,6 +889,11 @@ function TemplateReview({
         </section>
         <aside className="quality-card"><span className="panel-kicker">品質メモ</span><h3>自動点検の結果</h3>{Object.entries(version.quality).slice(0, 8).map(([key, value]) => <div className="metric" key={key}><span>{key}</span><strong>{typeof value === "number" ? value.toFixed(3) : String(value)}</strong></div>)}<p>数値は正解確率ではありません。比較画像を優先して確認してください。</p></aside>
       </div>}
+      {isSpreadsheetTemplate && <PrintLayoutEditor
+        key={version.id} versionId={version.id}
+        disabled={editorDirty || editorBusy || maskDirty || maskBusy || verifying || decisionBusy !== null}
+        onDirtyChange={setPrintDirty} onBusyChange={setPrintBusy} onSavedChange={setPrintSaved}
+      />}
       {mappingConfig && layoutConfig && after && (
         <section className="form-card mapping-section">
           <div className="section-title">
@@ -917,7 +932,7 @@ function TemplateReview({
             documentNameRule={documentNameRule}
             onDocumentNameRuleChange={setDocumentNameRule}
             allowUnchangedSave={!mappingConfig.validForOcr || identityDirty || documentNameDirty}
-            disabled={maskDirty || maskBusy}
+            disabled={maskDirty || maskBusy || printDirty || printBusy || printSaved}
             onDirtyChange={setEditorDirty}
             onBusyChange={setEditorBusy}
             draftStorageKey={`template-layout-draft:${version.id}`}
@@ -1055,10 +1070,10 @@ function TemplateReview({
         <button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>
           {decisionBusy === "reject" ? "却下中…" : "却下"}</button>
         {!version.quality.forkParentVersionId && <button className="secondary"
-          disabled={operationBusy || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved}
+          disabled={operationBusy || printSaved || printDirty || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved}
           onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button>}
         <button className="primary"
-          disabled={operationBusy || editorDirty || identityDirty || documentNameDirty || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved}
+          disabled={operationBusy || printSaved || printDirty || editorDirty || identityDirty || documentNameDirty || maskDirty || maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved}
           onClick={() => void approveVersion()}>{decisionBusy === "approve" ? "承認中…" : "承認して有効化"}</button>
       </div>}
     </div>

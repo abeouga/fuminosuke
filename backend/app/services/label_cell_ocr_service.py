@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 
 from app.layout_analysis.detector import PaddleTextDetector, TextDetector, TextRegion
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
-from app.layout_analysis.text_placement import infer_text_placement
+from app.layout_analysis.text_placement import infer_text_placement, infer_vertical_alignment
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,5 +139,8 @@ def _apply_regions(cell: LayoutCell, regions: list[TextRegion]) -> LayoutCell:
             "text_confidence": round(mean(region.confidence for region in regions), 3),
             "text_direction": text_direction,
             "text_alignment": text_alignment,
+            "text_vertical_alignment": infer_vertical_alignment(
+                cell_height=cell.height, bounds=(region.bounds for region in regions),
+            ),
         }
     )

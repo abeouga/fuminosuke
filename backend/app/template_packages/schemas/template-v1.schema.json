@@ -965,6 +965,23 @@
           "title": "Textdirection",
           "type": "string"
         },
+        "textVerticalAlignment": {
+          "anyOf": [
+            {
+              "enum": [
+                "top",
+                "middle",
+                "bottom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Textverticalalignment"
+        },
         "width": {
           "exclusiveMinimum": 0,
           "title": "Width",

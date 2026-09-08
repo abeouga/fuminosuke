@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.core.config import Settings
 from app.db.session import Database
@@ -34,6 +35,7 @@ class OcrWorkflowService:
     ) -> None:
         self._settings = settings
         self._database = database
+        self._storage = storage
         self._writer = ArtifactWriter(database, storage)
         self._validator = DeterministicValidator()
         self._presence_gate = PaddleTextPresenceGate()
@@ -41,13 +43,18 @@ class OcrWorkflowService:
         self._request_preparer = OcrRequestPreparer()
         self._response_finalizer = OcrResponseFinalizer(self._validator)
 
-    def process(self, extraction: ExtractionOutput) -> None:
+    def process(self, extraction: ExtractionOutput) -> dict[str, Any] | None:
         with self._database.session() as session:
             job = JobRepository(session).get(extraction.job_id)
             if job is None:
                 raise ValueError("OCR job not found")
-            job_snapshot = dict(job.config_snapshot_json)
+            job_snapshot = dict(extraction.page_snapshot or job.config_snapshot_json)
             ocr_enabled = bool(job_snapshot.get("ocrEnabled", True))
+        writer = (
+            ArtifactWriter(
+                self._database, self._storage, page_id=extraction.page_snapshot["pageId"],
+            ) if extraction.page_snapshot else self._writer
+        )
         provider_name = (
             str(job_snapshot.get("ocrProvider", self._settings.ocr.provider))
             if ocr_enabled
@@ -75,7 +82,7 @@ class OcrWorkflowService:
                     )
                     for region in all_regions
                 }
-                self._writer.json(
+                writer.json(
                     job_id=extraction.job_id,
                     attempt_number=extraction.attempt_number,
                     name="paddleTextPresence",
@@ -92,7 +99,7 @@ class OcrWorkflowService:
                         ],
                     },
                 )
-            self._writer.json(
+            writer.json(
                 job_id=extraction.job_id,
                 attempt_number=extraction.attempt_number,
                 name="mappedCells",
@@ -100,7 +107,7 @@ class OcrWorkflowService:
                 value=mapped_cells_payload,
             )
         if self._cancel_requested(extraction.job_id):
-            return
+            return None
         self._progress(extraction.job_id, "CALLING_OCR", 78)
         response = (
             OcrProviderResponse(
@@ -159,7 +166,7 @@ class OcrWorkflowService:
         openai_mapping_diagnostics = finalized.diagnostics_payload
         configured_paths = finalized.configured_paths
         if mapped_cells_payload is not None:
-            self._writer.json(
+            writer.json(
                 job_id=extraction.job_id,
                 attempt_number=extraction.attempt_number,
                 name="mappedCells",
@@ -168,13 +175,21 @@ class OcrWorkflowService:
                 replace=True,
             )
         if openai_mapping_diagnostics is not None:
-            self._writer.json(
+            writer.json(
                 job_id=extraction.job_id,
                 attempt_number=extraction.attempt_number,
                 name="openAiMappingDiagnostics",
                 file_name="openai_mapping_diagnostics.json",
                 value=openai_mapping_diagnostics,
             )
+        if extraction.page_snapshot is not None:
+            return {
+                "result": response_document.model_dump(mode="json", by_alias=True),
+                "validation": report.to_dict(), "quality": extraction.quality,
+                "mappedCells": mapped_cells_payload, "diagnostics": openai_mapping_diagnostics,
+                "provider": response.provider, "modelId": response.model_id,
+                "apiCallCount": response.api_call_count,
+            }
         with self._database.session() as session:
             stored = OcrResultRepository(session).save_provider_result(
                 job_id=extraction.job_id,
@@ -208,7 +223,7 @@ class OcrWorkflowService:
         # results remain in the database so an abandoned review cannot create
         # an orphan file in Google Drive.
         self._progress(extraction.job_id, "WRITING_ARTIFACTS", 96)
-        self._writer.json(
+        writer.json(
             job_id=extraction.job_id,
             attempt_number=extraction.attempt_number,
             name="result",
@@ -233,6 +248,8 @@ class OcrWorkflowService:
                 "durationMs": response.duration_ms,
             },
         )
+
+        return None
 
     def _create_provider(self, provider_name: str) -> OcrProvider:
         if provider_name == "disabled":

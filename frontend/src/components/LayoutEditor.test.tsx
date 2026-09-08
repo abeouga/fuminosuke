@@ -3120,7 +3120,78 @@ describe("editing safety regressions", () => {
 
     expect(editor.getByRole("button", { name: "左揃え" })).toHaveAttribute("aria-pressed", "false");
     expect(editor.getByRole("button", { name: "右揃え" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(editor.getByRole("button", { name: "上下中央揃え" }));
+    expect(editor.getByRole("button", { name: "右揃え" })).toHaveAttribute("aria-pressed", "true");
+    expect(editor.getByRole("button", { name: "上下中央揃え" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(editor.getByRole("button", { name: "下揃え" }));
+    expect(editor.getByRole("button", { name: "上下中央揃え" })).toHaveAttribute("aria-pressed", "false");
+    expect(editor.getByRole("button", { name: "下揃え" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(editor.getByRole("button", { name: "自動配置" }));
+    expect(editor.getByRole("button", { name: "自動配置" })).toHaveAttribute("aria-pressed", "true");
+    expect(editor.getByRole("button", { name: "縦位置を自動配置" })).toHaveAttribute("aria-pressed", "true");
+    expect(editor.getByRole("button", { name: "右揃え" })).toHaveAttribute("aria-pressed", "false");
+    expect(editor.getByRole("button", { name: "下揃え" })).toHaveAttribute("aria-pressed", "false");
   });
+
+  test("auto resolves different horizontal and vertical positions for each rectangle", () => {
+    for (const horizontal of ["left", "center", "right"] as const) {
+      for (const vertical of ["top", "middle", "bottom"] as const) {
+        const cell = { ...labelCell, width: 160, height: 100, text: "見出し",
+          textDirection: "horizontal" as const,
+          textAlignment: horizontal, textVerticalAlignment: vertical };
+        const fillRect = vi.fn();
+        const fillText = vi.fn();
+        const context = { save: vi.fn(), restore: vi.fn(), fillRect, fillText,
+          measureText: vi.fn((text: string) => ({ width: text.length * 12 })),
+        } as unknown as CanvasRenderingContext2D;
+        drawOcrLabelText(context, cell, 1200, "auto", "auto");
+        const [x, y, width, height] = fillRect.mock.calls[0] as number[];
+        expect(context.textAlign).toBe(horizontal);
+        if (horizontal === "center") expect(fillText.mock.calls[0][1]).toBe(cell.x + cell.width / 2);
+        if (horizontal === "left") expect(fillText.mock.calls[0][1]).toBe(x + 4);
+        if (horizontal === "right") expect(fillText.mock.calls[0][1]).toBe(x + width - 4);
+        if (vertical === "top") expect(y).toBe(cell.y + 2);
+        if (vertical === "middle") expect(y + height / 2).toBeCloseTo(cell.y + cell.height / 2);
+        if (vertical === "bottom") expect(y + height).toBeCloseTo(cell.y + cell.height - 2);
+      }
+    }
+  });
+
+  test.each(["horizontal", "vertical", "multiline"] as const)(
+    "positions %s text and its background together on both axes without changing the cell",
+    (direction) => {
+      const cell = { ...labelCell, width: 120, height: 180,
+        text: direction === "multiline" ? "項目名\n見出し" : "項目名",
+        textDirection: direction === "vertical" ? "vertical" as const : "horizontal" as const };
+      const original = structuredClone(cell);
+      for (const horizontal of ["left", "center", "right"] as const) {
+        const ys: number[] = [];
+        for (const vertical of ["top", "middle", "bottom"] as const) {
+          const fillRect = vi.fn();
+          const fillText = vi.fn();
+          const context = { save: vi.fn(), restore: vi.fn(), fillRect, fillText,
+            measureText: vi.fn((value: string) => ({ width: value.length * 12 })),
+          } as unknown as CanvasRenderingContext2D;
+          drawOcrLabelText(context, cell, 1200, horizontal, vertical);
+          const [x, y, width, height] = fillRect.mock.calls[0] as number[];
+          ys.push(y);
+          if (vertical === "top") expect(y).toBe(cell.y + 2);
+          if (vertical === "middle") expect(y + height / 2).toBeCloseTo(cell.y + cell.height / 2);
+          if (vertical === "bottom") expect(y + height).toBeCloseTo(cell.y + cell.height - 2);
+          for (const [, textX, textY] of fillText.mock.calls) {
+            expect(textX).toBeGreaterThanOrEqual(x);
+            expect(textX).toBeLessThanOrEqual(x + width);
+            expect(textY).toBeGreaterThan(y);
+            expect(textY).toBeLessThan(y + height);
+          }
+          expect(fillText).toHaveBeenCalledTimes(direction === "vertical" ? 3 : direction === "multiline" ? 2 : 1);
+        }
+        expect(ys[0]).toBeLessThan(ys[1]);
+        expect(ys[1]).toBeLessThan(ys[2]);
+      }
+      expect(cell).toEqual(original);
+    },
+  );
 
   test("shows OCR toolbar and alignment switches in non-label workflow steps", () => {
     const view = render(

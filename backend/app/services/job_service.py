@@ -164,6 +164,9 @@ class JobService:
                     title="Template version is not active",
                     detail="OCRにはACTIVEテンプレート版を指定してください。",
                 )
+            from app.domain.print_layout import require_legacy_ocr
+
+            require_legacy_ocr(template_version.quality_json)
             if document_action not in {None, "ADD_PAGE", "RESCAN_PAGE", "NEW_DOCUMENT"}:
                 raise AppError(
                     status=422,
@@ -783,6 +786,12 @@ class JobService:
             raise
 
     def _ocr_template_snapshot_is_complete(self, job: ProcessingJob) -> bool:
+        if "jobPages" in job.config_snapshot_json:
+            from app.services.job_page_service import JobPageService
+
+            with self._database.session() as session:
+                JobPageService(self._database, self._storage, self._settings).validate(session, job)
+            return True
         raw_snapshot = job.config_snapshot_json.get("templateSnapshot")
         if not isinstance(raw_snapshot, dict):
             return False

@@ -19,12 +19,15 @@ document image → crop / physical region → physical cell identity
 
 ## 2. 現在の実装境界と保護対象
 
-以下は2026-09-06に照合した入口である。表のパスは `backend/app/` 基準（frontendのみリポジトリroot基準）。ファイル名だけでなく、対象データを生成・変換・保存する処理を保護する。
+以下は実装を照合する入口である。表のパスは `backend/app/` 基準（frontendのみリポジトリroot基準）。ファイル名だけでなく、対象データを生成・変換・保存する処理を保護する。
 
 | 境界 | file / class・function | 保護する挙動 |
 | --- | --- | --- |
 | 受付・snapshot・retry | `services/job_service.py` — `JobService.create_ocr_job` / `retry` | 入力・templateSnapshot・fieldMappings・出力snapshot、冪等性 |
 | job実行 | `jobs/runner.py` — `JobRunner`、`jobs/handlers.py`、`services/document_ocr_execution_service.py` — `DocumentOcrExecutionService.execute` | queue、attempt、progress、cancel / retry |
+| XLSXページ定義・geometry | `domain/print_layout.py`、`services/print_layout_service.py`、`services/workbook_geometry.py` | 版所有、保存range、geometry version、page-local transform（§12） |
+| paged受付・実行 | `domain/job_pages.py`、`services/job_page_service.py`、`services/paged_ocr_execution.py` | 明示binding、全ページsnapshot、ページ別artifact、部分失敗・retry（§12） |
+| reference・環境認定 | `services/reference_qualification_service.py`、`services/renderer_environment.py`、`services/office_reference_renderer.py`、`services/renderer_raster.py`、`services/reference_crop_safety.py` | 原本保持、evidence失効、隔離、font、crop安全性、本番gate（§12） |
 | template・rectangle / region検出 | `services/template_service.py` — `TemplatePreparationService.process`、`services/layout_service.py` — `LayoutService.detect` / `save`、`layout_analysis/detector.py`、`segmentation/`、`template_recovery/` | layout、cell / region、ラベルと入力セルの対応 |
 | 画像抽出・crop | `services/extraction_service.py` — `ImageExtractionService.process`、`extraction/region_cropper.py` — `RegionCropper.crop`、`image_processing/`、`extraction/` | alignment、前処理、padding込みcrop.bbox、fieldPreview |
 | orchestration | `services/ocr_workflow_service.py` — `OcrWorkflowService.process` / `_create_provider` | provider生成・呼出し、DB・artifact保存、reconciliation |
@@ -39,7 +42,9 @@ document image → crop / physical region → physical cell identity
 
 `backend/app/ocr/**` と上表のデータ契約はOCR-sensitiveである。Reactやテンプレート編集でも、見た目だけか、保存layout / mapping / cell associationを変えるかで分類する。
 
-主要経路は `JobRunner → PipelineJobHandler → DocumentOcrExecutionService.execute → ImageExtractionService.process → OcrWorkflowService.process`。request/response計算へHTTP・DB・Google・filesystem責務を持ち込まない。依存テストは直接importと特定のfilesystem呼出しの検査であり、推移的依存の完全分離は保証しない。
+legacy単一ページの主要経路は `JobRunner → PipelineJobHandler → DocumentOcrExecutionService.execute → ImageExtractionService.process → OcrWorkflowService.process`。新しい`jobPages`形式は同じjob lifecycle内で`PagedOcrExecution`へ分岐し、既存の抽出・workflowをページ別に利用する。request/response計算へHTTP・DB・Google・filesystem責務を持ち込まない。依存テストは直接importと特定のfilesystem呼出しの検査であり、推移的依存の完全分離は保証しない。
+
+以下の既存ReviewPage・単一OcrResult・補正・確定・出力の実装説明はlegacy経路のもので、新paged結果に対応済みという意味ではない。§3〜7のidentity・association・値保護の契約は新経路にも適用し、未対応操作は§12に従い明示拒否する。
 
 Quest / MRや非HTTP入口でも既存の受付・snapshot・job lifecycleを利用し、revision・cancel・retry管理を迂回しない。
 
@@ -102,6 +107,17 @@ model、fallback、prompt / prompt version、structured-output schema、associat
 provider・model・promptVersion・schemaVersion等、保持している識別子を記録し、コード未変更でも設定差分を追う。`associationVersion` 等を全jobで永続化済みとは仮定しない。
 
 ## 5. Review contractとUI / 業務状態
+
+### テンプレート文字の自動配置
+
+`LayoutCell.textVerticalAlignment` は表示用の `top` / `middle` / `bottom` / null。
+新規XLSXは元セルの縦配置、画像は既存の文字検出領域の上下余白から求める。
+文字検出がない場合はnullとし、自動表示では従来の上配置へfallbackする。
+既存XLSXは同じ版の `spreadsheetPrintCells` に保存されたidと矩形座標・寸法が
+一意に一致する場合だけ不足情報を補う。既存の配置指定は上書きしない。
+自動ボタンは各矩形の横・縦配置を使用し、手動表示切替は保存値を変更しない。
+これは表示metadataの追加であり、文字列・物理identity・mapping・crop座標・
+provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を書き換えない。
 
 ### 5.1 reviewStructureと行移動
 
@@ -324,3 +340,76 @@ OCR-sensitive変更の完了報告には、次を含める。
 - `git diff --check`、未検証範囲、既存失敗・環境制約
 
 OCR動作を変更していない場合は「既存OCR contractを維持した」と明記する。同じ画像から意図したセル・mapping・検証済みresponse・レビュー・補正保存・出力までの対応を証明できることが完了の基準である。
+
+## 12. XLSX複数ページOCRの安全契約
+
+本節は新printLayout / paged OCRの追加契約であり、§3〜10のprovider・model・prompt・schema・association・mapping・補正・確定・出力契約を緩めない。現在の対応状況と作業ルールは[AGENTS §9](../AGENTS.md#9-xlsx複数ページocr--reference-renderer)、実験・測定はそこから参照するPhase報告に置く。
+
+### 12.1 版所有・保存range・geometryの互換性
+
+`printLayout`はTemplateVersionが所有し、Template系列へ共有して公開版の意味を変えない。保存・解除はDRAFT制約とrevision再照合を要求し、検証fingerprintにページ設定を含める。準備jobの定義・画像hashは受付済みOCR jobのsnapshotと区別し、過去jobへ後付けしない。
+
+ユーザー確定済みpage rangesを最優先し、版に保存済みの範囲をmanual breaks・目標ページ数・自動計算だけで再構成しない。再配置は明示的な編集として行う。行・列・元セル範囲を保持し、pixel矩形だけを正本にしない。
+
+論理セル座標と物理ページ座標を区別する。元セル範囲からpage-local rectangleと基準画像への変換は、保存した用紙・方向・余白・全ページ共通のuniform scale・offsetに従う。連続編集ビューのrangeを物理ページそのものと扱わない。
+
+geometry modelの変更を旧保存プラン・legacy canonical rectangle・preview・受付済みjob・OCR結果へ暗黙適用しない。旧X/Y画像合わせ補正も一律にuniform print scaleへ置換しない。旧データの移行が必要なら、§10に従い明示的な版変更・migration設計と比較検証を分離する。
+
+### 12.2 ページを含むphysical identityと入力binding
+
+新経路のfieldは`TemplateVersion → TemplatePage identity → source cell/range → mapping → page-local rectangle`を一意に追跡できなければならない。同じX/Yでも別ページのfieldは別の物理領域であり、ページ情報なしで保存・処理しない。
+
+現TemplatePage identityは版IDと基準画像artifact IDに由来し、受付入力はJobInput UUIDで識別する。`templatePage → inputPage`は明示bindingで固定し、アップロード順を逆にしても同じ対応を維持する。配列index・ページ番号だけ・OCR文字・ラベルからidentityやfield所有権を推定しない。
+
+### 12.3 受付snapshotと実行・retry
+
+1 logical document/jobの受付transactionで全ページのbindingを検証し、少なくとも次をimmutable snapshotへ固定する。
+
+- TemplateVersion、page identity・順序・ranges、元XLSXのidentity / SHA
+- ページ別基準画像・参照元artifact・SHA、transform、source cell/rangeを持つfields、fieldMappings
+- OCR設定とprovider / prompt / schema識別子、画像処理・registration等の実行設定
+- 入力ページidentity、binding、inputRevision、入力SHA
+
+実行・retryは受付snapshotを正本とし、現行TemplateVersionからranges・fields・mappings・基準画像・設定を差し替えない。全ページの入力・基準画像SHAとsnapshot整合性を最初のprovider呼出し前に検証する。保存画像を再生成して不一致を隠さない。
+
+現実行設定が受付時と異なる場合、最新設定で続行せず明示拒否する。retryで成功ページを再利用できるのは保存結果のSHAとページsnapshotが一致する場合だけであり、同じ受付snapshotで失敗ページを再実行する。過去jobの再現性を新しいgeometryや認定artifactの適用で変更しない。
+
+### 12.4 全ページ処理と未対応操作
+
+`jobPages`形式を単一入力経路へ渡さない。欠落・重複・余剰・unsupportedページを黙って除外せず、全fieldのページ所有権を検証する。ページ別artifactを分離し、単一OcrResultへ上書きしない。各ページでも既存のrequest準備・provider association検証・response確定計算の契約を守る。
+
+全結果を`documentPages`へ集約し、一部失敗を文書全体成功と扱わない。現実装では部分失敗はjobをFAILEDとし、成功ページの証拠を保持する。OCR計算の全ページ成功もレビュー・確定・出力完了の代用にはならない。
+
+未対応のレビュー・補正・確定・出力は明示拒否する。Page 1だけのOCR・レビュー・exportへ縮退して成功扱いにしない。ページ設定を扱えないpackage出力等でもmetadataを黙って落とさない。
+
+### 12.5 原本保持とunsupported workbook
+
+原本XLSXを不変とし、可能な箇所でSHAを照合する。図形・画像・controls・高度なOOXMLの削除、hidden行列の可視化、根拠のないused range切捨て、数式の値化、未対応要素を失うopenpyxl再保存、元pageSetupの破壊によって対応済みに見せない。原本を変更して同じ帳票と主張しない。
+
+新renderer用の一時コピーは原本と区別し、検証済みadapterが保存page range・印刷条件を反映するための必要最小限の変更に限定する。未編集のセル・style・ZIPパートを保持し、対応を証明できない形式は拒否する。内部printLayoutの管理を、出力XLSXの印刷設定を変更する根拠にしない。既存出力契約は§7に従う。
+
+離れたprint area、print titles / repeated rows・columns、header/footer、横複数ページ、hidden行列、shapes / controls / formulas、高度な書式・OOXML、未確認font、過大range等を推測処理しない。安全な対応が未検証ならunsupportedまたは未認定として本番への流入を止める。OOXML属性の未指定とライブラリdefaultも区別し、取得できない設定を推測で正規化しない。
+
+### 12.6 Qualificationと本番gate
+
+reference imageの生成成功はqualificationではない。元XLSX、TemplateVersion、printLayout revision、geometry model / implementation、ページ別reference SHA、field geometry、renderer evidenceの対応を検証する。版・設定・画像・実装・環境の変更や証拠の欠落で有効性を失った結果を再利用しない。
+
+Geometry / Reference QualificationとRenderer Environment Qualificationを区別し、両方の有効な証拠を要求する。network / resource isolation、実選択font、runtime依存、rasterizer、crop安全性・本番閾値の未認定条件を、座標精度のPASSで代替しない。hostにfontが存在することはOfficeの実選択fontの証明ではなく、fallback先を推測して認定しない。
+
+`qualified` / `ocrReady` / `productionReady` / `environmentQualified` / `productionQualified`等の保存booleanだけでACTIVE化・production paged OCRを許可しない。認定対象のidentity・evidence SHA・失効条件と未解決条件を再検証する。fixtureのgate置換やmock通過は本番環境の証明ではない。
+
+認定が不成立なら本番gateをfail-closedに維持する。renderer isolation / container設計は別infraタスクとして保留できるが、保留を理由に拒否を緩めない。再開時は実環境で正式なqualificationを行い、§10の変更手順と回帰検証を満たしてから本番開放する。
+
+### 12.7 Renderer隔離とnative処理
+
+AppContainerの通信拒否probeが通っても、実Officeの変換・IPC・filesystem・lifecycleが同じ隔離条件で成立する証明にはならない。Job Objectの資源制限とnetwork isolationも同一視しない。隔離失敗時に無制限processや広い権限へfallbackしない。
+
+Office互換性のためのbinary patch・hook・独自再ビルドは通常修正として行わない。必要性、隔離への影響、配備・再認定方法を別設計として提示し、明示的な変更範囲とする。
+
+未信頼PDFのnative parse / raster失敗をbackend本体へ波及させない。新reference rendererのPDFium helper process境界を維持し、無条件にbackend内native処理へ戻さない。helper自身のnetwork・資源・入出力・依存関係も認定対象とする。timeout・cancel・親終了時は所有processと一時領域だけを回収し、他jobやユーザーのOffice processを終了しない。
+
+### 12.8 Geometry誤差とcrop安全性
+
+geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、内容と境界・隣接内容とのclearance、paddingを区別して評価する。独立したclearance証拠がなければ未検証とし、空の基準画像や人工fixtureだけから実手書きの安全性を推定しない。padding増加や閾値緩和でgeometry誤差を隠さない。
+
+`logical geometry → reference image`の誤差予算と、`reference image → scan registration`の誤差予算を分離する。前者のずれを既存X/Y画像合わせで吸収して認定せず、後者を未測定のまま実OCR精度が保証されたと扱わない。DPI間は物理単位とraster誤差を区別し、数値の根拠・対象条件はPhase evidenceに保存する。

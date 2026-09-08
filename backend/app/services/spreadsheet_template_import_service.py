@@ -13,6 +13,8 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZipFile
 
 import cv2
 import numpy as np
@@ -40,6 +42,7 @@ from app.layout_analysis.models import (
     LayoutMarkOption,
     LayoutMarkSet,
 )
+from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.storage.local_storage import LocalStorageService
@@ -505,6 +508,35 @@ class SpreadsheetTemplateImportService:
         template_name: str,
         auto_print: bool,
     ) -> str:
+        paged = version.quality_json.get("printLayout")
+        if isinstance(paged, dict):
+            from app.services.print_layout_service import digest
+
+            if paged.get("layoutSha256") != digest(version.layout_json):
+                raise AppError(status=409, code="PRINT_LAYOUT_STALE",
+                               title="Print layout is stale",
+                               detail="矩形の編集後は印刷ページ設定を再計算・保存してください。")
+            pages = "".join(
+                f'<section><p>Page {p["page"]}: {html.escape(p["range"])}</p>'
+                f'<img src="/api/v1/template-versions/{html.escape(version.id, quote=True)}'
+                f'/print-layout/pages/{p["page"]}/image" alt="Page {p["page"]}"></section>'
+                for p in paged["pages"]
+            )
+            paper = html.escape(paged["paperSize"])
+            orientation = html.escape(paged["orientation"])
+            return (
+                '<!doctype html><html lang="ja"><meta charset="utf-8">'
+                f'<title>{html.escape(template_name)} - ページ配置の参考描画</title>'
+                '<style>body{font-family:sans-serif;background:#eee}section{max-width:800px;'
+                'margin:20px auto}img{width:100%;display:block}header{padding:16px}'
+                f'@page{{size:{paper} {orientation};margin:0}}'
+                '@media print{header,section p{display:none}body,section{margin:0;'
+                'background:white}section{break-after:page;max-width:none}'
+                'section:last-child{break-after:auto}}</style>'
+                '<header>セル構造からの参考描画です。Excel組版の完全再現・実OCRには未対応です。'
+                '<button onclick="window.print()">参考ページを印刷</button></header>'
+                f'{pages}</html>'
+            )
         raw_cells = version.quality_json.get("spreadsheetPrintCells")
         has_pdf = (
             version.quality_json.get("spreadsheetPreviewEngine") == "libreoffice-pdf"
@@ -613,7 +645,7 @@ class SpreadsheetTemplateImportService:
                 detail="表示状態のシートがありません。",
             )
         worksheet = workbook.active if workbook.active in worksheets else worksheets[0]
-        min_col, min_row, max_col, max_row = self._worksheet_bounds(worksheet)
+        min_col, min_row, max_col, max_row = self._worksheet_bounds(worksheet, content=content)
         source_cell_count = (max_col - min_col + 1) * (max_row - min_row + 1)
         if source_cell_count > self.MAX_SOURCE_CELLS:
             raise AppError(
@@ -807,6 +839,9 @@ class SpreadsheetTemplateImportService:
                             text_confidence=1.0 if text else None,
                             text_direction=text_direction,
                             text_alignment=text_alignment,
+                            text_vertical_alignment=spreadsheet_vertical_alignment(
+                                cell.alignment.vertical,
+                            ),
                             source="detected",
                             composite_subfields=self._composite_address_subfields(
                                 worksheet,
@@ -890,8 +925,10 @@ class SpreadsheetTemplateImportService:
         )
         return layout, print_cells, worksheet.title, canvas
 
-    @staticmethod
-    def _worksheet_bounds(worksheet: Any) -> tuple[int, int, int, int]:
+    @classmethod
+    def _worksheet_bounds(
+        cls, worksheet: Any, *, content: bytes | None = None,
+    ) -> tuple[int, int, int, int]:
         raw_print_area = worksheet.print_area
         if raw_print_area:
             matches = re.findall(
@@ -909,7 +946,71 @@ class SpreadsheetTemplateImportService:
                     max(item[2] for item in boundaries),
                     max(item[3] for item in boundaries),
                 )
-        return range_boundaries(worksheet.calculate_dimension())
+        bounds: tuple[int, int, int, int] = range_boundaries(worksheet.calculate_dimension())
+        min_col, min_row, max_col, max_row = bounds
+        # Preserve every previously accepted geometry and every explicit print area.
+        # Only recover oversized sheets whose trailing cells have no printed content.
+        if (max_col - min_col + 1) * (max_row - min_row + 1) <= cls.MAX_SOURCE_CELLS:
+            return bounds
+        if (
+            content is None
+            or worksheet.print_titles
+            or worksheet.print_options.gridLines
+            or worksheet.print_options.headings
+            or worksheet.conditional_formatting
+            or any(d.has_style for d in worksheet.row_dimensions.values())
+            or any(d.has_style for d in worksheet.column_dimensions.values())
+            or not cls._empty_tail_is_inspectable(content)
+        ):
+            return bounds
+
+        last_col, last_row = min_col, min_row
+        # Sparse cells avoid expanding an oversized rectangle just to inspect it.
+        for cell in worksheet._cells.values():
+            border = cell.border
+            visible_border = any(
+                getattr(border, side, None) is not None
+                and getattr(border, side).style is not None
+                for side in ("left", "right", "top", "bottom", "diagonal",
+                             "start", "end", "vertical", "horizontal")
+            )
+            if (cell.value is not None or visible_border or cell.fill.fill_type is not None
+                    or cell.comment or cell.hyperlink):
+                last_col = max(last_col, cell.column)
+                last_row = max(last_row, cell.row)
+        for merged in worksheet.merged_cells.ranges:
+            last_col = max(last_col, merged.max_col)
+            last_row = max(last_row, merged.max_row)
+        return min_col, min_row, last_col, last_row
+
+    @staticmethod
+    def _empty_tail_is_inspectable(content: bytes) -> bool:
+        # openpyxl can discard unsupported drawings. Inspect original OOXML before
+        # treating blank cells as an empty tail; an empty drawing part is harmless.
+        sheet_tags = {
+            "sheetPr", "dimension", "sheetViews", "sheetFormatPr", "cols", "sheetData",
+            "mergeCells", "printOptions", "pageMargins", "pageSetup", "headerFooter",
+            "rowBreaks", "colBreaks", "drawing",
+        }
+        namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+        try:
+            with ZipFile(io.BytesIO(content)) as package:
+                for name in package.namelist():
+                    if name.endswith(".vml") or name.startswith((
+                        "xl/ctrlProps/", "xl/activeX/", "xl/embeddings/",
+                    )):
+                        return False
+                    if (name.startswith("xl/drawings/") and name.endswith(".xml")
+                            and len(ElementTree.fromstring(package.read(name)))):
+                        return False
+                    if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                        root = ElementTree.fromstring(package.read(name))
+                        if any(node.tag not in {namespace + tag for tag in sheet_tags}
+                               for node in root):
+                            return False
+        except (BadZipFile, ElementTree.ParseError, KeyError):
+            return False
+        return True
 
     def _render_workbook_preview(
         self,
@@ -945,7 +1046,9 @@ class SpreadsheetTemplateImportService:
                 workbook.active = selected_index
                 worksheet = workbook.worksheets[selected_index]
                 if not worksheet.print_area:
-                    min_col, min_row, max_col, max_row = self._worksheet_bounds(worksheet)
+                    min_col, min_row, max_col, max_row = self._worksheet_bounds(
+                        worksheet, content=content,
+                    )
                     worksheet.print_area = (
                         f"${get_column_letter(min_col)}${min_row}:"
                         f"${get_column_letter(max_col)}${max_row}"
@@ -1061,17 +1164,18 @@ class SpreadsheetTemplateImportService:
     @staticmethod
     def _has_border(cell: Cell) -> bool:
         return any(
-            side.style is not None
+            side is not None and side.style is not None
             for side in (cell.border.top, cell.border.right, cell.border.bottom, cell.border.left)
         )
 
     @staticmethod
     def _border_map(cell: Cell) -> dict[str, bool]:
         return {
-            "top": cell.border.top.style is not None,
-            "right": cell.border.right.style is not None,
-            "bottom": cell.border.bottom.style is not None,
-            "left": cell.border.left.style is not None,
+            name: side is not None and side.style is not None
+            for name, side in (
+                ("top", cell.border.top), ("right", cell.border.right),
+                ("bottom", cell.border.bottom), ("left", cell.border.left),
+            )
         }
 
     @staticmethod

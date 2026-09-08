@@ -1,0 +1,54 @@
+ M backend/app/api/v1/router.py
+ M backend/app/api/v1/routes/templates.py
+ M backend/app/core/lifecycle.py
+ M backend/app/image_processing/artifacts.py
+ M backend/app/repositories/template_repository.py
+ M backend/app/services/document_ocr_execution_service.py
+ M backend/app/services/extraction_service.py
+ M backend/app/services/job_service.py
+ M backend/app/services/layout_service.py
+ M backend/app/services/ocr_result_service.py
+ M backend/app/services/ocr_workflow_service.py
+ M backend/app/services/spreadsheet_template_import_service.py
+ M backend/app/services/template_version_service.py
+ M backend/app/template_packages/canonical_mapper.py
+ M docs/ocr-safety-contract.md
+ M frontend/src/api.ts
+ M frontend/src/pages/OcrPage.tsx
+ M frontend/src/pages/TemplatePage.tsx
+?? backend/app/api/v1/routes/job_pages.py
+?? backend/app/api/v1/routes/print_layout.py
+?? backend/app/domain/job_pages.py
+?? backend/app/domain/print_layout.py
+?? backend/app/services/geometry_calibration.py
+?? backend/app/services/job_page_service.py
+?? backend/app/services/office_reference_renderer.py
+?? backend/app/services/paged_ocr_execution.py
+?? backend/app/services/print_layout_renderer.py
+?? backend/app/services/print_layout_service.py
+?? backend/app/services/print_layout_source.py
+?? backend/app/services/reference_geometry.py
+?? backend/app/services/reference_qualification_service.py
+?? backend/app/services/workbook_geometry.py
+?? backend/scripts/
+?? backend/tests/integration/test_geometry_version_boundary.py
+?? backend/tests/integration/test_job_pages.py
+?? backend/tests/integration/test_print_layout_api.py
+?? backend/tests/integration/test_reference_qualification_api.py
+?? backend/tests/unit/test_geometry_calibration.py
+?? backend/tests/unit/test_print_layout.py
+?? backend/tests/unit/test_reference_qualification.py
+?? docs/geometry-calibration.md
+?? docs/multi-page-ocr.md
+?? docs/reference-renderer-evidence/
+?? docs/reference-renderer-qualification.md
+?? docs/xlsx-page-input-audit.json
+?? docs/xlsx-print-layout.md
+?? frontend/src/components/OcrPageBindings.test.tsx
+?? frontend/src/components/OcrPageBindings.tsx
+?? frontend/src/components/PrintLayoutEditor.css
+?? frontend/src/components/PrintLayoutEditor.test.tsx
+?? frontend/src/components/PrintLayoutEditor.tsx
+?? frontend/src/components/ReferenceQualification.test.tsx
+?? frontend/src/components/ReferenceQualification.tsx
+?? frontend/src/printLayout.ts

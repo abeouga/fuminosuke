@@ -390,6 +390,7 @@ export type LayoutCell = {
   textConfidence: number | null;
   textDirection?: "horizontal" | "vertical";
   textAlignment?: "left" | "center" | "right";
+  textVerticalAlignment?: "top" | "middle" | "bottom" | null;
   source: "detected" | "manual";
   markSets?: LayoutMarkSet[];
   compositeSubfields?: LayoutCompositeSubfield[];

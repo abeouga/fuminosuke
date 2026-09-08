@@ -1,0 +1,20 @@
+{
+  "baselineContractPassed": 194,
+  "baselineRelatedPassed": 112,
+  "afterContractPassed": 194,
+  "backendFullPassed": 684,
+  "backendFullSkipped": 1,
+  "backendFullFailed": 0,
+  "backendFullSeconds": 281.37,
+  "securityTargetedPassed": 21,
+  "referenceAndSecurityPassed": 34,
+  "frontendTargetedPassed": 28,
+  "frontendBuild": "PASS",
+  "ruffNewErrors": 0,
+  "mypyNewErrors": 0,
+  "mypyExistingErrors": 36,
+  "openaiApiCalls": 0,
+  "googleApiCalls": 0,
+  "networkTestInternetCalls": 0,
+  "productionQualified": false
+}

@@ -110,9 +110,12 @@ class TemplateRepository:
             return self._approve_locked(version_id)
 
     def _approve_locked(self, version_id: str) -> TemplateVersion:
+        from app.domain.print_layout import require_legacy_ocr
+
         version = self.get_version(version_id)
         if version is None:
             raise self._not_found()
+        require_legacy_ocr(version.quality_json)
         if version.status != TemplateVersionStatus.DRAFT.value:
             raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
         if version.quality_json.get("layoutVerificationInProgress"):

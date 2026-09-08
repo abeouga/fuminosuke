@@ -112,10 +112,16 @@ async def start_runtime_services(app: FastAPI) -> None:
         database=database,
         storage=storage,
     )
+    from app.services.job_page_service import JobPageService
+    from app.services.paged_ocr_execution import PagedOcrExecution
+
     document_ocr_execution = DocumentOcrExecutionService(
         database=database,
         extraction_service=extraction_service,
         ocr_workflow_service=ocr_workflow_service,
+        paged_execution=PagedOcrExecution(
+            JobPageService(database, storage, settings), extraction_service, ocr_workflow_service,
+        ),
     )
     pipeline_handler = PipelineJobHandler(
         database=database,

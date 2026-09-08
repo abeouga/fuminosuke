@@ -21,6 +21,7 @@ type Rect = Point & { width: number; height: number };
 type RecordNamePopoverState = Point & { sectionId: string };
 type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity";
 type OcrLabelAlignment = "auto" | "left" | "center" | "right";
+type OcrLabelVerticalAlignment = "auto" | "top" | "middle" | "bottom";
 export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
 
 export type LayoutEditorHandle = {
@@ -634,6 +635,7 @@ export function drawOcrLabelText(
   cell: LayoutCell,
   canonicalWidth: number,
   alignment: OcrLabelAlignment = "auto",
+  verticalAlignment: OcrLabelVerticalAlignment = "auto",
 ) {
   if (cell.role !== "label" && cell.role !== "parent_label") return;
   const text = cell.text.trim();
@@ -642,6 +644,9 @@ export function drawOcrLabelText(
     ? cell.textAlignment ?? "left"
     : alignment;
   const padding = 4;
+  const resolvedVerticalAlignment = verticalAlignment === "auto"
+    ? cell.textVerticalAlignment ?? "top"
+    : verticalAlignment;
   const compactText = Array.from(text.replace(/\s+/g, ""));
   const inferredDirection = cell.textDirection
     ?? (compactText.length >= 2 && cell.height >= cell.width * 1.4 ? "vertical" : "horizontal");
@@ -653,7 +658,8 @@ export function drawOcrLabelText(
       : canonicalWidth / 85,
   ));
   const badgeX = cell.x + 2;
-  const badgeY = cell.y + 2;
+  const alignedBadgeY = (height: number) => cell.y + 2 + Math.max(0, cell.height - 4 - height)
+    * (resolvedVerticalAlignment === "middle" ? 0.5 : resolvedVerticalAlignment === "bottom" ? 1 : 0);
   const badgeWidth = Math.max(1, cell.width - 4);
   const badgeStyle = OCR_LABEL_BADGE_STYLE[cell.role];
   context.save();
@@ -664,7 +670,10 @@ export function drawOcrLabelText(
       : resolvedAlignment === "right"
         ? badgeX + badgeWidth - verticalBadgeWidth
         : badgeX + (badgeWidth - verticalBadgeWidth) / 2;
-    const verticalBadgeHeight = Math.max(1, cell.height - 4);
+    const verticalBadgeHeight = Math.max(1, Math.min(
+      cell.height - 4, fontSize * 1.15 * compactText.length + padding * 2,
+    ));
+    const badgeY = alignedBadgeY(verticalBadgeHeight);
     context.fillStyle = badgeStyle.background;
     context.fillRect(verticalBadgeX, badgeY, verticalBadgeWidth, verticalBadgeHeight);
     context.fillStyle = badgeStyle.text;
@@ -738,6 +747,7 @@ export function drawOcrLabelText(
     1,
     Math.min(cell.height - 4, lineHeight * lines.length + padding * 2),
   );
+  const badgeY = alignedBadgeY(badgeHeight);
   context.fillStyle = badgeStyle.background;
   context.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
   context.fillStyle = badgeStyle.text;
@@ -858,6 +868,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [detecting, setDetecting] = useState(false);
   const [recognizingLabels, setRecognizingLabels] = useState(false);
   const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("auto");
+  const [ocrLabelVerticalAlignment, setOcrLabelVerticalAlignment] = useState<OcrLabelVerticalAlignment>("auto");
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
   const [magnifierScale, setMagnifierScale] = useState(DEFAULT_MAGNIFIER_SCALE);
   const [magnifierSize, setMagnifierSize] = useState(DEFAULT_MAGNIFIER_SIZE);
@@ -1715,7 +1726,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         }
         context.setLineDash([]);
       }
-      drawOcrLabelText(context, cell, layout.canonicalWidth, ocrLabelAlignment);
+      drawOcrLabelText(context, cell, layout.canonicalWidth, ocrLabelAlignment, ocrLabelVerticalAlignment);
       drawCompositeSubfields(context, cell, layout.canonicalWidth);
       context.restore();
     });
@@ -2006,6 +2017,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     recordSections,
     recordSectionById,
     ocrLabelAlignment,
+    ocrLabelVerticalAlignment,
     identityCandidateByCellId,
     selectedIdentityByPath,
     eraserTrail,
@@ -3269,12 +3281,37 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               className={ocrLabelAlignment === value ? "active" : ""}
               aria-label={accessibleLabel}
               aria-pressed={ocrLabelAlignment === value}
-              onClick={() => setOcrLabelAlignment(value)}
+              onClick={() => {
+                setOcrLabelAlignment(value);
+                if (value === "auto") setOcrLabelVerticalAlignment("auto");
+              }}
             >
                 {label}
               </button>
             ))}
           </div>}
+        {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && (
+          <div className="ocr-alignment-switch" role="group" aria-label="OCR文字の縦位置">
+            <span>縦位置</span>
+            {([
+              ["auto", "自動", "縦位置を自動配置"],
+              ["top", "上", "上揃え"],
+              ["middle", "真ん中", "上下中央揃え"],
+              ["bottom", "下", "下揃え"],
+            ] as const).map(([value, label, accessibleLabel]) => (
+              <button
+                key={value}
+                type="button"
+                className={ocrLabelVerticalAlignment === value ? "active" : ""}
+                aria-label={accessibleLabel}
+                aria-pressed={ocrLabelVerticalAlignment === value}
+                onClick={() => setOcrLabelVerticalAlignment(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {(showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && (
           <span className="command-separator" />
         )}

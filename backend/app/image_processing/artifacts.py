@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import cv2
 import numpy as np
@@ -22,9 +24,12 @@ class ArtifactSpec:
 
 
 class ArtifactWriter:
-    def __init__(self, database: Database, storage: LocalStorageService) -> None:
+    def __init__(
+        self, database: Database, storage: LocalStorageService, *, page_id: str | None = None,
+    ) -> None:
         self._database = database
         self._storage = storage
+        self._page_id = page_id
 
     def image(
         self,
@@ -84,6 +89,14 @@ class ArtifactWriter:
         height: int | None = None,
         replace: bool = False,
     ) -> JobArtifact:
+        if self._page_id is not None:
+            name = f"page.{self._page_id}.{name}"
+            # Keep full page identity in the DB name, without pushing nested crop
+            # paths beyond Windows' temporary-file path limit. The filename key
+            # retains all 256 hash bits; it is not a truncated page identifier.
+            key = hashlib.sha256(f"{self._page_id}/{file_name}".encode()).digest()
+            token = base64.urlsafe_b64encode(key).decode("ascii").rstrip("=")
+            file_name = f"p/{token}{PurePosixPath(file_name).suffix}"
         relative = f"artifacts/{job_id}/attempts/{attempt_number}/{file_name}"
         stored = self._storage.write_bytes(relative, content)
         with self._database.session() as session:

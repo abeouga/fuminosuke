@@ -1,0 +1,12 @@
+{
+  "pid": 16852,
+  "exitCode": 0,
+  "peakJobMemoryBytes": 16355328,
+  "totalProcesses": 3,
+  "activeProcesses": 0,
+  "elapsedSeconds": 0.23400000000037835,
+  "osl": {
+    "pipeCreated": false,
+    "winerror": 5
+  }
+}

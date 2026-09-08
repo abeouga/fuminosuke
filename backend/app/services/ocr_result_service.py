@@ -98,6 +98,19 @@ class OcrResultService:
         self._google_drive = google_drive
         self._documents = DocumentReconciliationService(self._validator)
 
+    @staticmethod
+    def _require_single_page(job: ProcessingJob | None, *, output: bool = False) -> None:
+        if job is not None and "jobPages" in job.config_snapshot_json:
+            raise AppError(
+                status=409,
+                code=(
+                    "MULTI_PAGE_OUTPUT_NOT_AVAILABLE"
+                    if output else "MULTI_PAGE_REVIEW_NOT_AVAILABLE"
+                ),
+                title="Page review and output are not available",
+                detail="複数ページ結果のレビュー・補正・確定・出力は未対応です。",
+            )
+
     def get(
         self,
         job_id: str,
@@ -105,6 +118,7 @@ class OcrResultService:
     ) -> dict[str, Any]:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             if job.status not in {
@@ -141,6 +155,7 @@ class OcrResultService:
             self._begin_mutation(session)
             jobs = JobRepository(session)
             job = jobs.get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             if job.status != JobStatus.REVIEW_REQUIRED.value:
@@ -226,6 +241,7 @@ class OcrResultService:
         with self._database.session() as session:
             self._begin_mutation(session)
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             repository = OcrResultRepository(session)
             stored = repository.get_by_job(job_id)
             if job is None or stored is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
@@ -491,6 +507,7 @@ class OcrResultService:
         with self._database.session() as session:
             self._begin_mutation(session)
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             repository = OcrResultRepository(session)
@@ -571,6 +588,7 @@ class OcrResultService:
             self._begin_mutation(session)
             jobs = JobRepository(session)
             job = jobs.get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             repository = OcrResultRepository(session)
@@ -813,6 +831,7 @@ class OcrResultService:
         name_retry: tuple[str, str, str] | None = None
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             stored = OcrResultRepository(session).get_by_job(job_id)
             if job is None or stored is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
@@ -887,6 +906,7 @@ class OcrResultService:
 
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             stored = OcrResultRepository(session).get_by_job(job_id)
             if job is None or stored is None:
                 raise self._not_found()
@@ -914,6 +934,7 @@ class OcrResultService:
         normalized = self._normalize_spreadsheet_name(file_name)
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             confirmed = OcrResultRepository(session).get_confirmed(job_id)
             if (
                 job is None
@@ -981,6 +1002,7 @@ class OcrResultService:
     def document_id(self, job_id: str) -> str | None:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             return self._documents.document_id_for_job(session, job_id)
@@ -992,6 +1014,7 @@ class OcrResultService:
     ) -> dict[str, object | None]:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             if job is None or job.job_type != JobType.EXTRACT_DOCUMENT.value:
                 raise self._not_found()
             if self._is_spreadsheet_template(session, job):
@@ -1159,6 +1182,9 @@ class OcrResultService:
         job.confirmed_at = confirmed_at
 
     def export_path(self, job_id: str, format_name: str) -> tuple[str, str, str]:
+        with self._database.session() as page_session:
+            page_job = JobRepository(page_session).get(job_id)
+            self._require_single_page(page_job, output=True)
         if format_name not in {"json", "csv", "xlsx"}:
             raise AppError(
                 status=422,
@@ -1169,6 +1195,7 @@ class OcrResultService:
         file_name = f"confirmed_result.{format_name}"
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             confirmed = OcrResultRepository(session).get_confirmed(job_id)
             if job is None or job.status != JobStatus.CONFIRMED.value or confirmed is None:
                 raise AppError(
@@ -1262,6 +1289,7 @@ class OcrResultService:
     def excel_table(self, job_id: str) -> dict[str, object]:
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             confirmed = OcrResultRepository(session).get_confirmed(job_id)
             if job is None or job.status != JobStatus.CONFIRMED.value or confirmed is None:
                 raise AppError(
@@ -1454,6 +1482,7 @@ class OcrResultService:
             return self._disabled_spreadsheet_status()
         with self._database.session() as session:
             job = JobRepository(session).get(job_id)
+            self._require_single_page(job)
             confirmed = OcrResultRepository(session).get_confirmed(job_id)
             if job is None or confirmed is None or not self._is_spreadsheet_template(session, job):
                 return self._disabled_spreadsheet_status()

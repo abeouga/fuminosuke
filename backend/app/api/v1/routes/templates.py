@@ -686,6 +686,10 @@ def get_template_version_print_pdf(request: Request, version_id: str) -> FileRes
                 title="Template not found",
                 detail="指定されたテンプレート版が見つかりません。",
             )
+        if version.quality_json.get("printLayout") is not None:
+            raise AppError(status=409, code="PRINT_LAYOUT_PDF_UNAVAILABLE",
+                           title="Paged PDF is not available",
+                           detail="印刷ページ設定はページ画像で確認してください。旧方式のPDFは使用できません。")
         relative_path = version.quality_json.get("spreadsheetPrintablePdfPath")
     if not isinstance(relative_path, str) or not relative_path:
         raise AppError(
@@ -778,6 +782,11 @@ def approve_template_version(request: Request, version_id: str) -> TemplateVersi
 
 def _approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
     with request.app.state.database.session() as session:
+        from app.domain.print_layout import require_legacy_ocr
+
+        candidate = TemplateRepository(session).get_version(version_id)
+        if candidate is not None:
+            require_legacy_ocr(candidate.quality_json)
         if TemplatePackageActivationService.imported_installation_for_version(
             session,
             version_id,

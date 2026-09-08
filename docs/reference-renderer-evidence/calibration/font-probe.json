@@ -1,0 +1,92 @@
+{
+  "method": "UNO ReferenceDevice.getFont descriptor Height=220 twips; getCharWidths 0..9",
+  "renderer": "LibreOffice 26.2.3.2",
+  "fontSizePt": 11,
+  "measurements": [
+    {
+      "family": "Calibri",
+      "digitWidthsTwips": [
+        111,
+        111,
+        111,
+        111,
+        111,
+        111,
+        111,
+        111,
+        111,
+        111
+      ],
+      "actualFallbackKnown": false
+    },
+    {
+      "family": "Arial",
+      "digitWidthsTwips": [
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122
+      ],
+      "actualFallbackKnown": false
+    },
+    {
+      "family": "Meiryo",
+      "digitWidthsTwips": [
+        137,
+        137,
+        137,
+        137,
+        137,
+        137,
+        137,
+        137,
+        137,
+        137
+      ],
+      "actualFallbackKnown": false
+    },
+    {
+      "family": "Yu Gothic",
+      "digitWidthsTwips": [
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122
+      ],
+      "actualFallbackKnown": false
+    },
+    {
+      "family": "Aptos",
+      "digitWidthsTwips": [
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122,
+        122
+      ],
+      "actualFallbackKnown": false
+    }
+  ],
+  "limitations": [
+    "Aptos file absent; returned metric is not accepted as Aptos metric.",
+    "Controlled synthetic workbook; independent named-pipe Office profile.",
+    "Observed metrics used only in candidate C; production D reads imported document dimensions."
+  ]
+}

@@ -1,0 +1,132 @@
+[
+  {
+    "requestedFamily": "Calibri",
+    "normal": {
+      "family": "Calibri",
+      "sizePt": 11.0,
+      "normalXfId": 0,
+      "fontId": 1,
+      "bold": false,
+      "italic": false,
+      "installed": true,
+      "fileFamily": "Calibri",
+      "fontSha256": "57e93ff143572bcc092c1f56202d43ddc07bb119aa104c6d7af163470fb551f6",
+      "fallbackVerified": false
+    },
+    "expectedHostFamily": "Calibri",
+    "file": {
+      "path": "C:\\Windows\\Fonts\\calibri.ttf",
+      "available": true,
+      "sha256": "57e93ff143572bcc092c1f56202d43ddc07bb119aa104c6d7af163470fb551f6"
+    },
+    "unresolvedSemantics": [],
+    "actualOfficeFontVerified": false,
+    "codes": [
+      "FONT_FALLBACK_UNVERIFIED"
+    ]
+  },
+  {
+    "requestedFamily": "Arial",
+    "normal": {
+      "family": "Arial",
+      "sizePt": 11.0,
+      "normalXfId": 0,
+      "fontId": 1,
+      "bold": false,
+      "italic": false,
+      "installed": true,
+      "fileFamily": "Arial",
+      "fontSha256": "b3658eadae55e682b5f69eb64c439c1ecc8f196c0bb8d4756d145d13bc86476a",
+      "fallbackVerified": false
+    },
+    "expectedHostFamily": "Arial",
+    "file": {
+      "path": "C:\\Windows\\Fonts\\arial.ttf",
+      "available": true,
+      "sha256": "b3658eadae55e682b5f69eb64c439c1ecc8f196c0bb8d4756d145d13bc86476a"
+    },
+    "unresolvedSemantics": [],
+    "actualOfficeFontVerified": false,
+    "codes": [
+      "FONT_FALLBACK_UNVERIFIED"
+    ]
+  },
+  {
+    "requestedFamily": "Meiryo",
+    "normal": {
+      "family": "Meiryo",
+      "sizePt": 11.0,
+      "normalXfId": 0,
+      "fontId": 1,
+      "bold": false,
+      "italic": false,
+      "installed": true,
+      "fileFamily": "Meiryo",
+      "fontSha256": "457b306f719a002f1d037b2a3942f2abfa8a55d7bb109bf8950341a3129adb46",
+      "fallbackVerified": false
+    },
+    "expectedHostFamily": "Meiryo",
+    "file": {
+      "path": "C:\\Windows\\Fonts\\meiryo.ttc",
+      "available": true,
+      "sha256": "457b306f719a002f1d037b2a3942f2abfa8a55d7bb109bf8950341a3129adb46"
+    },
+    "unresolvedSemantics": [],
+    "actualOfficeFontVerified": false,
+    "codes": [
+      "FONT_FALLBACK_UNVERIFIED"
+    ]
+  },
+  {
+    "requestedFamily": "Yu Gothic",
+    "normal": {
+      "family": "Yu Gothic",
+      "sizePt": 11.0,
+      "normalXfId": 0,
+      "fontId": 1,
+      "bold": false,
+      "italic": false,
+      "installed": true,
+      "fileFamily": "Yu Gothic",
+      "fontSha256": "cd24b5617c1e26572b0a7fe7e558f7121ca42c36f7b50e8d9216ac222a1c0a93",
+      "fallbackVerified": false
+    },
+    "expectedHostFamily": "Yu Gothic",
+    "file": {
+      "path": "C:\\Windows\\Fonts\\YuGothR.ttc",
+      "available": true,
+      "sha256": "cd24b5617c1e26572b0a7fe7e558f7121ca42c36f7b50e8d9216ac222a1c0a93"
+    },
+    "unresolvedSemantics": [],
+    "actualOfficeFontVerified": false,
+    "codes": [
+      "FONT_FALLBACK_UNVERIFIED"
+    ]
+  },
+  {
+    "requestedFamily": "Aptos",
+    "normal": {
+      "family": "Aptos",
+      "sizePt": 11.0,
+      "normalXfId": 0,
+      "fontId": 1,
+      "bold": false,
+      "italic": false,
+      "installed": false,
+      "fileFamily": null,
+      "fontSha256": null,
+      "fallbackVerified": false
+    },
+    "expectedHostFamily": "Aptos",
+    "file": {
+      "path": "C:\\Windows\\Fonts\\aptos.ttf",
+      "available": false
+    },
+    "unresolvedSemantics": [],
+    "actualOfficeFontVerified": false,
+    "codes": [
+      "FONT_FALLBACK_UNVERIFIED",
+      "FONT_IDENTITY_UNAVAILABLE"
+    ]
+  }
+]

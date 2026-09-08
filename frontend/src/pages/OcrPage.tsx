@@ -9,6 +9,7 @@ import {
   FiX,
 } from "react-icons/fi";
 import { ApiError, api, createIdempotencyKey } from "../api";
+import { OcrPageBindings } from "../components/OcrPageBindings";
 import { CameraCapture } from "../components/CameraCapture";
 import { FilePicker } from "../components/FilePicker";
 import { showToast } from "../components/Toast";
@@ -290,7 +291,7 @@ export function OcrPage({
     };
   }, [mappingRetryToken, versionId]);
   const { job, connectionLost } = useJobPoller(jobId, (terminal) => {
-    if (terminal.status !== "REVIEW_REQUIRED") return;
+    if (terminal.status !== "REVIEW_REQUIRED" || activeVersion?.quality.printLayout != null) return;
     void api.result(terminal.id)
       .then((result) => {
         const sync = result.spreadsheetSync;
@@ -554,7 +555,12 @@ export function OcrPage({
               </section>
             )}
 
-            {step === 2 && (
+            {step === 2 && activeVersion?.quality.printLayout != null && (
+              <OcrPageBindings key={versionId} versionId={versionId} onAccepted={(id) => {
+                setJobId(id); rememberJob(id);
+              }} />
+            )}
+            {step === 2 && activeVersion?.quality.printLayout == null && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-image">
                 <div className="ocr-step-heading">
                   <span>STEP 2</span>

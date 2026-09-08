@@ -8,6 +8,33 @@ TextAlignment = Literal["left", "center", "right"]
 TextBounds = tuple[float, float, float, float]
 
 
+def infer_vertical_alignment(
+    *, cell_height: int, bounds: Iterable[TextBounds], origin_y: float = 0,
+) -> Literal["top", "middle", "bottom"] | None:
+    regions = list(bounds)
+    if not regions:
+        return None
+    top_margin = max(0.0, min(item[1] for item in regions) - origin_y)
+    bottom_margin = max(0.0, origin_y + cell_height - max(item[3] for item in regions))
+    tolerance = max(3.0, cell_height * 0.12)
+    if top_margin + tolerance < bottom_margin:
+        return "top"
+    if bottom_margin + tolerance < top_margin:
+        return "bottom"
+    return "middle"
+
+
+def spreadsheet_vertical_alignment(value: object) -> Literal["top", "middle", "bottom"] | None:
+    if value == "top":
+        return "top"
+    if value == "center":
+        return "middle"
+    if value is None or value == "bottom":
+        return "bottom"
+    # Distributed/justified text cannot be represented by three anchor positions.
+    return None
+
+
 def infer_text_placement(
     *,
     cell_width: int,

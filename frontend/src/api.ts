@@ -1,6 +1,7 @@
 import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSearchResponse, DocumentLibrary, DocumentLibraryFolder, DocumentLibrarySyncResult, DriveOutputFolder, DrivePickerSession, ExcelTable, FieldMapping, FieldMappingsResponse, Health, IndividualRecordCatalog, IndividualRecordSearch, Job, LayoutDefinition, OcrDocument, OcrLibraryContext, OcrResult, OpenAIUsageReport, OutputLayoutTemplateStatus, PortableBackupExport, PortableBackupOperation, PortableRestoreOperation, Problem, SaleCalfSireSearch, SireNamePool, SpreadsheetSyncStatus, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateOutputFolder, TemplatePackageActivation, TemplatePackageDriveItem, TemplatePackageOperation, WorkspaceSnapshot, WorkspaceSyncStatus } from "./types";
 
 const API = "/api/v1";
+import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
 
 export class ApiError extends Error {
   code: string;
@@ -122,6 +123,27 @@ export function createIdempotencyKey(scope: "template" | "ocr"): string {
 }
 
 export const api = {
+  referenceQualification: (id: string) => request<import("./printLayout").ReferenceQualification>(
+    `/template-versions/${id}/print-layout/qualification`),
+  qualifyReference: (id: string, revision: string) => request<import("./printLayout").ReferenceQualification>(
+    `/template-versions/${id}/print-layout/qualification?base_revision=${encodeURIComponent(revision)}`,
+    { method: "POST" },
+  ),
+  getOcrPages: (versionId: string) => request<import("./components/OcrPageBindings").PageCatalog>(`/template-versions/${versionId}/ocr-pages`),
+  createOcrPageJob: (body: FormData, key: string) => request<{ jobId: string }>("/ocr-page-jobs", { method: "POST", body, headers: { "Idempotency-Key": key } }),
+  printLayout: (id: string) => request<PrintState>(`/template-versions/${id}/print-layout`),
+  previewPrintLayout: (id: string, body: PrintRequest) => request<PrintPlan>(
+    `/template-versions/${id}/print-layout/preview`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  ),
+  savePrintLayout: (id: string, body: PrintRequest) => request<PrintState>(
+    `/template-versions/${id}/print-layout`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  ),
+  clearPrintLayout: (id: string, revision: string) => request<PrintState>(
+    `/template-versions/${id}/print-layout?base_revision=${encodeURIComponent(revision)}`,
+    { method: "DELETE" },
+  ),
   health: () => request<Health>("/health"),
   authSession: () => request<AuthSession>("/auth/session"),
   logout: () => request<{ authenticated: false }>("/auth/logout", { method: "POST" }),

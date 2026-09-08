@@ -42,6 +42,7 @@ class ExtractionOutput:
     unknown_overlap_regions: list[dict[str, object]]
     artifacts: dict[str, str]
     config: TemplateConfig
+    page_snapshot: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +74,7 @@ class ImageExtractionService:
         self._isolator = HandwritingIsolator(threshold=settings.segmentation.threshold)
         self._writer = ArtifactWriter(database, storage)
 
-    def process(self, job_id: str) -> ExtractionOutput:
+    def process(self, job_id: str, *, page_id: str | None = None) -> ExtractionOutput:
         started = time.perf_counter()
         with self._database.session() as session:
             repository = JobRepository(session)
@@ -81,12 +82,29 @@ class ImageExtractionService:
             if job is None:
                 raise ValueError("OCR job is missing")
             inputs = repository.list_inputs(job_id)
-            if len(inputs) != 1:
+            if page_id is None and len(inputs) != 1:
                 raise ValueError("EXTRACT_DOCUMENT requires exactly one input")
             attempt = job.attempt_number
             job_snapshot = dict(job.config_snapshot_json)
+            from app.domain.print_layout import require_legacy_ocr
+
+            if page_id is None:
+                if "jobPages" in job_snapshot:
+                    raise self._invalid_template_snapshot()
+                require_legacy_ocr(job_snapshot)
+                source_input = inputs[0]
+            else:
+                from app.services.job_page_service import JobPageService
+
+                pages = JobPageService(
+                    self._database, self._storage, self._settings,
+                ).validate(session, job)
+                matches = [p for p in pages if p["pageId"] == page_id]
+                if len(matches) != 1:
+                    raise self._invalid_template_snapshot()
+                job_snapshot = matches[0]
+                source_input = next(i for i in inputs if i.id == job_snapshot["inputId"])
             linked_template_version_id = job.template_version_id
-            source_input = inputs[0]
         template_snapshot = self._load_template_snapshot(
             job_id=job_id,
             job_snapshot=job_snapshot,
@@ -188,6 +206,7 @@ class ImageExtractionService:
             marks=marks,
             quality=quality,
             unknown=unknown,
+            page_id=page_id,
         )
         return ExtractionOutput(
             job_id=job_id,
@@ -201,6 +220,7 @@ class ImageExtractionService:
             unknown_overlap_regions=unknown,
             artifacts=artifacts,
             config=config,
+            page_snapshot=job_snapshot if page_id is not None else None,
         )
 
     def _load_template_snapshot(
@@ -324,11 +344,13 @@ class ImageExtractionService:
         marks: list[dict[str, object]],
         quality: dict[str, Any],
         unknown: list[dict[str, object]],
+        page_id: str | None = None,
     ) -> dict[str, str]:
         artifacts: dict[str, str] = {}
+        writer = ArtifactWriter(self._database, self._storage, page_id=page_id)
 
         def image(name: str, file_name: str, value: NDArray[np.uint8], *, rgb: bool = True) -> None:
-            artifact = self._writer.image(
+            artifact = writer.image(
                 job_id=job_id,
                 attempt_number=attempt,
                 name=name,
@@ -387,7 +409,7 @@ class ImageExtractionService:
             "quality": quality,
             "unknownOverlapRegions": unknown,
         }
-        self._writer.json(
+        writer.json(
             job_id=job_id,
             attempt_number=attempt,
             name="fieldResults",

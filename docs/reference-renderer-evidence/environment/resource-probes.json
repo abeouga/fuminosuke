@@ -1,0 +1,90 @@
+{
+  "environmentQualified": false,
+  "administrator": false,
+  "resources": [
+    {
+      "fixture": "three-pages",
+      "cells": 180,
+      "sourceSha256": "18bfd8768ec753ef12cd030fec8c290377b7dcf6d8aaec881393dc024580d76a",
+      "renderer": {
+        "type": "LibreOffice",
+        "version": "LibreOffice 26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34",
+        "adapter": "libreoffice-contained-diagnostic-v2",
+        "executableSha256": "6dc82122e9caf7e4c297885ee35e69bfe698b28684fe6eda3d016dd21370776c",
+        "executable": "C:\\Program Files\\LibreOffice\\program\\soffice.com",
+        "dpi": 150,
+        "pdfRasterizer": "pypdfium2",
+        "productionIsolationVerified": false
+      },
+      "execution": [
+        {
+          "pid": 30320,
+          "exitCode": 0,
+          "peakJobMemoryBytes": 559546368,
+          "totalProcesses": 6,
+          "activeProcesses": 0,
+          "elapsedSeconds": 2.375
+        },
+        {
+          "pid": 17952,
+          "exitCode": 0,
+          "peakJobMemoryBytes": 508825600,
+          "totalProcesses": 6,
+          "activeProcesses": 0,
+          "elapsedSeconds": 2.1409999999996217
+        },
+        {
+          "pid": 16576,
+          "exitCode": 0,
+          "peakJobMemoryBytes": 559452160,
+          "totalProcesses": 6,
+          "activeProcesses": 0,
+          "elapsedSeconds": 2.108999999999469
+        }
+      ],
+      "pageCount": 3,
+      "imageHashes": [
+        "45de38ab32fdd5f0fd29b5acd5264e7c10ecf5d38c1afbd61033aa98a0bd2336",
+        "45de38ab32fdd5f0fd29b5acd5264e7c10ecf5d38c1afbd61033aa98a0bd2336",
+        "45de38ab32fdd5f0fd29b5acd5264e7c10ecf5d38c1afbd61033aa98a0bd2336"
+      ]
+    },
+    {
+      "fixture": "20000-cells",
+      "cells": 20000,
+      "sourceSha256": "bc5e9983041995936e17d035d3c7d1d9a89fc9dfedfd705a8ce836446796d28a",
+      "renderer": {
+        "type": "LibreOffice",
+        "version": "LibreOffice 26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34",
+        "adapter": "libreoffice-contained-diagnostic-v2",
+        "executableSha256": "6dc82122e9caf7e4c297885ee35e69bfe698b28684fe6eda3d016dd21370776c",
+        "executable": "C:\\Program Files\\LibreOffice\\program\\soffice.com",
+        "dpi": 150,
+        "pdfRasterizer": "pypdfium2",
+        "productionIsolationVerified": false
+      },
+      "execution": [
+        {
+          "pid": 11748,
+          "exitCode": 0,
+          "peakJobMemoryBytes": 556163072,
+          "totalProcesses": 6,
+          "activeProcesses": 0,
+          "elapsedSeconds": 2.8599999999996726
+        }
+      ],
+      "pageCount": 1,
+      "imageHashes": [
+        "3d6243a0afcb639629bd32c51880c29b5f6a5294fe79d207f8ed8cba246edd4f"
+      ]
+    }
+  ],
+  "network": {
+    "endpoint": "loopback-only",
+    "connected": true,
+    "isolationProven": false,
+    "internetAttempts": 0
+  },
+  "tempRoot": "C:\\Users\\hanam\\AppData\\Local\\Temp\\utsushibi-reference-v1",
+  "limitsQualified": false
+}

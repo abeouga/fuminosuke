@@ -34,6 +34,7 @@ from app.layout_analysis.models import (
     LayoutRecordGroup,
     LayoutRelation,
 )
+from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
 from app.repositories.artifact_repository import ArtifactRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
@@ -112,6 +113,10 @@ class LayoutService:
                 and not layout.label_pool
                 else None
             )
+            if version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value:
+                layout = self._with_saved_text_placement(
+                    layout, version.quality_json.get("spreadsheetPrintCells"),
+                )
         if legacy_config_path is None:
             return layout
         legacy = parse_legacy_spreadsheet_metadata(
@@ -128,6 +133,30 @@ class LayoutService:
             },
             deep=True,
         )
+
+    @staticmethod
+    def _with_saved_text_placement(
+        layout: LayoutDefinition, print_cells: object,
+    ) -> LayoutDefinition:
+        # Only reuse evidence from this version and the same unchanged physical rectangle.
+        if not isinstance(print_cells, list):
+            return layout
+        cells = []
+        for cell in layout.cells:
+            matches = [
+                item for item in print_cells
+                if isinstance(item, dict) and item.get("id") == cell.id
+            ]
+            if cell.text_vertical_alignment is None and len(matches) == 1:
+                item = matches[0]
+                if "vertical" in item and all(
+                    item.get(key) == getattr(cell, key) for key in ("x", "y", "width", "height")
+                ):
+                    cell = cell.model_copy(update={
+                        "text_vertical_alignment": spreadsheet_vertical_alignment(item["vertical"]),
+                    })
+            cells.append(cell)
+        return layout.model_copy(update={"cells": cells})
 
     def detect(self, version_id: str) -> LayoutDefinition:
         with self._database.session() as session:
@@ -783,6 +812,8 @@ class LayoutService:
             "editedMask": edited_mask,
             "inputRevision": quality.get(LAYOUT_INPUT_REVISION_KEY, 0),
         }
+        if quality.get("printLayout") is not None:
+            payload["printLayout"] = quality["printLayout"]
         serialized = json.dumps(
             payload,
             ensure_ascii=False,
