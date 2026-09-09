@@ -15,6 +15,7 @@ import type {
   LayoutRelation,
 } from "../types";
 import { showToast } from "./Toast";
+import { pageDisplayCells, type PageView } from "../pageAuthoring";
 
 export type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
@@ -30,6 +31,8 @@ export type LayoutEditorHandle = {
 
 type LayoutEditorProps = {
   source: string;
+  pageView?: PageView;
+  preserveDetectedRoles?: boolean;
   initialLayout: LayoutDefinition;
   targets: FieldMappingTarget[];
   onDetect: () => Promise<LayoutDefinition>;
@@ -805,6 +808,8 @@ function drawCompositeSubfields(
 
 export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(function LayoutEditor({
   source,
+  pageView,
+  preserveDetectedRoles = false,
   initialLayout,
   targets,
   onDetect,
@@ -837,9 +842,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const copiedCellMergeRef = useRef<LayoutCellMerge | null>(null);
   const operationLockRef = useRef(false);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
-  const [layout, setLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
+  const [layout, setLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey, preserveDetectedRoles));
   const [baselineSignature, setBaselineSignature] = useState(
-    () => layoutSignature(normalizeLayout(initialLayout)),
+    () => layoutSignature(normalizeLayout(initialLayout, preserveDetectedRoles)),
   );
   const [mode, setMode] = useState<Mode>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1018,7 +1023,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   }, []);
 
   useEffect(() => {
-    const normalized = normalizeLayout(initialLayout);
+    const normalized = normalizeLayout(initialLayout, preserveDetectedRoles);
     if (dirtyRef.current) return;
     setLayout(normalized);
     setBaselineSignature(layoutSignature(normalized));
@@ -1028,7 +1033,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedIds(new Set());
     relationHistory.current = [];
     setHistoryDepth(0);
-  }, [initialLayout]);
+  }, [initialLayout, preserveDetectedRoles]);
   useEffect(() => {
     dirtyRef.current = dirty;
     onDirtyChange?.(dirty);
@@ -1087,6 +1092,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setMessage("読み取る内容が未設定の記入欄はありません。");
     }
   }, [highlightUnassigned, unassignedMeaningCount, workflowStep]);
+  const displayCells = useMemo(() => pageDisplayCells(layout, pageView), [layout, pageView]);
+  const displayCellById = useMemo(() => new Map(displayCells.map(cell => [cell.id, cell])), [displayCells]);
+  const displayWidth = pageView?.width ?? layout.canonicalWidth;
+  const displayHeight = pageView?.height ?? layout.canonicalHeight;
+  const displaySource = pageView?.imageUrl ?? source;
+  useEffect(() => {
+    setSelectedId(null); setSelectedIds(new Set());
+    dragStart.current = null; linkLabelId.current = null; eraserPathRef.current = null;
+    setDraft(null); setLinkPoint(null); setEraserTrail([]); setRecordNamePopover(null);
+  }, [pageView?.page]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
   useEffect(() => {
     if (mode === "link") {
@@ -1161,8 +1176,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!recordNamePopover) return undefined;
     const canvas = canvasRef.current;
     const bounds = canvas?.getBoundingClientRect();
-    const xRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.x / layout.canonicalWidth));
-    const yRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.y / layout.canonicalHeight));
+    const xRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.x / displayWidth));
+    const yRatio = Math.min(0.95, Math.max(0.05, recordNamePopover.y / displayHeight));
     if (!canvas || !bounds || bounds.width <= 0 || bounds.height <= 0) {
       return { left: `${xRatio * 100}%`, top: `${yRatio * 100}%` };
     }
@@ -1460,9 +1475,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const showRecordStep = !workflowStep || workflowStep === "records";
   const showIdentityStep = workflowStep === "identity";
   const showReviewStep = !workflowStep || workflowStep === "review";
-  const showDetectAction = showClassificationStep
-    || (showMeaningStep && detectLabel !== "枠を再検出");
-  const cellsVisibleInList = layout.cells.filter((cell) => {
+  const showDetectAction = !pageView && (showClassificationStep
+    || (showMeaningStep && detectLabel !== "枠を再検出"));
+  const cellsVisibleInList = displayCells.filter((cell) => {
     if (!workflowStep || workflowStep === "classify" || workflowStep === "review") return true;
     if (workflowStep === "identity") {
       return identityCandidateByCellId.has(cell.id);
@@ -1490,7 +1505,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       : "原本を変更せず、XLSXのセル構造を復元しています…");
     try {
       const detected = await onDetect();
-      const normalized = normalizeLayout(detected);
+      const normalized = normalizeLayout(detected, preserveDetectedRoles);
       setLayout(normalized);
       setSelectedRecordSectionId(normalized.recordSections?.[0]?.id ?? "");
       setSelectedId(null);
@@ -1524,7 +1539,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setRecognizingLabels(true);
     setMessage(`${labelCount}個の項目名から文字候補を取得しています…`);
     try {
-      const recognized = normalizeLayout(await onRecognizeLabels(layout));
+      const recognized = normalizeLayout(await onRecognizeLabels(layout), preserveDetectedRoles);
       setLayout(recognized);
       setSelectedPath("");
       const recognizedCount = recognized.cells.filter(
@@ -1552,7 +1567,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setBusy(true);
     try {
       const prepared = repairDuplicateCalvingMarkRows(layout);
-      const saved = normalizeLayout(await onSave(prepared.layout));
+      const saved = normalizeLayout(await onSave(prepared.layout), preserveDetectedRoles);
       setLayout(saved);
       setBaselineSignature(layoutSignature(saved));
       relationHistory.current = [];
@@ -1579,7 +1594,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setBusy(false);
       operationLockRef.current = false;
     }
-  }, [allowUnchangedSave, disabled, dirty, draftStorageKey, layout, onSave]);
+  }, [allowUnchangedSave, disabled, dirty, draftStorageKey, layout, onSave, preserveDetectedRoles]);
 
   useImperativeHandle(ref, () => ({
     saveIfNeeded: () => save(false),
@@ -1611,10 +1626,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-    const displayCellById = new Map(layout.cells.map((cell) => [cell.id, cell]));
 
     if (mode === "identity") {
-      layout.cells.forEach((storedCell) => {
+      displayCells.forEach((storedCell) => {
         const cell = displayCellById.get(storedCell.id) ?? storedCell;
         const candidate = identityCandidateByCellId.get(storedCell.id);
         const selectedIdentity = candidate
@@ -1643,7 +1657,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         context.fillRect(cell.x, cell.y, cell.width, cell.height);
         context.strokeRect(cell.x, cell.y, cell.width, cell.height);
 
-        const fontSize = Math.max(11, Math.min(22, layout.canonicalWidth / 75));
+        const fontSize = Math.max(11, Math.min(22, displayWidth / 75));
         const badgeHeight = fontSize + 12;
         context.font = `800 ${fontSize}px sans-serif`;
         const badgeWidth = Math.min(
@@ -1668,7 +1682,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       return;
     }
 
-    layout.cells.forEach((storedCell) => {
+    displayCells.forEach((storedCell) => {
       const cell = displayCellById.get(storedCell.id) ?? storedCell;
       const cellMerge = cellMergeByParentId.get(cell.id);
       const roleStyle = LAYOUT_ROLE_STYLE[cell.role];
@@ -1726,8 +1740,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         }
         context.setLineDash([]);
       }
-      drawOcrLabelText(context, cell, layout.canonicalWidth, ocrLabelAlignment, ocrLabelVerticalAlignment);
-      drawCompositeSubfields(context, cell, layout.canonicalWidth);
+      drawOcrLabelText(context, cell, displayWidth, ocrLabelAlignment, ocrLabelVerticalAlignment);
+      drawCompositeSubfields(context, cell, displayWidth);
       context.restore();
     });
 
@@ -1742,7 +1756,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         drawnMeaningParentLinks.add(linkKey);
         context.save();
         context.strokeStyle = "#16805d";
-        context.lineWidth = Math.max(3, Math.min(5, layout.canonicalWidth / 420));
+        context.lineWidth = Math.max(3, Math.min(5, displayWidth / 420));
         context.setLineDash([12, 7]);
         context.globalAlpha = 0.82;
         context.beginPath();
@@ -1790,7 +1804,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         context.strokeRect(anchor.x, anchor.y, anchor.width, anchor.height);
       });
       context.setLineDash([]);
-      const badgeHeight = Math.max(16, Math.min(24, layout.canonicalWidth / 65));
+      const badgeHeight = Math.max(16, Math.min(24, displayWidth / 65));
       const badgeWidth = Math.max(
         1,
         Math.min(Math.max(38, badgeHeight * 3.3), Math.max(1, lastAnchor.width - 4)),
@@ -1810,15 +1824,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const meaningRoutes = buildMeaningRelationRoutes(
       layout.relations,
       displayCellById,
-      layout.canonicalWidth,
-      layout.canonicalHeight,
+      displayWidth,
+      displayHeight,
     );
     const connectedMeaningCellIds = new Set<string>();
     meaningRoutes.forEach((route) => {
       connectedMeaningCellIds.add(route.labelCellId);
       connectedMeaningCellIds.add(route.inputCellId);
     });
-    const markerRadius = Math.max(3, Math.min(5, layout.canonicalWidth / 360));
+    const markerRadius = Math.max(3, Math.min(5, displayWidth / 360));
     connectedMeaningCellIds.forEach((cellId) => {
       const cell = displayCellById.get(cellId);
       if (!cell) return;
@@ -1900,7 +1914,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       context.globalAlpha = 1;
       const endpointRadius = showAllMeaningRoutes
         ? markerRadius
-        : Math.max(5, Math.min(8, layout.canonicalWidth / 240));
+        : Math.max(5, Math.min(8, displayWidth / 240));
       const drawnEndpoints = new Set<string>();
       routes.forEach(({ inputAnchor }) => {
         const key = `${inputAnchor.x.toFixed(2)},${inputAnchor.y.toFixed(2)}`;
@@ -1926,7 +1940,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (mode === "erase" && eraserTrail.length > 0) {
       context.save();
       context.strokeStyle = "#d62929";
-      context.lineWidth = Math.max(8, layout.canonicalWidth / 100);
+      context.lineWidth = Math.max(8, displayWidth / 100);
       context.lineCap = "round";
       context.lineJoin = "round";
       context.globalAlpha = 0.52;
@@ -1948,14 +1962,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         };
         const highlightedCells = mode === "parent"
           ? showMeaningStep
-            ? layout.cells.filter((cell) => (
+            ? displayCells.filter((cell) => (
               cell.role === "label"
               && cell.id !== label.id
               && pointInsideRect(linkPoint, cell)
             ))
             : recordSections.flatMap((section) => {
               const anchors = section.recordLabelCellIds
-                .map((labelId) => cellById.get(labelId))
+                .map((labelId) => displayCellById.get(labelId))
                 .filter((cell): cell is LayoutCell => Boolean(cell));
               return anchors.some((anchor) => pointInsideRect(linkPoint, anchor)) ? anchors : [];
             })
@@ -1963,12 +1977,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             ? recordLabelCellsCrossedByLine(
               start,
               linkPoint,
-              layout.cells.filter((cell) => cell.role === "label"),
+              displayCells.filter((cell) => cell.role === "label"),
             )
             : linkLaneCells(
               start,
               linkPoint,
-              layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
+              displayCells.filter((cell) => cell.role === "input" || cell.role === "mark"),
             );
         highlightedCells.forEach((storedCell) => {
           const cell = displayCellById.get(storedCell.id) ?? storedCell;
@@ -1992,21 +2006,21 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       }
     }
     if (highlightUnassigned && workflowStep === "meaning") {
-      const unassignedCells = layout.cells.filter(
+      const unassignedCells = displayCells.filter(
         (cell) => unassignedMeaningIds.has(cell.id),
       );
       drawUnassignedMeaningOverlay(
         context,
         image,
         unassignedCells,
-        layout.canonicalWidth,
-        layout.canonicalHeight,
+        displayWidth,
+        displayHeight,
       );
     }
   };
 
   useEffect(redraw, [
-    layout,
+    layout, displayCells, displayWidth, displayHeight,
     selectedId,
     selectedIds,
     mode,
@@ -2032,13 +2046,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       imageRef.current = image;
       redraw();
     };
-    image.src = source;
+    imageRef.current = null;
+    image.src = displaySource;
     return () => {
       image.onload = null;
     };
   // redraw is intentionally driven by state effects after the image is cached.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source]);
+  }, [displaySource]);
 
   const point = (
     event: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>,
@@ -2046,16 +2061,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const bounds = event.currentTarget.getBoundingClientRect();
     return {
       x: Math.round(Math.max(0, Math.min(
-        layout.canonicalWidth,
-        (event.clientX - bounds.left) * layout.canonicalWidth / bounds.width,
+        displayWidth,
+        (event.clientX - bounds.left) * displayWidth / bounds.width,
       ))),
       y: Math.round(Math.max(0, Math.min(
-        layout.canonicalHeight,
-        (event.clientY - bounds.top) * layout.canonicalHeight / bounds.height,
+        displayHeight,
+        (event.clientY - bounds.top) * displayHeight / bounds.height,
       ))),
     };
   };
-  const cellAt = (location: Point) => [...layout.cells].reverse().find(
+  const cellAt = (location: Point) => [...displayCells].reverse().find(
     (cell) => location.x >= cell.x
       && location.x <= cell.x + cell.width
       && location.y >= cell.y
@@ -2082,15 +2097,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       const bounds = canvas.getBoundingClientRect();
       const location = {
         x: Math.max(0, Math.min(
-          layout.canonicalWidth,
-          (event.clientX - bounds.left) * layout.canonicalWidth / bounds.width,
+          displayWidth,
+          (event.clientX - bounds.left) * displayWidth / bounds.width,
         )),
         y: Math.max(0, Math.min(
-          layout.canonicalHeight,
-          (event.clientY - bounds.top) * layout.canonicalHeight / bounds.height,
+          displayHeight,
+          (event.clientY - bounds.top) * displayHeight / bounds.height,
         )),
       };
-      const hoveredCell = [...layout.cells].reverse().find((cell) => (
+      const hoveredCell = [...displayCells].reverse().find((cell) => (
         connectedCellIds.has(cell.id)
         && location.x >= cell.x
         && location.x <= cell.x + cell.width
@@ -2116,10 +2131,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     height: Math.abs(start.y - end.y),
   });
   const eraseLinksAlongSegment = (start: Point, end: Point) => {
-    const tolerance = Math.max(8, layout.canonicalWidth / 100);
+    const tolerance = Math.max(8, displayWidth / 100);
     setLayout((current) => {
       let changed = false;
-      const storedCellById = new Map(current.cells.map((cell) => [cell.id, cell]));
+      const storedCellById = new Map(pageDisplayCells(current, pageView).map((cell) => [cell.id, cell]));
       const visualCell = (id: string) => storedCellById.get(id);
       const erasedMeaningLinks = eraseMeaningLabelLinksAlongSegment(
         current.relations,
@@ -2127,8 +2142,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         start,
         end,
         tolerance,
-        current.canonicalWidth,
-        current.canonicalHeight,
+        displayWidth,
+        displayHeight,
       );
       let relations = erasedMeaningLinks.relations;
       if (erasedMeaningLinks.changed) changed = true;
@@ -2338,6 +2353,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     cellsToMerge: LayoutCell[] = selectedCells,
     copiedMerge?: LayoutCellMerge,
   ) => {
+    if (pageView) return;
     if (cellsToMerge.length < 2) {
       showMergeError("2つ以上のセルを選択してください。");
       return;
@@ -2464,7 +2480,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     });
   };
   const unmergeSelectedCell = () => {
-    if (!selected || !selectedCellMerge) return;
+    if (pageView || !selected || !selectedCellMerge) return;
     const parentId = selected.id;
     const isReferenced = layout.relations.some((relation) => (
       relation.inputCellId === parentId
@@ -2505,6 +2521,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   useEffect(() => {
     const clipboardShortcutAvailable = (target: EventTarget | null) => (
       showClassificationStep
+      && !pageView
       && !busy
       && !disabled
       && !isEditableKeyboardTarget(target)
@@ -2540,6 +2557,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const handleMergeClipboard = (event: KeyboardEvent) => {
       if (
         !showClassificationStep
+        || pageView
         || busy
         || disabled
         || (!event.ctrlKey && !event.metaKey)
@@ -2731,7 +2749,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     linkLabelId.current = null;
     setLinkPoint(null);
     if (!labelId) return;
-    const label = cellById.get(labelId);
+    const label = displayCellById.get(labelId);
     if (!label) return;
     const start = { x: label.x + label.width / 2, y: label.y + label.height / 2 };
     const endCell = cellAt(end);
@@ -2744,12 +2762,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const axis: LayoutRelation["axis"] = Math.abs(resolvedEnd.x - start.x) >= Math.abs(resolvedEnd.y - start.y)
       ? "horizontal"
       : "vertical";
-    const inputs = meaningLinkLaneCells(
+    const visibleInputs = meaningLinkLaneCells(
       start,
       resolvedEnd,
-      layout.cells.filter((cell) => cell.role === "input" || cell.role === "mark"),
+      displayCells.filter((cell) => cell.role === "input" || cell.role === "mark"),
       endCell,
     );
+    const inputs = visibleInputs.map(cell => cellById.get(cell.id)!);
     if (inputs.length === 0) {
       setMessage("スライド経路に手書き文字欄がありません。記入欄を通過するようにドラッグしてください。");
       return;
@@ -3035,7 +3054,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedRecordSectionId(section.id);
     setSelectedId(labelIds[0] ?? null);
     setSelectedIds(new Set(labelIds));
-    const nameAnchor = recordSectionBand(nextSection, layout.cells)?.anchor;
+    const nameAnchor = recordSectionBand(nextSection, displayCells)?.anchor;
     if (nameAnchor) openRecordNameEditor(nextSection, nameAnchor);
     const labelNames = labels.map((label) => label.text.trim() || label.id).join(" / ");
     setMessage(
@@ -3051,7 +3070,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     linkLabelId.current = null;
     setLinkPoint(null);
     if (!startLabelId) return;
-    const startLabel = cellById.get(startLabelId);
+    const startLabel = displayCellById.get(startLabelId);
     if (!startLabel) return;
     const labels = recordLabelCellsCrossedByLine(
       {
@@ -3059,7 +3078,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         y: startLabel.y + startLabel.height / 2,
       },
       end,
-      layout.cells.filter((cell) => cell.role === "label"),
+      displayCells.filter((cell) => cell.role === "label"),
     );
     if (labels.length < 2) {
       setMessage("レコード作成では、最初の列ラベルから最後の列ラベルまで横方向にドラッグし、2個以上をまとめて選択してください。");
@@ -3075,7 +3094,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!labelId) return;
     if (mode === "parent" && showMeaningStep) {
       const parentLabel = cellById.get(labelId);
-      const childLabel = [...layout.cells].reverse().find((cell) => (
+      const childLabel = [...displayCells].reverse().find((cell) => (
         cell.role === "label"
         && cell.id !== labelId
         && pointInsideRect(end, cell)
@@ -3124,7 +3143,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       );
       return;
     }
-    const recordLabel = [...layout.cells].reverse().find((cell) => (
+    const recordLabel = [...displayCells].reverse().find((cell) => (
       cell.role === "label" && pointInsideRect(end, cell)
     ));
     const section = recordLabel
@@ -3219,7 +3238,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setMessage("未設定の記入欄の強調表示を解除しました。");
       return;
     }
-    const firstUnassigned = layout.cells.find(
+    const firstUnassigned = displayCells.find(
       (cell) => unassignedMeaningIds.has(cell.id),
     );
     if (!firstUnassigned) return;
@@ -3235,7 +3254,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       if (!wrapper || !canvas) return;
       const renderedWidth = canvas.getBoundingClientRect().width;
       const scale = renderedWidth > 0
-        ? renderedWidth / layout.canonicalWidth
+        ? renderedWidth / displayWidth
         : 1;
       const centerX = (firstUnassigned.x + firstUnassigned.width / 2) * scale;
       const centerY = (firstUnassigned.y + firstUnassigned.height / 2) * scale;
@@ -3319,7 +3338,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           <ModeButton current={mode} mode="select" label="選択" onChange={setMode} />
         )}
         {showClassificationStep && <ModeButton current={mode} mode="classify" label="区分変更" onChange={setMode} />}
-        {showClassificationStep && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
+        {showClassificationStep && !pageView && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
         {showMeaningStep && (
           <ModeButton
             current={mode}
@@ -3450,8 +3469,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           <canvas
             id="layout-mapping-canvas"
             ref={canvasRef}
-            width={layout.canonicalWidth}
-            height={layout.canonicalHeight}
+            width={displayWidth}
+            height={displayHeight}
             tabIndex={0}
             aria-label={showIdentityStep ? "書類を見分ける欄を選択する帳票プレビュー" : "帳票レイアウト編集キャンバス"}
             aria-describedby="layout-keyboard-help"
@@ -3473,7 +3492,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               toggleIdentityCandidate(candidate);
             }}
             onKeyDown={(event) => {
-              if (busy || disabled || layout.cells.length === 0) return;
+              if (busy || disabled || displayCells.length === 0) return;
               if (mode === "identity" && (event.key === "Enter" || event.key === " ")) {
                 const candidate = selectedId ? identityCandidateByCellId.get(selectedId) : null;
                 if (!candidate) return;
@@ -3484,8 +3503,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) return;
               event.preventDefault();
               const navigableCells = mode === "identity"
-                ? identityCandidates.map((candidate) => candidate.cell)
-                : layout.cells;
+                ? identityCandidates.map((candidate) => candidate.cell).filter(cell => displayCellById.has(cell.id))
+                : displayCells;
               if (navigableCells.length === 0) return;
               const currentIndex = navigableCells.findIndex((cell) => cell.id === selectedId);
               const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
@@ -3524,17 +3543,17 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 const bounds = event.currentTarget.getBoundingClientRect();
                 const hitTolerance = Math.max(
                   10,
-                  16 * layout.canonicalWidth / Math.max(1, bounds.width),
-                  16 * layout.canonicalHeight / Math.max(1, bounds.height),
+                  16 * displayWidth / Math.max(1, bounds.width),
+                  16 * displayHeight / Math.max(1, bounds.height),
                 );
                 const recordSectionHit = recordSectionAtPoint(
                   location,
                   recordSections,
-                  layout.cells,
+                  displayCells,
                   hitTolerance,
                 );
                 if (recordSectionHit) {
-                  const anchor = recordSectionBand(recordSectionHit, layout.cells)?.anchor ?? location;
+                  const anchor = recordSectionBand(recordSectionHit, displayCells)?.anchor ?? location;
                   openRecordNameEditor(recordSectionHit, anchor);
                   return;
                 }
@@ -3548,7 +3567,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 return;
               }
               if (mode === "link" || mode === "parent" || mode === "record-parent") {
-                const labelHit = [...layout.cells].reverse().find((cell) => (
+                const labelHit = [...displayCells].reverse().find((cell) => (
                   (cell.role === "label" || ((mode === "parent" || mode === "record-parent") && cell.role === "parent_label"))
                   && location.x >= cell.x
                   && location.x <= cell.x + cell.width
@@ -3657,7 +3676,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   }
                   return;
                 }
-                const ids = cellsSelectedByRect(layout.cells, next).map((cell) => cell.id);
+                const ids = cellsSelectedByRect(displayCells, next).map((cell) => cell.id);
                 const nextIds = additive
                   ? new Set([...selectedIds, ...ids])
                   : new Set(ids);
@@ -3802,7 +3821,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               <h3>範囲選択: {selectedCells.length} セル</h3>
               <p>選択したセルの区分を一括変更するか、1つの論理セルとして結合できます。</p>
               <div className="cell-merge-actions">
-                <button type="button" className="merge-cell-button" onClick={() => mergeSelectedCells()}>
+                <button type="button" className="merge-cell-button" disabled={Boolean(pageView)} onClick={() => mergeSelectedCells()}>
                   選択セルを結合
                 </button>
                 <small>元のセルは保持され、結合解除で復元できます。</small>
@@ -3910,7 +3929,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   onBatchChange={patchMarkCells}
                 />
               )}
-              {showClassificationStep && <button
+              {showClassificationStep && !pageView && <button
                 className="danger-button compact"
                 type="button"
                 onClick={() => {
@@ -5925,7 +5944,7 @@ function hasAdjacentMeaningField(
   });
 }
 
-export function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
+export function normalizeLayout(layout: LayoutDefinition, preserveDetectedRoles = false): LayoutDefinition {
   // Keep the legacy schema readable, but migrate its special number cells to
   // ordinary inputs as soon as the editor loads the layout.
   const legacyNumberIds = new Set(layout.cells.flatMap((cell) => (
@@ -5947,7 +5966,7 @@ export function normalizeLayout(layout: LayoutDefinition): LayoutDefinition {
       section.parentLabelCellId ? [section.parentLabelCellId] : []
     )),
   ]);
-  const repairDetectedSpreadsheetLabels = layout.detector === "xlsx-structure";
+  const repairDetectedSpreadsheetLabels = !preserveDetectedRoles && layout.detector === "xlsx-structure";
   // Older spreadsheet imports could persist a field label as parent_label.
   // Repair only unused parent candidates that geometrically own an adjacent
   // input; explicit parent links and record-section headings remain intact.
@@ -6205,19 +6224,20 @@ function findCopiedMergeTargetCells(
 function restoreLayoutDraft(
   initialLayout: LayoutDefinition,
   draftStorageKey?: string,
+  preserveDetectedRoles = false,
 ): LayoutDefinition {
-  if (!draftStorageKey) return normalizeLayout(initialLayout);
+  if (!draftStorageKey) return normalizeLayout(initialLayout, preserveDetectedRoles);
   try {
     const stored = window.localStorage.getItem(draftStorageKey);
-    if (!stored) return normalizeLayout(initialLayout);
-    return normalizeLayout(JSON.parse(stored) as LayoutDefinition);
+    if (!stored) return normalizeLayout(initialLayout, preserveDetectedRoles);
+    return normalizeLayout(JSON.parse(stored) as LayoutDefinition, preserveDetectedRoles);
   } catch {
     try {
       window.localStorage.removeItem(draftStorageKey);
     } catch {
       // Ignore storage failures and continue with the server-backed layout.
     }
-    return normalizeLayout(initialLayout);
+    return normalizeLayout(initialLayout, preserveDetectedRoles);
   }
 }
 

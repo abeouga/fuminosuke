@@ -390,7 +390,31 @@ geometry modelの変更を旧保存プラン・legacy canonical rectangle・prev
 
 離れたprint area、print titles / repeated rows・columns、header/footer、横複数ページ、hidden行列、shapes / controls / formulas、高度な書式・OOXML、未確認font、過大range等を推測処理しない。安全な対応が未検証ならunsupportedまたは未認定として本番への流入を止める。OOXML属性の未指定とライブラリdefaultも区別し、取得できない設定を推測で正規化しない。
 
+明示的に追加した[印刷用帳票取得](template-print-files.md)は、対象TemplateVersionの保存済み
+printLayoutを使う別成果物の生成である。横1ページ×縦Nページの保存rangeから成果物の
+Print_Area・manual rowBreaks・印刷条件を設定できる。原本、保存版、過去job、既存の
+OCR結果出力（§7）は変更しない。小数％倍率等、既存adapterで再現できない条件は拒否する。
+この取得成功・PDF生成成功をreference資格や本番OCR利用許可に昇格させない。
+
 ### 12.6 Qualificationと本番gate
+
+目視によるページ編集は[ページ単位の目視編集](page-authoring.md)に従う。
+`draft-visible-cells-v1`は非表示行列を表示幅・高さから除き、セル内縮小を参考描画する
+未認定の表示モデルである。保存済みlegacy/LOモデルを自動更新しない。原本の設定・セルを
+書き換えず、元セルIDからページ表示座標を参照する。表示座標はlayoutへ保存しない。
+`PUT print-layout/authoring`はDRAFT/revisionと既存矩形ID・座標・結合の一致を確認し、
+既存LayoutServiceへ人間の区分・意味づけを保存する。ページ境界・transform・参考画像は保持し、
+ページfields/bindingsとlayout SHAを更新する。過去のqualificationは新版の証明に流用しない。
+この表示モデルでは既存のqualificationモデル照合が不成立となり、本番gateは閉じたままとする。
+Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR受付・実行・レビューの
+制限は変更しない。追加の自動区分・自動意味づけは実装しない。
+
+新規XLSX取込のlegacyプレビューでは、同じ一時コピーをOfficeで読んだ行高・列幅を
+`quality_json.spreadsheetPreviewGeometry`へ保存し、元セル由来の矩形座標に利用する。
+このsnapshotがない既存版の復元は従来計算を維持する。snapshotがある版の復元は保存寸法と
+原本SHAを照合し、現在のOfficeで再測定しない。セル数・役割・merged cellsを推測変更しない。
+これはprintLayoutのgeometry evidenceやqualificationを代替しない。
+検証と制限は[プレビュー座標・ページ編集検証](spreadsheet-preview-geometry.md)を参照する。
 
 reference imageの生成成功はqualificationではない。元XLSX、TemplateVersion、printLayout revision、geometry model / implementation、ページ別reference SHA、field geometry、renderer evidenceの対応を検証する。版・設定・画像・実装・環境の変更や証拠の欠落で有効性を失った結果を再利用しない。
 

@@ -213,40 +213,9 @@ def render_office(
                 directory.mkdir()
                 source = directory / "page.xlsx"
                 source.write_bytes(data)
-                profile = directory / "profile"
-                (profile / "user").mkdir(parents=True)
-                (profile / "user/registrymodifications.xcu").write_text(
-                    '<?xml version="1.0"?><oor:items '
-                    'xmlns:oor="http://openoffice.org/2001/registry">'
-                    '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
-                    '<prop oor:name="DisableMacrosExecution" oor:op="fuse">'
-                    '<value>true</value></prop>'
-                    '<prop oor:name="DisableActiveContent" oor:op="fuse"><value>true</value></prop>'
-                    '</item></oor:items>', encoding="utf-8")
-                command = [identity["executable"], "--headless", "--nologo", "--nodefault",
-                           "--norestore", "--nofirststartwizard",
-                           f"-env:UserInstallation={profile.as_uri()}", "--convert-to",
-                           "fods" if geometry_only else "pdf:calc_pdf_Export",
-                           "--outdir", str(directory), str(source)]
-                try:
-                    modules = LoadedImages()
-                    with container(directory) if sandboxed else nullcontext(None) as ac:
-                        metrics = run_contained(command, timeout=RENDER_TIMEOUT_SECONDS,
-                                                loaded_images=modules, appcontainer=ac,
-                                                environment=render_environment(directory))
-                    metrics["networkPolicy"] = (
-                        "appcontainer-zero-capabilities-v1" if sandboxed else "uncontained-v1")
-                    metrics["loadedDependencies"] = modules.report()
-                except AppError as exc:
-                    if exc.code == "RENDER_TIMEOUT":
-                        raise print_error("Office render timed out.", "RENDER_FAILED") from exc
-                    raise
-                if execution_metrics is not None:
-                    execution_metrics.append(metrics)
-                code = metrics["exitCode"]
-                pdf_path = directory / ("page.fods" if geometry_only else "page.pdf")
-                if code or not pdf_path.is_file() or pdf_path.stat().st_size > MAX_SOURCE_BYTES:
-                    raise print_error("Office PDF conversion failed.", "RENDER_FAILED")
+                pdf_path, metrics = convert_office_file(
+                    directory, identity, geometry_only=geometry_only, sandboxed=sandboxed,
+                    execution_metrics=execution_metrics)
                 if geometry_only:
                     images.append(pdf_path.read_bytes())
                     continue
@@ -256,3 +225,47 @@ def render_office(
         return identity, images
     finally:
         _RENDER_LOCK.release()
+
+
+def convert_office_file(
+    directory: Path, identity: dict[str, Any], *, geometry_only: bool = False,
+    sandboxed: bool = False,
+    execution_metrics: list[dict[str, Any]] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Convert fixed page.xlsx using the existing profile and process containment."""
+    source = directory / "page.xlsx"
+    profile = directory / "profile"
+    (profile / "user").mkdir(parents=True)
+    (profile / "user/registrymodifications.xcu").write_text(
+        '<?xml version="1.0"?><oor:items '
+        'xmlns:oor="http://openoffice.org/2001/registry">'
+        '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+        '<prop oor:name="DisableMacrosExecution" oor:op="fuse">'
+        '<value>true</value></prop>'
+        '<prop oor:name="DisableActiveContent" oor:op="fuse"><value>true</value></prop>'
+        '</item></oor:items>', encoding="utf-8")
+    command = [identity["executable"], "--headless", "--nologo", "--nodefault",
+               "--norestore", "--nofirststartwizard",
+               f"-env:UserInstallation={profile.as_uri()}", "--convert-to",
+               "fods" if geometry_only else "pdf:calc_pdf_Export",
+               "--outdir", str(directory), str(source)]
+    try:
+        modules = LoadedImages()
+        with container(directory) if sandboxed else nullcontext(None) as ac:
+            metrics = run_contained(command, timeout=RENDER_TIMEOUT_SECONDS,
+                                    loaded_images=modules, appcontainer=ac,
+                                    environment=render_environment(directory))
+        metrics["networkPolicy"] = (
+            "appcontainer-zero-capabilities-v1" if sandboxed else "uncontained-v1")
+        metrics["loadedDependencies"] = modules.report()
+    except AppError as exc:
+        if exc.code == "RENDER_TIMEOUT":
+            raise print_error("Office render timed out.", "RENDER_FAILED") from exc
+        raise
+    if execution_metrics is not None:
+        execution_metrics.append(metrics)
+    code = metrics["exitCode"]
+    pdf_path = directory / ("page.fods" if geometry_only else "page.pdf")
+    if code or not pdf_path.is_file() or pdf_path.stat().st_size > MAX_SOURCE_BYTES:
+        raise print_error("Office PDF conversion failed.", "RENDER_FAILED")
+    return pdf_path, metrics

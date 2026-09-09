@@ -209,6 +209,7 @@ class LayoutService:
             ).restore_layout(
                 self._storage.read_bytes(spreadsheet_source_path),
                 preview_image=preview_image,
+                preview_geometry=version.quality_json.get("spreadsheetPreviewGeometry"),
             )
             label_pool_by_path = {
                 entry.target_path: entry

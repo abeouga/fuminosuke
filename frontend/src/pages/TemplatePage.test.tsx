@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DocumentIdentity, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 import { mappingWarningsForIdentity, TemplatePage } from "./TemplatePage";
+import type { PrintState } from "../printLayout";
 
 const createdAt = "2026-07-30T12:00:00Z";
 
@@ -165,6 +166,61 @@ function jsonResponse(body: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test("saved pages enable manual authoring while legacy verification and activation stay blocked", async () => {
+  const state: PrintState = {
+    revision: "a".repeat(64), editable: true,
+    source: { sheetName: "sheet", startRow: 1, endRow: 10, width: 100, height: 100,
+      rowBoundaries: [], validBreakRows: [], cells: [], unsupported: [], warnings: [],
+      importedSettings: { pageSetup: null, margins: null, printOptions: null } },
+    saved: { paperSize: "A4", orientation: "portrait", margins: { left: 10, right: 10, top: 10, bottom: 10 },
+      targetPagesWide: 1, targetPagesTall: null, horizontalCentering: false, verticalCentering: false,
+      commonScale: 1, ocrReady: false, warnings: [], pages: [
+        { page: 1, range: "A1:D10", startRow: 1, endRow: 10, width: 600, height: 800,
+          transform: { scale: 2, offsetX: 0, offsetY: 0, originX: 0, originY: 0 }, cells: [],
+          fields: [{ cellId: "identity-input", sourceRange: "A1", templatePage: 1,
+            rectangle: { x: 100, y: 100, width: 200, height: 60 } }], referenceImage: { sha256: "b".repeat(64) } },
+      ] },
+  };
+  const fallback = reviewFetch(undefined, undefined, {
+    documentName: { fieldPaths: ["document.unifiedEarTag"], separator: "_", prefix: "", suffix: "" },
+  });
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/print-layout")) return Promise.resolve(jsonResponse(state));
+    return fallback(input, init);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
+    quality: { layoutVerified: false, printLayout: state.saved } };
+  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
+    refresh={vi.fn()} rememberJob={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "編集ページ" })).toBeEnabled());
+  expect(screen.getByRole("button", { name: "区分変更" })).toBeEnabled();
+  expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toHaveAttribute("width", "600");
+  expect(screen.queryByRole("heading", { name: "XLSXのセル構造を確定" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
+});
+
+test("saved print layout exposes version-bound downloads in template management", async () => {
+  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
+    quality: { printLayout: { pages: [{ startRow: 1, endRow: 10 }] } } };
+  const fetch = vi.fn((input: RequestInfo | URL) => {
+    if (String(input).endsWith("/print-layout")) return Promise.resolve(jsonResponse({ revision: "r1" }));
+    if (String(input).endsWith("/files/pdf?base_revision=r1")) {
+      return Promise.resolve(jsonResponse({ detail: "隔離環境でPDF変換できません。" }, 409));
+    }
+    throw new Error(`Unexpected request: ${String(input)}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
+    refresh={vi.fn(async () => undefined)} rememberJob={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "印刷用XLSX" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "印刷用PDF" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("隔離環境");
+  expect(fetch.mock.calls.some(([url]) => String(url).includes(
+    "/template-versions/version-draft/print-layout/files/pdf?base_revision=r1"))).toBe(true);
+});
 
 async function openDraftReview() {
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));

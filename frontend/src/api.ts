@@ -123,6 +123,12 @@ export function createIdempotencyKey(scope: "template" | "ocr"): string {
 }
 
 export const api = {
+  downloadTemplatePrint: async (id: string, revision: string, format: "xlsx" | "pdf") => {
+    const response = await requestResponse(
+      `/template-versions/${encodeURIComponent(id)}/print-layout/files/${format}?base_revision=${encodeURIComponent(revision)}`,
+    );
+    return response.blob();
+  },
   referenceQualification: (id: string) => request<import("./printLayout").ReferenceQualification>(
     `/template-versions/${id}/print-layout/qualification`),
   qualifyReference: (id: string, revision: string) => request<import("./printLayout").ReferenceQualification>(
@@ -132,6 +138,11 @@ export const api = {
   getOcrPages: (versionId: string) => request<import("./components/OcrPageBindings").PageCatalog>(`/template-versions/${versionId}/ocr-pages`),
   createOcrPageJob: (body: FormData, key: string) => request<{ jobId: string }>("/ocr-page-jobs", { method: "POST", body, headers: { "Idempotency-Key": key } }),
   printLayout: (id: string) => request<PrintState>(`/template-versions/${id}/print-layout`),
+  savePageAuthoring: (id: string, revision: string, layout: LayoutDefinition) => request<{
+    layout: LayoutDefinition; state: PrintState;
+  }>(`/template-versions/${id}/print-layout/authoring?base_revision=${encodeURIComponent(revision)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(layout),
+  }),
   previewPrintLayout: (id: string, body: PrintRequest) => request<PrintPlan>(
     `/template-versions/${id}/print-layout/preview`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },

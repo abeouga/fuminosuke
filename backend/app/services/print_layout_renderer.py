@@ -44,7 +44,23 @@ def render_page(page: dict[str, Any]) -> bytes:
         x, y, w, h = (rect[k] for k in ("x", "y", "width", "height"))
         draw.rectangle((x, y, x + w - 1, y + h - 1), fill=cell["fill"])
         if cell["text"]:
-            font = _font(max(1, round(cell["fontSize"] * scale)), cell["bold"])
+            font_size = max(1, round(cell["fontSize"] * scale))
+            font = _font(font_size, cell["bold"])
+            # Draft-only approximation: fit complete explicit lines without
+            # altering the source text, style, or worksheet dimensions.
+            if cell.get("shrinkToFit") and not cell["wrap"]:
+                low, high = 1, font_size
+                paragraphs = cell["text"].split("\n")
+                while low < high:
+                    size = (low + high + 1) // 2
+                    candidate = _font(size, cell["bold"])
+                    if (max(draw.textlength(line, font=candidate) for line in paragraphs)
+                            <= max(1, w - 4) and size * 1.4 * len(paragraphs) <= h):
+                        low = size
+                    else:
+                        high = size - 1
+                font_size = low
+                font = _font(font_size, cell["bold"])
             tile = Image.new("RGB", (w, h), cell["fill"])
             td = ImageDraw.Draw(tile)
             lines: list[str] = []
@@ -60,7 +76,8 @@ def render_page(page: dict[str, Any]) -> bytes:
                         line = ""
                     line += char
                 lines.append(line)
-            line_h = max(1, round(cell["fontSize"] * scale * 1.4))
+            line_h = max(1, round((font_size if cell.get("shrinkToFit") and not cell["wrap"]
+                                  else cell["fontSize"] * scale) * 1.4))
             for i, line in enumerate(lines):
                 if i * line_h >= h:
                     break

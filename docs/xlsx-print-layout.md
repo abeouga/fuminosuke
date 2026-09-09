@@ -1,5 +1,10 @@
 # XLSX印刷ページ設計 (2026-09-07)
 
+2026-09-09追記: [ページ単位の目視編集](page-authoring.md)を追加した。
+非表示行列・セル内縮小を含む帳票は、原本を保持した未認定の下書き表示に限定して扱う。
+保存ページ上で既存矩形の区分・意味づけを編集できる。以下の初期Phaseの拒否範囲と
+レイアウト編集後の画像失効は、専用authoring APIの条件を除く記録として参照する。
+
 2026-09-08追記: 新規printLayoutのsource geometryは`lo-import-twip-v1`を使用する。
 旧保存プランとlegacy OCR座標は旧モデルを保持。以下は初期Phaseの記録であり、
 校正の現状・実測・制約は[Geometry Calibration](geometry-calibration.md)を参照。

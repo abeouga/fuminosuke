@@ -18,6 +18,7 @@ from app.domain.print_layout import print_error
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+DRAFT_GEOMETRY_VERSION = "draft-visible-cells-v1"
 
 
 def _xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
@@ -27,14 +28,18 @@ def _xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
     return ET.fromstring(data)
 
 
-def read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dict[str, Any]:
+def read_source(
+    content: bytes, sheet_name: str, layout: dict[str, Any], *, draft_support: bool = False,
+) -> dict[str, Any]:
     try:
-        return _read_source(content, sheet_name, layout)
+        return _read_source(content, sheet_name, layout, draft_support=draft_support)
     except (ValueError, KeyError, StopIteration, zipfile.BadZipFile, ET.ParseError) as exc:
         raise print_error("元XLSXのセル・印刷構造を安全に取得できません。") from exc
 
 
-def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dict[str, Any]:
+def _read_source(
+    content: bytes, sheet_name: str, layout: dict[str, Any], *, draft_support: bool,
+) -> dict[str, Any]:
     if len(content) > 64 * 1024 * 1024:
         raise print_error("元XLSXが64MiBを超えています。")
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -131,8 +136,15 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
             r: float(sheet.row_dimensions[r].height or sheet.sheet_format.defaultRowHeight or 15)
             for r in range(r1, r2 + 1)
         }
-        if hidden_cols or any(sheet.row_dimensions[r].hidden for r in rows):
-            unsupported.append("非表示行・列を含む印刷範囲は未対応です。")
+        hidden_rows = {r for r in rows if sheet.row_dimensions[r].hidden}
+        draft_features = []
+        if hidden_cols or hidden_rows:
+            if draft_support:
+                draft_features.append("hidden-dimensions")
+                columns.update({c: 0.0 for c in hidden_cols})
+                rows.update({r: 0.0 for r in hidden_rows})
+            else:
+                unsupported.append("非表示行・列を含む印刷範囲は未対応です。")
         xs, ys = {c1: 0.0}, {r1: 0.0}
         for col, w in columns.items():
             xs[col + 1] = xs[col] + w
@@ -171,9 +183,15 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
                     continue
                 cell = sheet.cell(row, col)
                 er, ec = spans.get((row, col), (row, col))
+                if draft_support and (xs[ec + 1] == xs[col] or ys[er + 1] == ys[row]):
+                    continue
                 if cell.data_type == "f":
                     unsupported.append("数式セルの表示値の再計算は未対応です。")
-                if cell.alignment.textRotation or cell.alignment.shrinkToFit:
+                if draft_support and cell.alignment.shrinkToFit:
+                    draft_features.append("shrink-to-fit")
+                if cell.alignment.textRotation or (
+                    cell.alignment.shrinkToFit and not draft_support
+                ):
                     unsupported.append("回転文字・セル内縮小は未対応です。")
                 text = str(cell.value) if cell.value is not None else ""
                 if (
@@ -183,7 +201,7 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
                 ):
                     unsupported.append("書式付き数値・日付の表示は未対応です。")
                 borders = {
-                    side: getattr(cell.border, side).style is not None
+                    side: getattr(getattr(cell.border, side), "style", None) is not None
                     for side in ("left", "right", "top", "bottom")
                 }
                 if not text and not any(borders.values()) and cell.fill.fill_type is None:
@@ -210,6 +228,8 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
                         "bold": bool(cell.font.bold),
                         "align": cell.alignment.horizontal or "left",
                         "wrap": bool(cell.alignment.wrap_text),
+                        **({"shrinkToFit": bool(cell.alignment.shrinkToFit)}
+                           if draft_support else {}),
                         "borders": borders,
                         "fill": fill,
                     }
@@ -225,6 +245,9 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
                 unsupported.append("印刷範囲外または結合内部の編集矩形があります。")
                 continue
             er, ec = spans.get((fr, fc), (fr, fc))
+            if draft_support and (xs[ec + 1] == xs[fc] or ys[er + 1] == ys[fr]):
+                unsupported.append("非表示セルに対応する編集矩形があります。")
+                continue
             fields.append(
                 {
                     "cellId": field["id"],
@@ -276,6 +299,10 @@ def _read_source(content: bytes, sheet_name: str, layout: dict[str, Any]) -> dic
             "importedSettings": imported,
             "unsupported": list(dict.fromkeys(unsupported)),
             "warnings": warnings,
+            **({
+                "draftFeatures": sorted(set(draft_features)),
+                "hiddenColumns": sorted(hidden_cols), "hiddenRows": sorted(hidden_rows),
+            } if draft_support else {}),
         }
     finally:
         workbook.close()

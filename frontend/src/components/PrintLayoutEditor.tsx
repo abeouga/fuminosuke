@@ -3,6 +3,7 @@ import { api } from "../api";
 import { nearestBreak, printDefaults, type PrintCell, type PrintPlan, type PrintRequest, type PrintState } from "../printLayout";
 import "./PrintLayoutEditor.css";
 import { ReferenceQualification } from "./ReferenceQualification";
+import { TemplatePrintFiles } from "./TemplatePrintFiles";
 
 function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boolean }) {
   return <>{cells.map((cell) => {
@@ -25,10 +26,14 @@ function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boo
   })}</>;
 }
 
-export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyChange, onSavedChange }: {
+export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyChange, onSavedChange,
+  onStateChange, externalState, initialSaved = false }: {
   versionId: string; disabled: boolean;
   onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
   onSavedChange: (saved: boolean) => void;
+  onStateChange?: (state: PrintState) => void;
+  externalState?: PrintState | null;
+  initialSaved?: boolean;
 }) {
   const [opened, setOpened] = useState(false);
   const [state, setState] = useState<PrintState | null>(null);
@@ -41,14 +46,19 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const [selectedPage, setSelectedPage] = useState(0);
   const [overlay, setOverlay] = useState(true);
   const [drag, setDrag] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [addRow, setAddRow] = useState("");
   const sequence = useRef(0);
   const lock = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
   const apply = (next: PrintState) => {
     setState(next); setRequest(printDefaults(next)); setPlan(next.saved);
     setDirty(false); onSavedChange(Boolean(next.saved)); setSelectedPage(0);
+    setAddRow("");
+    onStateChange?.(next);
   };
   const load = async () => {
     if (lock.current) return;
@@ -57,6 +67,15 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     catch (e) { setError(e instanceof Error ? e.message : "印刷設定を取得できません。"); }
     finally { lock.current = false; setBusy(false); }
   };
+  useEffect(() => {
+    if (initialSaved) void load();
+    // Saved versions need their revision even while the page planner is collapsed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionId]);
+  useEffect(() => {
+    if (externalState && externalState !== state && !dirty) apply(externalState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalState]);
   useEffect(() => {
     if (!opened || !request || !state || state.source.unsupported.length) return;
     const token = ++sequence.current;
@@ -93,6 +112,20 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const breaks = request?.breakAfterRows ?? plan?.pages.slice(0, -1).map(p => p.endRow) ?? [];
   const blocked = disabled || busy || !state?.editable || Boolean(state?.source.unsupported.length);
   const current = plan?.pages[selectedPage];
+  const availableRows = state?.source.validBreakRows.filter(r => !breaks.includes(r)) ?? [];
+  const addBoundary = () => {
+    if (!state || blocked) return;
+    let y = state.source.height / 2;
+    if (scroll.current && svg.current) {
+      const frame = scroll.current.getBoundingClientRect();
+      const sheet = svg.current.getBoundingClientRect();
+      if (sheet.height > 0) y = (frame.top + frame.height / 2 - sheet.top) * state.source.height / sheet.height;
+    }
+    const row = addRow ? Number(addRow) : nearestBreak(y, state.source, breaks);
+    if (row !== null && availableRows.includes(row)) {
+      update({ breakAfterRows: [...breaks, row].sort((a, b) => a - b) }); setAddRow("");
+    }
+  };
   const moveBreak = (index: number, row: number) => {
     if (!state || !state.source.validBreakRows.includes(row) || breaks.some((b, i) => i !== index && b === row)) return;
     // A dragged boundary cannot cross its neighbors.
@@ -107,7 +140,13 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
       {error && <p role="alert" className="error-box">{error}</p>}
       {!state && <button type="button" disabled={busy} onClick={() => void load()}>読み込みを再試行</button>}
       {state && request && <>
-        {state.source.unsupported.map(w => <p className="error-box" key={w}>{w}</p>)}
+        {state.source.unsupported.length > 0 && <div className="error-box" role="status">
+          <strong>このXLSXは現在のページ編集対象外です。境界の追加・保存はできません。</strong>
+          <ul>{state.source.unsupported.map(w => <li key={w}>{w}</li>)}</ul>
+          <p>Excel側で該当する構造・設定を確認して再取り込みしてください。下の表示は拡大・スクロールで確認できます。</p>
+        </div>}
+        {!state.editable && <p className="inline-warning">この版は閲覧専用です。編集には下書き版が必要です。</p>}
+        {disabled && <p className="inline-warning">テンプレート側の編集中の内容を保存してからページ境界を編集してください。</p>}
         <fieldset disabled={blocked} className="print-controls">
           <label>用紙<select value={request.paperSize} onChange={e => update({ paperSize: e.target.value as PrintRequest["paperSize"] })}>
             {["A4", "A3", "Letter"].map(v => <option key={v}>{v}</option>)}</select></label>
@@ -121,16 +160,34 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
           <label><input type="checkbox" checked={request.horizontalCentering} onChange={e => update({ horizontalCentering: e.target.checked })} />左右中央</label>
           <label><input type="checkbox" checked={request.verticalCentering} onChange={e => update({ verticalCentering: e.target.checked })} />上下中央</label>
           <button type="button" onClick={() => update({ breakAfterRows: null, autoArrange: true })}>自動配置</button>
-          <button type="button" disabled={breaks.length >= 49} onClick={() => {
-            const row = nearestBreak(state.source.height / 2, state.source, breaks);
-            if (row !== null) update({ breakAfterRows: [...breaks, row].sort((a, b) => a - b) });
-          }}>改ページを追加</button>
           <button type="button" onClick={() => update({ breakAfterRows: [] })}>全範囲を1ページにする</button>
         </fieldset>
+        <div className="print-controls print-actions">
+          <button type="button" disabled={blocked || pendingPreview || !plan} onClick={() => void save()}>印刷ページを下書き保存</button>
+          <button type="button" disabled={busy || !dirty} onClick={() => { apply(state); setError(""); }}>変更を取消</button>
+          <button type="button" disabled={busy || dirty} onClick={() => void load()}>保存済み設定を再取得</button>
+          <span role="status">{dirty ? "未保存" : state.saved ? `保存済み・${state.saved.pages.length}ページ` : "未保存のページ案"}</span>
+        </div>
         <div className="print-views">
-          <div><h3>連続シート・行境界の編集</h3><p>セル範囲の表示です。用紙の実寸ではありません。</p>
-            <div className="print-logical-scroll"><svg ref={svg} viewBox={`-22 0 ${state.source.width + 22} ${state.source.height}`}
-              aria-label="連続シートの改ページ" style={{ touchAction: drag === null ? "auto" : "none" }}
+          <div><h3>連続シート・行境界の編集</h3>
+            <div className="print-controls">
+              <button type="button" disabled={zoom <= .5} onClick={() => setZoom(z => Math.max(.5, z - .25))}>縮小</button>
+              <output aria-label="表示倍率">{Math.round(zoom * 100)}%</output>
+              <button type="button" disabled={zoom >= 3} onClick={() => setZoom(z => Math.min(3, z + .25))}>拡大</button>
+              <button type="button" onClick={() => setZoom(1)}>倍率をリセット</button>
+            </div>
+            <p>横幅基準の表示です。上下にスクロールし、青い「移動」ハンドルをドラッグするか、最終行を選択します。結合セルの途中には区切れません。</p>
+            <div className="print-controls">
+              <label>追加する境界（行の後）<select disabled={blocked || !availableRows.length} value={addRow} onChange={e => setAddRow(e.target.value)}>
+                <option value="">表示中の位置に追加</option>
+                {availableRows.map(row => <option key={row} value={row}>{row}行の後</option>)}
+              </select></label>
+              <button type="button" disabled={blocked || breaks.length >= 49 || !availableRows.length} onClick={addBoundary}>改ページを追加</button>
+            </div>
+            {!state.source.validBreakRows.length && <p className="inline-warning">結合セルを分断せずに追加できる行境界がありません。</p>}
+            <div ref={scroll} className="print-logical-scroll" tabIndex={0} aria-label="連続シートのスクロール領域"><svg ref={svg} viewBox={`-22 0 ${state.source.width + 22} ${state.source.height}`}
+              style={{ width: `${zoom * 100}%`, minWidth: `${960 * zoom}px` }}
+              aria-label="連続シートの改ページ"
               onPointerMove={e => {
                 if (drag === null || blocked || !svg.current) return;
                 const bounds = svg.current.getBoundingClientRect();
@@ -151,21 +208,24 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
                 <text key={b.row} x={-3} y={b.y + 9} textAnchor="end" fontSize={7} fill="#526270" pointerEvents="none">{b.row}</text>)}
               {breaks.map((row, i) => {
                 const y = state.source.rowBoundaries.find(b => b.row === row + 1)!.y;
-                return <g key={i}>
-                  <line x1={0} x2={state.source.width} y1={y} y2={y} stroke="#156ec5" strokeWidth={2} />
-                  <text x={4} y={Math.max(12, y - 3)} fontSize={12} fill="#064b8b">Page {i + 1} end / {row}行</text>
+                return <g key={i} style={{ cursor: blocked ? "default" : "ns-resize", touchAction: "none" }}
+                  onPointerDown={e => { if (!blocked) { e.preventDefault(); svg.current?.setPointerCapture(e.pointerId); setDrag(i); } }}>
+                  <line x1={0} x2={state.source.width} y1={y} y2={y} stroke={dirty ? "#a45000" : "#156ec5"} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                  <rect x={4} y={Math.max(0, y - 21)} width={155} height={20} rx={3} fill="#e8f3ff" />
+                  <text x={8} y={Math.max(14, y - 6)} fontSize={12} fill="#064b8b" pointerEvents="none">移動 · Page {i + 1} / {row}行の後</text>
                   <line x1={0} x2={state.source.width} y1={y} y2={y} stroke="transparent" strokeWidth={18}
-                    style={{ cursor: blocked ? "default" : "ns-resize", touchAction: "none" }}
-                    onPointerDown={e => { if (!blocked) { e.currentTarget.setPointerCapture(e.pointerId); setDrag(i); } }} />
+                    aria-label={`改ページ ${i + 1} を移動`} vectorEffect="non-scaling-stroke"
+                    style={{ touchAction: "none" }} />
                 </g>;
               })}
             </svg></div>
-            {breaks.map((row, i) => <div key={i} className="print-boundary-controls">
+            <div className="print-boundary-list">{breaks.map((row, i) => <div key={i} className="print-boundary-controls">
               <label>Page {i + 1} 最終行<select disabled={blocked} value={row} onChange={e => moveBreak(i, Number(e.target.value))}>
                 {state.source.validBreakRows.filter(r => (i === 0 || r > breaks[i - 1]) && (i === breaks.length - 1 || r < breaks[i + 1]))
                   .map(r => <option key={r} value={r}>{r}</option>)}</select></label>
               <button type="button" disabled={blocked} onClick={() => update({ breakAfterRows: breaks.filter((_, n) => n !== i) })}>改ページ {i + 1} を削除</button>
-            </div>)}
+              <span>{i ? breaks[i - 1] + 1 : state.source.startRow}〜{row}行</span>
+            </div>)}</div>
           </div>
           <div><h3>用紙上の配置プレビュー</h3>
             {pendingPreview && <p role="status">計算中…</p>}
@@ -186,12 +246,10 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
           </div>
         </div>
         <div className="print-controls">
-          <button type="button" disabled={blocked || pendingPreview || !plan} onClick={() => void save()}>印刷ページを下書き保存</button>
-          <button type="button" disabled={busy || !dirty} onClick={() => { apply(state); setError(""); }}>変更を取消</button>
-          <button type="button" disabled={busy || dirty} onClick={() => void load()}>保存済み設定を再取得</button>
           {state.saved && <button type="button" disabled={disabled || busy || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button>}
-          {dirty && <span>未保存</span>}
         </div>
+        {state.saved && <TemplatePrintFiles key={versionId} versionId={versionId} revision={state.revision}
+          disabled={disabled || busy || dirty} />}
         {state.saved && <ReferenceQualification versionId={versionId} revision={state.revision}
           disabled={disabled || busy || dirty || !state.editable}
           onBusyChange={setBusy} />}

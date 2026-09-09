@@ -575,8 +575,10 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
 .google-login-button span{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#4285f4;color:#fff;font-weight:900}
 .auth-security-note{margin:22px 0 0;color:var(--ui-text-muted);font-size:11px;line-height:1.65}
 .auth-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover}
-.auth-session-actions{display:flex;flex-direction:column;align-items:flex-end;gap:2px;margin-left:auto}
-.auth-logout,.auth-disconnect{border:0;background:transparent;color:#b8c8d3;font-size:10px;text-decoration:underline}
+.auth-session-actions{display:flex;flex-direction:row;align-items:center;gap:2px;margin-left:auto;white-space:nowrap}
+.auth-logout,.auth-disconnect{border:0;background:transparent;color:#b8c8d3;font-size:10px;text-decoration:underline;white-space:nowrap}
+.side-footer > div{min-width:0}
+.side-footer strong,.side-footer small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .auth-logout:hover,.auth-disconnect:hover{color:#fff}
 
 @media (max-width:620px){.auth-card{padding:30px 22px}.auth-card h1{font-size:25px}}
@@ -590,8 +592,25 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
   .ocr-step-actions button{min-width:0}
   .ocr-key-value-table{min-width:560px}.ocr-cell-editor-fields{grid-template-columns:1fr}.ocr-cell-editor-fields label:last-child{grid-column:auto}.ocr-cell-editor>header{flex-wrap:wrap}.ocr-cell-editor>header>div{flex-basis:100%}
   .calving-mark-dialog{grid-template-rows:auto minmax(90px,.5fr) auto auto}.calving-mark-dialog>header{padding:14px}.calving-mark-dialog>header p{display:none}.calving-mark-layout{grid-template-columns:repeat(2,minmax(100px,1fr));padding:15px}.calving-mark-layout>button{min-height:120px}.calving-mark-layout .mark-circle{width:70px;height:70px;font-size:38px}.calving-mark-dialog>footer{padding:12px;flex-direction:column-reverse}.calving-mark-dialog>footer button{width:100%;min-width:0}
-  .identity-confirm-actions{position:static;align-items:stretch;flex-direction:column}.identity-confirm-actions button{width:100%;min-width:0}
+.identity-confirm-actions{position:static;align-items:stretch;flex-direction:column}.identity-confirm-actions button{width:100%;min-width:0}
 }
+
+/* Sidebar footer: place auth actions below the Google identity line to avoid overflow. */
+.side-footer{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  align-items:start;
+  column-gap:10px;
+  row-gap:6px;
+}
+.side-footer .auth-session-actions{
+  grid-column:1 / -1;
+  margin-left:0;
+  display:flex;
+  align-items:center;
+  gap:2px;
+}
+.side-footer strong,.side-footer small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 
 /* Confirmed individual picker. */
 .record-catalog{display:grid;gap:15px;border:1px solid var(--line);border-radius:18px;background:var(--paper);padding:22px 24px;box-shadow:0 12px 30px #24443a0a}

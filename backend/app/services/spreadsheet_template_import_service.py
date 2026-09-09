@@ -45,6 +45,8 @@ from app.layout_analysis.models import (
 from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.spreadsheet_preview_geometry import MODEL, project_preview_geometry
+from app.services.workbook_geometry import read_office_dimensions
 from app.storage.local_storage import LocalStorageService
 
 
@@ -99,14 +101,20 @@ class SpreadsheetTemplateImportService:
                     return existing
 
         layout, print_cells, sheet_name, fallback_image = self._parse_workbook(content)
+        preview_geometry: dict[str, Any] = {}
         pdf, image, pdf_page_count = self._render_workbook_preview(
             content,
             sheet_name=sheet_name,
             canonical_width=layout.canonical_width,
             canonical_height=layout.canonical_height,
+            geometry=preview_geometry,
         )
         if image is None:
             image = fallback_image
+        if preview_geometry:
+            layout, print_cells = project_preview_geometry(
+                content, layout, print_cells, preview_geometry,
+            )
         layout, print_cells = self._align_layout_to_preview(layout, print_cells, image)
         png = encode_png(image)
         image_hash = hashlib.sha256(png).hexdigest()
@@ -196,6 +204,8 @@ class SpreadsheetTemplateImportService:
             "layoutVerified": False,
             "structureReviewRequired": True,
         }
+        if preview_geometry:
+            quality["spreadsheetPreviewGeometry"] = preview_geometry
         with self._database.session() as session:
             templates = TemplateRepository(session)
             template = templates.create_template(
@@ -266,10 +276,15 @@ class SpreadsheetTemplateImportService:
         content: bytes,
         *,
         preview_image: np.ndarray[Any, Any] | None = None,
+        preview_geometry: dict[str, Any] | None = None,
     ) -> LayoutDefinition:
         """Rebuild virtual XLSX cells without writing to the source workbook."""
 
         layout, print_cells, _, _ = self._parse_workbook(content)
+        if preview_geometry is not None:
+            layout, print_cells = project_preview_geometry(
+                content, layout, print_cells, preview_geometry,
+            )
         if preview_image is not None:
             layout, _ = self._align_layout_to_preview(layout, print_cells, preview_image)
         restored, _ = self._with_field_catalog(layout)
@@ -1019,6 +1034,7 @@ class SpreadsheetTemplateImportService:
         sheet_name: str,
         canonical_width: int,
         canonical_height: int,
+        geometry: dict[str, Any] | None = None,
     ) -> tuple[bytes, np.ndarray[Any, Any] | None, int]:
         soffice = self._find_soffice()
         if soffice is None:
@@ -1108,6 +1124,34 @@ class SpreadsheetTemplateImportService:
                     detail="LibreOfficeでXLSXをPDFへ変換できませんでした。",
                 )
             pdf = pdf_path.read_bytes()
+            if geometry is not None:
+                # The same prepared copy and Office profile supply the dimensions
+                # used by this PDF. Never route new reference rendering through
+                # this legacy renderer or infer a qualification from this snapshot.
+                bounds = self._worksheet_bounds(worksheet, content=content)
+                command[command.index("--convert-to") + 1] = "fods"
+                try:
+                    converted = subprocess.run(
+                        command, cwd=directory, capture_output=True, check=False, timeout=90,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    fods_path = directory / "source.fods"
+                    if converted.returncode != 0 or not fods_path.is_file():
+                        raise ValueError("Office dimensions were not exported")
+                    dimensions = read_office_dimensions(
+                        fods_path.read_bytes(), sheet_name, bounds[3], bounds[2],
+                    )
+                except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
+                    raise AppError(
+                        status=422, code="SPREADSHEET_PREVIEW_GEOMETRY_FAILED",
+                        title="Spreadsheet preview geometry could not be read",
+                        detail="プレビューと同じOffice読込寸法を取得できませんでした。",
+                    ) from exc
+                geometry.update(
+                    model=MODEL, sourceSha256=hashlib.sha256(content).hexdigest(),
+                    sheetName=sheet_name, bounds=list(bounds),
+                    rows=dimensions["rows"], columns=dimensions["columns"],
+                )
 
         try:
             document = pdfium.PdfDocument(pdf)

@@ -4,6 +4,8 @@ import { ComparisonViewer } from "../components/ComparisonViewer";
 import { DocumentBoundaryEditor } from "../components/DocumentBoundaryEditor";
 import { FilePicker } from "../components/FilePicker";
 import { PrintLayoutEditor } from "../components/PrintLayoutEditor";
+import type { PrintState } from "../printLayout";
+import { TemplatePrintFiles } from "../components/TemplatePrintFiles";
 import { JobProgress } from "../components/JobProgress";
 import { LayoutEditor, type LayoutEditorHandle, type LayoutWorkflowStep } from "../components/LayoutEditor";
 import { MaskEditor } from "../components/MaskEditor";
@@ -481,6 +483,8 @@ export function TemplatePage({
                   )}
                 </div>
                 <div className="template-management-action">
+                  {primaryVersion && Boolean(primaryVersion.quality.printLayout) && <TemplatePrintFiles key={primaryVersion.id}
+                    versionId={primaryVersion.id} disabled={isDeletingCurrentTemplate || openingReview} />}
                   {primaryVersion && (
                     <button
                       type="button"
@@ -676,6 +680,11 @@ function TemplateReview({
   const [printDirty, setPrintDirty] = useState(false);
   const [printBusy, setPrintBusy] = useState(false);
   const [printSaved, setPrintSaved] = useState(Boolean(version.quality.printLayout));
+  const [printState, setPrintState] = useState<PrintState | null>(null);
+  const [authoringPage, setAuthoringPage] = useState(0);
+  const currentPrintPage = printState?.saved?.pages[
+    Math.min(authoringPage, printState.saved.pages.length - 1)
+  ];
   const [editorBusy, setEditorBusy] = useState(false);
   const [maskDirty, setMaskDirty] = useState(false);
   const [maskBusy, setMaskBusy] = useState(false);
@@ -893,6 +902,8 @@ function TemplateReview({
         key={version.id} versionId={version.id}
         disabled={editorDirty || editorBusy || maskDirty || maskBusy || verifying || decisionBusy !== null}
         onDirtyChange={setPrintDirty} onBusyChange={setPrintBusy} onSavedChange={setPrintSaved}
+        initialSaved={Boolean(version.quality.printLayout)}
+        onStateChange={setPrintState} externalState={printState}
       />}
       {mappingConfig && layoutConfig && after && (
         <section className="form-card mapping-section">
@@ -921,10 +932,25 @@ function TemplateReview({
             ))}
           </nav>
           {maskDirty && <p className="inline-warning">先に文字候補の選別結果を保存してください。</p>}
+          {printSaved && printState?.saved && <div className="print-controls" aria-label="区分・意味づけの編集ページ">
+            <label>編集ページ<select value={currentPrintPage?.page ?? 1}
+              disabled={operationBusy || printDirty}
+              onChange={event => setAuthoringPage(Number(event.target.value) - 1)}>
+              {printState.saved.pages.map(page => <option key={page.page} value={page.page}>
+                {page.page} / {printState.saved!.pages.length}ページ · {page.range}
+              </option>)}
+            </select></label>
+            <span>下書きの目視編集用です。ページ内の区分と読み取る内容を確認・修正してください。実OCRは未対応です。</span>
+          </div>}
           <LayoutEditor
             ref={layoutEditorRef}
             source={after}
+            pageView={printSaved && currentPrintPage ? {
+              ...currentPrintPage,
+              imageUrl: `/api/v1/template-versions/${version.id}/print-layout/pages/${currentPrintPage.page}/image?sha=${currentPrintPage.referenceImage?.sha256 ?? ""}`,
+            } : undefined}
             initialLayout={layoutConfig}
+            preserveDetectedRoles={isSpreadsheetTemplate}
             targets={mappingConfig.targets}
             workflowStep={layoutWorkflowStep}
             documentIdentityFields={identityFields}
@@ -932,7 +958,7 @@ function TemplateReview({
             documentNameRule={documentNameRule}
             onDocumentNameRuleChange={setDocumentNameRule}
             allowUnchangedSave={!mappingConfig.validForOcr || identityDirty || documentNameDirty}
-            disabled={maskDirty || maskBusy || printDirty || printBusy || printSaved}
+            disabled={maskDirty || maskBusy || printDirty || printBusy || (printSaved && !currentPrintPage)}
             onDirtyChange={setEditorDirty}
             onBusyChange={setEditorBusy}
             draftStorageKey={`template-layout-draft:${version.id}`}
@@ -942,7 +968,15 @@ function TemplateReview({
             onDetect={async () => api.detectLayout(version.id)}
             onRecognizeLabels={async (layout) => api.recognizeLayoutLabels(version.id, layout)}
             onSave={async (layout) => {
-              const saved = await api.saveLayout(version.id, layout);
+              let saved;
+              if (printSaved) {
+                if (!printState) throw new Error("保存済みの印刷ページ設定を取得してください。");
+                const result = await api.savePageAuthoring(version.id, printState.revision, layout);
+                saved = result.layout;
+                setPrintState(result.state);
+              } else {
+                saved = await api.saveLayout(version.id, layout);
+              }
               setLayoutConfig(saved);
               setLayoutVerified(false);
               setMappingFresh(false);
@@ -982,6 +1016,7 @@ function TemplateReview({
                 setIdentityFields(identityFieldsFromResponse(persisted));
                 setDocumentNameRule(documentNameFromResponse(persisted));
                 setMappingFresh(true);
+                if (printSaved) setPrintState(await api.printLayout(version.id));
                 setFeedback({
                   kind: "success",
                   text: persisted.validForOcr
@@ -1029,7 +1064,7 @@ function TemplateReview({
           </div>
         </section>
       )}
-      {meaningSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><span className="eyebrow">LAYOUT VERIFICATION</span><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した矩形だけを対象にOpenCVでセル候補を再検出します。任意の文字認識機能がある場合は候補を補助します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty} onClick={async () => {
+      {meaningSaved && !printSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><span className="eyebrow">LAYOUT VERIFICATION</span><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した矩形だけを対象にOpenCVでセル候補を再検出します。任意の文字認識機能がある場合は候補を補助します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty} onClick={async () => {
         if (verificationLockRef.current || editorDirty || editorBusy) return;
         verificationLockRef.current = true;
         setVerifying(true);

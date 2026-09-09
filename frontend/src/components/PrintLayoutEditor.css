@@ -1,11 +1,13 @@
 .print-controls { display:flex; gap:12px; flex-wrap:wrap; align-items:end; border:0; padding:12px 0; }
 .print-controls label { display:flex; flex-direction:column; gap:4px; }
 .print-controls input[type=number] { width:90px; }
-.print-views { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; }
+.print-views { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:20px; }
 .print-logical-scroll { max-height:680px; overflow:auto; border:1px solid #bccbd3; background:white; }
 .print-logical-scroll > svg { display:block; width:100%; height:auto; }
 .print-physical { display:block; width:100%; max-height:680px; background:white; border:1px solid #bccbd3; margin-top:12px; }
 .print-boundary-controls { display:flex; gap:12px; align-items:center; padding-top:8px; }
+.print-boundary-list { max-height:240px; overflow:auto; }
+.print-actions { background:#fff; border-bottom:1px solid #bccbd3; }
 .print-editor button { border:1px solid #a9bdc8; border-radius:6px; padding:8px 12px; background:#f4f8fa; color:#25475a; cursor:pointer; }
 .print-editor button:disabled { opacity:.5; cursor:default; }
 .print-editor input:not([type=checkbox]), .print-editor select { border:1px solid #a9bdc8; border-radius:5px; padding:6px; background:white; color:#223946; }

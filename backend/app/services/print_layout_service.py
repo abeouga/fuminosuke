@@ -16,8 +16,10 @@ from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.print_layout import PrintLayoutRequest, page_plan, print_error
 from app.domain.template_config import parse_template_config
+from app.layout_analysis.models import LayoutDefinition
+from app.services.draft_page_geometry import draft_geometry
 from app.services.print_layout_renderer import render_page
-from app.services.print_layout_source import read_source
+from app.services.print_layout_source import DRAFT_GEOMETRY_VERSION, read_source
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
 from app.services.template_mutation import begin_immediate, require_draft, template_mutation_lock
 from app.services.workbook_geometry import (
@@ -77,8 +79,11 @@ class PrintLayoutService:
             raise print_error(
                 "元XLSXのハッシュが一致しません。", "PRINT_LAYOUT_SOURCE_CHANGED", 409
             )
+        saved = version.quality_json.get("printLayout")
+        draft_support = not saved or saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION
         source = read_source(
-            content, str(version.quality_json.get("sourceSheetName", "")), version.layout_json
+            content, str(version.quality_json.get("sourceSheetName", "")), version.layout_json,
+            draft_support=draft_support,
         )
         # An address embedded in a rectangle ID is not proof that a user-edited
         # rectangle still occupies the whole source cell. Verify against the
@@ -93,6 +98,7 @@ class PrintLayoutService:
         original = SpreadsheetTemplateImportService(self.database, self.storage).restore_layout(
             content,
             preview_image=preview,
+            preview_geometry=version.quality_json.get("spreadsheetPreviewGeometry"),
         )
         originals = {c.id: c for c in original.cells}
         for cell in version.layout_json.get("cells", []):
@@ -137,8 +143,14 @@ class PrintLayoutService:
                     "mappingType": mapping.mapping_type,
                 }
             )
-        saved = version.quality_json.get("printLayout")
         source["geometryModelVersion"] = LEGACY_GEOMETRY_VERSION
+        if draft_support and (
+            source["draftFeatures"]
+            or (saved and saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION)
+        ):
+            evidence = (saved.get("geometryEvidence") if saved else
+                        version.quality_json.get("spreadsheetPreviewGeometry"))
+            return draft_geometry(source, evidence)
         # Historical plans keep their original geometry even when edited. A
         # newly created printLayout may use the calibrated Office import model.
         # Accepted jobs and the legacy template layout are never recalculated.
@@ -263,6 +275,55 @@ class PrintLayoutService:
                 job.config_snapshot_json = snapshot
             session.commit()
         return self.get(version_id)
+
+    def save_authoring(
+        self, version_id: str, expected: str, layout: LayoutDefinition,
+    ) -> dict[str, Any]:
+        """Save human semantics through the existing layout path, keeping page geometry."""
+        from app.services.layout_service import LayoutService
+
+        with template_mutation_lock():
+            with self.database.session() as session:
+                version = self._version(session, version_id)
+                require_draft(version)
+                self._check_revision(version, expected)
+                saved = copy.deepcopy(version.quality_json.get("printLayout"))
+                if not saved or saved.get("layoutSha256") != digest(version.layout_json):
+                    raise print_error(
+                        "印刷ページを保存し直してください。", "PRINT_LAYOUT_STALE", 409)
+                previous = version.layout_json
+                proposed = layout.model_dump(mode="json", by_alias=True)
+                def geometry(value: dict[str, Any]) -> dict[str, tuple[Any, ...]]:
+                    return {c["id"]: tuple(c[k] for k in ("x", "y", "width", "height"))
+                            for c in value.get("cells", [])}
+                if (geometry(previous) != geometry(proposed)
+                        or previous.get("cellMerges", []) != proposed.get("cellMerges", [])):
+                    raise print_error("ページ上では既存矩形の区分・意味づけを編集してください。",
+                                      "PRINT_AUTHORING_GEOMETRY_CHANGED", 409)
+                request = PrintLayoutRequest.model_validate({
+                    **{k: saved[k] for k in (
+                        "paperSize", "orientation", "margins", "horizontalCentering",
+                        "verticalCentering", "targetPagesWide", "targetPagesTall",
+                    )}, "baseRevision": expected,
+                    "breakAfterRows": [p["endRow"] for p in saved["pages"][:-1]],
+                    "autoArrange": False,
+                })
+            result = LayoutService(self.database, self.storage).save(version_id, layout)
+            with self.database.session() as session:
+                version = self._version(session, version_id)
+                plan = self._plan(session, version, request)
+                # Only cell roles/bindings change. Reuse the immutable source-cell
+                # image; drop prior qualification rather than certifying new inputs.
+                for page, old in zip(plan["pages"], saved["pages"], strict=True):
+                    page["referenceImage"] = old["referenceImage"]
+                plan["source"] = "user"
+                version.quality_json = {**version.quality_json, "printLayout": plan}
+                job = session.get(ProcessingJob, version.source_job_id)
+                if job is not None:
+                    job.config_snapshot_json = {**job.config_snapshot_json, "printLayout": plan}
+                session.commit()
+            return {"layout": result.model_dump(mode="json", by_alias=True),
+                    "state": self.get(version_id)}
 
     def image(self, version_id: str, page_number: int) -> bytes:
         with self.database.session() as session:
