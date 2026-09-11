@@ -116,6 +116,9 @@ class TemplateRepository:
         if version is None:
             raise self._not_found()
         require_legacy_ocr(version.quality_json)
+        from app.services.layout_service import LayoutService
+
+        LayoutService.require_valid_saved_mapping_layout(version)
         if version.status != TemplateVersionStatus.DRAFT.value:
             raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
         if version.quality_json.get("layoutVerificationInProgress"):

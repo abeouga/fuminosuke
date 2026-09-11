@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import mean
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -36,7 +37,8 @@ def recognize_label_cells(
     label_cells = [
         cell
         for cell in cells
-        if cell.role in {"label", "parent_label"} and cell.id not in excluded
+        if cell.role in {"label", "parent_label"} and not cell.virtual
+        and cell.id not in excluded
     ]
     if not label_cells:
         return LabelCellOcrResult(
@@ -86,6 +88,10 @@ def protected_label_cell_ids(layout: LayoutDefinition) -> set[str]:
         for relation in layout.relations
         for label_id in relation.label_cell_ids
     }
+    protected.update(cell.id for cell in layout.cells if cell.virtual)
+    protected.update(
+        cell.parent_label_cell_id for cell in layout.cells if cell.parent_label_cell_id
+    )
     for section in layout.record_sections:
         protected.update(section.record_label_cell_ids)
         if section.parent_label_cell_id:
@@ -104,7 +110,16 @@ def _crop_cell(
     bottom = max(top, min(cell.y + cell.height, image_height))
     if right <= left or bottom <= top:
         return None
-    return np.asarray(image_rgb[top:bottom, left:right], dtype=np.uint8)
+    crop = np.asarray(image_rgb[top:bottom, left:right], dtype=np.uint8)
+    if cell.vertices:
+        crop = crop.copy()
+        mask = np.zeros(crop.shape[:2], dtype=np.uint8)
+        points = np.asarray(
+            [(point.x - left, point.y - top) for point in cell.vertices], dtype=np.int32,
+        )
+        cv2.fillPoly(mask, [points], (255,))
+        crop[mask == 0] = 255
+    return crop
 
 
 def _apply_regions(cell: LayoutCell, regions: list[TextRegion]) -> LayoutCell:

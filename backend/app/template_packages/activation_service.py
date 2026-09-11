@@ -82,6 +82,9 @@ class TemplatePackageActivationService:
                         detail="却下済みの取り込み版は有効化できません。",
                     )
 
+                from app.services.layout_service import LayoutService
+
+                LayoutService.require_valid_saved_mapping_layout(version)
                 canonical = CanonicalTemplate.model_validate(
                     installation.canonical_template_json
                 )

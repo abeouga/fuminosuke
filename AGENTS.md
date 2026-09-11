@@ -103,3 +103,11 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 - [XLSX Print Layout](docs/xlsx-print-layout.md) / [Multi-page OCR foundation](docs/multi-page-ocr.md)
 - [Reference Renderer Qualification](docs/reference-renderer-qualification.md) / [Geometry Calibration](docs/geometry-calibration.md)
 - [Renderer Environment Qualification](docs/renderer-environment-qualification.md) / [Renderer Sandbox Closure](docs/renderer-sandbox-closure.md)
+
+## 10. テンプレート手動編集の拡張
+
+多角形・見出し階層・仮想見出し・同名項目の連番化は
+[テンプレート手動編集の拡張](docs/template-authoring-extensions.md)を参照します。
+多角形のmaskは新しい多角形だけに適用し、矩形のcropとsnapshot形式を維持します。
+見出しの整理で既存の意味づけ・targetPath・結合・IDを再生成しません。
+別形式のAI汎用定義への変換やページ単位編集で、新metadataを黙って落とさないでください。

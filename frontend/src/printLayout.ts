@@ -19,6 +19,7 @@ export type PrintPage = {
   transform: { scale: number; offsetX: number; offsetY: number; originX: number; originY: number };
   cells: PrintCell[];
   fields: { cellId: string; sourceRange: string; templatePage: number;
+    sourceParts?: { cellId: string; sourceRange: string }[];
     rectangle: { x: number; y: number; width: number; height: number } }[];
   referenceImage?: { sha256: string };
 };

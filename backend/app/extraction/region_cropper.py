@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -53,4 +54,19 @@ class RegionCropper:
                 enhanced_gray=variants.enhanced_gray[slices].copy(),
                 ink_difference=variants.ink_difference[slices].copy(),
             )
+            if region.vertices:
+                crops = result[region.region_id]
+                mask = np.zeros(crops.enhanced_gray.shape[:2], dtype=np.uint8)
+                points = np.asarray(
+                    [(point.x - x1, point.y - y1) for point in region.vertices],
+                    dtype=np.int32,
+                )
+                cv2.fillPoly(mask, [points], (255,))
+                outside = mask == 0
+                for image in (
+                    crops.aligned_color, crops.clean_reference,
+                    crops.handwriting_only, crops.enhanced_gray,
+                ):
+                    image[outside] = 255
+                crops.ink_difference[outside] = 0
         return result

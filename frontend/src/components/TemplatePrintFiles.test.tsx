@@ -18,6 +18,7 @@ it.each(["xlsx", "pdf"] as const)("downloads saved version and revision as %s", 
   fireEvent.click(screen.getByRole("button", { name: `印刷用${format.toUpperCase()}` }));
   await waitFor(() => expect(api.downloadTemplatePrint).toHaveBeenCalledWith("v1", "r1", format));
   await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce());
+  expect(screen.getByRole("status")).toHaveTextContent(`印刷用${format.toUpperCase()}を取得`);
   expect(api.printLayout).not.toHaveBeenCalled();
 });
 
@@ -42,4 +43,27 @@ it("blocks downloads for unsaved edits and during an in-flight request", async (
   fireEvent.click(screen.getByRole("button", { name: "印刷用XLSX" }));
   expect(screen.getByRole("button", { name: "印刷用PDF" })).toBeDisabled();
   expect(api.downloadTemplatePrint).toHaveBeenCalledOnce();
+});
+
+it("explains missing page settings without calling the server", () => {
+  render(<TemplatePrintFiles versionId="v1" disabledReason="印刷ページ設定が保存されていません。" />);
+  expect(screen.getByText("印刷ページ設定が保存されていません。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "印刷用XLSX" }));
+  fireEvent.click(screen.getByRole("button", { name: "印刷用PDF" }));
+  expect(api.downloadTemplatePrint).not.toHaveBeenCalled();
+  expect(api.printLayout).not.toHaveBeenCalled();
+});
+
+it("reports stale data and retries using a freshly fetched revision of the same version", async () => {
+  vi.mocked(api.printLayout).mockResolvedValueOnce({ revision: "old" } as never)
+    .mockResolvedValueOnce({ revision: "new" } as never);
+  vi.mocked(api.downloadTemplatePrint).mockRejectedValueOnce(new Error("矩形の編集後は印刷ページ設定を保存し直してください。"))
+    .mockResolvedValueOnce(new Blob(["fixture"]));
+  render(<TemplatePrintFiles versionId="v1" />);
+  fireEvent.click(screen.getByRole("button", { name: "印刷用XLSX" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("保存し直してください");
+  expect(HTMLAnchorElement.prototype.click).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "印刷用XLSX" }));
+  await waitFor(() => expect(api.downloadTemplatePrint).toHaveBeenLastCalledWith("v1", "new", "xlsx"));
+  await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce());
 });

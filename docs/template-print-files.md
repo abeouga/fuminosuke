@@ -41,11 +41,90 @@ backend内にnative PDF parse/rasterを追加していない。
 
 ## UI
 
-テンプレート管理の保存済みprintLayoutを持つ版、および印刷ページ編集内の保存済み設定へ、
+テンプレート管理のXLSX由来の表示対象版、および印刷ページ編集内の保存済み設定へ、
 「印刷用XLSX」「印刷用PDF」を追加した。新規画面なし。
+カードにprintLayoutがない場合は両ボタンを無効化し、未保存の理由を表示する。
 未保存の印刷設定がある間は編集内の取得操作を無効化する。
 取得中の重複操作を止め、変換失敗・版競合を表示して再試行できる。
+生成中の形式と、取得後にブラウザーへダウンロードを渡した状態を表示する。
+ブラウザーがディスクへの保存を完了したことまでは判定しない。
 元ファイルダウンロードやOCR結果出力と名称・APIを分離している。
+
+## 2026-09-12 カード操作の再確認・補完
+
+既存の上記API・生成service・命名・隔離条件を正本として再利用した。別endpointや
+並行rendererを追加せず、frontendの不足した表示とテストだけを補完した。
+カードの `primaryVersion.id` を直接使用し、template IDから最新versionを探し直さない。
+元セル・結合を再構成せず、保存済みprintLayoutを変換する既存処理を維持する。
+数式保持を理由に、現adapterが拒否する数式入り帳票を新たに通すこともしない。
+
+### 今回の変更とGit
+
+開始/終了HEAD: `b613c11a72b20d4c7cafc7ec3dd7ddf9adf52b55`。staged差分は開始/終了ともなし。
+開始時はtracked変更30ファイルと既存untracked（過去テストtemp、手動編集・位置合わせ・
+自動保存のコード/テスト/文書）が存在した。それらを保持し、今回の変更として数えない。
+今回の変更は次の5ファイル。終了時tracked変更は34ファイル（4ファイル増加）。
+
+- `frontend/src/components/TemplatePrintFiles.tsx`
+- `frontend/src/components/TemplatePrintFiles.test.tsx`
+- `frontend/src/pages/TemplatePage.tsx`（既存差分にカード表示条件だけを追加）
+- `frontend/src/pages/TemplatePage.test.tsx`
+- `docs/template-print-files.md`
+
+AGENTS.md・OCR Safety Contractの追加編集は不要。staging・commit・push・差分破棄なし。
+検証が追加したtemp/evidenceは保持した。原本・実DB・公開版・過去jobへの書込みなし。
+
+### 検証結果
+
+| 検証 | 結果 |
+| --- | --- |
+| root `backend/.venv/Scripts/python.exe scripts/verify_ocr_contract.py` 変更前/後 | 194 passed / 194 passed（41.51秒 / 53.92秒） |
+| backend `pytest tests/unit/test_print_workbook.py tests/unit/test_reference_qualification.py tests/integration/test_template_print_files.py -q -o addopts='' -p no:cacheprovider --basetemp=.pt-print-card-20260912` | 46 passed |
+| frontend `npm.cmd test -- TemplatePrintFiles.test.tsx TemplatePage.test.tsx` | 34 passed |
+| frontend `npm.cmd test` | 29ファイル、300 passed |
+| frontend `npm.cmd run build` | 成功。既存の500kB超bundle警告あり |
+| `git diff --check` | 成功 |
+| backend full / Ruff / mypy | backend変更なしのため今回は再実行なし。上記対象回帰とOCR契約で検証 |
+
+追加テストは未保存理由、stale失敗/再試行、XLSXのみのカード表示、2カードと旧版のID非混線。
+既存の二重操作拒否・XLSX/PDF download・失敗後の再試行を維持した。
+API integrationはsource SHA、保存range、版分離、stale拒否、元ZIP内容、PDFへ渡すXLSX、
+用紙寸法/ページ数の検査を含む。PDF成功ケースはOffice stubであり実Office成功ではない。
+実Chromeのカードから保存完了までのE2E、物理印刷は未実施。
+
+### 人工帳票の実生成
+
+既存scriptをbackendから実行:
+`.venv/Scripts/python.exe scripts/check_template_print.py --output C:/Users/hanam/.codex/tmp/template-print-card-20260912`
+
+同directoryの `report.json` とXLSX/planを保持した。1/2/3ページとV1/V2相当のXLSXを生成し、
+元break=9に対し、保存breakのなし/16/10,20/20が成果物へ反映された。原本SHAは不変。
+用紙A4縦、余白各10mm、中央配置なし、保存倍率100%。構造保持は上記unitでZIPパートと
+sheetData・行高列幅・結合等を比較した。実際のプリンターのページ分割は未検証。
+
+LibreOffice `26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34` の既存AppContainer変換を
+再試行したが `RENDER_FAILED`。PDFファイルは生成されず、実PDFページ数は未検証。
+非隔離fallback・偽PDF・qualification flag変更は行っていない。
+XLSXはメモリ上の別bytes、PDF用一時ファイルは既存 `render_directory` のrequest別領域で
+生成し、既存cleanupとprocess境界を維持する。
+
+### 指定のキャリア・プラン帳票
+
+実DBをread-only接続し、版 `6d2187c0-ac7f-4d0c-90c8-a0fc381c2cc8` のsourceWorkbookと保存planを
+照合した。保存範囲は `A1:AK28`, `A29:AK60`, `A61:AK89`, `A90:AK102`、breakは28/60/89。
+A4縦、左右18mm・上下19mm、横中央、縦中央なし、commonScale=`0.6957339287812906`。
+artifact SHAとplan.sourceSha256が原本bytesに一致し、検査後も原本SHAは不変。
+
+既存 `workbook_copy` は `UNSUPPORTED_XLSX_FEATURE`（`AlternateContent`）で拒否した。
+この実帳票のXLSX/PDF取得はBLOCKED。高度XMLを削除して対応させていない。
+加えて保存倍率が小数％であり、現adapterでは黙った丸めも許可しない。
+
+### 判定
+
+全体は **PARTIAL**。対応fixtureのXLSX取得・原本保持・版境界は検証済みだが、
+実隔離PDF変換は未成立。指定実帳票は既存adapterの対応範囲外。
+OpenAI 0回、Google 0回。既存OCR contractと本番paged OCRの拒否gateを維持した。
+本結果をrenderer認定・複数ページOCR完成・実OCR精度検証済みとは扱わない。
 
 ## 明示的な制約
 

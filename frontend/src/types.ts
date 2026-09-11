@@ -311,6 +311,7 @@ export type FieldMapping = {
   padding: number;
   enabled: boolean;
   modelDetail: string;
+  vertices?: { x: number; y: number }[];
   printedLabelText?: string;
   mappingType?: "text" | "mark";
   markRecognitionMode?: "automatic" | "manual";
@@ -366,6 +367,7 @@ export type DocumentNameRule = {
 };
 
 export type FieldMappingsResponse = {
+  fieldErrors?: { field: string; message: string }[];
   canonicalWidth: number;
   canonicalHeight: number;
   mappings: FieldMapping[];
@@ -392,6 +394,10 @@ export type LayoutCell = {
   textAlignment?: "left" | "center" | "right";
   textVerticalAlignment?: "top" | "middle" | "bottom" | null;
   source: "detected" | "manual";
+  shapeType?: "rectangle" | "polygon";
+  vertices?: { x: number; y: number }[];
+  virtual?: boolean;
+  parentLabelCellId?: string | null;
   markSets?: LayoutMarkSet[];
   compositeSubfields?: LayoutCompositeSubfield[];
 };

@@ -72,6 +72,43 @@ mappingのずれの帳尻合わせとして、空欄OCR結果の削除、array c
 
 reconciliationにも同じprovenance・physical identity契約を適用する。§6の既存mergeを安全性の証拠や禁止の例外とせず、provider associationと混同して推測修正しない。
 
+### 3.4 手動追加した多角形
+
+新しい多角形セルは `shapeType=polygon` とcanonical座標の `vertices` を保持する。
+頂点の外接矩形を既存のx/y/width/heightと一致させ、3〜100頂点・重複なし・
+面積あり・自己交差なしを検証する。矩形には頂点を要求せず、既存データを移行しない。
+
+多角形の頂点はFieldMappingConfig、RegionConfig、受付snapshotへ引き継ぐ。
+RegionCropperは既存のpadding込みbboxで切り出した後、多角形の場合だけ領域外を
+白、ink_differenceを0にする。入力画像全体を変更しない。画像端の多角形のpaddingは
+canonical領域内に制限する。矩形のpadding・切り出し画素・mapping保存形式は維持する。
+空のverticesを矩形のconfig/snapshotへ追加して既存hashを変更しない。
+provider・model・prompt・association方式は変更しない。
+
+対応範囲・境界テストは[テンプレート手動編集の拡張](template-authoring-extensions.md)を参照する。
+
+### 3.5 単一ページ位置合わせの追加復旧
+
+従来の位置合わせが `LOW_REGISTRATION_CONFIDENCE` で失敗した場合に限り、
+双方向のdescriptor比率検査で相互に一致するORB特徴点から別候補を生成できる。
+帳票名・項目名に依存する分岐や既存の一致数・inlier数・比率・残差閾値の引下げは行わない。
+従来成功経路の画像画素と採用条件は維持する。
+
+追加候補は既存の幾何条件に加え、ECCスコア、補正後の射影形状・向き・残差、
+全体の輪郭一致、紙面3×3区画と受付snapshotの読み取り枠付近の印刷輪郭を検証する。
+独立した画像輪郭検証には特徴点の対応表を流用しない。32 edge画素未満の領域は
+検証根拠とせず、少なくとも4区画と、根拠がある全対象領域が既存の輪郭閾値を満たす必要がある。
+空の記入欄だけで追加候補を認定しない。枠数・選択範囲を変換推定へ使わない。
+印刷輪郭一致は手書きの認識正解率や、全筆画のcrop clearanceの保証ではない。
+
+追加経路の最終変換はECCを合成したnormalized-image → template-image変換として記録する。
+失敗時にもinput / template / config SHAと数値、比較画像をjob / attempt（pagedではpageも）
+に分離保存し、切り出し・providerへ進めない。mappingId・targetPath・sourceRegionId・
+保存矩形・paddingを再生成せず、過去jobのsnapshotや公開版を変更しない。
+新printLayoutの認定gate解除には使用しない。
+
+再現・実装範囲・検証の限界は[位置合わせ失敗調査](registration-investigation-20260911.md)を参照する。
+
 ## 4. Provider request・association・mappedCells
 
 ### 4.1 Request manifest
@@ -121,6 +158,15 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 
 ### 5.1 reviewStructureと行移動
 
+テンプレートの新しい見出し階層はLayoutCellの `parentLabelCellId` に明示保存する。
+見出し区分は既存の `parent_label` を使用し、親専用・仮想専用の区分を増やさない。
+新しい接続は既存relation・targetPath・結合・cell IDを再生成せず、単一親と循環拒否を
+守る。既存relationの親接続も循環検査に含める。仮想見出しは `virtual=true` の
+名前付きmanual見出しで、配置用の座標をOCR領域として使用しない。
+仮想見出し自身へのfield mappingは生成せず、ラベル文字候補OCRからも除外する。
+囲い込み対象は現在の論理セルに限定し、結合前のpartsから子を再生成しない。
+過去jobのreviewStructureや補正・確定値を新しい階層から再構成しない。
+
 表示上のgroup化とfield identity統合を混同しない。独立項目のgroup identityはlabel文字列でなく `parentLabelCellId + labelCellIds` に基づく。現在の `_logical_field_group_id` はlabel cell IDを重複除去・sortし、情報がなければ `field:{mappingId}` にfallbackする。
 
 過去jobの表示は保存済みreviewStructure / fieldMappingsを基準とする。reviewStructureがない旧jobは既存の独立項目fallbackを維持し、現在のTemplateVersionから勝手に対応を再構築しない。
@@ -146,6 +192,13 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 明示的なユーザー補正は既存経路で許可する。`ReviewPage.updateReading` はfieldのpatchと該当pathのreviewItems除去を行い、backendが再検証する。確定表示やloading終了のためだけの一括消去・成功判定への置換は禁止する。
 
 ### 5.3 レビュー表示と状態遷移
+
+テンプレートの自動保存では、保存中の一時状態だけで編集領域全体を無効化しない。
+同じエディターの保存要求は直列化し、送信後の追加編集を古い保存応答で上書きしない。
+ブラウザー下書きは最新の編集内容が保存された場合だけ消去する。保存後の関連取得失敗も
+永続化状態が不明な失敗として扱い、元の値へ戻した編集を含めて下書きを保持する。
+再検出・工程移動・明示保存の完了境界、既存のAPI検証・revision照合を迂回しない。
+実装範囲と検証は[テンプレートの非ブロッキング自動保存](template-background-save.md)を参照する。
 
 作業完了に応じた表示はデータを壊さない派生値で表す。現ReviewPageの `reviewCompleted` / `displayedWarningPaths` も `result.confirmed` を基準にする。独立したローカルreviewed stateで正本を複製しない。
 
@@ -217,6 +270,10 @@ reviewStructure、補正保存およびprovider associationを変更しない。
 再結合できる。従来拒否していた既存結合の包含を、この根拠がある場合に限って
 許可する。部分交差、別結合との重複、数式消失、未承認の内部値消失は拒否する。
 元XLSXは書き換えない。旧形式の重複拒否テストは維持し、新形式を別ケースで検証する。
+
+ページ結合の版コピーでは、TemplateVersionServiceが付与する20桁のhex suffixを持つ
+元セルIDも同じ元Excel座標へ解決する。その他の仮想分割IDへ範囲全体の所有を拡張しない。
+ページ保存では取込元のcanonical矩形との一致も検証し、コピー後に元結合範囲を縮小しない。
 
 この変更はExcel出力契約の拡張であり、OCR認識・物理identity契約の変更ではない。
 
@@ -300,6 +357,15 @@ model・prompt・schema・provider request・association方式変更、または
 ## 10. OCR改善と意図的な契約変更
 
 ### Template編集の版境界
+
+mapping生成validationの失敗を空mappingへの置換保存に変換しない。
+不完全なDRAFT layoutは保存できるが、既存fieldMappings・document identity・logical field
+identityのpresent状態を保持し、layoutFinalized=falseとする。再取得は現在layoutの
+mapping生成validationを正本にvalidForOcr=falseと対象fieldの警告を返す。
+保持したmappingを読み取り確認・ACTIVE化・新規OCR受付で有効化しない。
+frontendの未割当（保存先なし）と設定不完全（保存先あり・mark必須設定不足）を区別し、
+共通fixtureでbackendとの判定一致を固定する。過去job snapshotは再検証対象にしない。
+DBとconfig YAML全体のatomic saveは別課題であり、この保護を全面transactionと称さない。
 
 公開済みTemplateVersionのlayout・field mappings・mask・汎用定義を直接変更しない。
 ACTIVEからの編集は同じ原本のDRAFTを1つ作るか再開する。途中保存では版を増やさず、
@@ -402,8 +468,15 @@ OCR結果出力（§7）は変更しない。小数％倍率等、既存adapter�
 `draft-visible-cells-v1`は非表示行列を表示幅・高さから除き、セル内縮小を参考描画する
 未認定の表示モデルである。保存済みlegacy/LOモデルを自動更新しない。原本の設定・セルを
 書き換えず、元セルIDからページ表示座標を参照する。表示座標はlayoutへ保存しない。
-`PUT print-layout/authoring`はDRAFT/revisionと既存矩形ID・座標・結合の一致を確認し、
-既存LayoutServiceへ人間の区分・意味づけを保存する。ページ境界・transform・参考画像は保持し、
+`PUT print-layout/authoring`はDRAFT/revisionを確認する。通常矩形と結合partsへ展開した元セル集合は
+重複のない既存集合の部分集合とし、残存元セルのphysical ID・canonical座標・形状を保持する。
+既存LayoutServiceへ人間の区分・意味づけ・明示的な削除・同一ページ内の結合/解除を保存する。
+結合親は元partsの外接矩形と一致し、元XLSXから解決したpartsの範囲は欠落・重複のない連続矩形に限る。
+追加IDは検証済み結合親と保存partsの復元だけを許可する。field.sourcePartsにcellId/sourceRangeを保存し、
+表示位置や配列順から部品を推定しない。元範囲・内部値保護・ページ境界の検証をDB/config保存前に行い、
+不正要求で保存済みlayout/config/planを変更しない。ページ境界・transform・参考画像を保持する。
+枠追加・任意の移動/変形・ページをまたぐ結合は拒否する。これは2026-09-11の明示要求による
+ページ手動編集契約の拡張であり、既存jobのcrop・mapping・provider association契約は変更しない。
 ページfields/bindingsとlayout SHAを更新する。過去のqualificationは新版の証明に流用しない。
 この表示モデルでは既存のqualificationモデル照合が不成立となり、本番gateは閉じたままとする。
 Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR受付・実行・レビューの

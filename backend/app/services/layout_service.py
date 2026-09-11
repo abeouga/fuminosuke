@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 from sqlalchemy.orm import Session
 
-from app.core.errors import AppError
+from app.core.errors import AppError, FieldError
 from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.enums import TemplateMode
@@ -388,10 +388,12 @@ class LayoutService:
                 "RECORD_KEY_REQUIRED",
             }:
                 raise
-            mappings = []
-        TemplateManagementService(self._database, self._storage).save_field_mappings(
-            version_id, mappings
-        )
+            # A failed candidate is not an explicit request to delete mappings.
+            mappings = None
+        if mappings is not None:
+            TemplateManagementService(self._database, self._storage).save_field_mappings(
+                version_id, mappings
+            )
         with self._database.session() as session:
             begin_immediate(session)
             version = TemplateRepository(session).get_version(version_id)
@@ -721,6 +723,7 @@ class LayoutService:
                     title="Layout meaning is required",
                     detail="Meaning must be assigned to the template fields before verification.",
                 )
+            self._as_field_mappings(layout)
             self._require_verified_record_structure(layout)
             fingerprint = self._verification_fingerprint(session, version)
             version.quality_json = invalidated_layout_quality(
@@ -1387,6 +1390,27 @@ class LayoutService:
         return f"customFields.{base_key}_{suffix}"[:200]
 
     @staticmethod
+    def mapping_validation_error(layout: LayoutDefinition) -> AppError | None:
+        """Use the actual mapping compiler as the canonical draft validation."""
+        try:
+            LayoutService._as_field_mappings(layout)
+            LayoutService._require_verified_record_structure(layout)
+        except AppError as error:
+            return error
+        return None
+
+    @staticmethod
+    def require_valid_saved_mapping_layout(version: TemplateVersion) -> None:
+        # Only saved, unfinished layouts need this additional gate. Legacy and
+        # immutable job snapshots retain their existing qualification paths.
+        if version.quality_json.get("layoutFinalized") is False and version.layout_json:
+            error = LayoutService.mapping_validation_error(
+                LayoutDefinition.model_validate(version.layout_json)
+            )
+            if error is not None:
+                raise error
+
+    @staticmethod
     def _as_field_mappings(layout: LayoutDefinition) -> list[FieldMappingConfig]:
         cell_by_id = {cell.id: cell for cell in layout.cells}
         relations_by_input: dict[str, list[LayoutRelation]] = {}
@@ -1451,7 +1475,12 @@ class LayoutService:
                     y=input_cell.y,
                     width=input_cell.width,
                     height=input_cell.height,
-                    padding=4,
+                    vertices=input_cell.vertices,
+                    padding=min(
+                        4, input_cell.x, input_cell.y,
+                        layout.canonical_width - input_cell.x - input_cell.width,
+                        layout.canonical_height - input_cell.y - input_cell.height,
+                    ) if input_cell.vertices else 4,
                     enabled=True,
                     model_detail="high",
                     printed_label_text=input_cell.printed_label_text.strip(),
@@ -1492,10 +1521,12 @@ class LayoutService:
                     code="MARK_OPTIONS_REQUIRED",
                     title="Mark options are required",
                     detail=f"{cell.id} の選択肢を設定してください。",
+                    field_errors=[FieldError(field=f"cells.{cell.id}.markSets",
+                                             message=f"{cell.id}: 選択肢を設定してください。")],
                 )
             for mark_set in cell.mark_sets:
                 target_path = mark_set.target_path
-                if not target_path:
+                if not target_path.strip():
                     raise AppError(
                         status=422,
                         code="MARK_TARGET_REQUIRED",
@@ -1507,7 +1538,12 @@ class LayoutService:
                         status=422,
                         code="MARK_OPTIONS_REQUIRED",
                         title="Mark options are required",
-                        detail=f"{cell.id} の選択肢を設定してください。",
+                        detail=(f"{cell.text or cell.id} ({cell.id} / {mark_set.id} / "
+                                f"{target_path}): 選択肢を1件以上設定してください。"),
+                        field_errors=[FieldError(
+                            field=f"cells.{cell.id}.markSets.{mark_set.id}.options",
+                            message=f"{target_path}: 選択肢を1件以上設定してください。",
+                        )],
                     )
                 if not is_supported_field_path(target_path):
                     raise AppError(
@@ -1540,6 +1576,7 @@ class LayoutService:
                         y=cell.y,
                         width=cell.width,
                         height=cell.height,
+                        vertices=cell.vertices,
                         padding=0,
                         enabled=True,
                         model_detail="high",

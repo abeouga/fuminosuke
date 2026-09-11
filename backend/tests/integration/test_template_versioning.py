@@ -175,6 +175,55 @@ def _edit(client: TestClient, version: str) -> dict:
     return response.json()
 
 
+def test_authoring_shapes_and_headings_persist_without_changing_existing_identity(
+    client, versioned_source,
+):
+    v1, _ = versioned_source
+    original = _get(client, v1, "layout")
+    v2 = _edit(client, v1)["id"]
+    layout = _get(client, v2, "layout")
+    identities = _get(client, v2, "field-identities")
+    relations = copy.deepcopy(layout["relations"])
+    base = {"x": 10, "y": 60, "width": 40, "height": 30, "confidence": 1,
+            "source": "manual", "role": "parent_label"}
+    layout["cells"].extend([
+        {**base, "id": "headingA", "text": "振込情報"},
+        {**base, "id": "virtualB", "text": "記入日", "virtual": True,
+         "parentLabelCellId": "headingA"},
+        {**base, "id": "polygonC", "text": "", "role": "input", "shapeType": "polygon",
+         "vertices": [{"x": 10, "y": 60}, {"x": 50, "y": 60}, {"x": 10, "y": 90}],
+         "parentLabelCellId": "virtualB"},
+    ])
+    layout["cells"][0]["parentLabelCellId"] = "virtualB"
+    layout["relations"].append({"id": "polygonMeaning", "inputCellId": "polygonC",
+                                "labelCellIds": [], "targetPath": "customFields.漢字2",
+                                "axis": "horizontal", "order": 1})
+    for _ in range(2):
+        response = client.put(f"/api/v1/template-versions/{v2}/layout", json=layout)
+        assert response.status_code == 200, response.text
+        layout = _get(client, v2, "layout")
+    cells = {cell["id"]: cell for cell in layout["cells"]}
+    assert cells["virtualB"]["virtual"] is True
+    assert cells["virtualB"]["parentLabelCellId"] == "headingA"
+    assert cells["polygonC"]["parentLabelCellId"] == "virtualB"
+    assert len(cells["polygonC"]["vertices"]) == 3
+    assert layout["relations"][:len(relations)] == relations
+    saved_ids = _get(client, v2, "field-identities")
+    assert all(saved_ids[key] == value for key, value in identities.items())
+    mappings = _get(client, v2, "field-mappings")["mappings"]
+    assert not any(item["mappingId"] == "layout_virtualB" for item in mappings)
+    polygon_mapping = next(item for item in mappings if item["mappingId"] == "layout_polygonC")
+    assert polygon_mapping["vertices"] == cells["polygonC"]["vertices"]
+    response = client.put(
+        f"/api/v1/template-versions/{v2}/field-mappings", json={"mappings": mappings},
+    )
+    assert response.status_code == 200, response.text
+    after = next(item for item in _get(client, v2, "field-mappings")["mappings"]
+                 if item["mappingId"] == "layout_polygonC")
+    assert after["vertices"] == polygon_mapping["vertices"]
+    assert _get(client, v1, "layout") == original
+
+
 def test_fork_edit_preserves_v1_and_logical_provenance(client, versioned_source):
     v1, _ = versioned_source
     original_layout = _get(client, v1, "layout")

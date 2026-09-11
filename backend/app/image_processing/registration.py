@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any, NoReturn
 
 import cv2
 import numpy as np
@@ -17,6 +19,21 @@ class RegistrationResult:
     homography: NDArray[np.float64]
     debug_rgb: NDArray[np.uint8]
     quality: RegistrationQuality
+    diagnostics: dict[str, Any] | None = None
+
+
+class RegistrationFailure(AppError):
+    """Safe numerical diagnostics and a separate local comparison artifact."""
+
+    def __init__(self, diagnostics: dict[str, Any], debug_rgb: NDArray[np.uint8]) -> None:
+        super().__init__(
+            status=422,
+            code="LOW_REGISTRATION_CONFIDENCE",
+            title="Low registration confidence",
+            detail="帳票とテンプレートを十分な精度で位置合わせできません。",
+            metadata=diagnostics,
+        )
+        self.debug_rgb = debug_rgb
 
 
 class TemplateAligner:
@@ -24,6 +41,137 @@ class TemplateAligner:
         self._settings = settings
 
     def align(
+        self,
+        source_rgb: NDArray[np.uint8],
+        template_rgb: NDArray[np.uint8],
+        *,
+        validation_regions: Sequence[tuple[int, int, int, int]] = (),
+    ) -> RegistrationResult:
+        # Preserve the pixels and acceptance of every previously successful path.
+        # Recovery uses reciprocal matches, not a lower inlier-ratio threshold.
+        try:
+            return self._align_legacy(source_rgb, template_rgb)
+        except AppError as exc:
+            if exc.code != "LOW_REGISTRATION_CONFIDENCE":
+                raise
+            legacy_diagnostics = exc.metadata
+        return self._recover_mutual(
+            source_rgb, template_rgb, validation_regions, legacy_diagnostics,
+        )
+
+    def _recover_mutual(
+        self,
+        source_rgb: NDArray[np.uint8],
+        template_rgb: NDArray[np.uint8],
+        validation_regions: Sequence[tuple[int, int, int, int]],
+        legacy_diagnostics: dict[str, Any],
+    ) -> RegistrationResult:
+        height, width = template_rgb.shape[:2]
+        source_gray, source_scale = _scaled_gray(source_rgb)
+        template_gray, template_scale = _scaled_gray(template_rgb)
+        orb = cv2.ORB_create(nfeatures=5000, scaleFactor=1.2, nlevels=8)
+        source_points, source_descriptors = orb.detectAndCompute(source_gray, None)
+        template_points, template_descriptors = orb.detectAndCompute(template_gray, None)
+        quality = RegistrationQuality(
+            registration_method="MUTUAL_ORB_RANSAC_ECC",
+            detected_keypoints_source=len(source_points),
+            detected_keypoints_template=len(template_points),
+        )
+        diagnostics: dict[str, Any] = {"legacy": legacy_diagnostics}
+        aligned = cv2.resize(source_rgb, (width, height), interpolation=cv2.INTER_CUBIC)
+
+        def reject(reason: str) -> NoReturn:
+            diagnostics.update(rejectionReason=reason, recovery=quality.to_dict())
+            raise RegistrationFailure(diagnostics, _registration_debug(aligned, template_rgb))
+
+        if source_descriptors is None or template_descriptors is None:
+            reject("NO_DESCRIPTORS")
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        forward = _ratio_matches(matcher.knnMatch(source_descriptors, template_descriptors, k=2))
+        backward = _ratio_matches(matcher.knnMatch(template_descriptors, source_descriptors, k=2))
+        reverse = {match.queryIdx: match.trainIdx for match in backward}
+        matches = [m for m in forward if reverse.get(m.trainIdx) == m.queryIdx]
+        quality.match_count = len(matches)
+        if len(matches) < self._settings.min_feature_matches:
+            reject("INSUFFICIENT_MUTUAL_MATCHES")
+        source_small = np.float32([source_points[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        target_small = np.float32(
+            [template_points[m.trainIdx].pt for m in matches],
+        ).reshape(-1, 1, 2)
+        small_h, mask = cv2.findHomography(
+            source_small, target_small, cv2.RANSAC,
+            self._settings.max_reprojection_error_px * template_scale,
+        )
+        if small_h is None or mask is None:
+            reject("NO_MUTUAL_HOMOGRAPHY")
+        homography = _to_full_homography(small_h, source_scale, template_scale)
+        source_full = source_small / source_scale
+        target_full = target_small / template_scale
+        inliers = mask.ravel().astype(bool)
+        errors = np.linalg.norm(
+            cv2.perspectiveTransform(source_full, homography) - target_full, axis=2,
+        ).ravel()[inliers]
+        quality.inlier_count = int(inliers.sum())
+        quality.inlier_ratio = float(inliers.mean())
+        if errors.size:
+            quality.mean_reprojection_error_px = float(errors.mean())
+            quality.median_reprojection_error_px = float(np.median(errors))
+        quality.spatial_distribution_score = min(
+            _spatial_distribution(
+                source_full[inliers, 0], source_rgb.shape[1], source_rgb.shape[0],
+            ),
+            _spatial_distribution(target_full[inliers, 0], width, height),
+        )
+        quality.coverage_ratio, quality.homography_valid = _validate_homography(
+            homography, source_rgb.shape[1], source_rgb.shape[0], width, height,
+        )
+        if not self._orb_quality_sufficient(quality):
+            reject("MUTUAL_GEOMETRY_REJECTED")
+        aligned = cv2.warpPerspective(
+            source_rgb, homography, (width, height), flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+        )
+        aligned, quality.ecc_score, ecc_warp = _ecc_refine_transform(aligned, template_rgb)
+        if not np.isfinite(ecc_warp).all() or abs(float(np.linalg.det(ecc_warp))) < 1e-8:
+            reject("DEGENERATE_ECC_TRANSFORM")
+        final_homography = np.linalg.inv(ecc_warp) @ homography
+        diagnostics["appliedHomography"] = final_homography.tolist()
+        quality.coverage_ratio, quality.homography_valid = _validate_homography(
+            final_homography, source_rgb.shape[1], source_rgb.shape[0], width, height,
+        )
+        final_errors = np.linalg.norm(
+            cv2.perspectiveTransform(source_full, final_homography) - target_full, axis=2,
+        ).ravel()[inliers]
+        diagnostics["finalMeanReprojectionErrorPx"] = float(final_errors.mean())
+        quality.edge_overlap = _edge_overlap(aligned, template_rgb)
+        # ECC may drift to a repeated row; validate its applied transform too.
+        if (
+            not quality.homography_valid
+            or not _orientation_preserved(
+                final_homography, source_rgb.shape[1], source_rgb.shape[0],
+            )
+            or float(final_errors.mean()) > self._settings.max_reprojection_error_px
+            or quality.ecc_score is None
+            or quality.ecc_score < self._settings.min_ecc_score
+            or quality.edge_overlap < self._settings.min_edge_overlap
+        ):
+            reject("REFINED_GEOMETRY_REJECTED")
+        local_scores = _local_template_edge_support(aligned, template_rgb, validation_regions)
+        diagnostics["localTemplateEdgeSupport"] = local_scores
+        # One strong portion of a form cannot qualify missing or displaced portions.
+        if len(local_scores["grid"]) < 4 or any(
+            score < self._settings.min_edge_overlap
+            for scores in local_scores.values() for score in scores
+        ):
+            reject("LOCAL_TEMPLATE_SUPPORT_REJECTED")
+        diagnostics["recovery"] = quality.to_dict()
+        return RegistrationResult(
+            aligned_rgb=aligned, homography=final_homography,
+            debug_rgb=_registration_debug(aligned, template_rgb),
+            quality=quality, diagnostics=diagnostics,
+        )
+
+    def _align_legacy(
         self,
         source_rgb: NDArray[np.uint8],
         template_rgb: NDArray[np.uint8],
@@ -127,6 +275,7 @@ class TemplateAligner:
                 metadata={
                     "matchCount": quality.match_count,
                     "inlierCount": quality.inlier_count,
+                    "quality": quality.to_dict(),
                 },
             )
 
@@ -161,6 +310,50 @@ def _scaled_gray(image_rgb: NDArray[np.uint8]) -> tuple[NDArray[np.uint8], float
             interpolation=cv2.INTER_AREA,
         )
     return gray, scale
+
+
+def _ratio_matches(pairs: Sequence[Sequence[cv2.DMatch]]) -> list[cv2.DMatch]:
+    return [
+        pair[0] for pair in pairs
+        if len(pair) == 2 and pair[0].distance < 0.75 * pair[1].distance
+    ]
+
+
+def _orientation_preserved(homography: NDArray[np.float64], width: int, height: int) -> bool:
+    corners = np.float32([[[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]]])
+    transformed = cv2.perspectiveTransform(corners, homography)
+    return bool(np.isfinite(transformed).all() and cv2.contourArea(transformed, oriented=True) > 0)
+
+
+def _local_template_edge_support(
+    aligned_rgb: NDArray[np.uint8],
+    template_rgb: NDArray[np.uint8],
+    regions: Sequence[tuple[int, int, int, int]],
+) -> dict[str, list[float]]:
+    """Check fixed print evidence independently of the ORB correspondences.
+
+    Use the existing one-pixel edge tolerance. Directional template recall does
+    not penalize additional handwriting; global symmetric overlap still applies.
+    Sparse/blank areas are not evidence and cannot qualify the recovery alone.
+    """
+    source = cv2.Canny(cv2.cvtColor(aligned_rgb, cv2.COLOR_RGB2GRAY), 60, 160)
+    template = cv2.Canny(cv2.cvtColor(template_rgb, cv2.COLOR_RGB2GRAY), 60, 160) > 0
+    supported = template & (cv2.dilate(source, np.ones((3, 3), np.uint8)) > 0)
+    height, width = template.shape
+    grid = [
+        (x * width // 3, y * height // 3, (x + 1) * width // 3, (y + 1) * height // 3)
+        for y in range(3) for x in range(3)
+    ]
+    # Include each field's immediate printed border without changing crop geometry.
+    fields = [(max(0, x - 3), max(0, y - 3), min(width, x + w + 3), min(height, y + h + 3))
+              for x, y, w, h in regions]
+    result: dict[str, list[float]] = {"grid": [], "fields": []}
+    for key, boxes in (("grid", grid), ("fields", fields)):
+        for x0, y0, x1, y1 in boxes:
+            count = int(template[y0:y1, x0:x1].sum())
+            if count >= 32:
+                result[key].append(float(supported[y0:y1, x0:x1].sum()) / count)
+    return result
 
 
 def _to_full_homography(
@@ -220,6 +413,13 @@ def _spatial_distribution(points: NDArray[np.float32], width: int, height: int) 
 def _ecc_refine(
     aligned_rgb: NDArray[np.uint8], template_rgb: NDArray[np.uint8]
 ) -> tuple[NDArray[np.uint8], float | None]:
+    refined, score, _ = _ecc_refine_transform(aligned_rgb, template_rgb)
+    return refined, score
+
+
+def _ecc_refine_transform(
+    aligned_rgb: NDArray[np.uint8], template_rgb: NDArray[np.uint8]
+) -> tuple[NDArray[np.uint8], float | None, NDArray[np.float64]]:
     template_gray = cv2.cvtColor(template_rgb, cv2.COLOR_RGB2GRAY)
     aligned_gray = cv2.cvtColor(aligned_rgb, cv2.COLOR_RGB2GRAY)
     template_float = cv2.GaussianBlur(template_gray, (5, 5), 0).astype(np.float32) / 255.0
@@ -244,9 +444,9 @@ def _ecc_refine(
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(255, 255, 255),
         )
-        return refined, float(score)
+        return refined, float(score), np.vstack((warp, [0.0, 0.0, 1.0]))
     except cv2.error:
-        return aligned_rgb, None
+        return aligned_rgb, None, np.eye(3, dtype=np.float64)
 
 
 def _edge_overlap(source_rgb: NDArray[np.uint8], template_rgb: NDArray[np.uint8]) -> float:

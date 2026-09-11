@@ -135,6 +135,24 @@ class SpreadsheetTemplateOutputService:
                 self._ensure_merge_contents_safe(workbook[source_sheet_name], plan)
         return snapshot
 
+    @classmethod
+    def page_merge_sources(
+        cls, worksheet: Worksheet, merge: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        """Source identity for page authoring, sharing the output range checks."""
+        source_ranges = cls._source_ranges(worksheet, merge)
+        plan = cls._merge_plan(merge, require_snapshot_metadata=False, source_ranges=source_ranges)
+        cls._ensure_merge_contents_safe(worksheet, plan)
+        result = []
+        for part in merge["parts"]:
+            coordinate = cls._coordinate(part["cell"]["id"])
+            if coordinate is None:
+                raise cls._merge_invalid("merge partの元セル座標を確定できません。")
+            result.append({"cellId": part["cell"]["id"],
+                           "sourceRange": (source_ranges or {}).get(
+                               coordinate, f"{coordinate}:{coordinate}")})
+        return result
+
     @staticmethod
     def is_final_output(content: bytes, document_name: str) -> bool:
         try:
@@ -531,10 +549,13 @@ class SpreadsheetTemplateOutputService:
             cell = part.get("cell") if isinstance(part, dict) else None
             cell_id = cell.get("id") if isinstance(cell, dict) else None
             coordinate = cls._coordinate(cell_id) if isinstance(cell_id, str) else None
-            if coordinate is None:
+            if coordinate is None or not isinstance(cell_id, str):
                 return {}
-            if cell_id != f"xlsx_{coordinate}":
+            if cell_id != f"xlsx_{coordinate}" and not re.fullmatch(
+                rf"xlsx_{coordinate}_[0-9a-f]{{20}}", cell_id,
+            ):
                 # Virtual subcells do not own the entire source Excel cell/range.
+                # TemplateVersionService's UUID suffix changes identity, not coverage.
                 return {}
             source = next((r for r in worksheet.merged_cells.ranges if coordinate in r), None)
             if source is not None:

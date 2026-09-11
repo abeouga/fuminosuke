@@ -154,6 +154,9 @@ class TemplateDefinitionService:
         return self._append(version_id, "APPROVED", approved)
 
     def _save_generic_mappings(self, version_id: str, definition: TemplateDefinition) -> None:
+        with self._database.session() as session:
+            version = self._require_version(session, version_id)
+            self._require_supported_authoring(self._parse_layout(version))
         cells = {cell.id: cell for cell in definition.cells}
         mappings: list[FieldMappingConfig] = []
         for location in generic_field_locations(definition):
@@ -267,7 +270,20 @@ class TemplateDefinitionService:
             return self._view(row)
 
     @staticmethod
+    def _require_supported_authoring(layout: LayoutDefinition) -> None:
+        # This separate AI-assisted definition format cannot retain these explicit
+        # authoring edges or polygon masks. Never silently replace them with boxes.
+        if any(cell.vertices or cell.virtual or cell.parent_label_cell_id for cell in layout.cells):
+            raise AppError(
+                status=409, code="GENERIC_DEFINITION_AUTHORING_UNSUPPORTED",
+                title="Authoring geometry is not supported by generic definitions",
+                detail="多角形・仮想見出し・見出し階層は手動レイアウトで保存してください。"
+                       "別形式のAI汎用定義への変換には未対応です。",
+            )
+
+    @staticmethod
     def _cells_from_layout(layout: LayoutDefinition) -> list[TemplateCell]:
+        TemplateDefinitionService._require_supported_authoring(layout)
         parent_ids = {
             section.parent_label_cell_id
             for section in layout.record_sections

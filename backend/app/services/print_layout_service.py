@@ -18,6 +18,7 @@ from app.domain.print_layout import PrintLayoutRequest, page_plan, print_error
 from app.domain.template_config import parse_template_config
 from app.layout_analysis.models import LayoutDefinition
 from app.services.draft_page_geometry import draft_geometry
+from app.services.page_authoring_validation import bounds, physical_cells, validate_page_edit
 from app.services.print_layout_renderer import render_page
 from app.services.print_layout_source import DRAFT_GEOMETRY_VERSION, read_source
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
@@ -63,7 +64,9 @@ class PrintLayoutService:
             }
         )
 
-    def _source(self, session: Session, version: TemplateVersion) -> dict[str, Any]:
+    def _source(self, session: Session, version: TemplateVersion,
+                proposed: dict[str, Any] | None = None) -> dict[str, Any]:
+        layout = version.layout_json if proposed is None else proposed
         artifact = session.scalars(
             select(JobArtifact)
             .where(
@@ -82,7 +85,7 @@ class PrintLayoutService:
         saved = version.quality_json.get("printLayout")
         draft_support = not saved or saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION
         source = read_source(
-            content, str(version.quality_json.get("sourceSheetName", "")), version.layout_json,
+            content, str(version.quality_json.get("sourceSheetName", "")), layout,
             draft_support=draft_support,
         )
         # An address embedded in a rectangle ID is not proof that a user-edited
@@ -101,21 +104,27 @@ class PrintLayoutService:
             preview_geometry=version.quality_json.get("spreadsheetPreviewGeometry"),
         )
         originals = {c.id: c for c in original.cells}
-        for cell in version.layout_json.get("cells", []):
-            match = re.match(r"^(xlsx_[A-Z]{1,3}[1-9]\d*)(?:$|_)", cell["id"])
+        for physical_cell in physical_cells(layout):
+            match = re.match(r"^(xlsx_[A-Z]{1,3}[1-9]\d*)(?:$|_)", physical_cell["id"])
             baseline = originals.get(match[1]) if match else None
             if baseline is None or any(
-                cell[k] != getattr(baseline, k) for k in ("x", "y", "width", "height")
+                physical_cell[k] != getattr(baseline, k) for k in ("x", "y", "width", "height")
             ):
                 source["unsupported"].append(
                     "位置・サイズを手動変更した矩形の元セル対応は未対応です。"
                 )
                 break
+        parents = {c["id"]: c for c in layout["cells"]}
+        for merge in layout.get("cellMerges", []):
+            parent = parents.get(merge["parentCellId"])
+            rectangle = bounds([p["cell"] for p in merge["parts"]])
+            if parent is None or any(parent[k] != v for k, v in rectangle.items()):
+                source["unsupported"].append("結合矩形と元セル範囲が一致しません。")
         source["unsupported"] = list(dict.fromkeys(source["unsupported"]))
         config = parse_template_config(
             self.storage.read_bytes(version.config_relative_path).decode("utf-8")
         )
-        cells = {c["id"]: c for c in version.layout_json.get("cells", [])}
+        cells = {c["id"]: c for c in layout.get("cells", [])}
         owners = {}
         for field in source["fields"]:
             cell_id = field["cellId"]
@@ -124,6 +133,8 @@ class PrintLayoutService:
             for mark in cells[cell_id].get("markSets", []):
                 owners[f"layout_{cell_id}_{mark['id']}"[:100]] = field
         for mapping in config.field_mappings:
+            if proposed is not None:
+                break  # Proposed semantics are saved by LayoutService after preflight.
             if not mapping.enabled:
                 continue
             owner = owners.get(mapping.mapping_id)
@@ -279,7 +290,7 @@ class PrintLayoutService:
     def save_authoring(
         self, version_id: str, expected: str, layout: LayoutDefinition,
     ) -> dict[str, Any]:
-        """Save human semantics through the existing layout path, keeping page geometry."""
+        """Save source-preserving semantics, deletion, merge and unmerge."""
         from app.services.layout_service import LayoutService
 
         with template_mutation_lock():
@@ -293,13 +304,7 @@ class PrintLayoutService:
                         "印刷ページを保存し直してください。", "PRINT_LAYOUT_STALE", 409)
                 previous = version.layout_json
                 proposed = layout.model_dump(mode="json", by_alias=True)
-                def geometry(value: dict[str, Any]) -> dict[str, tuple[Any, ...]]:
-                    return {c["id"]: tuple(c[k] for k in ("x", "y", "width", "height"))
-                            for c in value.get("cells", [])}
-                if (geometry(previous) != geometry(proposed)
-                        or previous.get("cellMerges", []) != proposed.get("cellMerges", [])):
-                    raise print_error("ページ上では既存矩形の区分・意味づけを編集してください。",
-                                      "PRINT_AUTHORING_GEOMETRY_CHANGED", 409)
+                validate_page_edit(previous, proposed)
                 request = PrintLayoutRequest.model_validate({
                     **{k: saved[k] for k in (
                         "paperSize", "orientation", "margins", "horizontalCentering",
@@ -308,12 +313,20 @@ class PrintLayoutService:
                     "breakAfterRows": [p["endRow"] for p in saved["pages"][:-1]],
                     "autoArrange": False,
                 })
+                # Reject unsupported source ranges and cross-page merges before
+                # LayoutService writes either the DB or the config artifact.
+                preflight = page_plan(self._source(session, version, proposed), request, saved)
+                for page, old in zip(preflight["pages"], saved["pages"], strict=True):
+                    if any(page[k] != old[k] for k in ("range", "transform", "width", "height")):
+                        raise print_error("保存したページ境界・寸法を変更できません。",
+                                          "PRINT_AUTHORING_GEOMETRY_CHANGED", 409)
             result = LayoutService(self.database, self.storage).save(version_id, layout)
             with self.database.session() as session:
                 version = self._version(session, version_id)
                 plan = self._plan(session, version, request)
-                # Only cell roles/bindings change. Reuse the immutable source-cell
-                # image; drop prior qualification rather than certifying new inputs.
+                # Roles, bindings, and the explicit set of retained source cells may change.
+                # Reuse the immutable source-cell image; drop prior qualification rather
+                # than certifying the resulting field set as a production reference.
                 for page, old in zip(plan["pages"], saved["pages"], strict=True):
                     page["referenceImage"] = old["referenceImage"]
                 plan["source"] = "user"

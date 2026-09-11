@@ -1,0 +1,23 @@
+{
+  "layout": {
+    "canonicalWidth": 100, "canonicalHeight": 30, "detector": "minimal-repro",
+    "ocrAvailable": false, "recordStructureVerified": true,
+    "allowCrossAxisLabels": false, "warnings": [],
+    "cells": [
+      {"id": "text_input", "role": "input", "x": 0, "y": 0, "width": 20, "height": 20, "confidence": 1, "text": "", "textConfidence": null, "source": "manual"},
+      {"id": "mark_valid", "role": "mark", "x": 30, "y": 0, "width": 20, "height": 20, "confidence": 1, "text": "正常選択", "textConfidence": null, "source": "manual", "markSets": [
+        {"id": "choice", "targetPath": "customFields.markValid", "recognitionMode": "manual", "selectionMode": "single", "options": [{"id": "yes", "label": "Yes", "value": "yes", "x": 0, "y": 0, "width": 10, "height": 10}]}
+      ]},
+      {"id": "mark_incomplete", "role": "mark", "x": 60, "y": 0, "width": 20, "height": 20, "confidence": 1, "text": "不完全選択", "textConfidence": null, "source": "manual", "markSets": [
+        {"id": "choice", "targetPath": "customFields.markIncomplete", "recognitionMode": "manual", "selectionMode": "single", "options": []}
+      ]}
+    ],
+    "relations": [{"id": "text_relation", "inputCellId": "text_input", "labelCellIds": [], "axis": "horizontal", "order": 1, "targetPath": "customFields.textValue"}]
+  },
+  "option": {"id": "yes", "label": "Yes", "value": "yes", "x": 0, "y": 0, "width": 10, "height": 10},
+  "cases": [
+    {"state": "valid", "targetPath": "customFields.markIncomplete", "hasOptions": true, "unassigned": 0, "incomplete": 0, "code": null},
+    {"state": "unassigned", "targetPath": "", "hasOptions": true, "unassigned": 1, "incomplete": 0, "code": "MARK_TARGET_REQUIRED"},
+    {"state": "incomplete", "targetPath": "customFields.markIncomplete", "hasOptions": false, "unassigned": 0, "incomplete": 1, "code": "MARK_OPTIONS_REQUIRED"}
+  ]
+}

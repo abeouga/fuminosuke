@@ -227,6 +227,40 @@ async function openDraftReview() {
   await waitFor(() => expect(screen.getByRole("button", { name: "承認して有効化" })).toBeEnabled());
 }
 
+test("print controls are exclusive to XLSX cards and explain missing settings", () => {
+  const spreadsheet = { ...draftTemplate, id: "xlsx-template", name: "未設定XLSX", versions: [
+    { ...draftVersion, id: "xlsx-version", mode: "SPREADSHEET_TEMPLATE" as const },
+  ] };
+  render(<TemplatePage templates={[draftTemplate, spreadsheet]} refresh={vi.fn()} rememberJob={vi.fn()} />);
+  expect(screen.getAllByRole("button", { name: "印刷用XLSX" })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "印刷用XLSX" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "印刷用PDF" })).toBeDisabled();
+  expect(screen.getByText("印刷ページ設定が保存されていません。")).toBeInTheDocument();
+});
+
+test("each template card downloads its displayed version without mixing cards or versions", async () => {
+  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const, quality: { printLayout: { pages: [{}] } } };
+  const templates = ["a", "b"].map(id => ({ ...draftTemplate, id, name: `帳票${id}`, versions: [
+    { ...version, id: `${id}-displayed` },
+    { ...version, id: `${id}-older`, versionNumber: 1, status: "ARCHIVED" as const },
+  ] }));
+  const fetch = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/print-layout")) return Promise.resolve(jsonResponse({ revision: url.includes("a-displayed") ? "ra" : "rb" }));
+    if (url.includes("/files/")) return Promise.resolve(new Response(new Blob(["fixture"])));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  render(<TemplatePage templates={templates} refresh={vi.fn()} rememberJob={vi.fn()} />);
+  fireEvent.click(screen.getAllByRole("button", { name: "印刷用XLSX" })[0]);
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).includes("/a-displayed/print-layout/files/xlsx?base_revision=ra"))).toBe(true));
+  fireEvent.click(screen.getAllByRole("button", { name: "印刷用PDF" })[1]);
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).includes("/b-displayed/print-layout/files/pdf?base_revision=rb"))).toBe(true));
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("-older"))).toBe(false);
+  await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(2));
+});
+
 test("active editing opens and reuses the server draft without saving the active version", async () => {
   const active = { ...draftVersion, id: "version-active", status: "ACTIVE" as const,
     versionNumber: 1, sourceJobId: "job-active" };

@@ -22,6 +22,7 @@ import {
   mergeLabelRelations,
   normalizeLayout,
   recordRowsFromColumnLabels,
+  removeLayoutCells,
   recordSectionAtPoint,
   recordSectionDisplayName,
   repairDuplicateCalvingMarkRows,
@@ -923,6 +924,78 @@ describe("range classification", () => {
     });
   });
 
+  test("deletes all cells in a marquee selection", async () => {
+    const originalPointerEvent = window.PointerEvent;
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: MouseEvent,
+    });
+    const cells: LayoutCell[] = [10, 110, 210].map((x, index) => ({
+      id: `input_${index + 1}`,
+      role: "input",
+      x,
+      y: 10,
+      width: 80,
+      height: 30,
+      confidence: 1,
+      text: "",
+      textConfidence: null,
+      source: "manual",
+    }));
+    const onSave = vi.fn(async (current: LayoutDefinition) => current);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          canonicalWidth: 300,
+          canonicalHeight: 100,
+          detector: "test",
+          ocrAvailable: false,
+          cells,
+          relations: [],
+          allowCrossAxisLabels: false,
+          warnings: [],
+        }}
+        targets={targets}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const scope = within(view.container);
+    const canvas = scope.getByLabelText("帳票レイアウト編集キャンバス");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 100,
+      width: 300,
+      height: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerDown(canvas, { clientX: 5, clientY: 5, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 195, clientY: 45, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 195, clientY: 45, pointerId: 1 });
+    fireEvent.click(scope.getByRole("button", { name: "選択した矩形を完全に削除" }));
+
+    expect(scope.queryByText("範囲選択: 2 セル")).toBeNull();
+    expect(within(scope.getByLabelText("セル一覧から選択")).getAllByRole("option"))
+      .toHaveLength(2);
+    fireEvent.click(scope.getByRole("button", { name: /レイアウト.*保存/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls.at(-1)?.[0].cells.map((cell) => cell.id)).toEqual(["input_3"]);
+
+    view.unmount();
+    Object.defineProperty(window, "PointerEvent", {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  });
+
   test("adds and removes cells with Ctrl+click while classifying", () => {
     const originalPointerEvent = window.PointerEvent;
     Object.defineProperty(window, "PointerEvent", {
@@ -1002,6 +1075,88 @@ describe("range classification", () => {
       value: originalPointerEvent,
     });
   });
+});
+
+test("removeLayoutCells clears references to every deleted rectangle", () => {
+  const label: LayoutCell = {
+    id: "label",
+    role: "label",
+    x: 10,
+    y: 10,
+    width: 80,
+    height: 30,
+    confidence: 1,
+    text: "項目",
+    textConfidence: null,
+    source: "manual",
+  };
+  const input: LayoutCell = { ...label, id: "input", role: "input", x: 110, text: "" };
+  const survivor: LayoutCell = {
+    ...input,
+    id: "survivor",
+    x: 210,
+    parentLabelCellId: "label",
+  };
+  const result = removeLayoutCells({
+    canonicalWidth: 300,
+    canonicalHeight: 100,
+    detector: "test",
+    ocrAvailable: false,
+    cells: [label, input, survivor],
+    cellMerges: [{
+      id: "merge",
+      parentCellId: "input",
+      direction: "horizontal",
+      parts: [{ cell: input, partType: "input", literal: "" }],
+    }],
+    relations: [{
+      id: "relation",
+      inputCellId: "input",
+      labelCellIds: ["label"],
+      parentLabelCellId: "label",
+      axis: "horizontal",
+      order: 1,
+      targetPath: "customFields.value",
+    }],
+    recordSections: [{
+      id: "section",
+      title: "表",
+      collectionPath: "genericRecords.table",
+      recordType: "generic",
+      recordLabelCellIds: ["label"],
+      parentLabelCellId: "label",
+      rowKeyCellIds: ["input"],
+      source: "manual",
+    }],
+    recordGroups: [{
+      id: "group",
+      sectionId: "section",
+      order: 1,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 30,
+      inputCellIds: ["input"],
+      recordKeyField: "row",
+      recordKeyValue: null,
+      recordKeyCellId: "input",
+      source: "manual",
+    }],
+    recordStructureVerified: true,
+    allowCrossAxisLabels: false,
+    warnings: [],
+  }, ["label", "input"]);
+
+  expect(result.cells).toEqual([{ ...survivor, parentLabelCellId: null }]);
+  expect(result.cellMerges).toEqual([]);
+  expect(result.relations).toEqual([]);
+  expect(result.recordSections).toEqual([expect.objectContaining({
+    recordLabelCellIds: [],
+    parentLabelCellId: null,
+    rowKeyCellIds: [],
+  })]);
+  expect(result.recordGroups).toEqual([]);
+  expect(result.recordStructureVerified).toBe(false);
 });
 
 describe("layout draft autosave", () => {

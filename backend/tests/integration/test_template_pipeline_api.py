@@ -374,7 +374,8 @@ def test_reference_approve_then_extract(client: TestClient) -> None:
     ungrouped_mappings = client.get(
         f"/api/v1/template-versions/{version_id}/field-mappings"
     ).json()
-    assert ungrouped_mappings["mappings"] == []
+    # Invalid draft bindings preserve the last valid mapping configuration.
+    assert ungrouped_mappings["mappings"] == incremented_mappings["mappings"]
     assert ungrouped_mappings["validForOcr"] is False
 
     completed_mapping_with_unassigned_cell = {

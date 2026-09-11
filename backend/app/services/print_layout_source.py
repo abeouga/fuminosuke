@@ -15,6 +15,7 @@ from openpyxl.utils.cell import get_column_letter, range_boundaries
 from openpyxl.worksheet.print_settings import PrintArea
 
 from app.domain.print_layout import print_error
+from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -235,7 +236,34 @@ def _read_source(
                     }
                 )
         fields = []
+        authored_merges = {m["parentCellId"]: m for m in layout.get("cellMerges", [])}
         for field in layout.get("cells", []):
+            merge = authored_merges.get(field["id"])
+            if merge:
+                # Resolve exact source ranges with the same contiguous-rectangle
+                # validator as XLSX output, never from the parent ID or pixels.
+                source_parts = SpreadsheetTemplateOutputService.page_merge_sources(sheet, merge)
+                fc = min(range_boundaries(p["sourceRange"])[0] for p in source_parts)
+                fr = min(range_boundaries(p["sourceRange"])[1] for p in source_parts)
+                ec = max(range_boundaries(p["sourceRange"])[2] for p in source_parts)
+                er = max(range_boundaries(p["sourceRange"])[3] for p in source_parts)
+                if not (r1 <= fr <= er <= r2 and c1 <= fc <= ec <= c2):
+                    unsupported.append("印刷範囲外の結合矩形があります。")
+                    continue
+                if any(xs[c2p + 1] == xs[c1p] or ys[r2p + 1] == ys[r1p]
+                       for c1p, r1p, c2p, r2p in
+                       (range_boundaries(p["sourceRange"]) for p in source_parts)):
+                    unsupported.append("非表示セルに対応する結合矩形があります。")
+                    continue
+                fields.append({"cellId": field["id"], "role": field["role"],
+                               "sourceRange": (f"{get_column_letter(fc)}{fr}:"
+                                               f"{get_column_letter(ec)}{er}"),
+                               "sourceParts": source_parts,
+                               "startRow": fr, "endRow": er, "startCol": fc, "endCol": ec,
+                               "x": xs[fc], "y": ys[fr],
+                               "width": xs[ec + 1] - xs[fc], "height": ys[er + 1] - ys[fr]})
+                invalid.update(range(fr, er))
+                continue
             match = re.match(r"^xlsx_([A-Z]{1,3}[1-9]\d*)(?:$|_)", field["id"])
             if not match:
                 unsupported.append("元セル番地を確定できない編集矩形があります。")
@@ -264,8 +292,6 @@ def _read_source(
                 }
             )
             invalid.update(range(fr, er))
-        if layout.get("cellMerges"):
-            unsupported.append("GUIで結合したOCR矩形のページ変換は未対応です。")
         valid = [r for r in range(r1, r2) if r not in invalid]
         manual = sorted(
             {

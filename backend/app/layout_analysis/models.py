@@ -6,6 +6,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.errors import to_camel
+from app.domain.polygon import PolygonPoint, validate_polygon
 from app.domain.text_encoding import repair_utf8_mojibake
 
 
@@ -77,11 +78,27 @@ class LayoutCell(LayoutModel):
     text_alignment: Literal["left", "center", "right"] = "left"
     text_vertical_alignment: Literal["top", "middle", "bottom"] | None = None
     source: Literal["detected", "manual"] = "detected"
+    shape_type: Literal["rectangle", "polygon"] = "rectangle"
+    vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
+    virtual: bool = False
+    parent_label_cell_id: str | None = Field(default=None, max_length=100)
     mark_sets: list[LayoutMarkSet] = Field(default_factory=list, max_length=10)
     composite_subfields: list[LayoutCompositeSubfield] = Field(
         default_factory=list,
         max_length=10,
     )
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> Self:
+        if (self.shape_type == "polygon") != bool(self.vertices):
+            raise ValueError("Only polygon cells require vertices")
+        validate_polygon(self.vertices, self.x, self.y, self.width, self.height)
+        if self.virtual and (
+            self.role != "parent_label" or self.source != "manual"
+            or self.shape_type != "rectangle" or not self.text.strip()
+        ):
+            raise ValueError("Virtual cells must be named manual headings")
+        return self
 
     @field_validator("text", "printed_label_text", mode="before")
     @classmethod
@@ -356,6 +373,34 @@ class LayoutDefinition(LayoutModel):
         if len(cell_ids) != len(set(cell_ids)):
             raise ValueError("Layout cell IDs must be unique")
         known = set(cell_ids)
+        cells_by_id = {cell.id: cell for cell in self.cells}
+        parents: dict[str, set[str]] = {}
+        for cell in self.cells:
+            if cell.parent_label_cell_id is None:
+                continue
+            parent = cells_by_id.get(cell.parent_label_cell_id)
+            if parent is None or parent.role not in {"label", "parent_label"}:
+                raise ValueError("Cell parent must reference a heading")
+            if cell.role not in {"label", "parent_label", "input", "mark"}:
+                raise ValueError("Only headings and fields may have a parent")
+            parents.setdefault(cell.id, set()).add(parent.id)
+        # Include legacy meaning edges when checking new hierarchy cycles.
+        for relation in self.relations:
+            if relation.parent_label_cell_id:
+                for child_id in relation.label_cell_ids or [relation.input_cell_id]:
+                    parents.setdefault(child_id, set()).add(relation.parent_label_cell_id)
+        for cell in self.cells:
+            if cell.parent_label_cell_id and len(parents[cell.id]) > 1:
+                raise ValueError("A hierarchy node may have only one parent")
+            visited = {cell.id}
+            pending = list(parents.get(cell.id, set()))
+            while pending:
+                parent_id = pending.pop()
+                if parent_id == cell.id:
+                    raise ValueError("Heading hierarchy must not contain cycles")
+                if parent_id not in visited:
+                    visited.add(parent_id)
+                    pending.extend(parents.get(parent_id, set()))
         relation_ids = [relation.id for relation in self.relations]
         if len(relation_ids) != len(set(relation_ids)):
             raise ValueError("Layout relation IDs must be unique")

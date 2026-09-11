@@ -896,6 +896,9 @@ class JobService:
         config: TemplateConfig | None = None,
         generic_definition: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        from app.services.layout_service import LayoutService
+
+        LayoutService.require_valid_saved_mapping_layout(version)
         if config is None:
             config = parse_template_config(
                 self._storage.read_bytes(version.config_relative_path).decode("utf-8")

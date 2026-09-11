@@ -483,8 +483,9 @@ export function TemplatePage({
                   )}
                 </div>
                 <div className="template-management-action">
-                  {primaryVersion && Boolean(primaryVersion.quality.printLayout) && <TemplatePrintFiles key={primaryVersion.id}
-                    versionId={primaryVersion.id} disabled={isDeletingCurrentTemplate || openingReview} />}
+                  {primaryVersion?.mode === "SPREADSHEET_TEMPLATE" && <TemplatePrintFiles key={primaryVersion.id}
+                    versionId={primaryVersion.id} disabled={isDeletingCurrentTemplate || openingReview}
+                    disabledReason={primaryVersion.quality.printLayout ? undefined : "印刷ページ設定が保存されていません。"} />}
                   {primaryVersion && (
                     <button
                       type="button"
@@ -982,6 +983,16 @@ function TemplateReview({
               setMappingFresh(false);
               try {
                 const refreshed = await api.fieldMappings(version.id);
+                if (refreshed.fieldErrors?.length) {
+                  // Draft layout saved; retained mappings belong to the last valid layout.
+                  // Do not reconcile or persist identity against this stale configuration.
+                  setMappingConfig(refreshed);
+                  setFeedback({
+                    kind: "error",
+                    text: `レイアウトを途中保存しました。${refreshed.warnings.join(" ")}`,
+                  });
+                  return saved;
+                }
                 const persistedIdentityFields = identityFields.map((field) => {
                   const selectedMapping = refreshed.mappings.find((mapping) => (
                     mapping.enabled

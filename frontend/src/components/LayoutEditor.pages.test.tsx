@@ -91,6 +91,28 @@ test("page-local classification and switching preserve canonical coordinates and
   });
 });
 
+test("page-local range selection deletes selected rectangles and preserves other pages", async () => {
+  const ref = createRef<LayoutEditorHandle>();
+  const save = vi.fn(async (layout: LayoutDefinition) => layout);
+  const props = { ref, source: "legacy.png", initialLayout: initial, targets, onDetect: vi.fn(),
+    onSave: save, workflowStep: "classify" as const };
+  const view = render(<LayoutEditor {...props} pageView={first} />);
+  const element = canvas();
+  fireEvent.pointerDown(element, { clientX: 5, clientY: 20, pointerId: 1 });
+  fireEvent.pointerMove(element, { clientX: 310, clientY: 100, pointerId: 1 });
+  fireEvent.pointerUp(element, { clientX: 310, clientY: 100, pointerId: 1 });
+
+  expect(screen.getByText("範囲選択: 2 セル")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "選択セルを結合" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "選択した矩形を完全に削除" }));
+  view.rerender(<LayoutEditor {...props} pageView={second} />);
+  clickAt(canvas(), 180, 65);
+  expect(screen.getByRole("button", { name: "矩形を完全に削除" })).toBeEnabled();
+
+  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(save.mock.calls.at(-1)![0].cells).toEqual(normalizeLayout(initial).cells.slice(2));
+});
+
 test("page-local meaning drag connects only the selected page's existing IDs", async () => {
   const ref = createRef<LayoutEditorHandle>();
   const save = vi.fn(async (layout: LayoutDefinition) => layout);
@@ -123,4 +145,51 @@ test("failed page save retains human edits for retry", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "読み取らない" })).toHaveClass("active"));
   await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
   expect(save.mock.calls[0][0]).toEqual(save.mock.calls[1][0]);
+});
+
+test("page merge remains visible across switching, failed save, reload and unmerge", async () => {
+  const ref = createRef<LayoutEditorHandle>();
+  const save = vi.fn<(layout: LayoutDefinition) => Promise<LayoutDefinition>>()
+    .mockRejectedValueOnce(new Error("revision conflict"))
+    .mockImplementation(async layout => layout);
+  const props = { ref, source: "legacy.png", initialLayout: initial, targets,
+    onDetect: vi.fn(), onSave: save, workflowStep: "classify" as const };
+  const view = render(<LayoutEditor {...props} pageView={first} />);
+  const element = canvas();
+  clickAt(element, 60, 65);
+  fireEvent.pointerDown(element, { clientX: 180, clientY: 65, pointerId: 1, ctrlKey: true });
+  fireEvent.pointerUp(element, { clientX: 180, clientY: 65, pointerId: 1, ctrlKey: true });
+  fireEvent.click(screen.getByRole("button", { name: "選択セルを結合" }));
+  expect(screen.getByRole("button", { name: "結合を解除" })).toBeEnabled();
+  view.rerender(<LayoutEditor {...props} pageView={second} />);
+  expect(screen.queryByRole("button", { name: "結合を解除" })).not.toBeInTheDocument();
+  view.rerender(<LayoutEditor {...props} pageView={first} />);
+  clickAt(canvas(), 60, 65);
+  expect(screen.getByRole("button", { name: "結合を解除" })).toBeEnabled();
+  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(false); });
+  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(save.mock.calls[0][0]).toEqual(save.mock.calls[1][0]);
+  const saved = save.mock.calls[1][0];
+  const parent = saved.cells.find(cell => cell.id.startsWith("merged_"))!;
+  expect(parent).toMatchObject({ x: 400, y: 600, width: 100, height: 20 });
+  expect(saved.cellMerges![0].parts.map(part => part.cell)).toEqual(normalizeLayout(initial).cells.slice(0, 2));
+  expect(pageDisplayCells(saved, first)).toEqual([
+    { ...parent, x: 20, y: 40, width: 280, height: 50 },
+  ]);
+  view.unmount();
+  const savedPage: PageView = { ...first,
+    fields: [{ cellId: parent.id, sourceRange: "B2:C2", templatePage: 1,
+      rectangle: { x: 20, y: 40, width: 280, height: 50 },
+      sourceParts: first.fields.map(field => ({ cellId: field.cellId, sourceRange: field.sourceRange })) }],
+    cells: first.fields.map(field => ({ sourceRange: field.sourceRange, startRow: 2, endRow: 2,
+      ...field.rectangle, text: "", fill: "#ffffff", fontSize: 12, bold: false, align: "left",
+      borders: {}, rectangle: field.rectangle })),
+  };
+  render(<LayoutEditor {...props} initialLayout={saved} pageView={savedPage} />);
+  clickAt(canvas(), 60, 65);
+  fireEvent.click(screen.getByRole("button", { name: "結合を解除" }));
+  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  const restored = save.mock.calls.at(-1)![0];
+  expect(restored.cells).toEqual(normalizeLayout(initial).cells);
+  expect(pageDisplayCells(restored, savedPage)).toEqual(pageDisplayCells(normalizeLayout(initial), first));
 });

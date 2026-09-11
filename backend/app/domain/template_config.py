@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 
 from app.core.errors import to_camel
+from app.domain.polygon import PolygonPoint, validate_polygon
 from app.domain.text_encoding import repair_utf8_mojibake
 
 
@@ -23,7 +35,33 @@ class RegistrationConfig(TemplateConfigModel):
     min_ecc_score: float = Field(ge=0, le=1)
 
 
-class RegionConfig(TemplateConfigModel):
+class PolygonConfigModel(TemplateConfigModel):
+    # Keep the optional geometry field in exported schemas while the serializer
+    # retains the exact pre-polygon representation for ordinary rectangles.
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        # A wrap serializer's dict return annotation otherwise erases the field
+        # schema. The wire object still has exactly the declared model fields.
+        def declared_model(node: core_schema.CoreSchema) -> core_schema.CoreSchema:
+            declared = dict(node)
+            declared.pop("serialization", None)
+            if node["type"] != "model" and isinstance(declared.get("schema"), dict):
+                declared["schema"] = declared_model(declared["schema"])
+            return cast(core_schema.CoreSchema, declared)
+
+        return handler(declared_model(schema))
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_polygon(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not data.get("vertices"):
+            data.pop("vertices", None)
+        return data
+
+
+class RegionConfig(PolygonConfigModel):
     region_id: str
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -38,6 +76,12 @@ class RegionConfig(TemplateConfigModel):
     fallback_enabled: bool
     mark_detection_enabled: bool
     printed_label_text: str = Field(default="", max_length=300)
+    vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_polygon_geometry(self) -> RegionConfig:
+        validate_polygon(self.vertices, self.x, self.y, self.width, self.height)
+        return self
 
     @field_validator("printed_label_text", mode="before")
     @classmethod
@@ -71,7 +115,7 @@ class CompositeSubfieldConfig(TemplateConfigModel):
     height_ratio: float = Field(gt=0, le=1)
 
 
-class FieldMappingConfig(TemplateConfigModel):
+class FieldMappingConfig(PolygonConfigModel):
     mapping_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
     target_path: str = Field(min_length=1, max_length=200)
     label: str = Field(min_length=1, max_length=100)
@@ -82,6 +126,12 @@ class FieldMappingConfig(TemplateConfigModel):
     padding: int = Field(default=4, ge=0, le=50)
     enabled: bool = True
     model_detail: str = "high"
+    vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_polygon_geometry(self) -> FieldMappingConfig:
+        validate_polygon(self.vertices, self.x, self.y, self.width, self.height)
+        return self
     printed_label_text: str = Field(default="", max_length=300)
     mapping_type: Literal["text", "mark"] = "text"
     mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
@@ -116,6 +166,7 @@ class FieldMappingConfig(TemplateConfigModel):
                 and self.mark_recognition_mode == "automatic"
             ),
             printed_label_text=self.printed_label_text,
+            vertices=self.vertices,
         )
 
 

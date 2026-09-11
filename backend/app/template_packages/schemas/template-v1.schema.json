@@ -800,6 +800,14 @@
           "title": "Targetpath",
           "type": "string"
         },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
+          "type": "array"
+        },
         "width": {
           "exclusiveMinimum": 0,
           "title": "Width",
@@ -898,6 +906,19 @@
           "title": "Marksets",
           "type": "array"
         },
+        "parentLabelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentlabelcellid"
+        },
         "printedLabelText": {
           "default": "",
           "maxLength": 300,
@@ -915,6 +936,15 @@
             "ignored"
           ],
           "title": "Role",
+          "type": "string"
+        },
+        "shapeType": {
+          "default": "rectangle",
+          "enum": [
+            "rectangle",
+            "polygon"
+          ],
+          "title": "Shapetype",
           "type": "string"
         },
         "source": {
@@ -981,6 +1011,19 @@
           ],
           "default": null,
           "title": "Textverticalalignment"
+        },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
+          "type": "array"
+        },
+        "virtual": {
+          "default": false,
+          "title": "Virtual",
+          "type": "boolean"
         },
         "width": {
           "exclusiveMinimum": 0,
@@ -1827,6 +1870,27 @@
       "title": "NormalizedBox",
       "type": "object"
     },
+    "PolygonPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "PolygonPoint",
+      "type": "object"
+    },
     "RegionConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1882,6 +1946,14 @@
             "type": "string"
           },
           "title": "Validatornames",
+          "type": "array"
+        },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
           "type": "array"
         },
         "width": {

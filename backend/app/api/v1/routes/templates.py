@@ -12,7 +12,7 @@ from app.api.auth_dependencies import require_authenticated_user
 from app.api.dependencies import get_job_service
 from app.api.v1.routes.shared import JobAccepted, JobDetail, job_accepted, job_detail
 from app.api.v1.routes.uploads import read_upload
-from app.core.errors import ApiModel, AppError
+from app.core.errors import ApiModel, AppError, FieldError
 from app.db.models import TemplateVersion
 from app.domain.enums import JobStatus, JobType, TemplateMode
 from app.domain.field_targets import (
@@ -21,6 +21,7 @@ from app.domain.field_targets import (
     custom_field_key,
     is_supported_field_path,
 )
+from app.domain.polygon import PolygonPoint
 from app.domain.template_config import (
     DocumentIdentityConfig,
     DocumentNameConfig,
@@ -153,6 +154,7 @@ class FieldMappingView(ApiModel):
     padding: int = 4
     enabled: bool = True
     model_detail: str = "high"
+    vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
     printed_label_text: str = ""
     mapping_type: str = "text"
     mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
@@ -196,6 +198,7 @@ class FieldMappingsResponse(ApiModel):
     document_name: DocumentNameView | None = None
     targets: list[FieldMappingTargetView]
     valid_for_ocr: bool
+    field_errors: list[FieldError] = Field(default_factory=list)
     warnings: list[str]
 
 
@@ -878,6 +881,9 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
         document_name,
     )
     layout_warnings = _unassigned_layout_warnings(layout)
+    layout_error = LayoutService.mapping_validation_error(layout)
+    if layout_error:
+        layout_warnings.insert(0, f"[{layout_error.code}] {layout_error.detail}")
     if layout_warnings:
         valid_for_ocr = False
         warnings = [*warnings, *layout_warnings]
@@ -904,6 +910,9 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
             for item in _mapping_targets(mappings, layout)
         ],
         valid_for_ocr=valid_for_ocr,
+        field_errors=(
+            layout_error.field_errors or [FieldError(field="layout", message=layout_error.detail)]
+        ) if layout_error else [],
         warnings=warnings,
     )
 
@@ -952,6 +961,9 @@ def update_field_mappings(
         document_name,
     )
     layout_warnings = _unassigned_layout_warnings(layout)
+    layout_error = LayoutService.mapping_validation_error(layout)
+    if layout_error:
+        layout_warnings.insert(0, f"[{layout_error.code}] {layout_error.detail}")
     if layout_warnings:
         valid_for_ocr = False
         warnings = [*warnings, *layout_warnings]
@@ -978,6 +990,9 @@ def update_field_mappings(
             for item in _mapping_targets(mappings, layout)
         ],
         valid_for_ocr=valid_for_ocr,
+        field_errors=(
+            layout_error.field_errors or [FieldError(field="layout", message=layout_error.detail)]
+        ) if layout_error else [],
         warnings=warnings,
     )
 
