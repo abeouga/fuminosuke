@@ -85,6 +85,12 @@ canonical領域内に制限する。矩形のpadding・切り出し画素・mapp
 空のverticesを矩形のconfig/snapshotへ追加して既存hashを変更しない。
 provider・model・prompt・association方式は変更しない。
 
+Canvasのハンド操作による明示的な配置修正では、編集可能なDRAFTの同じcell IDと
+意味づけを保持して座標を平行移動できる。多角形の頂点、結合parts、所属行の外接矩形を
+対応させ、ドロップ時に既存layout保存経路へ渡す。仮想見出しは移動後もOCR対象外。
+元XLSXのセル・出力先を移動する操作ではなく、過去jobのsnapshotを変更しない。
+§12のページ投影矩形の固定座標制約は解除しない。
+
 対応範囲・境界テストは[テンプレート手動編集の拡張](template-authoring-extensions.md)を参照する。
 
 ### 3.5 単一ページ位置合わせの追加復旧
@@ -167,6 +173,10 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 囲い込み対象は現在の論理セルに限定し、結合前のpartsから子を再生成しない。
 過去jobのreviewStructureや補正・確定値を新しい階層から再構成しない。
 
+繰り返し群への見出し接続はrecordSectionsのparentLabelCellIdへ保存し、
+個別列の意味づけへ置き換えない。同じcollectionの複数帯は従来どおり同じ親を持つ。
+見出し階層の循環検証には、この群から見出しへの既存接続も含める。
+
 表示上のgroup化とfield identity統合を混同しない。独立項目のgroup identityはlabel文字列でなく `parentLabelCellId + labelCellIds` に基づく。現在の `_logical_field_group_id` はlabel cell IDを重複除去・sortし、情報がなければ `field:{mappingId}` にfallbackする。
 
 過去jobの表示は保存済みreviewStructure / fieldMappingsを基準とする。reviewStructureがない旧jobは既存の独立項目fallbackを維持し、現在のTemplateVersionから勝手に対応を再構築しない。
@@ -197,7 +207,9 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 同じエディターの保存要求は直列化し、送信後の追加編集を古い保存応答で上書きしない。
 ブラウザー下書きは最新の編集内容が保存された場合だけ消去する。保存後の関連取得失敗も
 永続化状態が不明な失敗として扱い、元の値へ戻した編集を含めて下書きを保持する。
-再検出・工程移動・明示保存の完了境界、既存のAPI検証・revision照合を迂回しない。
+同一エディター内の工程切替は未保存の状態と保存キューを保持したまま実行できる。
+工程切替を保存完了とは扱わず、移動先の追加編集を古い保存応答で上書きしない。
+画面終了・再検出・明示保存・承認の完了境界、既存のAPI検証・revision照合を迂回しない。
 実装範囲と検証は[テンプレートの非ブロッキング自動保存](template-background-save.md)を参照する。
 
 作業完了に応じた表示はデータを壊さない派生値で表す。現ReviewPageの `reviewCompleted` / `displayedWarningPaths` も `result.confirmed` を基準にする。独立したローカルreviewed stateで正本を複製しない。
@@ -270,6 +282,11 @@ reviewStructure、補正保存およびprovider associationを変更しない。
 再結合できる。従来拒否していた既存結合の包含を、この根拠がある場合に限って
 許可する。部分交差、別結合との重複、数式消失、未承認の内部値消失は拒否する。
 元XLSXは書き換えない。旧形式の重複拒否テストは維持し、新形式を別ケースで検証する。
+
+選択したliteral部品と元セル値の比較では、取込・編集時に除去される前後空白の差を
+非空の文字列に限り許容する。比較だけであり、原本・保存partsを正規化しない。
+内部空白、文字種・大小文字の差を同一視せず、数式とinput部品の内部値保護も維持する。
+テンプレート名・特定ラベル・セル番地による例外は設けない。
 
 ページ結合の版コピーでは、TemplateVersionServiceが付与する20桁のhex suffixを持つ
 元セルIDも同じ元Excel座標へ解決する。その他の仮想分割IDへ範囲全体の所有を拡張しない。

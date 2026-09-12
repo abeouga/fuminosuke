@@ -2,6 +2,31 @@ import type { FieldMappingTarget, LayoutCell, LayoutDefinition, LayoutLabelPoolE
 
 type Point = { x: number; y: number };
 
+/** Translate one logical cell, preserving IDs and explicit meaning/group ownership. */
+export function moveLayoutCell(layout: LayoutDefinition, id: string, dx: number, dy: number): LayoutDefinition {
+  const original = layout.cells.find(cell => cell.id === id);
+  if (!original || !Number.isFinite(dx) || !Number.isFinite(dy)) return layout;
+  dx = Math.max(-original.x, Math.min(Math.round(dx), layout.canonicalWidth - original.x - original.width));
+  dy = Math.max(-original.y, Math.min(Math.round(dy), layout.canonicalHeight - original.y - original.height));
+  if (!dx && !dy) return layout;
+  const translate = (cell: LayoutCell): LayoutCell => ({ ...cell, x: cell.x + dx, y: cell.y + dy,
+    ...(cell.vertices?.length ? { vertices: cell.vertices.map(p => ({ x: p.x + dx, y: p.y + dy })) } : {}),
+    source: "manual" });
+  const cells = layout.cells.map(cell => cell.id === id ? translate(cell) : cell);
+  const byId = new Map(cells.map(cell => [cell.id, cell]));
+  return { ...layout, cells,
+    cellMerges: layout.cellMerges?.map(merge => merge.parentCellId === id
+      ? { ...merge, parts: merge.parts.map(part => ({ ...part, cell: translate(part.cell) })) } : merge),
+    recordGroups: layout.recordGroups?.map(group => {
+      if (!group.inputCellIds.includes(id)) return group;
+      const members = group.inputCellIds.map(id => byId.get(id)).filter((cell): cell is LayoutCell => !!cell);
+      const x = Math.min(...members.map(cell => cell.x)), y = Math.min(...members.map(cell => cell.y));
+      return { ...group, x, y, width: Math.max(...members.map(cell => cell.x + cell.width)) - x,
+        height: Math.max(...members.map(cell => cell.y + cell.height)) - y };
+    }),
+  };
+}
+
 export function pointInCell(point: Point, cell: LayoutCell): boolean {
   if (point.x < cell.x || point.y < cell.y
     || point.x > cell.x + cell.width || point.y > cell.y + cell.height) return false;
@@ -86,6 +111,15 @@ export function attachHeading(
   const parent = layout.cells.find(cell => cell.id === parentId);
   if (!parent || !["label", "parent_label"].includes(parent.role)) throw new Error("接続元は見出しを選択してください。");
   const ids = new Set(childIds);
+  const collections = new Set((layout.recordSections ?? [])
+    .filter(section => section.recordLabelCellIds.some(id => ids.has(id)))
+    .map(section => section.collectionPath));
+  // A repeated column band is one child node, not just the column hit by the pointer.
+  const recordSections = layout.recordSections?.map(section => {
+    if (!collections.has(section.collectionPath)) return section;
+    section.recordLabelCellIds.forEach(id => ids.delete(id));
+    return { ...section, parentLabelCellId: parentId };
+  });
   for (const id of ids) {
     const child = layout.cells.find(cell => cell.id === id);
     if (!child || !["label", "parent_label", "input", "mark"].includes(child.role)) {
@@ -107,6 +141,10 @@ export function attachHeading(
     if (relation.parentLabelCellId) (relation.labelCellIds.length ? relation.labelCellIds : [relation.inputCellId])
       .forEach(id => add(id, relation.parentLabelCellId!));
   });
+  recordSections?.forEach(section => {
+    if (section.parentLabelCellId) section.recordLabelCellIds
+      .forEach(id => add(id, section.parentLabelCellId!));
+  });
   for (const cell of cells) {
     if (cell.parentLabelCellId && (parents.get(cell.id)?.size ?? 0) > 1) {
       throw new Error("同じ項目に異なる親を設定できません。項目名側の接続を確認してください。");
@@ -120,7 +158,7 @@ export function attachHeading(
       visited.add(id); pending.push(...(parents.get(id) ?? []));
     }
   }
-  return { ...layout, cells, relations };
+  return { ...layout, cells, relations, recordSections };
 }
 
 export function enclosedHeadingChildren(layout: LayoutDefinition, rect: Point & { width: number; height: number }): string[] {

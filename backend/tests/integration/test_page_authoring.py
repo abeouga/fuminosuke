@@ -27,6 +27,50 @@ def paged_draft(client, monkeypatch, request):
     return version, job, url, response.json(), layout
 
 
+@pytest.mark.parametrize("row, text", [(3, "分類 A\u3000\u3000"), (33, " \u3000Reference 42 ")])
+def test_imported_literal_boundary_whitespace_can_save_on_any_page(
+    client, monkeypatch, request, row, text,
+):
+    def workbook_bytes():
+        workbook = load_workbook(BytesIO(draft_workbook()))
+        workbook.active[f"C{row}"] = text
+        result = BytesIO()
+        workbook.save(result)
+        return result.getvalue()
+
+    monkeypatch.setattr(existing, "workbook_bytes", workbook_bytes)
+    version, job, content, layout = request.getfixturevalue("print_template")
+    url = f"/api/v1/template-versions/{version}/print-layout"
+    initial = client.get(url).json()
+    response = client.put(url, json={"baseRevision": initial["revision"]})
+    assert response.status_code == 200, response.text
+    state = response.json()
+    proposed = merge_cells(layout, [f"xlsx_B{row}", f"xlsx_C{row}"])
+    literal = proposed["cellMerges"][0]["parts"][1]
+    assert literal["cell"]["text"] == text.strip()
+    literal.update(partType="literal", literal=text.strip())
+    # A real text change is rejected before any authoring data is saved.
+    rejected = copy.deepcopy(proposed)
+    rejected["cellMerges"][0]["parts"][1]["literal"] = "different text"
+    response = client.put(url + "/authoring",
+                          params={"base_revision": state["revision"]}, json=rejected)
+    assert response.status_code == 409
+    assert response.json()["code"] == "SPREADSHEET_OUTPUT_MERGE_CONFLICT"
+    assert client.get(url).json() == state
+    response = client.put(url + "/authoring", params={"base_revision": state["revision"]},
+                          json=proposed)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert saved["layout"]["cellMerges"][0]["parts"] == proposed["cellMerges"][0]["parts"]
+    assert client.get(url).json() == saved["state"]
+    for before, after in zip(
+        state["saved"]["pages"], saved["state"]["saved"]["pages"], strict=True,
+    ):
+        for key in ("range", "transform", "referenceImage", "cells"):
+            assert before[key] == after[key]
+    assert load_workbook(BytesIO(content)).active[f"C{row}"].value == text
+
+
 def test_human_roles_and_meaning_save_canonical_geometry_and_page_bindings(client, paged_draft):
     version, job, url, state, layout = paged_draft
     before = copy.deepcopy(layout)
@@ -61,6 +105,36 @@ def test_human_roles_and_meaning_save_canonical_geometry_and_page_bindings(clien
     assert not client.get(url + "/qualification").json()["qualified"]
     assert (client.post(f"/api/v1/template-versions/{version}/approve").json()["code"]
             == "PRINT_LAYOUT_OCR_NOT_AVAILABLE")
+
+
+def test_nested_heading_and_repeated_band_parent_save_reload_without_geometry_changes(
+    client, paged_draft,
+):
+    version, job, url, state, layout = paged_draft
+    before = copy.deepcopy(layout)
+    for cell in layout["cells"]:
+        if cell["id"] in {"xlsx_B2", "xlsx_B3"}:
+            cell.update(role="parent_label", source="manual")
+        if cell["id"] in {"xlsx_B5", "xlsx_C5"}:
+            cell.update(role="label", source="manual")
+        if cell["id"] == "xlsx_B3":
+            cell["parentLabelCellId"] = "xlsx_B2"
+    layout["recordSections"] = [{"id": "section", "title": "検査一覧",
+                                 "recordType": "generic", "collectionPath": "genericRecords.tests",
+                                 "recordLabelCellIds": ["xlsx_B5", "xlsx_C5"],
+                                 "parentLabelCellId": "xlsx_B3", "rowKeyStrategy": "position",
+                                 "source": "manual"}]
+    response = client.put(url + "/authoring", params={"base_revision": state["revision"]},
+                          json=layout)
+    assert response.status_code == 200, response.text
+    saved = response.json()["layout"]
+    reloaded = client.get(f"/api/v1/template-versions/{version}/layout").json()
+    assert reloaded == saved
+    assert saved["recordSections"][0]["parentLabelCellId"] == "xlsx_B3"
+    assert next(c for c in saved["cells"] if c["id"] == "xlsx_B3")["parentLabelCellId"] == "xlsx_B2"
+    for original, cell in zip(before["cells"], saved["cells"], strict=True):
+        assert all(cell[key] == original[key] for key in ("id", "x", "y", "width", "height"))
+    assert saved["relations"] == before["relations"]
 
 
 def test_page_authoring_can_delete_cells_without_changing_survivor_or_page_geometry(

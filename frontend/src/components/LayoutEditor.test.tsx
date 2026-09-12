@@ -887,12 +887,15 @@ describe("range classification", () => {
           warnings: [],
         }}
         targets={targets}
+        workflowStep="classify"
         onDetect={vi.fn()}
         onSave={vi.fn()}
       />,
     );
 
     const canvas = screen.getByLabelText("帳票レイアウト編集キャンバス");
+    expect(screen.queryByText(/検出された枠を選び/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/クリックで1つの枠/)).not.toBeInTheDocument();
     vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
       x: 0,
       y: 0,
@@ -909,6 +912,7 @@ describe("range classification", () => {
     fireEvent.pointerUp(canvas, { clientX: 195, clientY: 45, pointerId: 1 });
 
     expect(screen.getByText("範囲選択: 2 セル")).toBeTruthy();
+    expect(screen.queryByText(/セルをまとめて選択しました/)).not.toBeInTheDocument();
     const classifyAsLabel = screen.getByRole("button", { name: "項目名にする" });
     expect(classifyAsLabel).toBeTruthy();
     expect(screen.getByRole("button", { name: "記入欄にする" })).toBeTruthy();
@@ -1232,6 +1236,7 @@ describe("layout draft autosave", () => {
       />,
     );
     const editor = within(view.container);
+    expect(view.container.querySelector(".layout-instructions")).not.toBeInTheDocument();
     const canvas = editor.getByLabelText("帳票レイアウト編集キャンバス");
     vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
       x: 0, y: 0, left: 0, top: 0, right: 300, bottom: 100,
@@ -2515,11 +2520,12 @@ describe("editing safety regressions", () => {
     });
 
     fireEvent.click(editor.getByRole("button", { name: "意味付け" }));
+    expect(editor.queryByText(/項目名から記入欄を通過するようにドラッグ/)).not.toBeInTheDocument();
     fireEvent.pointerDown(canvas, { clientX: 45, clientY: 25, pointerId: 1 });
     fireEvent.pointerMove(canvas, { clientX: 120, clientY: 25, pointerId: 1 });
     fireEvent.pointerUp(canvas, { clientX: 120, clientY: 25, pointerId: 1 });
 
-    expect(editor.getByText(/から1個の手書き文字欄へ/)).toBeInTheDocument();
+    expect(editor.queryByText(/から1個の手書き文字欄へ/)).not.toBeInTheDocument();
     expect(within(view.container.querySelector(".relation-table")!).getByText(touchingInput.id))
       .toBeInTheDocument();
     Object.defineProperty(window, "PointerEvent", {
@@ -3595,8 +3601,8 @@ describe("editing safety regressions", () => {
     fireEvent.pointerMove(canvas, { clientX: 60, clientY: 113, pointerId: 1 });
     fireEvent.pointerUp(canvas, { clientX: 60, clientY: 113, pointerId: 1 });
 
-    expect(editor.getByText(/車種名から3個の手書き文字欄へ、縦方向にまとめて意味づけしました/))
-      .toBeInTheDocument();
+    expect(editor.queryByText(/車種名から3個の手書き文字欄へ、縦方向にまとめて意味づけしました/))
+      .not.toBeInTheDocument();
     fireEvent.click(view.container.querySelector(".layout-save") as HTMLButtonElement);
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const saved = onSave.mock.calls[0]![0];

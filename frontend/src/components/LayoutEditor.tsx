@@ -15,13 +15,14 @@ import type {
   LayoutRelation,
 } from "../types";
 import { showToast } from "./Toast";
+import "./LayoutEditor.move.css";
 import { pageDisplayCells, type PageView } from "../pageAuthoring";
-import { attachHeading, enclosedHeadingChildren, pointInCell, polygonCell, uniqueMeaningEntry } from "./layoutAuthoring";
+import { attachHeading, enclosedHeadingChildren, moveLayoutCell, pointInCell, polygonCell, uniqueMeaningEntry } from "./layoutAuthoring";
 
 export type Point = { x: number; y: number };
 type Rect = Point & { width: number; height: number };
 type RecordNamePopoverState = Point & { sectionId: string };
-type Mode = "select" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity" | "virtual" | "virtual-group";
+type Mode = "select" | "move" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity" | "virtual" | "virtual-group";
 type OcrLabelAlignment = "auto" | "left" | "center" | "right";
 type OcrLabelVerticalAlignment = "auto" | "top" | "middle" | "bottom";
 export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
@@ -48,6 +49,7 @@ type LayoutEditorProps = {
   onDocumentNameRuleChange?: (rule: DocumentNameRule | null) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
   draftStorageKey?: string;
   detectLabel?: string;
 };
@@ -888,6 +890,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   onDocumentNameRuleChange,
   onDirtyChange,
   onBusyChange,
+  onSavingChange,
   draftStorageKey,
   detectLabel = "枠を再検出",
 }: LayoutEditorProps, ref) {
@@ -899,10 +902,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const magnifierFrameRef = useRef<number | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const dragStart = useRef<Point | null>(null);
+  const moveDrag = useRef<{ id: string; start: Point } | null>(null);
   const eraserPathRef = useRef<Point[] | null>(null);
   const additiveSelection = useRef(false);
   const linkLabelId = useRef<string | null>(null);
-  const relationHistory = useRef<Array<{ relations: LayoutRelation[]; parents: Map<string, string | null | undefined> }>>([]);
+  const relationHistory = useRef<Array<{ relations: LayoutRelation[];
+    parents: Map<string, string | null | undefined>;
+    sectionParents: Map<string, string | null | undefined> }>>([]);
   const copiedCellMergeRef = useRef<LayoutCellMerge | null>(null);
   const operationLockRef = useRef(false);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
@@ -911,6 +917,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     () => layoutSignature(normalizeLayout(initialLayout, preserveDetectedRoles)),
   );
   const [mode, setMode] = useState<Mode>("select");
+  useEffect(() => { moveDrag.current = null; setDraft(null); }, [mode, pageView?.page, workflowStep]);
   const [drawShape, setDrawShape] = useState<"rectangle" | "polygon">("rectangle");
   const [polygonPoints, setPolygonPoints] = useState<Point[]>([]);
   const [virtualPosition, setVirtualPosition] = useState<Point | null>(null);
@@ -940,6 +947,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [linkPoint, setLinkPoint] = useState<Point | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [flushRequested, setFlushRequested] = useState(false);
+  const flushRef = useRef<{ promise: Promise<boolean>; resolve: (saved: boolean) => void } | null>(null);
+  const flushNeedsSaveRef = useRef(false);
   const [detecting, setDetecting] = useState(false);
   const [recognizingLabels, setRecognizingLabels] = useState(false);
   const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("auto");
@@ -1077,7 +1087,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     relationHistory.current.push({ relations: relations.map((relation) => ({
       ...relation,
       labelCellIds: [...relation.labelCellIds],
-    })), parents: new Map(layout.cells.map(cell => [cell.id, cell.parentLabelCellId])) });
+    })), parents: new Map(layout.cells.map(cell => [cell.id, cell.parentLabelCellId])),
+      sectionParents: new Map((layout.recordSections ?? []).map(section => [section.id, section.parentLabelCellId])) });
     if (relationHistory.current.length > 50) relationHistory.current.shift();
     setHistoryDepth(relationHistory.current.length);
   };
@@ -1087,10 +1098,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setMessage("戻せる意味づけはありません。");
       return;
     }
-    setLayout((current) => ({ ...current, relations: previous.relations,
+    setLayout((current) => {
+      const recordSections = current.recordSections?.map(section => previous.sectionParents.has(section.id)
+        ? { ...section, parentLabelCellId: previous.sectionParents.get(section.id) ?? null } : section);
+      return { ...current, relations: previous.relations,
       cells: current.cells.map(cell => previous.parents.has(cell.id)
         ? { ...cell, parentLabelCellId: previous.parents.get(cell.id) } : cell),
-    }));
+      recordSections, recordStructureVerified: recordStructureIsLinked(recordSections ?? [], current.recordGroups ?? []),
+    }; });
     setHistoryDepth(relationHistory.current.length);
     setMessage("直前の意味づけを元に戻しました。");
   }, []);
@@ -1124,8 +1139,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
   }, [currentSignature, dirty, draftStorageKey]);
   useEffect(() => {
-    onBusyChange?.(busy || saving);
-  }, [busy, saving, onBusyChange]);
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+  useEffect(() => {
+    onSavingChange?.(saving);
+  }, [saving, onSavingChange]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
@@ -1177,17 +1195,17 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setMessage(null);
   }, [pageView?.page]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
+  const selectedRelationPath = layout.relations.find(item => item.inputCellId === selectedId)?.targetPath ?? "";
   useEffect(() => {
-    if (mode === "link") {
-      setSelectedPath("");
-      return;
-    }
+    if (mode === "link") setSelectedPath("");
+  }, [mode]);
+  useEffect(() => {
+    // A refreshed relations array is not a new selection. In particular, a save
+    // response must not erase the user's target for the next drag connection.
+    if (mode === "link") return;
     if (!selected || selected.role !== "input") return;
-    const relation = layout.relations.find(
-      (item) => item.inputCellId === selected.id,
-    );
-    setSelectedPath(relation?.targetPath ?? "");
-  }, [mode, selectedId, selected?.role, layout.relations]);
+    setSelectedPath(selectedRelationPath);
+  }, [mode, selectedId, selected?.role, selectedRelationPath]);
   const selectedCells = layout.cells.filter((cell) => selectedIds.has(cell.id));
   const cellMerges = layout.cellMerges ?? [];
   const cellMergeByParentId = useMemo(
@@ -1641,9 +1659,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
     operationLockRef.current = true;
     setSaving(true);
-    // Automatic persistence must not lock editing. Explicit saves still form a
-    // barrier for workflow navigation and identity/name configuration.
-    if (!automatic) setBusy(true);
+    lastAutoSaveAttemptSignatureRef.current = currentSignature;
+    // Authoring can continue during either an automatic or a navigation save.
+    // Identity/name configuration still has an explicit completion barrier.
+    if (!automatic && !["classify", "meaning", "records"].includes(workflowStep ?? "")) setBusy(true);
     try {
       const prepared = repairDuplicateCalvingMarkRows(layout);
       const saved = normalizeLayout(await onSave(prepared.layout), preserveDetectedRoles);
@@ -1654,7 +1673,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         prepared.repairedCellCount > 0
           ? `重複していた${prepared.repairedCellCount}個の選択マーク欄を繁殖履歴の行へ振り分け、テンプレートを保存しました。`
           : automatic
-            ? `編集中の内容を自動保存しました（${saved.cells.length}個の矩形）。`
+            ? null
             : `テンプレートへ${saved.cells.length}個の矩形を保存しました。`,
       );
       // The draft effect clears browser storage only when the current edit,
@@ -1666,17 +1685,46 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       // unconfirmed and must remain recoverable until a complete save succeeds.
       setBaselineSignature("");
       setMessage(error instanceof Error ? error.message : "レイアウトを保存できませんでした。");
+      flushRef.current?.resolve(false);
+      flushRef.current = null;
+      setFlushRequested(false);
       return false;
     } finally {
       setSaving(false);
       setBusy(false);
       operationLockRef.current = false;
     }
-  }, [allowUnchangedSave, disabled, dirty, draftStorageKey, layout, onSave, preserveDetectedRoles]);
+  }, [allowUnchangedSave, disabled, dirty, currentSignature, layout, onSave, preserveDetectedRoles, workflowStep]);
 
-  useImperativeHandle(ref, () => ({
-    saveIfNeeded: () => save(false),
-  }), [save]);
+  const finishFlush = useCallback((saved: boolean) => {
+    flushRef.current?.resolve(saved);
+    flushRef.current = null;
+    setFlushRequested(false);
+  }, []);
+  const flushLatest = useCallback((): Promise<boolean> => {
+    if (flushRef.current) return flushRef.current.promise;
+    if (disabled || (operationLockRef.current && !saving)) return Promise.resolve(false);
+    let resolve!: (saved: boolean) => void;
+    const promise = new Promise<boolean>(done => { resolve = done; });
+    flushRef.current = { promise, resolve };
+    flushNeedsSaveRef.current = !saving && allowUnchangedSave;
+    setFlushRequested(true);
+    return promise;
+  }, [allowUnchangedSave, disabled, saving]);
+  useImperativeHandle(ref, () => ({ saveIfNeeded: flushLatest }), [flushLatest]);
+  useEffect(() => {
+    if (!flushRequested || saving || busy) return;
+    if (disabled) { finishFlush(false); return; }
+    if (!dirty && !flushNeedsSaveRef.current) { finishFlush(true); return; }
+    flushNeedsSaveRef.current = false;
+    // Start the next write only after React commits the response and latest
+    // edits/parent props (including the updated XLSX page revision).
+    void save(false).then(saved => { if (!saved) finishFlush(false); });
+  }, [flushRequested, saving, busy, disabled, dirty, save, finishFlush]);
+  useEffect(() => () => {
+    flushRef.current?.resolve(false);
+    flushRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (
@@ -1684,8 +1732,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       || disabled
       || busy
       || saving
+      || flushRequested
       || !workflowStep
-      || !(["classify", "meaning", "records"] as LayoutWorkflowStep[]).includes(workflowStep)
       || lastAutoSaveAttemptSignatureRef.current === currentSignature
     ) return;
     const timer = window.setTimeout(() => {
@@ -1693,7 +1741,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       void save(true);
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [busy, saving, currentSignature, dirty, disabled, save, workflowStep]);
+  }, [busy, saving, flushRequested, currentSignature, dirty, disabled, save, workflowStep]);
 
   const hoveredMeaningCellIdRef = useRef<string | null>(null);
   const redraw = () => {
@@ -1788,18 +1836,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       context.setLineDash([]);
       if (cellMerge) {
         context.save();
-        context.strokeStyle = "rgba(35, 75, 103, 0.72)";
-        context.lineWidth = 2;
-        context.setLineDash([7, 5]);
-        cellMerge.parts.forEach((part) => {
-          context.strokeRect(
-            part.cell.x,
-            part.cell.y,
-            part.cell.width,
-            part.cell.height,
-          );
-        });
-        context.setLineDash([]);
         if (cell.width >= 38 && cell.height >= 20) {
           const badgeWidth = Math.min(54, Math.max(34, cell.width - 8));
           const badgeHeight = Math.min(19, Math.max(14, cell.height - 8));
@@ -2770,7 +2806,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     };
   });
   const ensureAutoLabelPoolEntry = (labelText: string): LayoutLabelPoolEntry | null => {
-    const entry = createAutoLabelPoolEntry(labelText, availableTargets);
+    const entry = createAutoLabelPoolEntry(labelText, availableTargets, "exact");
     if (!entry) return null;
     setLayout((current) => (
       (current.labelPool ?? []).some((candidate) => candidate.targetPath === entry.targetPath)
@@ -2820,7 +2856,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     );
   };
   const addCustomTarget = () => {
-    const label = customLabel.normalize("NFKC").trim();
+    const label = customLabel.trim();
     if (!label) return;
     const existing = findLabelPoolMatch(label, labelPoolEntries);
     if (existing?.paths[0]) {
@@ -2831,7 +2867,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setMessage(`「${existing.label}」は保存する項目に登録済みです。`);
       return;
     }
-    const generated = createAutoLabelPoolEntry(label, availableTargets);
+    const generated = createAutoLabelPoolEntry(label, availableTargets, "exact");
     if (!generated) {
       setMessage("保存する項目を追加できませんでした。項目名を確認してください。");
       return;
@@ -3080,14 +3116,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedId(inputs[0].id);
     setSelectedIds(new Set(inputs.map((input) => input.id)));
     setSelectedPath("");
-    setMessage(
-      `${label.text || label.id}から${inputs.length}個の手書き文字欄へ、`
-      + `${axis === "horizontal" ? "横方向" : "縦方向"}にまとめて意味づけしました。`
-      + ` 保存先: ${autoEntries.length > 1
-        ? `${label.text || label.id} ${autoEntries.length}行分`
-        : autoEntry?.label ?? targetByPath.get(targetPaths[0])?.label ?? targetPaths[0]}`
-      + `${autoEntries.length > 0 ? "（保存する情報へ自動追加）" : ""}`,
-    );
+    setMessage(null);
   };
 
   const createRecordsFromColumnLabels = (labelIds: string[]) => {
@@ -3287,10 +3316,22 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!labelId) return;
     const headingChild = [...displayCells].reverse().find(cell => pointInCell(end, cell));
     const headingParent = cellById.get(labelId);
+    const section = recordSections.find(item => item.recordLabelCellIds.includes(headingChild?.id ?? ""))
+      ?? recordSectionAtPoint(end, recordSections, displayCells, 10);
+    if (section) {
+      try {
+        const next = attachHeading(layout, labelId, section.recordLabelCellIds);
+        rememberRelations(layout.relations);
+        setLayout({ ...next, recordStructureVerified: recordStructureIsLinked(next.recordSections ?? [], next.recordGroups ?? []) });
+        setSelectedRecordSectionId(section.id);
+        setMessage(`${headingParent?.text || labelId}を${recordSectionDisplayName(section)}の帳票上の見出しに設定しました。`);
+      } catch (error) { setMessage((error as Error).message); }
+      return;
+    }
     if (headingChild && headingParent && (
       headingChild.role === "parent_label" || headingParent.role === "parent_label"
       || headingChild.role === "input" || headingChild.role === "mark"
-    ) && (mode === "parent" || headingChild.role === "parent_label")) {
+    )) {
       try {
         const next = attachHeading(layout, labelId, [headingChild.id]);
         rememberRelations(layout.relations); setLayout(next);
@@ -3349,43 +3390,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       );
       return;
     }
-    const recordLabel = [...displayCells].reverse().find((cell) => (
-      cell.role === "label" && pointInsideRect(end, cell)
-    ));
-    const section = recordLabel
-      ? recordSections.find((item) => item.recordLabelCellIds.includes(recordLabel.id))
-      : undefined;
-    if (!recordLabel || !section) {
-      setMessage("親ラベルから、青線でまとめたレコード列ラベルのいずれかまで線を引いてください。");
-      return;
-    }
-    const label = cellById.get(labelId);
-    if (section.recordLabelCellIds.includes(labelId)) {
-      setMessage("レコード列ラベルとは別の、表全体を表す親ラベルから接続してください。");
-      return;
-    }
-    setLayout((current) => {
-      const sections = (current.recordSections ?? []).map((item) => (
-        item.collectionPath === section.collectionPath
-          ? {
-            ...item,
-            parentLabelCellId: labelId,
-            title: item.title.trim() || label?.text.trim() || item.title,
-            source: "manual" as const,
-          }
-          : item
-      ));
-      return {
-        ...current,
-        recordSections: sections,
-        recordStructureVerified: recordStructureIsLinked(
-          sections,
-          current.recordGroups ?? [],
-        ),
-      };
-    });
-    setSelectedRecordSectionId(section.id);
-    setMessage(`${label?.text || labelId}を${recordSectionDisplayName(section)}の帳票上の見出しに設定しました。`);
+    setMessage("見出しから、接続先の見出し・項目名・繰り返し部分へ線を引いてください。");
   };
 
   const roleCounts = {
@@ -3549,6 +3554,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           <ModeButton current={mode} mode="select" label="選択" onChange={setMode} />
         )}
         {showClassificationStep && <ModeButton current={mode} mode="classify" label="区分変更" onChange={setMode} />}
+        {(showClassificationStep || showMeaningStep || showRecordStep) && (
+          <button type="button" className={`layout-move-button ${mode === "move" ? "active" : ""}`}
+            aria-label="矩形を移動" aria-pressed={mode === "move"} disabled={!!pageView}
+            onClick={() => setMode(mode === "move" ? "select" : "move")}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none"
+              stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 13V5a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v7-4a1.5 1.5 0 0 1 3 0v7c0 5-3 7-6 7h-1c-2 0-4-1-5-3l-4-5a1.5 1.5 0 0 1 2-2l2 2Z" />
+            </svg>
+          </button>
+        )}
         {showClassificationStep && !pageView && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
         {mode === "draw" && !pageView && <>
           <label>形状 <select aria-label="追加する枠の形状" value={drawShape}
@@ -3676,26 +3691,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         </div>
       </div>
 
-      <div className="layout-instructions">
-        {workflowStep === "classify" && mode === "select" && "検出された枠を選び、右側で種類と項目名の文字候補を確認してください。"}
-        {workflowStep === "identity" && "帳票上で強調されている欄を複数選択し、氏名や住所などの照合グループへまとめます。続けてライブラリと出力で共用する書類名を設定してください。"}
-        {workflowStep === "review" && "分類数、未割当、レコード構造を確認し、問題がなければ保存してください。"}
-        {workflowStep !== "identity" && workflowStep !== "review" && mode === "select" && "クリックで1つの枠、Ctrl（MacはCmd）+クリックで複数の枠を追加・解除できます。ドラッグで範囲をまとめて選択することもできます。"}
-        {workflowStep !== "review" && mode === "classify" && "変更する枠をクリックまたはドラッグで選び、右側で区分を明示的に指定してください。選択しただけでは区分は変わりません。"}
-        {workflowStep !== "review" && mode === "draw" && (drawShape === "polygon"
-          ? "頂点を順にクリックし、始点をクリックするか「多角形を確定」で閉じます。"
-          : "検出されなかった記入欄をドラッグして追加します。")}
-        {mode === "virtual" && (virtualPosition ? "名称を入力して見出しを配置してください。" : "プレビュー上の設置位置をクリックしてください。")}
-        {mode === "virtual-group" && "仮想見出しからドラッグし、子にする項目を囲んでください。"}
-        {workflowStep !== "review" && mode === "link" && "項目名から記入欄を通過するようにドラッグします。項目名がない記入欄は右側から保存する情報を直接指定できます。"}
-        {workflowStep !== "review" && mode === "record" && "車種名から備考など、同じ繰り返し表に含める複数の列見出しを横方向の1本の線で横断します。"}
-        {workflowStep !== "review" && mode === "parent" && "見出しから、子となる見出し・項目名・記入欄・選択欄へ線を引きます。"}
-        {workflowStep !== "review" && mode === "record-parent" && "「売却子牛一覧」などの見出しから、青線でまとめた項目名のいずれかまで線を引きます。"}
-        {workflowStep !== "identity" && workflowStep !== "review" && mode === "erase" && "消したい意味づけまたは繰り返し部分のリンクを、消しゴムでなぞってください。矩形自体は削除されません。"}
+      <div className="layout-status-slot" aria-live="polite" aria-atomic="true">
+        {message && !showReviewStep && <p className="layout-status">{message}</p>}
       </div>
-      {message && !showReviewStep && (
-        <p className="layout-status" aria-live="polite">{message}</p>
-      )}
 
       <div className="layout-workbench">
         <div
@@ -3732,6 +3730,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             }}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
+                moveDrag.current = null;
                 setPolygonPoints([]); setVirtualPosition(null); setMode("select");
                 setDraft(null); dragStart.current = null; return;
               }
@@ -3766,6 +3765,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if (busy || disabled) return;
               const location = point(event);
               const hit = cellAt(location);
+              if (mode === "move") {
+                if (pageView || !hit) return;
+                moveDrag.current = { id: hit.id, start: location };
+                setSelectedId(hit.id); setSelectedIds(new Set([hit.id]));
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                return;
+              }
               if (mode === "virtual") { setVirtualPosition(location); return; }
               if (mode === "virtual-group") {
                 if (hit?.id !== virtualHeadingId.current) {
@@ -3852,6 +3858,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             onPointerMove={(event) => {
               queueMagnifier(event.clientX, event.clientY);
               const location = point(event);
+              if (mode === "move" && moveDrag.current && !pageView) {
+                const { id, start } = moveDrag.current;
+                const moved = moveLayoutCell(layout, id, location.x - start.x, location.y - start.y);
+                const cell = moved.cells.find(cell => cell.id === id);
+                if (cell) setDraft({ x: cell.x, y: cell.y, width: cell.width, height: cell.height });
+                return;
+              }
               if (
                 (mode === "draw" || mode === "select" || mode === "classify" || mode === "virtual-group")
                 && dragStart.current
@@ -3874,6 +3887,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             }}
             onPointerUp={(event) => {
               const location = point(event);
+              if (mode === "move") {
+                const moving = moveDrag.current;
+                moveDrag.current = null; setDraft(null);
+                if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                if (moving && !pageView && !busy && !disabled) setLayout(current =>
+                  moveLayoutCell(current, moving.id, location.x - moving.start.x, location.y - moving.start.y));
+                return;
+              }
               if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
                 event.currentTarget.releasePointerCapture(event.pointerId);
               }
@@ -3934,7 +3955,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     setSelectedIds(ids);
                     setSelectedId(ids.has(hit.id) ? hit.id : ids.values().next().value ?? null);
                     setMessage(ids.size > 1
-                      ? `${ids.size} 個のセルを複数選択しました。右側で区分変更・削除・セル結合ができます。`
+                      ? null
                       : ids.size === 1
                         ? "1 個のセルを選択しています。Ctrlを押しながら別のセルを追加できます。"
                         : "セルの選択を解除しました。");
@@ -3951,7 +3972,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 setSelectedId(ids[0] ?? (additive ? selectedId : null));
                 setSelectedIds(nextIds);
                 setMessage(nextIds.size > 0
-                  ? `${nextIds.size} 個のセルをまとめて選択しました。右側で区分変更・削除・セル結合ができます。`
+                  ? null
                   : "選択範囲にセルはありません。変更したいセルを囲むようにドラッグしてください。");
                 return;
               }
@@ -3978,6 +3999,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               setMode("select");
             }}
             onPointerCancel={() => {
+              moveDrag.current = null;
               dragStart.current = null;
               additiveSelection.current = false;
               linkLabelId.current = null;
@@ -4840,7 +4862,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           || saving
           || (!dirty && !allowUnchangedSave)
         }
-        onClick={() => void save()}
+        onClick={() => void flushLatest()}
       >
         {busy
           ? "処理中…"
@@ -5963,14 +5985,14 @@ type LabelPoolEntry = {
 export function createAutoLabelPoolEntry(
   labelText: string,
   targets: FieldMappingTarget[],
+  match: "ocr" | "exact" = "ocr",
 ): LayoutLabelPoolEntry | null {
-  const label = labelText.normalize("NFKC").trim();
+  const label = (match === "exact" ? labelText : labelText.normalize("NFKC")).trim();
   if (!label) return null;
-  const normalizedLabel = normalizeLabelPoolText(label);
+  const sameName = (candidate: string) => match === "exact"
+    ? candidate === label : normalizeLabelPoolText(candidate) === normalizeLabelPoolText(label);
   if (targets.some((target) => (
-    [target.label, ...(target.aliases ?? [])].some(
-      (candidate) => normalizeLabelPoolText(candidate) === normalizedLabel,
-    )
+    (match === "exact" ? [target.label] : [target.label, ...(target.aliases ?? [])]).some(sameName)
   ))) return null;
   const baseKey = label
     .replace(/[\s　.。・:：／/()（）［］\[\]【】]+/g, "")
@@ -5981,8 +6003,7 @@ export function createAutoLabelPoolEntry(
   let suffix = 2;
   while (
     byPath.has(`customFields.${key}`)
-    && normalizeLabelPoolText(byPath.get(`customFields.${key}`)?.label ?? "")
-      !== normalizeLabelPoolText(label)
+    && !sameName(byPath.get(`customFields.${key}`)?.label ?? "")
   ) {
     const suffixText = `_${suffix}`;
     key = `${baseKey.slice(0, Math.max(1, 100 - suffixText.length))}${suffixText}`;
@@ -6100,16 +6121,8 @@ export function buildLabelPoolEntries(targets: FieldMappingTarget[]): LabelPoolE
 }
 
 function findLabelPoolMatch(text: string, entries: LabelPoolEntry[]): LabelPoolEntry | null {
-  const normalized = normalizeLabelPoolText(text);
-  if (!normalized) return null;
-  return entries.find((entry) => {
-    return [entry.label, ...entry.aliases].some((label) => {
-      const candidate = normalizeLabelPoolText(label);
-      return normalized === candidate
-        || (candidate.length >= 2 && normalized.includes(candidate))
-        || (normalized.length >= 2 && candidate.includes(normalized));
-    });
-  }) ?? null;
+  const label = text.trim();
+  return label ? entries.find(entry => entry.label === label) ?? null : null;
 }
 
 function normalizeLabelPoolText(value: string): string {

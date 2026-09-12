@@ -36,6 +36,33 @@ def relation(**kwargs):
                           axis="horizontal", order=1, target_path="customFields.漢字2", **kwargs)
 
 
+def test_repeated_section_heading_roundtrip_and_cycles_include_group_edges():
+    document = layout([cell("outer", "parent_label"),
+                       cell("heading", "parent_label", parent_label_cell_id="outer"),
+                       cell("a", "label"), cell("b", "label")])
+    raw = document.model_dump(mode="json", by_alias=True)
+    raw["recordSections"] = [{"id": "section", "collectionPath": "genericRecords.tests",
+                              "recordType": "generic", "title": "検査",
+                              "recordLabelCellIds": ["a", "b"], "parentLabelCellId": "heading",
+                              "rowKeyStrategy": "position", "source": "manual"}]
+    restored = LayoutDefinition.model_validate(raw)
+    assert LayoutDefinition.model_validate_json(restored.model_dump_json(by_alias=True)) == restored
+    assert restored.record_sections[0].parent_label_cell_id == "heading"
+    assert [c.parent_label_cell_id for c in restored.cells[2:]] == [None, None]
+    raw["cells"][0]["parentLabelCellId"] = "b"
+    with pytest.raises(ValidationError, match="cycles"):
+        LayoutDefinition.model_validate(raw)
+
+
+def test_role_change_retains_direct_input_mapping_after_label_reference_removed():
+    document = layout([cell("label", "parent_label"), cell()], [relation()])
+    restored = LayoutDefinition.model_validate_json(document.model_dump_json(by_alias=True))
+    mapping = LayoutService._as_field_mappings(restored)[0]
+    assert mapping.mapping_id == "layout_input"
+    assert mapping.target_path == "customFields.漢字2"
+    assert (mapping.x, mapping.y, mapping.width, mapping.height) == (10, 10, 40, 40)
+
+
 def test_polygon_layout_mapping_region_roundtrip_and_legacy_rectangle():
     document = layout([polygon()], [relation()])
     restored = LayoutDefinition.model_validate_json(document.model_dump_json(by_alias=True))

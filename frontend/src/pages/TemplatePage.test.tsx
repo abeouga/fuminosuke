@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DocumentIdentity, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 import { mappingWarningsForIdentity, TemplatePage } from "./TemplatePage";
@@ -166,6 +166,191 @@ function jsonResponse(body: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test.each([false, true])("steps switch immediately during background persistence without losing edits (paged=%s)", async (paged) => {
+  const key = "template-layout-draft:version-draft";
+  localStorage.removeItem(key);
+  const fallback = reviewFetch(undefined, undefined, {
+    documentName: { fieldPaths: ["document.unifiedEarTag"], separator: "_", prefix: "", suffix: "" },
+  });
+  const writes: Array<{ layout: LayoutDefinition; resolve: () => void }> = [];
+  const mappingWrites: Array<{ documentName: { prefix: string }; documentIdentityFields: DocumentIdentity[] }> = [];
+  let revision = "initial-revision";
+  const submittedRevisions: string[] = [];
+  const editableLayout: LayoutDefinition = { ...layout,
+    cells: [...layout.cells, { ...layout.cells[0], id: "edit-input", x: 150 }] };
+  const pageState: PrintState = {
+    revision, editable: true,
+    source: { sheetName: "sheet", startRow: 1, endRow: 1, width: 300, height: 100,
+      rowBoundaries: [], validBreakRows: [], cells: [], unsupported: [], warnings: [],
+      importedSettings: { pageSetup: null, margins: null, printOptions: null } },
+    saved: { paperSize: "A4", orientation: "portrait", margins: { left: 10, right: 10, top: 10, bottom: 10 },
+      targetPagesWide: 1, targetPagesTall: null, horizontalCentering: false, verticalCentering: false,
+      commonScale: 1, ocrReady: false, warnings: [], pages: [
+        { page: 1, range: "A1:C1", startRow: 1, endRow: 1, width: 300, height: 100,
+          transform: { scale: 1, offsetX: 0, offsetY: 0, originX: 0, originY: 0 }, cells: [],
+          fields: [{ cellId: "identity-input", sourceRange: "A1", templatePage: 1,
+            rectangle: { x: 0, y: 0, width: 100, height: 30 } },
+            { cellId: "edit-input", sourceRange: "B1", templatePage: 1,
+              rectangle: { x: 150, y: 0, width: 100, height: 30 } }], referenceImage: { sha256: "b".repeat(64) } },
+      ] },
+  };
+  let refreshCount = 0;
+  let releaseRefresh!: () => void;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/layout") && !init?.method) return Promise.resolve(jsonResponse(editableLayout));
+    if (path.endsWith("/print-layout")) return Promise.resolve(jsonResponse({ ...pageState, revision }));
+    if ((path.endsWith("/layout") || path.includes("/print-layout/authoring?")) && init?.method === "PUT") {
+      const submitted = JSON.parse(String(init.body)) as LayoutDefinition;
+      if (paged) submittedRevisions.push(decodeURIComponent(path.split("base_revision=")[1]));
+      return new Promise<Response>(resolve => writes.push({ layout: submitted, resolve: () => {
+        revision = `layout-${writes.length}`;
+        resolve(jsonResponse(paged ? { layout: submitted, state: { ...pageState, revision } } : submitted));
+      } }));
+    }
+    if (path.endsWith("/field-mappings") && init?.method === "PUT") {
+      revision = `mapping-${writes.length}`;
+      const body = JSON.parse(String(init.body));
+      mappingWrites.push(body);
+      return fallback(input, init).then(async response => jsonResponse({ ...await response.json(),
+        documentName: body.documentName, documentIdentityFields: body.documentIdentityFields }));
+    }
+    if (String(input).endsWith("/field-mappings") && !init?.method && ++refreshCount === 2) {
+      return new Promise<Response>(resolve => { releaseRefresh = () => { void fallback(input, init).then(resolve); }; });
+    }
+    return fallback(input, init);
+  }));
+  try {
+    const version = paged ? { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
+      quality: { layoutVerified: false, printLayout: pageState.saved } } : draftVersion;
+    render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]} refresh={vi.fn()} rememberJob={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
+    await screen.findByLabelText("帳票レイアウト編集キャンバス");
+    await waitFor(() => expect(screen.getByRole("button", { name: "区分変更" })).toBeEnabled());
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText("セル一覧から選択"), { target: { value: "edit-input" } });
+    fireEvent.click(screen.getByRole("button", { name: "読み取らない" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(writes).toHaveLength(1);
+    const next = screen.getByRole("button", { name: "次の工程 →" });
+    expect(next).toBeEnabled();
+    fireEvent.click(next);
+    expect(screen.getByRole("button", { name: "意味付け" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /3.*繰り返し/ }));
+    expect(screen.getByRole("button", { name: "繰り返し部分をまとめる" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /4.*照合/ }));
+    fireEvent.change(screen.getByLabelText("個体識別番号の照合グループ"), { target: { value: "identity_group_1" } });
+    fireEvent.change(screen.getByLabelText("選択中のグループ名"), { target: { value: "変更後の条件" } });
+    fireEvent.change(screen.getByLabelText("先頭の固定文字"), { target: { value: "new-prefix_" } });
+    fireEvent.click(screen.getByRole("button", { name: /5.*確認/ }));
+    expect(screen.getByRole("button", { name: /5.*確認/ })).toHaveAttribute("aria-current", "step");
+    fireEvent.click(screen.getByRole("button", { name: /1.*欄の種類/ }));
+    fireEvent.change(screen.getByLabelText("セル一覧から選択"), { target: { value: "edit-input" } });
+    expect(screen.getByRole("button", { name: "見出し" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "見出し" }));
+    await act(async () => writes[0].resolve());
+    expect(screen.getByRole("button", { name: "記入欄" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "記入欄" }));
+    await act(async () => releaseRefresh());
+    fireEvent.click(screen.getByRole("button", { name: /4.*照合/ }));
+    expect(screen.getByLabelText("先頭の固定文字")).toHaveValue("new-prefix_");
+    expect(screen.getByLabelText("選択中のグループ名")).toHaveValue("変更後の条件");
+    // Pending layout edits still auto-save after moving to identity/review.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(writes).toHaveLength(2);
+    expect(writes[1].layout.cells[1]).toMatchObject({ id: "edit-input", role: "input" });
+    fireEvent.click(screen.getByRole("button", { name: /1.*欄の種類/ }));
+    if (paged) {
+      expect(submittedRevisions).toEqual(["initial-revision", "mapping-1"]);
+      expect(screen.getByRole("button", { name: "矩形を移動" })).toBeDisabled(); // Existing geometry gate.
+    } else expect(screen.getByRole("button", { name: "矩形を移動" })).toBeEnabled();
+    await act(async () => writes[1].resolve());
+    expect(mappingWrites).toHaveLength(2);
+    expect(mappingWrites[0].documentName.prefix).toBe("");
+    expect(mappingWrites[1].documentName.prefix).toBe("new-prefix_");
+    expect(mappingWrites[1].documentIdentityFields[0]).toMatchObject({
+      targetPath: "document.unifiedEarTag", matchGroupLabel: "変更後の条件" });
+    fireEvent.click(screen.getByRole("button", { name: /2.*読み取る/ }));
+    expect(screen.getByRole("button", { name: "意味付け" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "親項目を接続" })).toBeEnabled();
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(screen.queryByText(/画面移動を中止/)).not.toBeInTheDocument();
+  } finally {
+    cleanup(); vi.useRealTimers(); localStorage.removeItem(key);
+  }
+});
+
+test("failed close retains draft and specific save error without blaming connectivity", async () => {
+  const key = "template-layout-draft:version-draft";
+  const draft = structuredClone(layout);
+  draft.cells[0].text = "unsaved value";
+  localStorage.setItem(key, JSON.stringify(draft));
+  const detail = "要求merge B3:C3 の内部値 C3 を安全に削除できません。";
+  const fallback = reviewFetch();
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/layout") && init?.method === "PUT") {
+      return Promise.resolve(jsonResponse({ detail, code: "SPREADSHEET_OUTPUT_MERGE_CONFLICT" }, 409));
+    }
+    return fallback(input, init);
+  }));
+  try {
+    render(<TemplatePage templates={[draftTemplate]} refresh={vi.fn()} rememberJob={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
+    const next = await screen.findByRole("button", { name: /一覧へ戻る/ });
+    // The navigation renders before the asynchronously loaded editor/draft.
+    await screen.findByLabelText("帳票レイアウト編集キャンバス");
+    expect(JSON.parse(localStorage.getItem(key)!).cells[0].text).toBe("unsaved value");
+    await waitFor(() => expect(next).toBeEnabled());
+    fireEvent.click(next);
+    expect(await screen.findByText(/編集欄に表示されたエラー内容を確認/)).toBeInTheDocument();
+    expect(screen.getByText(detail)).toBeInTheDocument();
+    expect(screen.queryByText(/接続状態を確認/)).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(key)!).cells[0].text).toBe("unsaved value");
+    expect(screen.getByRole("button", { name: /1.*欄の種類/ })).toHaveAttribute("aria-current", "step");
+  } finally {
+    cleanup();
+    localStorage.removeItem(key);
+  }
+});
+
+test("failed background save does not block or reverse step changes and retains the draft", async () => {
+  const key = "template-layout-draft:version-draft";
+  const draft = structuredClone(layout);
+  draft.cells[0].text = "recoverable edit";
+  localStorage.setItem(key, JSON.stringify(draft));
+  const fallback = reviewFetch();
+  let writes = 0;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/layout") && init?.method === "PUT") {
+      writes++;
+      return Promise.resolve(jsonResponse({ detail: "保存競合・下書きを保持" }, 409));
+    }
+    return fallback(input, init);
+  }));
+  try {
+    render(<TemplatePage templates={[draftTemplate]} refresh={vi.fn()} rememberJob={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
+    await screen.findByLabelText("帳票レイアウト編集キャンバス");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "次の工程 →" }));
+    expect(screen.getByRole("button", { name: "意味付け" })).toBeEnabled();
+    expect(writes).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(screen.getByText("保存競合・下書きを保持")).toBeInTheDocument();
+    expect(screen.queryByText(/画面移動を中止/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /3.*繰り返し/ }));
+    expect(screen.getByRole("button", { name: "繰り返し部分をまとめる" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /1.*欄の種類/ }));
+    expect(screen.getByRole("button", { name: /1.*欄の種類/ })).toHaveAttribute("aria-current", "step");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(writes).toBe(1);
+    expect(JSON.parse(localStorage.getItem(key)!).cells[0].text).toBe("recoverable edit");
+    expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
+  } finally {
+    cleanup(); vi.useRealTimers(); localStorage.removeItem(key);
+  }
+});
 
 test("saved pages enable manual authoring while legacy verification and activation stay blocked", async () => {
   const state: PrintState = {

@@ -389,6 +389,10 @@ class LayoutDefinition(LayoutModel):
             if relation.parent_label_cell_id:
                 for child_id in relation.label_cell_ids or [relation.input_cell_id]:
                     parents.setdefault(child_id, set()).add(relation.parent_label_cell_id)
+        for section in self.record_sections:
+            if section.parent_label_cell_id:
+                for child_id in section.record_label_cell_ids:
+                    parents.setdefault(child_id, set()).add(section.parent_label_cell_id)
         for cell in self.cells:
             if cell.parent_label_cell_id and len(parents[cell.id]) > 1:
                 raise ValueError("A hierarchy node may have only one parent")

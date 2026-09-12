@@ -687,6 +687,9 @@ function TemplateReview({
     Math.min(authoringPage, printState.saved.pages.length - 1)
   ];
   const [editorBusy, setEditorBusy] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [navigationPending, setNavigationPending] = useState(false);
+  const navigationLockRef = useRef(false);
   const [maskDirty, setMaskDirty] = useState(false);
   const [maskBusy, setMaskBusy] = useState(false);
   const [identityFields, setIdentityFields] = useState<DocumentIdentity[]>([]);
@@ -731,6 +734,7 @@ function TemplateReview({
     printDirty || printBusy ||
     editorDirty
     || editorBusy
+    || editorSaving
     || maskDirty
     || maskBusy
     || verifying
@@ -778,7 +782,8 @@ function TemplateReview({
     && !identityDirty
     && !documentNameDirty
     && mappingFresh;
-  const operationBusy = editorBusy || maskBusy || printBusy || verifying || decisionBusy !== null;
+  const navigationBusy = navigationPending || editorBusy || maskBusy || printBusy || verifying || decisionBusy !== null;
+  const operationBusy = navigationBusy || editorSaving;
   const layoutWorkflowIndex = LAYOUT_WIZARD_STEPS.findIndex(
     (step) => step.id === layoutWorkflowStep,
   );
@@ -788,24 +793,20 @@ function TemplateReview({
       setFeedback({ kind: "error", text: "印刷ページの変更を保存または取消してから移動してください。" });
       return false;
     }
-    if (!editorDirty) return true;
+    if (!editorDirty && !editorSaving) return true;
     const saved = await layoutEditorRef.current?.saveIfNeeded();
     if (saved) return true;
     setFeedback({
       kind: "error",
-      text: "編集中の内容を保存できなかったため、画面移動を中止しました。接続状態を確認して再度操作してください。",
+      text: "編集中の内容を保存できなかったため、画面移動を中止しました。編集欄に表示されたエラー内容を確認して再度操作してください。",
     });
     return false;
   };
   const moveLayoutWorkflow = (step: LayoutWorkflowStep) => {
-    if (operationBusy || step === layoutWorkflowStep) return;
-    if (!editorDirty) {
-      setLayoutWorkflowStep(step);
-      return;
-    }
-    void saveEditorBeforeLeaving().then((saved) => {
-      if (saved) setLayoutWorkflowStep(step);
-    });
+    if (navigationBusy || navigationLockRef.current || step === layoutWorkflowStep) return;
+    // These are views of the same mounted editor, not a persistence boundary.
+    // Keep its draft/save queue alive and switch without waiting for the network.
+    setLayoutWorkflowStep(step);
   };
   const closeAfterEditorSave = () => {
     if (
@@ -817,13 +818,18 @@ function TemplateReview({
     onClose();
   };
   const closeReview = () => {
-    if (operationBusy) return;
-    if (!editorDirty) {
+    if (navigationBusy || navigationLockRef.current) return;
+    if (!editorDirty && !editorSaving) {
       closeAfterEditorSave();
       return;
     }
+    navigationLockRef.current = true;
+    setNavigationPending(true);
     void saveEditorBeforeLeaving().then((saved) => {
       if (saved) closeAfterEditorSave();
+    }).finally(() => {
+      navigationLockRef.current = false;
+      setNavigationPending(false);
     });
   };
   const beginDecision = (action: DecisionAction) => {
@@ -874,7 +880,7 @@ function TemplateReview({
   };
   return (
     <div className="page-stack">
-      <header className="page-header split"><div><span className="eyebrow">TEMPLATE REVIEW · V{version.versionNumber}</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={operationBusy} onClick={closeReview}>{closeLabel}</button></header>
+      <header className="page-header split"><div><span className="eyebrow">TEMPLATE REVIEW · V{version.versionNumber}</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1><p>検出された枠の役割と、保存する情報の対応を画面上で確定します。文字認識は枠内の文字の転記だけを担当します。</p></div><button className="ghost" disabled={navigationBusy} onClick={closeReview}>{closeLabel}</button></header>
       <div className="template-lifecycle-status" aria-label="テンプレート設定の状態">
         <div className="done"><span>前処理</span><strong>画像準備済み</strong></div>
         <div className={meaningSaved ? "done" : "current"}><span>現在</span><strong>{meaningSaved ? "テンプレート設定保存済み" : `テンプレート設定中 · ${activeLayoutStep.shortTitle}`}</strong></div>
@@ -924,7 +930,7 @@ function TemplateReview({
                 key={step.id}
                 className={step.id === layoutWorkflowStep ? "current" : index < layoutWorkflowIndex ? "done" : ""}
                 aria-current={step.id === layoutWorkflowStep ? "step" : undefined}
-                disabled={operationBusy || (step.id === "review" && (!identityReady || !documentNameReady))}
+                disabled={navigationBusy || (step.id === "review" && (!identityReady || !documentNameReady))}
                 onClick={() => moveLayoutWorkflow(step.id)}
               >
                 <span>{index + 1}</span>
@@ -962,6 +968,7 @@ function TemplateReview({
             disabled={maskDirty || maskBusy || printDirty || printBusy || (printSaved && !currentPrintPage)}
             onDirtyChange={setEditorDirty}
             onBusyChange={setEditorBusy}
+            onSavingChange={setEditorSaving}
             draftStorageKey={`template-layout-draft:${version.id}`}
             detectLabel={version.mode === "SPREADSHEET_TEMPLATE"
               ? "元のExcelセル構造に戻す"
@@ -1024,8 +1031,12 @@ function TemplateReview({
                   documentNameRule,
                 );
                 setMappingConfig(persisted);
-                setIdentityFields(identityFieldsFromResponse(persisted));
-                setDocumentNameRule(documentNameFromResponse(persisted));
+                // The user may have moved to identity/name settings while this
+                // request was in flight. Never replace their newer edits.
+                setIdentityFields(current => identityFieldsSignature(current) === identityFieldsSignature(identityFields)
+                  ? identityFieldsFromResponse(persisted) : current);
+                setDocumentNameRule(current => documentNameSignature(current) === documentNameSignature(documentNameRule)
+                  ? documentNameFromResponse(persisted) : current);
                 setMappingFresh(true);
                 if (printSaved) setPrintState(await api.printLayout(version.id));
                 setFeedback({
@@ -1048,7 +1059,7 @@ function TemplateReview({
             <button
               type="button"
               className="secondary"
-              disabled={layoutWorkflowIndex === 0 || operationBusy}
+              disabled={layoutWorkflowIndex === 0 || navigationBusy}
               onClick={() => moveLayoutWorkflow(
                 LAYOUT_WIZARD_STEPS[Math.max(0, layoutWorkflowIndex - 1)].id,
               )}
@@ -1056,7 +1067,9 @@ function TemplateReview({
               ← 前の工程
             </button>
             <span>
-              {layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady)
+              {navigationPending
+                ? "変更を保存してから移動します。"
+                : layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady)
                 ? "照合グループと、ライブラリ・出力で共用する書類名を指定してください。"
                 : layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1
                   ? "設定内容は工程を移動しても保持されます。"
@@ -1066,7 +1079,7 @@ function TemplateReview({
               <button
                 type="button"
                 className="primary"
-                disabled={operationBusy || (layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady))}
+                disabled={navigationBusy || (layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady))}
                 onClick={() => moveLayoutWorkflow(LAYOUT_WIZARD_STEPS[layoutWorkflowIndex + 1].id)}
               >
                 次の工程 →

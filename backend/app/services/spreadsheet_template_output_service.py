@@ -664,6 +664,15 @@ class SpreadsheetTemplateOutputService:
                 )
                 if expected is not None and str(cell.value) == str(expected):
                     continue
+                # Import/editor literals omit boundary whitespace. Compare only;
+                # do not rewrite source values or normalize meaningful inner text.
+                if (
+                    isinstance(cell.value, str)
+                    and isinstance(expected, str)
+                    and expected.strip()
+                    and cell.value.strip() == expected.strip()
+                ):
+                    continue
             raise cls._merge_conflict(
                 f"要求merge {plan.excel_range} の内部値 {coordinate} を安全に削除できません。"
             )

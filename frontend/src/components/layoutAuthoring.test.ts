@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { LayoutCell, LayoutDefinition } from "../types";
-import { attachHeading, enclosedHeadingChildren, pointInCell, polygonCell, uniqueMeaningEntry } from "./layoutAuthoring";
+import { attachHeading, enclosedHeadingChildren, moveLayoutCell, pointInCell, polygonCell, uniqueMeaningEntry } from "./layoutAuthoring";
 import { normalizeLayout } from "./LayoutEditor";
 
 const cell = (id: string, role: LayoutCell["role"] = "input", extra: Partial<LayoutCell> = {}): LayoutCell => ({
@@ -9,6 +9,23 @@ const cell = (id: string, role: LayoutCell["role"] = "input", extra: Partial<Lay
 });
 const layout = (cells: LayoutCell[]): LayoutDefinition => ({ canonicalWidth: 300, canonicalHeight: 200,
   cells, relations: [], detector: "test", ocrAvailable: false, allowCrossAxisLabels: true, warnings: [] });
+
+test("moving a merged frame translates parts and row bounds without reassigning members", () => {
+  const initial = layout([cell("merged", "input", { width: 80 }), cell("other", "input", { x: 120 })]);
+  initial.cellMerges = [{ id: "merge", parentCellId: "merged", direction: "horizontal",
+    parts: [cell("left"), cell("right", "input", { x: 50 })].map(cell => ({ cell, partType: "input", literal: "" })) }];
+  initial.recordGroups = [{ id: "row", sectionId: "table", order: 1, x: 10, y: 10, width: 150, height: 40,
+    inputCellIds: ["merged", "other"], recordKeyField: "index", recordKeyValue: null, recordKeyCellId: null, source: "manual" }];
+  const moved = moveLayoutCell(initial, "merged", 20, 30);
+  expect(moved.cells[0]).toMatchObject({ id: "merged", x: 30, y: 40, width: 80, height: 40 });
+  expect(moved.cells[1]).toEqual(initial.cells[1]);
+  expect(moved.cellMerges![0].parts.map(part => [part.cell.id, part.cell.x, part.cell.y])).toEqual([
+    ["left", 30, 40], ["right", 70, 40],
+  ]);
+  expect(moved.recordGroups![0]).toEqual({ ...initial.recordGroups[0], x: 30, y: 10, width: 130, height: 70 });
+  expect(moved.relations).toBe(initial.relations);
+  expect(initial.cellMerges[0].parts[0].cell.x).toBe(10);
+});
 
 test("meaning names increment at creation and continue after save/reload in the same layout", () => {
   let current = layout([cell("label", "label", { text: "漢字" })]);

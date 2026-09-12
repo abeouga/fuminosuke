@@ -1067,6 +1067,46 @@ def test_selected_literal_is_allowed_but_input_text_is_not_discarded(
         assert "A1:B2" in {str(r) for r in output[_OUTPUT_NAME].merged_cells.ranges}
 
 
+@pytest.mark.parametrize("coordinates", [("B3", "C3"), ("D17", "E17")])
+@pytest.mark.parametrize("source, literal, allowed", [
+    ("分類 A\u3000\u3000", "分類 A", True),
+    (" \u3000Reference 42\t", "Reference 42", True),
+    ("分類 A", "分類A", False),
+    ("分類  A", "分類 A", False),
+    ("\uff21", "A", False),
+    ("Label", "label", False),
+    (" \u3000", "", False),
+])
+def test_literal_merge_only_normalizes_boundary_whitespace(coordinates, source, literal, allowed):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet[coordinates[1]] = source
+    merge = _imported_anchor_layout(*coordinates)["cellMerges"][0]
+    merge["parts"][1].update(partType="literal", literal=literal)
+    if allowed:
+        result = SpreadsheetTemplateOutputService.page_merge_sources(sheet, merge)
+        assert result[1]["cellId"] == f"xlsx_{coordinates[1]}"
+    else:
+        with pytest.raises(AppError) as caught:
+            SpreadsheetTemplateOutputService.page_merge_sources(sheet, merge)
+        assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_CONFLICT"
+    assert sheet[coordinates[1]].value == source
+    assert not sheet.merged_cells.ranges
+
+
+@pytest.mark.parametrize("source, part_type", [(" 値\u3000", "input"), ("=1+1", "literal")])
+def test_literal_whitespace_does_not_relax_input_or_formula_protection(source, part_type):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["C3"] = source
+    merge = _imported_anchor_layout("B3", "C3")["cellMerges"][0]
+    merge["parts"][1].update(partType=part_type, literal=source.strip())
+    with pytest.raises(AppError) as caught:
+        SpreadsheetTemplateOutputService.page_merge_sources(sheet, merge)
+    assert caught.value.code == "SPREADSHEET_OUTPUT_MERGE_CONFLICT"
+    assert sheet["C3"].value == source
+
+
 def test_non_contiguous_merge_parts_are_rejected(
     settings_factory: Callable[..., Settings],
 ) -> None:

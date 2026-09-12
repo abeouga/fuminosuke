@@ -5,6 +5,13 @@ import { pageDisplayCells, type PageView } from "../pageAuthoring";
 import type { LayoutDefinition } from "../types";
 import { LayoutEditor, normalizeLayout, type LayoutEditorHandle } from "./LayoutEditor";
 
+async function flushEditor(ref: { current: LayoutEditorHandle | null }) {
+  let pending!: Promise<boolean>;
+  // The next request uses props/revision from the committed response.
+  await act(async () => { pending = ref.current!.saveIfNeeded(); });
+  return pending;
+}
+
 const initial: LayoutDefinition = {
   canonicalWidth: 1000, canonicalHeight: 2000, detector: "test", ocrAvailable: false,
   warnings: [], relations: [], allowCrossAxisLabels: false,
@@ -64,7 +71,7 @@ test("spreadsheet authoring preserves detected headings on untouched pages", asy
   view.rerender(<LayoutEditor {...props} pageView={second} />);
   clickAt(canvas(), 180, 65);
   fireEvent.click(screen.getByRole("button", { name: "読み取らない" }));
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   expect(save.mock.calls[0][0].cells[0].role).toBe("parent_label");
   expect(save.mock.calls[0][0].cells[0].source).toBe("detected");
 });
@@ -81,7 +88,7 @@ test("page-local classification and switching preserve canonical coordinates and
   view.rerender(<LayoutEditor {...props} pageView={second} />);
   clickAt(canvas(), 180, 65);
   fireEvent.click(screen.getByRole("button", { name: "項目名" }));
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   const saved = save.mock.calls.at(-1)![0];
   expect(saved.cells.map(cell => cell.role)).toEqual(["label", "ignored", "label"]);
   saved.cells.forEach((cell, i) => {
@@ -109,7 +116,7 @@ test("page-local range selection deletes selected rectangles and preserves other
   clickAt(canvas(), 180, 65);
   expect(screen.getByRole("button", { name: "矩形を完全に削除" })).toBeEnabled();
 
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   expect(save.mock.calls.at(-1)![0].cells).toEqual(normalizeLayout(initial).cells.slice(2));
 });
 
@@ -124,7 +131,7 @@ test("page-local meaning drag connects only the selected page's existing IDs", a
   fireEvent.pointerDown(element, { clientX: 60, clientY: 65, pointerId: 1 });
   fireEvent.pointerMove(element, { clientX: 230, clientY: 65, pointerId: 1 });
   fireEvent.pointerUp(element, { clientX: 230, clientY: 65, pointerId: 1 });
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   const saved = save.mock.calls.at(-1)![0];
   expect(saved.relations).toHaveLength(1);
   expect(saved.relations[0]).toMatchObject({ inputCellId: "xlsx_C2", labelCellIds: ["xlsx_B2"],
@@ -141,9 +148,9 @@ test("failed page save retains human edits for retry", async () => {
     onDetect={vi.fn()} onSave={save} workflowStep="classify" pageView={second} />);
   clickAt(canvas(), 180, 65);
   fireEvent.click(screen.getByRole("button", { name: "読み取らない" }));
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(false); });
+  expect(await flushEditor(ref)).toBe(false);
   await waitFor(() => expect(screen.getByRole("button", { name: "読み取らない" })).toHaveClass("active"));
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   expect(save.mock.calls[0][0]).toEqual(save.mock.calls[1][0]);
 });
 
@@ -159,6 +166,7 @@ test("page merge remains visible across switching, failed save, reload and unmer
   clickAt(element, 60, 65);
   fireEvent.pointerDown(element, { clientX: 180, clientY: 65, pointerId: 1, ctrlKey: true });
   fireEvent.pointerUp(element, { clientX: 180, clientY: 65, pointerId: 1, ctrlKey: true });
+  expect(screen.queryByText(/セルを複数選択しました/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "選択セルを結合" }));
   expect(screen.getByRole("button", { name: "結合を解除" })).toBeEnabled();
   view.rerender(<LayoutEditor {...props} pageView={second} />);
@@ -166,8 +174,8 @@ test("page merge remains visible across switching, failed save, reload and unmer
   view.rerender(<LayoutEditor {...props} pageView={first} />);
   clickAt(canvas(), 60, 65);
   expect(screen.getByRole("button", { name: "結合を解除" })).toBeEnabled();
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(false); });
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(false);
+  expect(await flushEditor(ref)).toBe(true);
   expect(save.mock.calls[0][0]).toEqual(save.mock.calls[1][0]);
   const saved = save.mock.calls[1][0];
   const parent = saved.cells.find(cell => cell.id.startsWith("merged_"))!;
@@ -188,7 +196,7 @@ test("page merge remains visible across switching, failed save, reload and unmer
   render(<LayoutEditor {...props} initialLayout={saved} pageView={savedPage} />);
   clickAt(canvas(), 60, 65);
   fireEvent.click(screen.getByRole("button", { name: "結合を解除" }));
-  await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+  expect(await flushEditor(ref)).toBe(true);
   const restored = save.mock.calls.at(-1)![0];
   expect(restored.cells).toEqual(normalizeLayout(initial).cells);
   expect(pageDisplayCells(restored, savedPage)).toEqual(pageDisplayCells(normalizeLayout(initial), first));

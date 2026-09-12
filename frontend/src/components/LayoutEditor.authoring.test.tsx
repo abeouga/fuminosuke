@@ -2,7 +2,7 @@ import { act, fireEvent, render, waitFor, within } from "@testing-library/react"
 import { createRef } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { LayoutCell, LayoutDefinition } from "../types";
-import { LayoutEditor, normalizeLayout, type LayoutEditorHandle } from "./LayoutEditor";
+import { createAutoLabelPoolEntry, LayoutEditor, normalizeLayout, type LayoutEditorHandle } from "./LayoutEditor";
 import { polygonCell } from "./layoutAuthoring";
 
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
@@ -35,13 +35,136 @@ function setup(initial: LayoutDefinition, workflowStep: "classify" | "meaning" |
   };
   const save = async () => {
     const count = onSave.mock.calls.length;
-    await act(async () => { expect(await ref.current!.saveIfNeeded()).toBe(true); });
+    let pending!: Promise<boolean>;
+    // Let React commit each save response before awaiting the flush boundary.
+    await act(async () => { pending = ref.current!.saveIfNeeded(); });
+    expect(await pending).toBe(true);
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(count + 1));
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
     return onSave.mock.calls.at(-1)![0];
   };
   return { view, editor, canvas, click, drag, save, onSave, props };
 }
+
+test.each([
+  ["氏名", "氏名（カナ）"], ["番号備考", "番号"], ["記入日", "記 入日"],
+  ["A", "Ａ"], ["Field", "field"], ["歴", "暦"],
+])("manual addition keeps %s and %s separate", async (existingName, newName) => {
+  const initial = layout([cell("input", 100, 20)]);
+  initial.labelPool = [{ id: "original", label: existingName, targetPath: "customFields.original",
+    aliases: [newName], section: "test", source: "manual" }];
+  const ui = setup(initial, "meaning");
+  fireEvent.click(ui.editor.getByRole("button", { name: "一覧にない項目を追加" }));
+  fireEvent.change(ui.editor.getByRole("textbox", { name: "新しい項目名" }), { target: { value: newName } });
+  fireEvent.click(ui.editor.getByRole("button", { name: "この項目を追加" }));
+  const saved = await ui.save();
+  expect(saved.labelPool).toHaveLength(2);
+  expect(saved.labelPool![0]).toEqual(initial.labelPool[0]);
+  expect(saved.labelPool![1].label).toBe(newName);
+  ui.view.rerender(<LayoutEditor {...ui.props} initialLayout={saved} />);
+  fireEvent.click(ui.editor.getByRole("button", { name: "一覧にない項目を追加" }));
+  fireEvent.change(ui.editor.getByRole("textbox", { name: "新しい項目名" }), { target: { value: newName } });
+  fireEvent.click(ui.editor.getByRole("button", { name: "この項目を追加" }));
+  expect(ui.editor.getByText(`「${newName}」は保存する項目に登録済みです。`)).toBeInTheDocument();
+  expect(ui.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+});
+
+test("exact manual names allocate distinct paths even when sanitized keys collide", () => {
+  const entry = createAutoLabelPoolEntry("記 入日", [
+    { path: "customFields.記入日", label: "記入日", section: "test", aliases: ["記 入日"] },
+  ], "exact");
+  expect(entry).toMatchObject({ label: "記 入日", targetPath: "customFields.記入日_2" });
+});
+
+test("manually editing a printed label also adds a similar name without absorbing it", async () => {
+  const initial = layout([cell("label", 20, 20, "label", "氏名")]);
+  initial.labelPool = [{ id: "name", label: "氏名", targetPath: "customFields.name", aliases: [], section: "test", source: "manual" }];
+  const ui = setup(initial);
+  ui.click(30, 30);
+  const input = ui.editor.getByRole("textbox", { name: "項目名の文字候補" });
+  fireEvent.change(input, { target: { value: "氏名（カナ）" } });
+  fireEvent.blur(input);
+  const saved = await ui.save();
+  expect(saved.labelPool?.map(entry => entry.label)).toEqual(["氏名", "氏名（カナ）"]);
+});
+
+test("hand mode alone moves a polygon and virtual heading, preserving meaning through save/reload", async () => {
+  const initial = layout([polygonCell([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 20, y: 50 }], "polygon")!,
+    { ...cell("heading", 200, 20, "parent_label", "仮想"), virtual: true }]);
+  initial.relations = [{ id: "meaning", inputCellId: "polygon", labelCellIds: [],
+    targetPath: "customFields.test", axis: "horizontal", order: 1 }];
+  const ui = setup(initial);
+  ui.drag(25, 25, 85, 75);
+  expect(ui.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+  const hand = ui.editor.getByRole("button", { name: "矩形を移動" });
+  expect(hand).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(hand);
+  expect(hand).toHaveAttribute("aria-pressed", "true");
+  expect(ui.editor.queryByText(/矩形を動かせるモード|ドラッグアンドドロップしてください/)).toBeNull();
+  ui.drag(25, 25, 85, 75);
+  ui.drag(210, 30, 250, 110);
+  const saved = await ui.save();
+  expect(saved.cells[0]).toMatchObject({ id: "polygon", x: 80, y: 70,
+    vertices: [{ x: 80, y: 70 }, { x: 120, y: 70 }, { x: 80, y: 100 }] });
+  expect(saved.cells[1]).toMatchObject({ id: "heading", x: 240, y: 100, virtual: true });
+  expect(saved.relations).toEqual(initial.relations);
+  ui.view.rerender(<LayoutEditor {...ui.props} initialLayout={saved} />);
+  fireEvent.click(hand);
+  ui.drag(85, 75, 125, 105);
+  expect(ui.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+});
+
+test("move cancellation does not dirty the draft and dropping clamps to canvas bounds", async () => {
+  const initial = layout([cell("rect", 20, 20)]);
+  const ui = setup(initial);
+  fireEvent.click(ui.editor.getByRole("button", { name: "矩形を移動" }));
+  fireEvent.pointerDown(ui.canvas, { clientX: 25, clientY: 25 });
+  fireEvent.pointerMove(ui.canvas, { clientX: 100, clientY: 100 });
+  fireEvent.pointerCancel(ui.canvas);
+  expect(ui.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+  fireEvent.pointerDown(ui.canvas, { clientX: 25, clientY: 25 });
+  fireEvent.pointerMove(ui.canvas, { clientX: 100, clientY: 100 });
+  fireEvent.keyDown(ui.canvas, { key: "Escape" });
+  fireEvent.pointerUp(ui.canvas, { clientX: 100, clientY: 100 });
+  expect(ui.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+  fireEvent.click(ui.editor.getByRole("button", { name: "矩形を移動" }));
+  ui.drag(25, 25, 800, 800);
+  expect((await ui.save()).cells[0]).toMatchObject({ id: "rect", x: 360, y: 270, width: 40, height: 30 });
+});
+
+test("diagnosis: changing a label to heading removes its link but retains the input destination", async () => {
+  const initial = layout([cell("label", 20, 20, "label", "検査名"), cell("input", 100, 20)]);
+  initial.relations = [{ id: "meaning", inputCellId: "input", labelCellIds: ["label"],
+    targetPath: "customFields.test", axis: "horizontal", order: 1 }];
+  const ui = setup(initial);
+  ui.click(30, 30);
+  fireEvent.click(ui.editor.getByRole("button", { name: "見出し" }));
+  const saved = await ui.save();
+  expect(saved.cells[0].role).toBe("parent_label");
+  expect(saved.relations).toEqual([{ ...initial.relations[0], labelCellIds: [] }]);
+});
+
+test.each(["meaning", "records"] as const)("%s connects a heading to the entire repeated band and nests headings", async step => {
+  const initial = layout([cell("outer", 20, 10, "parent_label", "全体"),
+    cell("heading", 100, 60, "parent_label", "検査一覧"),
+    cell("a", 100, 150, "label", "日付"), cell("b", 200, 150, "label", "結果")]);
+  initial.recordSections = [{ id: "section", collectionPath: "genericRecords.tests", recordType: "generic",
+    title: "検査", parentLabelCellId: null, recordLabelCellIds: ["a", "b"], rowKeyStrategy: "position", source: "manual" }];
+  const ui = setup(initial, step);
+  fireEvent.click(ui.editor.getByRole("button", { name: "親項目を接続" }));
+  ui.drag(30, 20, 110, 70);
+  if (step === "records") fireEvent.click(ui.editor.getByRole("button", { name: "見出しへ接続" }));
+  ui.drag(110, 70, 210, 160);
+  const saved = await ui.save();
+  expect(saved.cells[1].parentLabelCellId).toBe("outer");
+  expect(saved.recordSections![0]).toEqual({ ...normalizeLayout(initial).recordSections![0], parentLabelCellId: "heading" });
+  expect(saved.cells.slice(2)).toEqual(normalizeLayout(initial).cells.slice(2));
+  expect(saved.relations).toEqual(initial.relations);
+  ui.view.rerender(<LayoutEditor {...ui.props} initialLayout={saved} />);
+  fireEvent.click(ui.editor.getByRole("button", { name: "親項目を接続" }));
+  ui.drag(110, 160, 30, 20);
+  expect(ui.editor.getByText(/循環参照/)).toBeInTheDocument();
+});
 
 test("draws polygon by clicks, undo and closing at the start, then saves, reclassifies and deletes it", async () => {
   const ui = setup(layout([]));
