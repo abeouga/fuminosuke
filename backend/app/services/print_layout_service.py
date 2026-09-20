@@ -14,11 +14,19 @@ from sqlalchemy.orm import Session
 
 from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.db.session import Database
+from app.domain.calc_print_grid import MODEL as CALC_GEOMETRY_MODEL
 from app.domain.print_layout import PrintLayoutRequest, page_plan, print_error
 from app.domain.template_config import parse_template_config
 from app.layout_analysis.models import LayoutDefinition
+from app.services.calc_workbook_geometry import apply_dimensions as apply_calc_dimensions
 from app.services.draft_page_geometry import draft_geometry
-from app.services.page_authoring_validation import bounds, physical_cells, validate_page_edit
+from app.services.page_authoring_validation import (
+    bounds,
+    physical_cells,
+    validate_page_edit,
+    validate_page_headings,
+)
+from app.services.prepared_print_contract import render_key
 from app.services.print_layout_renderer import render_page
 from app.services.print_layout_source import DRAFT_GEOMETRY_VERSION, read_source
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
@@ -30,6 +38,8 @@ from app.services.workbook_geometry import (
     normal_font,
     office_geometry,
 )
+from app.services.wsl_workbook_geometry import MODEL as WSL_GEOMETRY_MODEL
+from app.services.wsl_workbook_geometry import apply_dimensions
 from app.storage.local_storage import LocalStorageService
 
 
@@ -83,7 +93,8 @@ class PrintLayoutService:
                 "元XLSXのハッシュが一致しません。", "PRINT_LAYOUT_SOURCE_CHANGED", 409
             )
         saved = version.quality_json.get("printLayout")
-        draft_support = not saved or saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION
+        draft_support = not saved or saved.get("geometryModelVersion") in {
+            DRAFT_GEOMETRY_VERSION, WSL_GEOMETRY_MODEL, CALC_GEOMETRY_MODEL}
         source = read_source(
             content, str(version.quality_json.get("sourceSheetName", "")), layout,
             draft_support=draft_support,
@@ -155,6 +166,10 @@ class PrintLayoutService:
                 }
             )
         source["geometryModelVersion"] = LEGACY_GEOMETRY_VERSION
+        if saved and saved.get("geometryModelVersion") == CALC_GEOMETRY_MODEL:
+            return apply_calc_dimensions(source, saved["geometryEvidence"])
+        if saved and saved.get("geometryModelVersion") == WSL_GEOMETRY_MODEL:
+            return apply_dimensions(source, saved["geometryEvidence"])
         if draft_support and (
             source["draftFeatures"]
             or (saved and saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION)
@@ -206,6 +221,7 @@ class PrintLayoutService:
         plan = page_plan(
             self._source(session, version), request, version.quality_json.get("printLayout")
         )
+        validate_page_headings(version.layout_json, plan)
         plan["layoutSha256"] = digest(version.layout_json)
         return plan
 
@@ -276,6 +292,7 @@ class PrintLayoutService:
             version = self._version(session, version_id)
             require_draft(version)
             self._check_revision(version, expected)
+            validate_page_headings(version.layout_json, None)
             quality = dict(version.quality_json)
             quality.pop("printLayout", None)
             version.quality_json = quality
@@ -305,6 +322,7 @@ class PrintLayoutService:
                 previous = version.layout_json
                 proposed = layout.model_dump(mode="json", by_alias=True)
                 validate_page_edit(previous, proposed)
+                validate_page_headings(proposed, saved)
                 request = PrintLayoutRequest.model_validate({
                     **{k: saved[k] for k in (
                         "paperSize", "orientation", "margins", "horizontalCentering",
@@ -329,6 +347,9 @@ class PrintLayoutService:
                 # than certifying the resulting field set as a production reference.
                 for page, old in zip(plan["pages"], saved["pages"], strict=True):
                     page["referenceImage"] = old["referenceImage"]
+                if saved.get("printFiles") and render_key(plan) == saved["printFiles"]["renderKey"]:
+                    plan["printFiles"] = copy.deepcopy(saved["printFiles"])
+                    plan["rendererVersion"] = saved["rendererVersion"]
                 plan["source"] = "user"
                 version.quality_json = {**version.quality_json, "printLayout": plan}
                 job = session.get(ProcessingJob, version.source_job_id)

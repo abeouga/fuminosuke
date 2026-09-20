@@ -75,3 +75,17 @@ def test_picker_project_must_match_oauth_client_project() -> None:
     assert settings.picker_configured is False
     assert settings.picker_configuration_error is not None
     assert "一致していません" in settings.picker_configuration_error
+
+
+@pytest.mark.parametrize("identity", [None, "a" * 64, "", "../image", "A" * 64,
+                                     "a" * 63, "a" * 65, "a" * 63 + "\n"])
+def test_explicit_print_runtime_identity_is_preserved_or_rejected(tmp_path, identity):
+    data = tmp_path / "data"
+    raw = RawSettings(_env_file=None, data_dir=data,
+                      database_url=f"sqlite:///{(data / 'app.db').as_posix()}",
+                      log_file=data / "app.log", PRINT_WSL_RUNTIME_ID=identity)
+    if identity in {None, "a" * 64}:
+        assert Settings.from_raw(raw).app.print_wsl_runtime_id == identity
+    else:
+        with pytest.raises(ValueError, match="runtime identity"):
+            Settings.from_raw(raw)

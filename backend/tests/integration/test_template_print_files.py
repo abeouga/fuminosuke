@@ -101,7 +101,9 @@ def test_versions_export_their_own_saved_ranges(client, saved_template):
         version.status = "ACTIVE"
         session.get(Template, version.template_id).active_version_id = version_id
         session.commit()
-    fork = TemplateVersionService(database, storage).edit(version_id)
+    fork = TemplateVersionService(database, storage).edit(
+        version_id, expected_revision=state["revision"]
+    )
     new_url = f"/api/v1/template-versions/{fork.id}/print-layout"
     second_state = client.get(new_url).json()
     second_state = client.put(

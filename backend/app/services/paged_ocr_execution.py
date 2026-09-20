@@ -13,9 +13,12 @@ from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob
 from app.domain.print_layout import print_error
 from app.image_processing.artifacts import ArtifactWriter
+from app.ocr.openai_provider import OpenAIOcrProvider
 from app.services.extraction_service import ImageExtractionService
 from app.services.job_page_service import JobPageService
 from app.services.ocr_workflow_service import OcrWorkflowService
+from app.services.paged_ocr_budget import PagedCallBudget
+from app.services.paged_review_service import PagedReviewService
 from app.services.print_layout_service import digest
 
 logger = logging.getLogger(__name__)
@@ -39,13 +42,36 @@ class PagedOcrExecution:
                 return
             pages = service.validate(session, job)  # Validate every image before any provider call.
             attempt = job.attempt_number
+            snapshot_sha = job.config_snapshot_json["jobPagesSha256"]
+        previous = {page["pageId"]: self._previous_success(job_id, page) for page in pages}
+        minimum_calls = [
+            OpenAIOcrProvider.minimum_call_count(
+                len(page["fieldMappings"]),
+                len(page.get("documentContext", {}).get("identityFields", [])),
+            )
+            if page.get("ocrProvider") == "openai" and page.get("ocrEnabled", True)
+            and previous[page["pageId"]] is None
+            else 0
+            for page in pages
+        ]
+        openai_page = next((p for p in pages if p.get("ocrProvider") == "openai"), None)
+        if openai_page is not None:
+            available = PagedCallBudget(
+                service.database, job_id, openai_page["pageId"], attempt, snapshot_sha,
+            ).remaining()
+            if available < sum(minimum_calls):
+                raise print_error(
+                    "未完了の全ページを読むためのOCR呼び出し予算が不足しています。",
+                    "OCR_CALL_BUDGET_TOO_SMALL",
+                    409,
+                )
         results = []
-        for page in pages:
+        for page_index, page in enumerate(pages):
             with service.database.session() as session:
                 current = session.get(ProcessingJob, job_id)
                 if current is None or current.cancel_requested:
                     return
-            result = self._previous_success(job_id, page)
+            result = previous[page["pageId"]]
             if result is None:
                 result = {
                     "pageId": page["pageId"],
@@ -59,7 +85,14 @@ class PagedOcrExecution:
                 }
                 try:
                     extracted = self.extraction.process(job_id, page_id=page["pageId"])
-                    payload = self.workflow.process(extracted)
+                    payload = (
+                        self.workflow.process(
+                            extracted,
+                            reserved_calls_for_other_pages=sum(minimum_calls[page_index + 1:]),
+                        )
+                        if page.get("ocrProvider") == "openai"
+                        else self.workflow.process(extracted)
+                    )
                     if payload is None:
                         raise print_error("ページ処理が中断されました。", "JOB_CANCELLED", 409)
                     result.update(status="SUCCESS", extraction=payload)
@@ -73,6 +106,11 @@ class PagedOcrExecution:
                             exc.code if isinstance(exc, AppError) else "PAGE_EXECUTION_FAILED"
                         ),
                     )
+                    if (
+                        isinstance(exc, AppError)
+                        and exc.code == "PAGED_CROP_CORRESPONDENCE_INVALID"
+                    ):
+                        result["safetyFailure"] = exc.metadata
                 writer.json(
                     job_id=job_id,
                     attempt_number=attempt,
@@ -83,6 +121,8 @@ class PagedOcrExecution:
                 )
             results.append(result)
         failed = any(p["status"] != "SUCCESS" for p in results)
+        if not failed:
+            PagedReviewService(service.database).initialize(job_id, results)
         writer.json(
             job_id=job_id,
             attempt_number=attempt,
@@ -94,7 +134,7 @@ class PagedOcrExecution:
                 "jobId": job_id,
                 "pages": results,
                 "status": "partial_failure" if failed else "completed",
-                "reviewAvailable": False,
+                "reviewAvailable": not failed,
                 "outputAvailable": False,
             },
         )

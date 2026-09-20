@@ -7,6 +7,7 @@ import { PrintLayoutEditor } from "./PrintLayoutEditor";
 vi.mock("../api", () => ({ api: {
   printLayout: vi.fn(), previewPrintLayout: vi.fn(), savePrintLayout: vi.fn(), clearPrintLayout: vi.fn(),
   referenceQualification: vi.fn(), qualifyReference: vi.fn(),
+  preparePrintFiles: vi.fn(),
 } }));
 
 const state: PrintState = {
@@ -45,6 +46,53 @@ beforeEach(() => {
 });
 
 describe("印刷ページ編集", () => {
+  it("prepares print files explicitly without taking the global editing lock", async () => {
+    const initial = { ...state, saved: planned(printDefaults(state)) };
+    vi.mocked(api.printLayout).mockResolvedValue(initial);
+    let finish!: (value: PrintState) => void;
+    vi.mocked(api.preparePrintFiles).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await open();
+    expect(api.preparePrintFiles).not.toHaveBeenCalled();
+    expect(api.previewPrintLayout).not.toHaveBeenCalled();
+    busy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
+    expect(screen.getByRole("button", { name: "印刷用ファイルを生成中…" })).toBeDisabled();
+    expect(busy).not.toHaveBeenCalledWith(true);
+    expect(screen.getByRole("button", { name: "拡大" })).not.toBeDisabled();
+    finish({ ...initial, revision: "c".repeat(64), saved: { ...initial.saved, commonScale: .95 } });
+    await screen.findByText("印刷用ファイルを確定しました（2ページ・95%）。");
+    expect(saved).toHaveBeenLastCalledWith(true);
+  });
+  it("keeps saved settings and supports retry after preparation failure", async () => {
+    vi.mocked(api.printLayout).mockResolvedValue({ ...state, saved: planned(printDefaults(state)) });
+    vi.mocked(api.preparePrintFiles).mockRejectedValue(new Error("生成中に設定が変更されました"));
+    await open();
+    await waitFor(() => expect(screen.getByRole("button", { name: "印刷用ファイルを確定" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
+    await screen.findByText("生成中に設定が変更されました");
+    expect(screen.getByText("保存済み・2ページ")).toBeVisible();
+    expect(screen.getByRole("button", { name: "印刷用ファイルを確定" })).not.toBeDisabled();
+    expect(api.savePrintLayout).not.toHaveBeenCalled();
+  });
+  it("does not replace newer authoring state with a delayed preparation response", async () => {
+    const initial = { ...state, saved: planned(printDefaults(state)) };
+    vi.mocked(api.printLayout).mockResolvedValue(initial);
+    let finish!: (value: PrintState) => void;
+    vi.mocked(api.preparePrintFiles).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const props = { versionId: "v1", disabled: false, onDirtyChange: dirty, onBusyChange: busy, onSavedChange: saved };
+    const view = render(<PrintLayoutEditor {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
+    await screen.findByText("2ページ / 共通縮小率 96.0%");
+    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    const newer = { ...initial, revision: "n".repeat(64), saved: planned({ ...printDefaults(initial), breakAfterRows: [] }) };
+    view.rerender(<PrintLayoutEditor {...props} externalState={newer} />);
+    await screen.findByText("1ページ / 共通縮小率 96.0%");
+    finish({ ...initial, revision: "p".repeat(64) });
+    await screen.findByText("印刷用ファイルを生成しました。新しい編集内容は保持しています。保存後に設定を再取得してください。");
+    expect(screen.getByText("1ページ / 共通縮小率 96.0%")).toBeVisible();
+  });
   it("zooms a long continuous sheet without changing page settings", async () => {
     vi.mocked(api.printLayout).mockResolvedValue({ ...state, source: { ...state.source, height: 4200 } });
     await open();

@@ -208,6 +208,12 @@ class CanonicalTemplate(CanonicalModel):
 
     @model_validator(mode="after")
     def validate_portable_template(self) -> Self:
+        # Package v1 has no saved printLayout; accepting page-local display nodes
+        # would silently lose their page ownership on import.
+        if (any(cell.page_range is not None for cell in self.layout.cells)
+                or any(part.cell.page_range is not None
+                       for merge in self.layout.cell_merges for part in merge.parts)):
+            raise ValueError("Page virtual headings require printLayout, unsupported in package v1")
         runtime_config = TemplateConfig(
             template_id="package-template",
             template_version=1,

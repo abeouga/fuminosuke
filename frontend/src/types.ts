@@ -397,6 +397,8 @@ export type LayoutCell = {
   shapeType?: "rectangle" | "polygon";
   vertices?: { x: number; y: number }[];
   virtual?: boolean;
+  /** Virtual heading only: x/y/width/height belong to this saved page range. */
+  pageRange?: string;
   parentLabelCellId?: string | null;
   markSets?: LayoutMarkSet[];
   compositeSubfields?: LayoutCompositeSubfield[];
@@ -464,7 +466,7 @@ export type LayoutLabelPoolEntry = {
 
 export type LayoutRecordSection = {
   id: string;
-  /** Legacy generated title; displayName is preferred for user-facing text. */
+  /** Legacy/internal title. displayName=null explicitly disables the optional user-facing name. */
   title: string;
   displayName?: string | null;
   collectionPath: string;

@@ -906,6 +906,20 @@
           "title": "Marksets",
           "type": "array"
         },
+        "pageRange": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pagerange"
+        },
         "parentLabelCellId": {
           "anyOf": [
             {

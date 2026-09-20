@@ -5,6 +5,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,12 +13,15 @@ from openpyxl import Workbook, load_workbook
 from PIL import Image
 from sqlalchemy import select
 
+from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob, Template, TemplateVersion
 from app.domain.template_config import (
     DocumentIdentityConfig,
     FieldMappingConfig,
     build_blank_template_config,
 )
+from app.services.print_layout_service import PrintLayoutService
+from app.services.reference_qualification_service import ReferenceQualificationService
 from app.services.template_version_service import TemplateVersionService
 
 
@@ -169,10 +173,35 @@ def _get(client: TestClient, version: str, resource: str) -> object:
     return response.json()
 
 
-def _edit(client: TestClient, version: str) -> dict:
-    response = client.post(f"/api/v1/template-versions/{version}/edit")
+def _edit(client: TestClient, version: str, *, revision: str | None = None) -> dict:
+    params = {"base_revision": revision} if revision is not None else None
+    response = client.post(f"/api/v1/template-versions/{version}/edit", params=params)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _make_paged(client: TestClient, version_id: str, **quality_updates: object) -> str:
+    database = client.app.state.database
+    with database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        source = session.scalar(
+            select(JobArtifact).where(
+                JobArtifact.job_id == version.source_job_id,
+                JobArtifact.artifact_name == "sourceWorkbook",
+            )
+        )
+        quality = copy.deepcopy(version.quality_json)
+        quality.update(quality_updates)
+        quality["printLayout"] = {
+            "sourceSha256": source.sha256,
+            "geometryModelVersion": "wsl-calc-print-grid-v1",
+            "layoutSha256": "1" * 64,
+            "pages": [],
+            **copy.deepcopy(quality.get("printLayout", {})),
+        }
+        version.quality_json = quality
+        session.commit()
+        return PrintLayoutService.revision(version)
 
 
 def test_authoring_shapes_and_headings_persist_without_changing_existing_identity(
@@ -316,6 +345,317 @@ def test_concurrent_edit_creates_one_draft(client, versioned_source):
     with ThreadPoolExecutor(max_workers=4) as pool:
         versions = list(pool.map(lambda _: service.edit(v1).id, range(4)))
     assert len(set(versions)) == 1
+
+
+def test_paged_edit_requires_current_revision_and_reuses_one_matching_draft(
+    client, versioned_source,
+):
+    v1, _ = versioned_source
+    revision = _make_paged(client, v1)
+    missing = client.post(f"/api/v1/template-versions/{v1}/edit")
+    assert missing.status_code == 409
+    assert missing.json()["code"] == "TEMPLATE_VERSION_REVISION_REQUIRED"
+    stale = client.post(
+        f"/api/v1/template-versions/{v1}/edit",
+        params={"base_revision": "0" * 64},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "TEMPLATE_VERSION_CONFLICT"
+    v2 = _edit(client, v1, revision=revision)["id"]
+    assert _edit(client, v1, revision=revision)["id"] == v2
+    with client.app.state.database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        versions = list(
+            session.scalars(
+                select(TemplateVersion).where(TemplateVersion.template_id == source.template_id)
+            )
+        )
+        assert [(item.id, item.status) for item in versions] == [(v1, "ACTIVE"), (v2, "DRAFT")]
+
+
+def test_edit_rejects_existing_draft_from_another_parent(client, versioned_source):
+    v1, _ = versioned_source
+    revision = _make_paged(client, v1)
+    v2 = _edit(client, v1, revision=revision)["id"]
+    with client.app.state.database.session() as session:
+        draft = session.get(TemplateVersion, v2)
+        quality = copy.deepcopy(draft.quality_json)
+        quality["forkParentVersionId"] = "not-the-requested-version"
+        draft.quality_json = quality
+        session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{v1}/edit", params={"base_revision": revision}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_DRAFT_LINEAGE_MISMATCH"
+
+
+def test_edit_rejects_existing_draft_with_different_source_workbook(
+    client, versioned_source,
+):
+    v1, _ = versioned_source
+    revision = _make_paged(client, v1)
+    v2 = _edit(client, v1, revision=revision)["id"]
+    changed = b"different workbook identity"
+    with client.app.state.database.session() as session:
+        draft = session.get(TemplateVersion, v2)
+        artifact = session.scalar(
+            select(JobArtifact).where(
+                JobArtifact.job_id == draft.source_job_id,
+                JobArtifact.artifact_name == "sourceWorkbook",
+            )
+        )
+        client.app.state.storage.write_bytes(artifact.relative_path, changed)
+        artifact.sha256 = hashlib.sha256(changed).hexdigest()
+        quality = copy.deepcopy(draft.quality_json)
+        quality["printLayout"]["sourceSha256"] = artifact.sha256
+        draft.quality_json = quality
+        session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{v1}/edit", params={"base_revision": revision}
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_DRAFT_SOURCE_MISMATCH"
+
+
+def test_edit_rejects_multiple_drafts_without_selecting_one(client, versioned_source):
+    v1, _ = versioned_source
+    v2 = _edit(client, v1)["id"]
+    with client.app.state.database.session() as session:
+        draft = session.get(TemplateVersion, v2)
+        session.add(
+            TemplateVersion(
+                template_id=draft.template_id,
+                version_number=3,
+                mode=draft.mode,
+                status="DRAFT",
+                canonical_width=draft.canonical_width,
+                canonical_height=draft.canonical_height,
+                source_job_id=draft.source_job_id,
+                clean_template_artifact_id=draft.clean_template_artifact_id,
+                config_relative_path=draft.config_relative_path,
+                quality_json=copy.deepcopy(draft.quality_json),
+                layout_json=copy.deepcopy(draft.layout_json),
+            )
+        )
+        session.commit()
+    response = client.post(f"/api/v1/template-versions/{v1}/edit")
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_DRAFT_AMBIGUOUS"
+    selected = client.post(f"/api/v1/template-versions/{v2}/edit")
+    assert selected.status_code == 409
+    assert selected.json()["code"] == "TEMPLATE_DRAFT_AMBIGUOUS"
+
+
+def test_fork_rejects_missing_source_workbook(client, versioned_source):
+    v1, _ = versioned_source
+    with client.app.state.database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        artifact = session.scalar(
+            select(JobArtifact).where(
+                JobArtifact.job_id == source.source_job_id,
+                JobArtifact.artifact_name == "sourceWorkbook",
+            )
+        )
+        session.delete(artifact)
+        session.commit()
+    response = client.post(f"/api/v1/template-versions/{v1}/edit")
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_SOURCE_WORKBOOK_MISSING"
+
+
+def test_fork_artifact_paths_use_artifact_identity_and_preserve_bytes(
+    client, versioned_source,
+):
+    v1, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    added = {
+        "duplicateA": ("history/a/shared.bin", b"first"),
+        "duplicateB": ("history/b/shared.bin", b"second"),
+    }
+    with database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        for name, (path, content) in added.items():
+            storage.write_bytes(path, content)
+            session.add(
+                JobArtifact(
+                    job_id=source.source_job_id,
+                    attempt_number=1,
+                    artifact_name=name,
+                    relative_path=path,
+                    media_type="application/octet-stream",
+                    sha256=hashlib.sha256(content).hexdigest(),
+                )
+            )
+        session.commit()
+    v2 = _edit(client, v1)["id"]
+    with database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        draft = session.get(TemplateVersion, v2)
+        source_artifacts = {
+            item.artifact_name: item
+            for item in session.scalars(
+                select(JobArtifact).where(JobArtifact.job_id == source.source_job_id)
+            )
+        }
+        copied = {
+            item.artifact_name: item
+            for item in session.scalars(
+                select(JobArtifact).where(JobArtifact.job_id == draft.source_job_id)
+            )
+        }
+        destinations = {copied[name].relative_path for name in added}
+        assert len(destinations) == 2
+        for name, (_, original_content) in added.items():
+            clone = copied[name]
+            assert Path(clone.relative_path).stem == clone.id
+            assert storage.read_bytes(clone.relative_path) == original_content
+            assert clone.sha256 == hashlib.sha256(original_content).hexdigest()
+            assert storage.read_bytes(source_artifacts[name].relative_path) == original_content
+
+
+def test_fork_rejects_source_artifact_sha_mismatch(client, versioned_source):
+    v1, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    with database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        artifact = session.scalar(
+            select(JobArtifact).where(
+                JobArtifact.job_id == source.source_job_id,
+                JobArtifact.artifact_name == "normalized",
+            )
+        )
+        storage.write_bytes(artifact.relative_path, b"changed after artifact creation")
+    with pytest.raises(AppError) as failure:
+        TemplateVersionService(database, storage).edit(v1)
+    assert failure.value.code == "TEMPLATE_ARTIFACT_SOURCE_CHANGED"
+    with database.session() as session:
+        assert len(list(session.scalars(select(TemplateVersion)))) == 1
+
+
+def test_fork_rejects_destination_collision(client, versioned_source, monkeypatch):
+    v1, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    original_exists = storage.exists
+
+    def collide(path):
+        return Path(path).as_posix().startswith("jobs/") or original_exists(path)
+
+    monkeypatch.setattr(storage, "exists", collide)
+    with pytest.raises(AppError) as failure:
+        TemplateVersionService(database, storage).edit(v1)
+    assert failure.value.code == "TEMPLATE_ARTIFACT_DESTINATION_COLLISION"
+    with database.session() as session:
+        assert len(list(session.scalars(select(TemplateVersion)))) == 1
+        assert len(list(session.scalars(select(ProcessingJob)))) == 1
+
+
+def test_fork_detects_destination_change_and_leaves_no_success_records(
+    client, versioned_source, monkeypatch,
+):
+    v1, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    original_write = storage.write_bytes
+    written: list[str] = []
+
+    def tamper(path, content):
+        stored = original_write(path, content)
+        normalized = Path(stored).as_posix()
+        if normalized.startswith("jobs/"):
+            storage.resolve(stored).write_bytes(b"tampered after copy")
+            written.append(stored)
+        return stored
+
+    monkeypatch.setattr(storage, "write_bytes", tamper)
+    with pytest.raises(AppError) as failure:
+        TemplateVersionService(database, storage).edit(v1)
+    assert failure.value.code == "TEMPLATE_ARTIFACT_COPY_CHANGED"
+    assert written
+    assert all(not storage.exists(path) for path in written)
+    with database.session() as session:
+        assert len(list(session.scalars(select(TemplateVersion)))) == 1
+        assert len(list(session.scalars(select(JobArtifact)))) == 3
+
+
+def test_fork_copy_failure_removes_only_new_files_and_rolls_back_records(
+    client, versioned_source, monkeypatch,
+):
+    v1, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    original_write = storage.write_bytes
+    written: list[str] = []
+    copy_count = 0
+
+    def fail_second_copy(path, content):
+        nonlocal copy_count
+        normalized = Path(path).as_posix()
+        if normalized.startswith("jobs/"):
+            copy_count += 1
+            if copy_count == 2:
+                raise OSError("injected artifact copy failure")
+        stored = original_write(path, content)
+        if normalized.startswith("jobs/"):
+            written.append(stored)
+        return stored
+
+    monkeypatch.setattr(storage, "write_bytes", fail_second_copy)
+    with pytest.raises(OSError, match="injected artifact copy failure"):
+        TemplateVersionService(database, storage).edit(v1)
+    assert written
+    assert all(not storage.exists(path) for path in written)
+    with database.session() as session:
+        source = session.get(TemplateVersion, v1)
+        assert session.get(Template, source.template_id).active_version_id == v1
+        assert len(list(session.scalars(select(TemplateVersion)))) == 1
+        assert len(list(session.scalars(select(ProcessingJob)))) == 1
+        assert len(list(session.scalars(select(JobArtifact)))) == 3
+
+
+def test_fork_does_not_inherit_current_qualification_or_prepared_graph(
+    client, versioned_source,
+):
+    v1, _ = versioned_source
+    revision = _make_paged(
+        client,
+        v1,
+        qualified=True,
+        environmentQualified=True,
+        geometryQualified=True,
+        referenceQualification={
+            "status": "PASS",
+            "qualified": True,
+            "environmentQualified": True,
+            "geometryQualified": True,
+            "preparedArtifactGraphSha256": "a" * 64,
+        },
+        printLayout={
+            "printFiles": {"graphSha256": "b" * 64},
+            "pages": [
+                {
+                    "page": 1,
+                    "referenceImage": {
+                        "artifactId": "old-reference",
+                        "sha256": "c" * 64,
+                    },
+                }
+            ],
+        },
+    )
+    v2 = _edit(client, v1, revision=revision)["id"]
+    with client.app.state.database.session() as session:
+        draft = session.get(TemplateVersion, v2)
+        quality = draft.quality_json
+        assert "referenceQualification" not in quality
+        assert all(
+            quality.get(key) is not True
+            for key in ("qualified", "environmentQualified", "geometryQualified")
+        )
+        assert "printFiles" not in quality["printLayout"]
+        job = session.get(ProcessingJob, draft.source_job_id)
+        assert "printFiles" not in job.config_snapshot_json["printLayout"]
+    assert ReferenceQualificationService(
+        client.app.state.database, client.app.state.storage
+    ).status(v2) == {"status": "UNVERIFIED", "qualified": False}
 
 
 def test_draft_cannot_restore_ancestor_physical_ids(client, versioned_source):

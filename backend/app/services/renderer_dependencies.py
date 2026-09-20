@@ -5,13 +5,9 @@ from __future__ import annotations
 import ctypes as c
 import hashlib
 import json
-import threading
 from ctypes import wintypes as w
 from pathlib import Path
 from typing import Any
-
-_CACHE: dict[tuple[str, int, int, int], str] = {}
-_LOCK = threading.Lock()
 
 
 def file_record(path: Path) -> dict[str, Any]:
@@ -19,19 +15,15 @@ def file_record(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"path": str(path), "available": False}
     stat = path.stat()
-    key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-    with _LOCK:
-        value = _CACHE.get(key)
-    if value is None:
-        with path.open("rb") as stream:
-            value = hashlib.file_digest(stream, "sha256").hexdigest()
-        after = path.stat()
-        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != key[1:]:
-            raise ValueError("Dependency changed during hashing")
-        with _LOCK:
-            if len(_CACHE) > 2048:
-                _CACHE.clear()
-            _CACHE[key] = value
+    # Equal size/timestamps do not establish equal content (including rapid
+    # ordinary writes on Windows). Qualification must re-read the actual bytes.
+    with path.open("rb") as stream:
+        value = hashlib.file_digest(stream, "sha256").hexdigest()
+    after = path.stat()
+    if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+        stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+    ):
+        raise ValueError("Dependency changed during hashing")
     return {"path": str(path), "available": True, "sha256": value}
 
 

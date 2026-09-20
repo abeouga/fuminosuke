@@ -5,7 +5,7 @@ export type PageView = PrintPage & { imageUrl: string };
 
 /** Display projection only. Persisted geometry and physical IDs stay untouched. */
 export function pageDisplayCells(layout: LayoutDefinition, page?: PageView): LayoutCell[] {
-  if (!page) return layout.cells;
+  if (!page) return layout.cells.filter(cell => !cell.pageRange);
   const rectangles = new Map(page.fields.map(field => [field.cellId, field.rectangle]));
   const sourceRectangles = new Map(page.cells.map(cell => [cell.sourceRange, cell.rectangle]));
   // Saved merge parts retain their exact source ranges, including after unmerge.
@@ -27,6 +27,7 @@ export function pageDisplayCells(layout: LayoutDefinition, page?: PageView): Lay
       height: Math.max(...resolved.map(part => part.y + part.height)) - y });
   }
   return layout.cells.flatMap(cell => {
+    if (cell.virtual && cell.pageRange) return cell.pageRange === page.range ? [cell] : [];
     const rectangle = rectangles.get(cell.id);
     if (!rectangle) return [];
     const sx = rectangle.width / cell.width, sy = rectangle.height / cell.height;
@@ -40,4 +41,14 @@ export function pageDisplayCells(layout: LayoutDefinition, page?: PageView): Lay
       })),
     })) }];
   });
+}
+
+/** Page headings have no source-cell geometry and may move only on their own page. */
+export function movePageHeading(layout: LayoutDefinition, page: PageView, id: string, dx: number, dy: number): LayoutDefinition {
+  const cell = layout.cells.find(cell => cell.id === id);
+  if (!cell?.virtual || cell.pageRange !== page.range || !Number.isFinite(dx) || !Number.isFinite(dy)) return layout;
+  const x = Math.max(0, Math.min(cell.x + Math.round(dx), page.width - cell.width));
+  const y = Math.max(0, Math.min(cell.y + Math.round(dy), page.height - cell.height));
+  if (x === cell.x && y === cell.y) return layout;
+  return { ...layout, cells: layout.cells.map(item => item.id === id ? { ...item, x, y } : item) };
 }

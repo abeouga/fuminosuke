@@ -1,0 +1,1340 @@
+{
+  "edges": {
+    "/usr/bin/bash": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libtinfo.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/bwrap": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcap.so.2",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/mount": [
+      "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libmount.so.1",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/nsenter": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/python3": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libexpat.so.1",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib/x86_64-linux-gnu/libz.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/systemctl": [
+      "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcap.so.2",
+      "/lib/x86_64-linux-gnu/libgcrypt.so.20",
+      "/lib/x86_64-linux-gnu/libgpg-error.so.0",
+      "/lib/x86_64-linux-gnu/liblz4.so.1",
+      "/lib/x86_64-linux-gnu/liblzma.so.5",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib/x86_64-linux-gnu/libzstd.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/systemd-run": [
+      "/lib/systemd/libsystemd-shared-249.so",
+      "/lib/x86_64-linux-gnu/libacl.so.1",
+      "/lib/x86_64-linux-gnu/libaudit.so.1",
+      "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcap-ng.so.0",
+      "/lib/x86_64-linux-gnu/libcap.so.2",
+      "/lib/x86_64-linux-gnu/libcrypt.so.1",
+      "/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "/lib/x86_64-linux-gnu/libgcrypt.so.20",
+      "/lib/x86_64-linux-gnu/libgpg-error.so.0",
+      "/lib/x86_64-linux-gnu/libip4tc.so.2",
+      "/lib/x86_64-linux-gnu/libkmod.so.2",
+      "/lib/x86_64-linux-gnu/liblz4.so.1",
+      "/lib/x86_64-linux-gnu/liblzma.so.5",
+      "/lib/x86_64-linux-gnu/libmount.so.1",
+      "/lib/x86_64-linux-gnu/libpam.so.0",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libseccomp.so.2",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib/x86_64-linux-gnu/libzstd.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/umount": [
+      "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libmount.so.1",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/bin/unshare": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/config-3.10-x86_64-linux-gnu/libpython3.10.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libexpat.so.1",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib/x86_64-linux-gnu/libz.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_asyncio.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_bz2.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libbz2.so.1.0",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_cn.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_hk.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_iso2022.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_jp.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_kr.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_codecs_tw.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_contextvars.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_crypt.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcrypt.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_ctypes.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libffi.so.8",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_ctypes_test.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_curses.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libncursesw.so.6",
+      "/lib/x86_64-linux-gnu/libtinfo.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_curses_panel.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libncursesw.so.6",
+      "/lib/x86_64-linux-gnu/libpanelw.so.6",
+      "/lib/x86_64-linux-gnu/libtinfo.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_dbm.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libdb-5.3.so",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_decimal.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib/x86_64-linux-gnu/libmpdec.so.3",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_gdbm.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libgdbm.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_hashlib.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_json.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_lsprof.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_lzma.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/liblzma.so.5",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_multibytecodec.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_multiprocessing.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_opcode.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_posixshmem.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_queue.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_sqlite3.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib/x86_64-linux-gnu/libsqlite3.so.0",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_ssl.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "/lib/x86_64-linux-gnu/libssl.so.3",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_testbuffer.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_testcapi.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_testclinic.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_testimportmultiple.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_testinternalcapi.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_testmultiphase.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/_uuid.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libuuid.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_xxsubinterpreters.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_xxtestfuzz.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/_zoneinfo.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/audioop.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libm.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/mmap.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/nis.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcom_err.so.2",
+      "/lib/x86_64-linux-gnu/libgssapi_krb5.so.2",
+      "/lib/x86_64-linux-gnu/libk5crypto.so.3",
+      "/lib/x86_64-linux-gnu/libkeyutils.so.1",
+      "/lib/x86_64-linux-gnu/libkrb5.so.3",
+      "/lib/x86_64-linux-gnu/libkrb5support.so.0",
+      "/lib/x86_64-linux-gnu/libnsl.so.2",
+      "/lib/x86_64-linux-gnu/libresolv.so.2",
+      "/lib/x86_64-linux-gnu/libtirpc.so.3",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/ossaudiodev.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/readline.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libreadline.so.8",
+      "/lib/x86_64-linux-gnu/libtinfo.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/resource.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/termios.cpython-310-x86_64-linux-gnu.so": [
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/ld-linux-x86-64.so.2"
+    ],
+    "/usr/lib/python3.10/lib-dynload/xxlimited.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/python3.10/lib-dynload/xxlimited_35.cpython-310-x86_64-linux-gnu.so": [],
+    "/usr/lib/systemd/systemd": [
+      "/lib/systemd/libsystemd-shared-249.so",
+      "/lib/x86_64-linux-gnu/libacl.so.1",
+      "/lib/x86_64-linux-gnu/libapparmor.so.1",
+      "/lib/x86_64-linux-gnu/libaudit.so.1",
+      "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib/x86_64-linux-gnu/libcap-ng.so.0",
+      "/lib/x86_64-linux-gnu/libcap.so.2",
+      "/lib/x86_64-linux-gnu/libcrypt.so.1",
+      "/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "/lib/x86_64-linux-gnu/libgcrypt.so.20",
+      "/lib/x86_64-linux-gnu/libgpg-error.so.0",
+      "/lib/x86_64-linux-gnu/libip4tc.so.2",
+      "/lib/x86_64-linux-gnu/libkmod.so.2",
+      "/lib/x86_64-linux-gnu/liblz4.so.1",
+      "/lib/x86_64-linux-gnu/liblzma.so.5",
+      "/lib/x86_64-linux-gnu/libmount.so.1",
+      "/lib/x86_64-linux-gnu/libpam.so.0",
+      "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "/lib/x86_64-linux-gnu/libseccomp.so.2",
+      "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "/lib/x86_64-linux-gnu/libzstd.so.1",
+      "/lib64/ld-linux-x86-64.so.2"
+    ]
+  },
+  "limitations": [
+    "ELF startup resolution is not a dynamic dlopen execution trace",
+    "No renderer was launched",
+    "No production qualification issued"
+  ],
+  "manifestSha256": "70b84a57f107942fb40d10404a4126f99518b10220cbde5bd2af92c30b484fbd",
+  "recordCount": 112,
+  "records": [
+    {
+      "bytes": 30828,
+      "mode": "0o644",
+      "requested": "/etc/ld.so.cache",
+      "resolved": "/etc/ld.so.cache",
+      "sha256": "f5ebb45a26a29ee0917b347263229ab8d4a83af55d470d8d262ff259a381b4b0",
+      "uid": 0
+    },
+    {
+      "bytes": 34,
+      "mode": "0o644",
+      "requested": "/etc/ld.so.conf",
+      "resolved": "/etc/ld.so.conf",
+      "sha256": "d4b198c463418b493208485def26a6f4c57279467b9dfa491b70433cedb602e8",
+      "uid": 0
+    },
+    {
+      "bytes": 182,
+      "mode": "0o644",
+      "requested": "/etc/ld.so.conf.d/ld.wsl.conf",
+      "resolved": "/etc/ld.so.conf.d/ld.wsl.conf",
+      "sha256": "cfab3f46873c9203cab45d9038643fd9b0a02d84a749d12511c5cee5e2bd77c2",
+      "uid": 0
+    },
+    {
+      "bytes": 44,
+      "mode": "0o644",
+      "requested": "/etc/ld.so.conf.d/libc.conf",
+      "resolved": "/etc/ld.so.conf.d/libc.conf",
+      "sha256": "90d4c7e43e7661cd116010eb9f50ad5817e43162df344bd1ad10898851b15d41",
+      "uid": 0
+    },
+    {
+      "bytes": 100,
+      "mode": "0o644",
+      "requested": "/etc/ld.so.conf.d/x86_64-linux-gnu.conf",
+      "resolved": "/etc/ld.so.conf.d/x86_64-linux-gnu.conf",
+      "sha256": "f03e4740e6922b4f4a1181cd696b52f62f9f10d003740a8940f7121795c59c98",
+      "uid": 0
+    },
+    {
+      "bytes": 155,
+      "mode": "0o644",
+      "requested": "/etc/python3.10/sitecustomize.py",
+      "resolved": "/etc/python3.10/sitecustomize.py",
+      "sha256": "43d81125d92376b1a69d53a71126a041cc9a18d8080e92dea0a2ae23be138b1e",
+      "uid": 0
+    },
+    {
+      "bytes": 2840280,
+      "mode": "0o644",
+      "requested": "/lib/systemd/libsystemd-shared-249.so",
+      "resolved": "/usr/lib/systemd/libsystemd-shared-249.so",
+      "sha256": "bf1d487a268d16bccc2b72bdc18e29204c9fc11a7cfc73562017c01fd6352c4c",
+      "uid": 0
+    },
+    {
+      "bytes": 34888,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libacl.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libacl.so.1.1.2301",
+      "sha256": "b35d4bbf00844a585e02502b8a1db17b740a0127e2fb9a4428a83eaa0f23be65",
+      "uid": 0
+    },
+    {
+      "bytes": 80768,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libapparmor.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libapparmor.so.1.8.2",
+      "sha256": "ecaaeaa571ef0fbec11b138b24c3bab33e2d868325f82f9be51dffc29801e590",
+      "uid": 0
+    },
+    {
+      "bytes": 133200,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libaudit.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libaudit.so.1.0.0",
+      "sha256": "a62e2fcbf8925054a5d569bd242b196de569586a372f82a2794649f9bebe0032",
+      "uid": 0
+    },
+    {
+      "bytes": 220208,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0",
+      "sha256": "16beebd82fee33310c355a040128b5f2fa78a73f2619919c34550732acc4ff42",
+      "uid": 0
+    },
+    {
+      "bytes": 74848,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libbz2.so.1.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+      "sha256": "5e516f77fc36dd924fdf02c8489a217f55fa1548883d32c3a5e041fb25d47d6e",
+      "uid": 0
+    },
+    {
+      "bytes": 2220400,
+      "mode": "0o755",
+      "requested": "/lib/x86_64-linux-gnu/libc.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50",
+      "uid": 0
+    },
+    {
+      "bytes": 27072,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libcap-ng.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libcap-ng.so.0.0.0",
+      "sha256": "881e0e171e84d9c0370475cd36bd998e6095180929cb79545620c6b180d9aa2e",
+      "uid": 0
+    },
+    {
+      "bytes": 39024,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libcap.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libcap.so.2.44",
+      "sha256": "a87681f705c09fc97f23db4dccc0c9a0fd34cf73698251361d8c6ccbf26efe75",
+      "uid": 0
+    },
+    {
+      "bytes": 18504,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libcom_err.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libcom_err.so.2.1",
+      "sha256": "f196091d8ec9790b4cd203ecdb0eab3b242d35ae8625ead7962d0a944a8fdfa5",
+      "uid": 0
+    },
+    {
+      "bytes": 198664,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libcrypt.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libcrypt.so.1.1.0",
+      "sha256": "d8b34ade1d95c6243a48e90f2873d65399dfb0cd3fa4ee2af45afc9e6cb8642b",
+      "uid": 0
+    },
+    {
+      "bytes": 4455728,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+      "sha256": "956faca08210194c3753ad5c756234ccf3ea9f4938c697676be614993694603b",
+      "uid": 0
+    },
+    {
+      "bytes": 1760880,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libdb-5.3.so",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libdb-5.3.so",
+      "sha256": "659c3fb811bb0384b6a70127981ec1c1a7f95002cf1e569edc872066f20ef4c3",
+      "uid": 0
+    },
+    {
+      "bytes": 194872,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libexpat.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libexpat.so.1.8.7",
+      "sha256": "5491355459d82059a2e58134c5bf3a890f6f6e1a6fb209f152c25cde7522def0",
+      "uid": 0
+    },
+    {
+      "bytes": 47688,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libffi.so.8",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libffi.so.8.1.0",
+      "sha256": "247da4d5d34a91cadcdd6282be4c4644fcb8af001334d2b8a82ecda435418cbf",
+      "uid": 0
+    },
+    {
+      "bytes": 1296312,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libgcrypt.so.20",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.3.4",
+      "sha256": "7ff6ae38b83fd19beb283fa784d845d0614a0ee92917dab950846bdb14cce4f3",
+      "uid": 0
+    },
+    {
+      "bytes": 71848,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libgdbm.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libgdbm.so.6.0.0",
+      "sha256": "ffa9adb042df32f985ca2f1deb9247dfcb61d46fa513de2aa7159ecd55c18d67",
+      "uid": 0
+    },
+    {
+      "bytes": 149760,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libgpg-error.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.32.1",
+      "sha256": "ed682e103b671d628ef11f19f8a5b772b8d2501ba26e4b80c055331a4c4d8dfc",
+      "uid": 0
+    },
+    {
+      "bytes": 338648,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libgssapi_krb5.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2.2",
+      "sha256": "74c938dcc051d96376e4a396d4694f0ce9da54c08fce18c593148ad567f93810",
+      "uid": 0
+    },
+    {
+      "bytes": 35440,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libip4tc.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libip4tc.so.2.0.0",
+      "sha256": "d2a6bb4e22905ff6ed279013752bb87714fc64fa643da00d91012fec29eed6fa",
+      "uid": 0
+    },
+    {
+      "bytes": 182864,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libk5crypto.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libk5crypto.so.3.1",
+      "sha256": "43d6a714cda56141db7070f16c2ca4a33ed93c5af848b8ee226749fb29f3ef9d",
+      "uid": 0
+    },
+    {
+      "bytes": 22600,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libkeyutils.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libkeyutils.so.1.9",
+      "sha256": "ad20d5fb89df5297073b46373c65bfbb01f33a00b4949894055d29a7fcf00900",
+      "uid": 0
+    },
+    {
+      "bytes": 108760,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libkmod.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libkmod.so.2.3.7",
+      "sha256": "d64f52356563ff57cd89cf29a6b2cd6cc60334b2a9e15984ad19b94906b0d8e4",
+      "uid": 0
+    },
+    {
+      "bytes": 827936,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libkrb5.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libkrb5.so.3.3",
+      "sha256": "7ccebba46ab1548e386e4884c0bc6553d4297789d53324d890fa30f0c87ee31b",
+      "uid": 0
+    },
+    {
+      "bytes": 52016,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libkrb5support.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libkrb5support.so.0.1",
+      "sha256": "134342eac5baf7a0c5a37be979bf8addb22d171220441478f98ba6cd2771d14d",
+      "uid": 0
+    },
+    {
+      "bytes": 125152,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/liblz4.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/liblz4.so.1.9.3",
+      "sha256": "65f47a3dc2cec5f938379b7b625f0621657bf1254551895d22462c6a204cbad8",
+      "uid": 0
+    },
+    {
+      "bytes": 170456,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/liblzma.so.5",
+      "resolved": "/usr/lib/x86_64-linux-gnu/liblzma.so.5.2.5",
+      "sha256": "493cb401ab4aa3bba611ca464d12996afb3b327940d29476f535f999e167439b",
+      "uid": 0
+    },
+    {
+      "bytes": 940560,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libm.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176",
+      "uid": 0
+    },
+    {
+      "bytes": 273064,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libmount.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libmount.so.1.1.0",
+      "sha256": "e80992b7e08db8c1bbe9da22715946f40ae1027dbc3d9740087d2c66edcab173",
+      "uid": 0
+    },
+    {
+      "bytes": 187200,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libmpdec.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libmpdec.so.2.5.1",
+      "sha256": "77cc3397f963b6d882d3c49ad30091b79db6de48abfd05d434b0953dbc3916b1",
+      "uid": 0
+    },
+    {
+      "bytes": 239696,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libncursesw.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libncursesw.so.6.3",
+      "sha256": "bb977781bc886b44f39e49a8651e0d3e9fa8d9c31d30b01e3ca3ca8ab24d5053",
+      "uid": 0
+    },
+    {
+      "bytes": 93280,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libnsl.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libnsl.so.2.0.1",
+      "sha256": "3bea6a9232e4245cb6f7973bb75049be671980ba5ccf232421ac7464b254ad3d",
+      "uid": 0
+    },
+    {
+      "bytes": 67736,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libpam.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libpam.so.0.85.1",
+      "sha256": "19d04accbb803bf5a40755d8e299b3865cd699c5bd55549394a75ec742a88301",
+      "uid": 0
+    },
+    {
+      "bytes": 22688,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libpanelw.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libpanelw.so.6.3",
+      "sha256": "2c789d64293c7240040db4b08ca2fb3aa11cdc6a59d1222d2fad8b5321da0f83",
+      "uid": 0
+    },
+    {
+      "bytes": 613064,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libpcre2-8.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.10.4",
+      "sha256": "f887eed7d0df7073f3d8bdc9e60d35082453b10165cf45359b5019e33ba2b9ec",
+      "uid": 0
+    },
+    {
+      "bytes": 335936,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libreadline.so.8",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libreadline.so.8.1",
+      "sha256": "57419e3b177639246ecf7ffd2eba170bde779b7369d70e68b9b4c5fc3051cbc1",
+      "uid": 0
+    },
+    {
+      "bytes": 64456,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libresolv.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libresolv.so.2",
+      "sha256": "c0724375581c0303a3ea8bcf1d5cfce6b63eca7b99313c6598a721b414634751",
+      "uid": 0
+    },
+    {
+      "bytes": 125360,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libseccomp.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libseccomp.so.2.5.3",
+      "sha256": "0a10b36f83b58889352ef9de563fddeb80ba649d6a7108f32f31cfb08693e2a3",
+      "uid": 0
+    },
+    {
+      "bytes": 166280,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libselinux.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libselinux.so.1",
+      "sha256": "624eb1e6a7510e0983e9caa1bbf3e1966acb64fd6d3ad4db94528addbe1e7224",
+      "uid": 0
+    },
+    {
+      "bytes": 1358520,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libsqlite3.so.0",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6",
+      "sha256": "4afd0a63b217e9ad1716ededa0f90d2dbb0561136e69c363e423e2f501afd0d4",
+      "uid": 0
+    },
+    {
+      "bytes": 667864,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libssl.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+      "sha256": "d671f9ce5d85af6d3fffd89811c509f8a5525c187848ac767be921bf3fbd1d3f",
+      "uid": 0
+    },
+    {
+      "bytes": 200136,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libtinfo.so.6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.3",
+      "sha256": "1594d475b771bf8cbb547f0e9b0c842ec37628d42c6747960b4d7c12a4cf4427",
+      "uid": 0
+    },
+    {
+      "bytes": 182912,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libtirpc.so.3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libtirpc.so.3.0.0",
+      "sha256": "d1434508e5bae3fcba2a3bc2e465f52e89a1aad389d9ed9affe855addda853a4",
+      "uid": 0
+    },
+    {
+      "bytes": 30936,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libuuid.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0",
+      "sha256": "1c523104f3263664457638d6595b8054c788f348f60555b2bde142aee8f6c84c",
+      "uid": 0
+    },
+    {
+      "bytes": 108936,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libz.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libz.so.1.2.11",
+      "sha256": "64c206f0146cc58bbddc4f22054436f4ff278f5a554aa3ce6921ddf7e9133370",
+      "uid": 0
+    },
+    {
+      "bytes": 841808,
+      "mode": "0o644",
+      "requested": "/lib/x86_64-linux-gnu/libzstd.so.1",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.4.8",
+      "sha256": "5df4f4df42d76270bb6981fabc7c1fdccd8ad28a23d84d67f73203fb3f537667",
+      "uid": 0
+    },
+    {
+      "bytes": 240936,
+      "mode": "0o755",
+      "requested": "/lib64/ld-linux-x86-64.so.2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc",
+      "uid": 0
+    },
+    {
+      "bytes": 1396520,
+      "mode": "0o755",
+      "requested": "/usr/bin/bash",
+      "resolved": "/usr/bin/bash",
+      "sha256": "59474588a312b6b6e73e5a42a59bf71e62b55416b6c9d5e4a6e1c630c2a9ecd4",
+      "uid": 0
+    },
+    {
+      "bytes": 72160,
+      "mode": "0o755",
+      "requested": "/usr/bin/bwrap",
+      "resolved": "/usr/bin/bwrap",
+      "sha256": "d78807229d616606e339c5988392b9e0ab4a6a6998fa51e4590837f426a12fca",
+      "uid": 0
+    },
+    {
+      "bytes": 5444,
+      "mode": "0o755",
+      "requested": "/usr/bin/ldd",
+      "resolved": "/usr/bin/ldd",
+      "sha256": "e7cc1a3c95077362934b953093fec80330b6b76974e66836b7583ff818468fd5",
+      "uid": 0
+    },
+    {
+      "bytes": 47488,
+      "mode": "0o4755",
+      "requested": "/usr/bin/mount",
+      "resolved": "/usr/bin/mount",
+      "sha256": "112bd33faa9ab775e425517def26bbbb63e7d21dc3cc9a25d04bbda95e20ef3a",
+      "uid": 0
+    },
+    {
+      "bytes": 27240,
+      "mode": "0o755",
+      "requested": "/usr/bin/nsenter",
+      "resolved": "/usr/bin/nsenter",
+      "sha256": "cb260dd70307a49c988190ad332d55a4522c500707af7a808ef6d71d95383a4d",
+      "uid": 0
+    },
+    {
+      "bytes": 5941864,
+      "mode": "0o755",
+      "requested": "/usr/bin/python3",
+      "resolved": "/usr/bin/python3.10",
+      "sha256": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+      "uid": 0
+    },
+    {
+      "bytes": 1115760,
+      "mode": "0o755",
+      "requested": "/usr/bin/systemctl",
+      "resolved": "/usr/bin/systemctl",
+      "sha256": "8de8477a65a0479251a517d347ec70a416511496c7c1e5d50476ba46045962e0",
+      "uid": 0
+    },
+    {
+      "bytes": 64072,
+      "mode": "0o755",
+      "requested": "/usr/bin/systemd-run",
+      "resolved": "/usr/bin/systemd-run",
+      "sha256": "63d62a457cd84d1b74e14547fafdede9882158ca0a1a4a6d39993d5dd7639588",
+      "uid": 0
+    },
+    {
+      "bytes": 35200,
+      "mode": "0o4755",
+      "requested": "/usr/bin/umount",
+      "resolved": "/usr/bin/umount",
+      "sha256": "d79988df37b488a2fe0568f04f37dee9f80a8efd51bc2502cef98729649e1ad4",
+      "uid": 0
+    },
+    {
+      "bytes": 31336,
+      "mode": "0o755",
+      "requested": "/usr/bin/unshare",
+      "resolved": "/usr/bin/unshare",
+      "sha256": "ea175949d95fb64dcf6131758c6fc78ca318a241f7d4cb264ed63fbb5de77bcf",
+      "uid": 0
+    },
+    {
+      "bytes": 5834688,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/config-3.10-x86_64-linux-gnu/libpython3.10.so",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libpython3.10.so.1.0",
+      "sha256": "d7bc028c6a98ac8c17edeada13609ea36db324d7f49c26b6ca93994e8c830453",
+      "uid": 0
+    },
+    {
+      "bytes": 78624,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_asyncio.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_asyncio.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "6222f92ca7194b1daf4cd0ecd7da5fafa750919e26f46a5443d5ef034209c250",
+      "uid": 0
+    },
+    {
+      "bytes": 32120,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_bz2.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_bz2.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "3603dfed24c06133e6c06614176016577be924fb5f6d1160bb6d30ac56842a39",
+      "uid": 0
+    },
+    {
+      "bytes": 154128,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_cn.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_cn.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "18aad890910778c70c6068b5e41d5e1bd40a989f859e55ef41b38fca3665e67f",
+      "uid": 0
+    },
+    {
+      "bytes": 162352,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_hk.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_hk.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "4b06de5890ff4ad1a84bab4f7dcfaf34c4dcd266361082176ba962b8757f7905",
+      "uid": 0
+    },
+    {
+      "bytes": 31248,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_iso2022.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_iso2022.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "8d43c4adf9fb9759c047e7ee584a7b44892aaf5adae8c50ee64dfc1683afedeb",
+      "uid": 0
+    },
+    {
+      "bytes": 272912,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_jp.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_jp.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "d6e7eb386840d6c58c2dd79eef72332e4412d8f404cff74e3517d934b6f10afd",
+      "uid": 0
+    },
+    {
+      "bytes": 141840,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_kr.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_kr.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "ebbe45555b5e3fffb5c19a1fab2714af851fcc87290f5d064426d83c455557e3",
+      "uid": 0
+    },
+    {
+      "bytes": 113168,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_codecs_tw.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_codecs_tw.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "96e0c5fc0e66017365d23f6dbf8a718646290eacf7c908460bc174003e8ea1f3",
+      "uid": 0
+    },
+    {
+      "bytes": 14536,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_contextvars.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_contextvars.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "906b8886e77407f2a001fcd32912e1b0cec9b97ecb15a62c8d6c36d3f14c0981",
+      "uid": 0
+    },
+    {
+      "bytes": 14720,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_crypt.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_crypt.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "d92ac067b98b3c310f9f34a155888820aa35f48861f3a8eb2c5c3da96b758dec",
+      "uid": 0
+    },
+    {
+      "bytes": 132120,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_ctypes.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_ctypes.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "0208ba4a33c8fd0cb3b8482688a3781f129d45d6a948b30b0ec4eeb90b2a9c83",
+      "uid": 0
+    },
+    {
+      "bytes": 23072,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_ctypes_test.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_ctypes_test.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "c58a091093edfd8a9701bac7e91c217dbfd8004045f0c34be5c702a18d7053c6",
+      "uid": 0
+    },
+    {
+      "bytes": 128576,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_curses.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_curses.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "ad55cd1da454d180d4b2877ee518a1a9baec614ed5cc4375fe43cdfade75ec0c",
+      "uid": 0
+    },
+    {
+      "bytes": 28144,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_curses_panel.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_curses_panel.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "54a4f69cc2f88c1bf2f14e3b5eafd08a945fcebd6a87f8db7e7ce49913724767",
+      "uid": 0
+    },
+    {
+      "bytes": 23792,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_dbm.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_dbm.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "6681a886884e63b2285c0bf3d208c753f61ac2502e2171c75f9b6ec85d423ff3",
+      "uid": 0
+    },
+    {
+      "bytes": 180632,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_decimal.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_decimal.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "db7d38288217251c294732956058ea89c21080177e88eb56f9d9fa964f172f5d",
+      "uid": 0
+    },
+    {
+      "bytes": 28104,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_gdbm.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_gdbm.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "c84ed124baa05dc307738815ce26b0309b51b79f6eff7f54916ef759f902507c",
+      "uid": 0
+    },
+    {
+      "bytes": 63728,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_hashlib.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_hashlib.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "aaa7cad4595fb421be5a9206efea579ec852f820d44e1d76a8de9ab46e02200c",
+      "uid": 0
+    },
+    {
+      "bytes": 49160,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_json.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_json.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "d02668cbf0664d30f194230b767f940d0abf9da851204c54b84640f987bcb145",
+      "uid": 0
+    },
+    {
+      "bytes": 31784,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_lsprof.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_lsprof.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "3e8e84767b1f1bea9970cef4a5bbd98fa8b5f145bd204d3e0b1290c211acce88",
+      "uid": 0
+    },
+    {
+      "bytes": 45240,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_lzma.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_lzma.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "291e4fc37143c7060bf210390f08451bdce7fcfcc034c0b70fb9651e1e4098bf",
+      "uid": 0
+    },
+    {
+      "bytes": 50328,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_multibytecodec.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_multibytecodec.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "faa65133609e1b79570cc2c350f7e6ea94e0aeeb721a81ce53a65e4c6fa03d01",
+      "uid": 0
+    },
+    {
+      "bytes": 24336,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_multiprocessing.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_multiprocessing.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "efa25aa38572addc171033f02fa5dd8868074393786573183865a288676d3ff1",
+      "uid": 0
+    },
+    {
+      "bytes": 14672,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_opcode.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_opcode.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "57b17b5a12dcb7ddd890f968acd7d8afed00439d7f27deb656a3e5c81dc7d8f4",
+      "uid": 0
+    },
+    {
+      "bytes": 14992,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_posixshmem.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_posixshmem.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "dacb57d140fa79e27e557b798d6218c2cf0ca6037bf30332ebe56e752f7c759c",
+      "uid": 0
+    },
+    {
+      "bytes": 23664,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_queue.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_queue.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "558cd265559f8324b3723f5e349b0a4fc97b4c7139db373d30fd396c089f76ca",
+      "uid": 0
+    },
+    {
+      "bytes": 110888,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_sqlite3.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_sqlite3.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "634cbbb96ae1302313d77de76a465ec552ffb51007a37d02697b1747482a83af",
+      "uid": 0
+    },
+    {
+      "bytes": 221200,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_ssl.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_ssl.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "99aa106038e4ac231b4232733381f98903edba02319363db8a1d12728148c2b6",
+      "uid": 0
+    },
+    {
+      "bytes": 54272,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testbuffer.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testbuffer.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "807366f5ce7ac41e20512406a67470fed0822073be97f9f9ca2de29522e6c31a",
+      "uid": 0
+    },
+    {
+      "bytes": 154160,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testcapi.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testcapi.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "5150f629b8b2994bb1bab35627798efb3c4adee04d7a9528e023b073a622b624",
+      "uid": 0
+    },
+    {
+      "bytes": 58384,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testclinic.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testclinic.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "61f5a7c8540cef8b10d25641681ca0385038c59d47a5a5b836b2dc4ee05cf3c0",
+      "uid": 0
+    },
+    {
+      "bytes": 14664,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testimportmultiple.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testimportmultiple.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "f65eccf43377300e13dec3539b3787b21f54855723e89465ea8d486799e8891e",
+      "uid": 0
+    },
+    {
+      "bytes": 19200,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testinternalcapi.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testinternalcapi.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "05f3e8dd1ea929623694ad3e36f9f3011e771625154d4e6434a0b2875146444f",
+      "uid": 0
+    },
+    {
+      "bytes": 34928,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_testmultiphase.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_testmultiphase.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "74e10e93911d20f21681cfddc18f00c6a52f7a135d27f1e6b8d0aac7586e0856",
+      "uid": 0
+    },
+    {
+      "bytes": 14688,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_uuid.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_uuid.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "27ff5430c3efddd65da1b33b39b44fcdc854ce5efdbf127a9b45d1909fddbe1d",
+      "uid": 0
+    },
+    {
+      "bytes": 49744,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_xxsubinterpreters.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_xxsubinterpreters.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "bb78b5104a31db83894073490ea3b7095a8782dd5c4c6241313bab16f1094736",
+      "uid": 0
+    },
+    {
+      "bytes": 23120,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_xxtestfuzz.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_xxtestfuzz.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "23361912cdba8acaa170ccdf9a938d5238596c15224997cb9505f262f1685c5b",
+      "uid": 0
+    },
+    {
+      "bytes": 44624,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/_zoneinfo.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/_zoneinfo.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "e7a8412b14b9b3dcf91873bf0a8f8fdb624542d5bb76f0ffe3f17d55f6f9d75b",
+      "uid": 0
+    },
+    {
+      "bytes": 60768,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/audioop.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/audioop.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "98b86821a7a9d59f3737c6627ed6e2c4dde8d42b9f3f6021b5764237323854d7",
+      "uid": 0
+    },
+    {
+      "bytes": 32600,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/mmap.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/mmap.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "1d85a9fccb48eae9173b5fc8437daa05a62d221bf4b0066c0af332e1fb003c29",
+      "uid": 0
+    },
+    {
+      "bytes": 19280,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/nis.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/nis.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "4c4f6bd23240e7a4ec7e7387e94f28f2a4016d44545b23c7bcc0da8fa9595185",
+      "uid": 0
+    },
+    {
+      "bytes": 33632,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/ossaudiodev.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/ossaudiodev.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "caaa4d0e9cce1f77990a309fa8fcad79ad0cca7e1211eee6aedf630804f53750",
+      "uid": 0
+    },
+    {
+      "bytes": 40672,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/readline.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/readline.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "d7ce8eb782ac762f9e707512d8425fddba24c549fe1b7bf40186ac900fe23e52",
+      "uid": 0
+    },
+    {
+      "bytes": 19424,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/resource.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/resource.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "a08b98ad6eac99adf06043a5f39e841b85198a62189f47f9896906f9148224b9",
+      "uid": 0
+    },
+    {
+      "bytes": 31296,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/termios.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/termios.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "372d14580dee308321b69358821c4f2d19f938a26c259298c64365d50a14e4a9",
+      "uid": 0
+    },
+    {
+      "bytes": 14984,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/xxlimited.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/xxlimited.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "7eda06e4c45ab038bc45c8a139f813df14b17e88919db4f0b3232cfba0d995cf",
+      "uid": 0
+    },
+    {
+      "bytes": 15080,
+      "mode": "0o644",
+      "requested": "/usr/lib/python3.10/lib-dynload/xxlimited_35.cpython-310-x86_64-linux-gnu.so",
+      "resolved": "/usr/lib/python3.10/lib-dynload/xxlimited_35.cpython-310-x86_64-linux-gnu.so",
+      "sha256": "26f62301c0181a535b72dce1e8b961a35760a14ed6b87c8c1193568409901946",
+      "uid": 0
+    },
+    {
+      "bytes": 1849992,
+      "mode": "0o755",
+      "requested": "/usr/lib/systemd/systemd",
+      "resolved": "/usr/lib/systemd/systemd",
+      "sha256": "148d75f9d0727edb116e7f694f50b134f0db8bc60572e30a2aed52bf2111bcfc",
+      "uid": 0
+    }
+  ],
+  "resolutionKinds": {
+    "/usr/bin/bash": "listed",
+    "/usr/bin/bwrap": "listed",
+    "/usr/bin/mount": "listed",
+    "/usr/bin/nsenter": "listed",
+    "/usr/bin/python3": "listed",
+    "/usr/bin/systemctl": "listed",
+    "/usr/bin/systemd-run": "listed",
+    "/usr/bin/umount": "listed",
+    "/usr/bin/unshare": "listed",
+    "/usr/lib/python3.10/config-3.10-x86_64-linux-gnu/libpython3.10.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_asyncio.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_bz2.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_cn.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_hk.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_iso2022.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_jp.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_kr.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_codecs_tw.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_contextvars.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_crypt.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_ctypes.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_ctypes_test.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_curses.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_curses_panel.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_dbm.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_decimal.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_gdbm.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_hashlib.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_json.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_lsprof.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_lzma.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_multibytecodec.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_multiprocessing.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_opcode.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_posixshmem.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_queue.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_sqlite3.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_ssl.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_testbuffer.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_testcapi.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_testclinic.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_testimportmultiple.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_testinternalcapi.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_testmultiphase.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/_uuid.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_xxsubinterpreters.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_xxtestfuzz.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/_zoneinfo.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/audioop.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/mmap.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/nis.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/ossaudiodev.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/readline.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/resource.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/termios.cpython-310-x86_64-linux-gnu.so": "listed",
+    "/usr/lib/python3.10/lib-dynload/xxlimited.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/python3.10/lib-dynload/xxlimited_35.cpython-310-x86_64-linux-gnu.so": "ldd-reported-statically-linked",
+    "/usr/lib/systemd/systemd": "listed"
+  },
+  "rootCount": 58,
+  "roots": [
+    "/usr/bin/bash",
+    "/usr/bin/bwrap",
+    "/usr/bin/mount",
+    "/usr/bin/nsenter",
+    "/usr/bin/python3",
+    "/usr/bin/systemctl",
+    "/usr/bin/systemd-run",
+    "/usr/bin/umount",
+    "/usr/bin/unshare",
+    "/usr/lib/python3.10/config-3.10-x86_64-linux-gnu/libpython3.10.so",
+    "/usr/lib/python3.10/lib-dynload/_asyncio.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_bz2.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_cn.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_hk.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_iso2022.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_jp.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_kr.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_codecs_tw.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_contextvars.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_crypt.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_ctypes.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_ctypes_test.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_curses.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_curses_panel.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_dbm.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_decimal.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_gdbm.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_hashlib.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_json.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_lsprof.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_lzma.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_multibytecodec.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_multiprocessing.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_opcode.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_posixshmem.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_queue.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_sqlite3.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_ssl.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testbuffer.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testcapi.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testclinic.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testimportmultiple.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testinternalcapi.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_testmultiphase.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_uuid.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_xxsubinterpreters.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_xxtestfuzz.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/_zoneinfo.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/audioop.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/mmap.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/nis.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/ossaudiodev.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/readline.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/resource.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/termios.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/xxlimited.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/python3.10/lib-dynload/xxlimited_35.cpython-310-x86_64-linux-gnu.so",
+    "/usr/lib/systemd/systemd"
+  ],
+  "stableAcrossTwoReads": true,
+  "status": "OBSERVED_NOT_QUALIFIED",
+  "totalBytes": 41888891
+}

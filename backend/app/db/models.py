@@ -8,6 +8,7 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -968,3 +969,77 @@ class JobEvent(Base):
     )
 
     job: Mapped[ProcessingJob] = relationship(back_populates="events")
+
+
+class PagedReview(Base):
+    """One revision covers every page; legacy OcrResult remains untouched."""
+
+    __tablename__ = "paged_reviews"
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_pages_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    current_pages_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+
+
+class PagedReviewRevision(Base):
+    __tablename__ = "paged_review_revisions"
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("paged_reviews.job_id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    page_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    pages_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class PagedConfirmation(Base):
+    __tablename__ = "paged_confirmations"
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("paged_reviews.job_id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    pages_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    document_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class PagedOcrBudget(Base):
+    __tablename__ = "paged_ocr_budgets"
+    __table_args__ = (
+        CheckConstraint("max_calls > 0 AND used_calls >= 0 AND used_calls <= max_calls"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    max_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    used_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class PagedOcrCall(Base):
+    __tablename__ = "paged_ocr_calls"
+    __table_args__ = (CheckConstraint("call_number > 0 AND attempt_number > 0"),)
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("paged_ocr_budgets.job_id", ondelete="CASCADE"), primary_key=True
+    )
+    call_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    page_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )

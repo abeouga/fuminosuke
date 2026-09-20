@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,6 +14,9 @@ from app.domain.template_quality import (
     has_approved_generic_definition,
     has_full_image_boundary_fallback,
 )
+
+if TYPE_CHECKING:
+    from app.services.reference_qualification_service import ReferenceQualificationService
 
 
 class TemplateRepository:
@@ -102,25 +105,56 @@ class TemplateRepository:
     def get_version(self, version_id: str) -> TemplateVersion | None:
         return self._session.get(TemplateVersion, version_id)
 
-    def approve(self, version_id: str) -> TemplateVersion:
+    def approve(
+        self,
+        version_id: str,
+        *,
+        expected_revision: str | None = None,
+        qualification_service: ReferenceQualificationService | None = None,
+    ) -> TemplateVersion:
         from app.services.template_mutation import begin_immediate, template_mutation_lock
 
         with template_mutation_lock():
             begin_immediate(self._session)
-            return self._approve_locked(version_id)
+            return self._approve_locked(
+                version_id,
+                expected_revision=expected_revision,
+                qualification_service=qualification_service,
+            )
 
-    def _approve_locked(self, version_id: str) -> TemplateVersion:
+    def _approve_locked(
+        self,
+        version_id: str,
+        *,
+        expected_revision: str | None = None,
+        qualification_service: ReferenceQualificationService | None = None,
+    ) -> TemplateVersion:
         from app.domain.print_layout import require_legacy_ocr
 
         version = self.get_version(version_id)
         if version is None:
             raise self._not_found()
-        require_legacy_ocr(version.quality_json)
+        if version.status != TemplateVersionStatus.DRAFT.value:
+            raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
+        paged = version.quality_json.get("printLayout") is not None
+        if paged:
+            # Older callers cannot accidentally activate a paged version.  The
+            # API supplies both the client's exact revision and the Phase 3
+            # validator; the validator performs the full current evidence read
+            # inside this transaction.
+            if qualification_service is None or expected_revision is None:
+                require_legacy_ocr(version.quality_json)
+                raise RuntimeError("Paged approval guard did not reject an incomplete caller")
+            qualification_service.require_for_activation(
+                self._session,
+                version,
+                expected_revision,
+            )
+        else:
+            require_legacy_ocr(version.quality_json)
         from app.services.layout_service import LayoutService
 
         LayoutService.require_valid_saved_mapping_layout(version)
-        if version.status != TemplateVersionStatus.DRAFT.value:
-            raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
         if version.quality_json.get("layoutVerificationInProgress"):
             raise self._invalid_state("読み取り確認の完了後に承認してください。")
         source_job = self._session.get(ProcessingJob, version.source_job_id)
@@ -155,7 +189,7 @@ class TemplateRepository:
             if is_spreadsheet_template
             else version.quality_json.get("layoutFinalized") is True
         )
-        if not generic_approved and (
+        if not paged and not generic_approved and (
             not isinstance(relations, list)
             or not relations
             or not required_layout_ready

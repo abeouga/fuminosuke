@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import Field, model_validator
 
@@ -395,12 +395,16 @@ def _version_view(version: TemplateVersion) -> TemplateVersionView:
 
 @router.post("/template-versions/{version_id}/edit", response_model=TemplateVersionView,
              response_model_by_alias=True)
-def edit_template_version(request: Request, version_id: str) -> TemplateVersionView:
+def edit_template_version(
+    request: Request,
+    version_id: str,
+    base_revision: Annotated[str | None, Query(min_length=64, max_length=64)] = None,
+) -> TemplateVersionView:
     from app.services.template_version_service import TemplateVersionService
 
     return _version_view(TemplateVersionService(
         request.app.state.database, request.app.state.storage,
-    ).edit(version_id))
+    ).edit(version_id, expected_revision=base_revision))
 
 
 @router.get("/template-versions/{version_id}/field-identities")
@@ -776,20 +780,28 @@ async def update_template_boundary(
     response_model=TemplateVersionView,
     response_model_by_alias=True,
 )
-def approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
+def approve_template_version(
+    request: Request,
+    version_id: str,
+    base_revision: Annotated[str | None, Query(min_length=64, max_length=64)] = None,
+) -> TemplateVersionView:
     from app.services.template_mutation import template_mutation_lock
 
     with template_mutation_lock():
-        return _approve_template_version(request, version_id)
+        return _approve_template_version(request, version_id, base_revision)
 
 
-def _approve_template_version(request: Request, version_id: str) -> TemplateVersionView:
+def _approve_template_version(
+    request: Request,
+    version_id: str,
+    base_revision: str | None = None,
+) -> TemplateVersionView:
     with request.app.state.database.session() as session:
-        from app.domain.print_layout import require_legacy_ocr
-
         candidate = TemplateRepository(session).get_version(version_id)
-        if candidate is not None:
-            require_legacy_ocr(candidate.quality_json)
+        paged = bool(
+            candidate is not None
+            and candidate.quality_json.get("printLayout") is not None
+        )
         if TemplatePackageActivationService.imported_installation_for_version(
             session,
             version_id,
@@ -803,33 +815,43 @@ def _approve_template_version(request: Request, version_id: str) -> TemplateVers
                     "取り込み結果の「有効版にする」から有効化してください。"
                 ),
             )
-    (
-        _,
-        _,
-        mappings,
-        document_identity,
-        document_identity_fields,
-        document_name,
-    ) = TemplateManagementService(
-        request.app.state.database,
-        request.app.state.storage,
-    ).get_mapping_configuration(version_id)
-    valid_for_ocr, warnings = _mapping_validation(
-        mappings,
-        document_identity,
-        document_identity_fields,
-        document_name,
-        require_identity=True,
-    )
-    if not valid_for_ocr:
-        raise AppError(
-            status=409,
-            code="TEMPLATE_FIELD_MAPPING_OUT_OF_RANGE",
-            title="Template field mappings must be repaired",
-            detail=warnings[0],
+    if not paged:
+        (
+            _,
+            _,
+            mappings,
+            document_identity,
+            document_identity_fields,
+            document_name,
+        ) = TemplateManagementService(
+            request.app.state.database,
+            request.app.state.storage,
+        ).get_mapping_configuration(version_id)
+        valid_for_ocr, warnings = _mapping_validation(
+            mappings,
+            document_identity,
+            document_identity_fields,
+            document_name,
+            require_identity=True,
         )
+        if not valid_for_ocr:
+            raise AppError(
+                status=409,
+                code="TEMPLATE_FIELD_MAPPING_OUT_OF_RANGE",
+                title="Template field mappings must be repaired",
+                detail=warnings[0],
+            )
+    from app.services.reference_qualification_service import ReferenceQualificationService
+
     with request.app.state.database.session() as session:
-        return _version_view(TemplateRepository(session).approve(version_id))
+        return _version_view(TemplateRepository(session).approve(
+            version_id,
+            expected_revision=base_revision,
+            qualification_service=ReferenceQualificationService(
+                request.app.state.database,
+                request.app.state.storage,
+            ),
+        ))
 
 
 @router.post(

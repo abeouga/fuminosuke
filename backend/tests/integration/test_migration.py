@@ -31,6 +31,11 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
         "job_artifacts",
         "ocr_results",
         "ocr_result_revisions",
+        "paged_reviews",
+        "paged_review_revisions",
+        "paged_confirmations",
+        "paged_ocr_budgets",
+        "paged_ocr_calls",
         "confirmed_results",
         "confirmed_record_fields",
         "sire_names",
@@ -56,7 +61,7 @@ def test_initial_migration_creates_all_tables(monkeypatch: object, tmp_path: Pat
     } <= tables
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0031_template_field_identity"
+            "0034_paged_ocr_budget"
         )
     package_identity_columns = {
         column["name"]

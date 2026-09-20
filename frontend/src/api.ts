@@ -2,6 +2,7 @@ import type { Artifact, AuthSession, DataSearchCatalog, DataSearchFilter, DataSe
 
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
+import type { PageFieldEdit, PagedReviewResult } from "./pagedReview";
 
 export class ApiError extends Error {
   code: string;
@@ -123,6 +124,15 @@ export function createIdempotencyKey(scope: "template" | "ocr"): string {
 }
 
 export const api = {
+  downloadPageOutput: async (id: string, revision: number) => {
+    const response = await requestResponse(
+      `/ocr-jobs/${encodeURIComponent(id)}/page-review/output.xlsx?revision=${revision}`,
+    );
+    if (response.headers.get("X-Result-Revision") !== String(revision)) {
+      throw new ApiError("取得したXLSXの確認版が一致しません。", "PAGE_OUTPUT_REVISION_CHANGED");
+    }
+    return response.blob();
+  },
   downloadTemplatePrint: async (id: string, revision: string, format: "xlsx" | "pdf") => {
     const response = await requestResponse(
       `/template-versions/${encodeURIComponent(id)}/print-layout/files/${format}?base_revision=${encodeURIComponent(revision)}`,
@@ -138,6 +148,10 @@ export const api = {
   getOcrPages: (versionId: string) => request<import("./components/OcrPageBindings").PageCatalog>(`/template-versions/${versionId}/ocr-pages`),
   createOcrPageJob: (body: FormData, key: string) => request<{ jobId: string }>("/ocr-page-jobs", { method: "POST", body, headers: { "Idempotency-Key": key } }),
   printLayout: (id: string) => request<PrintState>(`/template-versions/${id}/print-layout`),
+  preparePrintFiles: (id: string, revision: string) => request<PrintState>(
+    `/template-versions/${id}/print-layout/prepare?base_revision=${encodeURIComponent(revision)}&geometry_model=wsl-calc-print-grid-v1`,
+    { method: "POST" },
+  ),
   savePageAuthoring: (id: string, revision: string, layout: LayoutDefinition) => request<{
     layout: LayoutDefinition; state: PrintState;
   }>(`/template-versions/${id}/print-layout/authoring?base_revision=${encodeURIComponent(revision)}`, {
@@ -300,6 +314,21 @@ export const api = {
   job: (id: string) => request<Job>(`/jobs/${id}`),
   artifacts: (id: string) => request<{ items: Artifact[] }>(`/jobs/${id}/artifacts`),
   result: (id: string) => request<OcrResult>(`/ocr-jobs/${id}/result`),
+  pageReview: (id: string) => request<PagedReviewResult>(`/ocr-jobs/${id}/page-review`),
+  confirmPages: (id: string, baseRevision: number, reviewedPageIds: string[], documentName: string) =>
+    request<PagedReviewResult>(`/ocr-jobs/${id}/page-review/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseRevision, reviewedPageIds, documentName }),
+    }),
+  reopenPages: (id: string, baseRevision: number) =>
+    request<PagedReviewResult>(`/ocr-jobs/${id}/page-review/reopen`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseRevision }),
+    }),
+  correctPage: (id: string, pageId: string, baseRevision: number, fields: PageFieldEdit[]) =>
+    request<PagedReviewResult>(`/ocr-jobs/${id}/page-review/${encodeURIComponent(pageId)}/corrections`, {
+      method: "POST", body: JSON.stringify({ baseRevision, fields }),
+    }),
   excelTable: (id: string) => request<ExcelTable>(`/ocr-jobs/${id}/excel-table`),
   searchIndividualRecords: (individualId: string) =>
     request<IndividualRecordSearch>(
@@ -458,9 +487,19 @@ export const api = {
       body,
     });
   },
-  approve: (id: string) => request(`/template-versions/${id}/approve`, { method: "POST" }),
-  editTemplateVersion: (id: string) =>
-    request<Template["versions"][number]>(`/template-versions/${id}/edit`, { method: "POST" }),
+  approve: (id: string, baseRevision?: string) => request<Template["versions"][number]>(
+    `/template-versions/${id}/approve${baseRevision
+      ? `?base_revision=${encodeURIComponent(baseRevision)}`
+      : ""}`,
+    { method: "POST" },
+  ),
+  editTemplateVersion: (id: string, baseRevision?: string) =>
+    request<Template["versions"][number]>(
+      `/template-versions/${id}/edit${baseRevision
+        ? `?base_revision=${encodeURIComponent(baseRevision)}`
+        : ""}`,
+      { method: "POST" },
+    ),
   reject: (id: string) => request(`/template-versions/${id}/reject`, { method: "POST" }),
   reprocess: (id: string) =>
     request<{ jobId: string }>(`/template-versions/${id}/reprocess`, { method: "POST" }),

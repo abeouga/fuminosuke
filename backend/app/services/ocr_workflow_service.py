@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any
 
 from app.core.config import Settings
@@ -19,6 +20,9 @@ from app.services.document_reconciliation_service import DocumentReconciliationS
 from app.services.extraction_service import ExtractionOutput
 from app.services.ocr_request_preparation_service import OcrRequestPreparer
 from app.services.ocr_response_finalization_service import OcrResponseFinalizer
+from app.services.paged_crop_correspondence import reject, verify_before_provider
+from app.services.paged_ocr_budget import PagedCallBudget
+from app.services.paged_transcription_resources import accepted_transcription_prompt
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -43,13 +47,34 @@ class OcrWorkflowService:
         self._request_preparer = OcrRequestPreparer()
         self._response_finalizer = OcrResponseFinalizer(self._validator)
 
-    def process(self, extraction: ExtractionOutput) -> dict[str, Any] | None:
+    def process(
+        self, extraction: ExtractionOutput, *, reserved_calls_for_other_pages: int = 0
+    ) -> dict[str, Any] | None:
+        crop_correspondence = None
         with self._database.session() as session:
             job = JobRepository(session).get(extraction.job_id)
             if job is None:
                 raise ValueError("OCR job not found")
+            if "jobPages" in job.config_snapshot_json:
+                from app.services.job_page_service import JobPageService
+
+                crop_correspondence = verify_before_provider(
+                    extraction, session=session, job=job,
+                    pages_service=JobPageService(self._database, self._storage, self._settings),
+                    settings=self._settings, storage=self._storage,
+                )
+            elif extraction.page_snapshot is not None:
+                reject("PAGE_SNAPSHOT_UNEXPECTED")
             job_snapshot = dict(extraction.page_snapshot or job.config_snapshot_json)
             ocr_enabled = bool(job_snapshot.get("ocrEnabled", True))
+            budget_snapshot_sha = str(job.config_snapshot_json.get("jobPagesSha256", ""))
+            transcription_prompt = (
+                accepted_transcription_prompt(job.config_snapshot_json)
+                if extraction.page_snapshot is not None
+                and ocr_enabled
+                and job_snapshot.get("ocrProvider", self._settings.ocr.provider) == "openai"
+                else None
+            )
         writer = (
             ArtifactWriter(
                 self._database, self._storage, page_id=extraction.page_snapshot["pageId"],
@@ -60,6 +85,12 @@ class OcrWorkflowService:
             if ocr_enabled
             else "disabled"
         )
+        if crop_correspondence is not None:
+            writer.json(
+                job_id=extraction.job_id, attempt_number=extraction.attempt_number,
+                name="cropCorrespondence", file_name="crop_correspondence.json",
+                value=crop_correspondence, replace=True,
+            )
         provider = self._create_provider(provider_name)
         prepared = self._request_preparer.prepare(
             extraction=extraction,
@@ -68,6 +99,16 @@ class OcrWorkflowService:
             should_cancel=lambda: self._cancel_requested(extraction.job_id),
         )
         request = prepared.request
+        if extraction.page_snapshot is not None and provider_name == "openai":
+            budget = PagedCallBudget(
+                self._database, extraction.job_id, extraction.page_snapshot["pageId"],
+                extraction.attempt_number, budget_snapshot_sha,
+                protected_calls=reserved_calls_for_other_pages,
+            )
+            budget.remaining()  # Reject missing/changed acceptance before any provider call.
+            request = replace(
+                request, call_budget=budget, transcription_prompt=transcription_prompt,
+            )
         all_regions = request.regions
         mapped_cells_payload = prepared.mapped_cells_payload
         mark_mappings = prepared.mark_mappings

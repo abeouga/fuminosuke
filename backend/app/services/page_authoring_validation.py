@@ -16,9 +16,35 @@ def bounds(cells: list[dict[str, Any]]) -> dict[str, Any]:
 
 def physical_cells(layout: dict[str, Any]) -> list[dict[str, Any]]:
     merges = {m["parentCellId"]: m for m in layout.get("cellMerges", [])}
-    return [part["cell"] for cell in layout["cells"]
+    return [part["cell"] for cell in layout["cells"] if not is_page_heading(cell)
             for part in (merges[cell["id"]]["parts"] if cell["id"] in merges
                          else [{"cell": cell}])]
+
+
+def is_page_heading(cell: dict[str, Any]) -> bool:
+    return (cell.get("virtual") is True and cell.get("role") == "parent_label"
+            and cell.get("source") == "manual" and bool(cell.get("pageRange")))
+
+
+def validate_page_headings(layout: dict[str, Any], plan: dict[str, Any] | None) -> None:
+    """Validate display-only nodes without deriving physical/OCR fields from them."""
+    pages = {p["range"]: p for p in (plan or {}).get("pages", [])}
+    for cell in layout["cells"]:
+        if cell.get("pageRange") is None:
+            continue
+        page = pages.get(cell["pageRange"])
+        if (not is_page_heading(cell) or cell["id"].startswith("xlsx_") or page is None
+                or cell["x"] + cell["width"] > page["width"]
+                or cell["y"] + cell["height"] > page["height"]):
+            raise print_error(
+                "仮想見出しの所属ページ・位置が保存ページと一致しません。"
+                "ページ設定を変更・解除する場合は、先に対象の仮想見出しを削除してください。",
+                "PRINT_VIRTUAL_HEADING_PAGE_INVALID", 409,
+            )
+    # Virtual nodes cannot impersonate parts of a physical merge.
+    if any(is_page_heading(p["cell"]) for m in layout.get("cellMerges", []) for p in m["parts"]):
+        raise print_error("仮想見出しはセル結合に使用できません。",
+                          "PRINT_AUTHORING_GEOMETRY_CHANGED", 409)
 
 
 def validate_page_edit(previous: dict[str, Any], proposed: dict[str, Any]) -> None:
@@ -41,6 +67,14 @@ def validate_page_edit(previous: dict[str, Any], proposed: dict[str, Any]) -> No
     new_merges = {m["parentCellId"]: m for m in proposed.get("cellMerges", [])}
     previous_cells = {c["id"]: c for c in previous["cells"]}
     proposed_cells = {c["id"]: c for c in proposed["cells"]}
+    virtual_ids = {c["id"] for c in proposed["cells"] if is_page_heading(c)}
+    for cell_id in virtual_ids:
+        original = previous_cells.get(cell_id) or originals.get(cell_id)
+        if original is not None and (
+            not is_page_heading(original)
+            or original.get("pageRange") != proposed_cells[cell_id].get("pageRange")
+        ):
+            refuse()
     for parent_id, merge in new_merges.items():
         parent = proposed_cells.get(parent_id)
         parts = [p["cell"] for p in merge["parts"]]
@@ -60,8 +94,9 @@ def validate_page_edit(previous: dict[str, Any], proposed: dict[str, Any]) -> No
                         or part.get("parentLabelCellId") or part["role"] == "mark"
                         or part.get("markSets")):
                     refuse()
-    # New parents and restored parts are the only permitted additions.
+    # Display-only page headings do not expand the physical source-cell set.
     restored = {p["cell"]["id"] for parent, merge in old_merges.items()
                 if parent not in new_merges for p in merge["parts"]}
-    if not proposed_cells.keys() <= previous_cells.keys() | new_merges.keys() | restored:
+    allowed = previous_cells.keys() | new_merges.keys() | restored | virtual_ids
+    if not proposed_cells.keys() <= allowed:
         refuse()

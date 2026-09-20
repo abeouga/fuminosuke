@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, api } from "../api";
+import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
 import {
   automaticJapaneseEraDatePatch,
@@ -241,6 +242,7 @@ export function ReviewPage({
   onSpreadsheetNavigate?: SpreadsheetNavigator;
 }) {
   const [result, setResult] = useState<OcrResult | null>(null);
+  const [pagedJobId, setPagedJobId] = useState<string | null>(null);
   const [draft, setDraft] = useState<OcrDocument | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -309,6 +311,7 @@ export function ReviewPage({
   };
   useEffect(() => {
     setResult(null);
+    setPagedJobId(null);
     setDraft(null);
     setError(null);
     setLoadError(null);
@@ -321,6 +324,10 @@ export function ReviewPage({
     setDocumentName("");
     setOutputLayout(null);
     void load().catch((reason) => {
+      if (reason instanceof ApiError && reason.code === "MULTI_PAGE_REVIEW_NOT_AVAILABLE") {
+        setPagedJobId(jobId);
+        return;
+      }
       setLoadError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
     });
   }, [autoReopenConfirmed, jobId, initialSelectedPath]);
@@ -657,6 +664,7 @@ export function ReviewPage({
   };
   const identityReady =
     !isCattleReview || hasConfirmableIndividualId(draft, result?.individualId);
+  if (pagedJobId === jobId) return <PagedReviewPage key={jobId} jobId={jobId} onClose={onClose} onNavigationGuardChange={onNavigationGuardChange} />;
   if (loadError) return <div className="empty-state large"><h2>結果を開けません</h2><p>{loadError}</p><button className="secondary" onClick={onClose}>戻る</button></div>;
   if (!result || !draft) return <div className="empty-state large">結果を読み込んでいます…</div>;
   const identityReading = draft.document.unifiedEarTag;

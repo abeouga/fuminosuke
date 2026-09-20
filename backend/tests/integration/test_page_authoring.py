@@ -212,7 +212,9 @@ def test_version_fork_edits_do_not_change_v1_pages_or_semantics(client, paged_dr
         version.status = "ACTIVE"  # fixture setup, never bypass the public activation gate
         session.get(Template, version.template_id).active_version_id = version_id
         session.commit()
-    fork = TemplateVersionService(database, storage).edit(version_id)
+    fork = TemplateVersionService(database, storage).edit(
+        version_id, expected_revision=state["revision"]
+    )
     fork_url = f"/api/v1/template-versions/{fork.id}/print-layout"
     fork_state = client.get(fork_url).json()
     fork_state = client.put(fork_url, json={"baseRevision": fork_state["revision"],
@@ -382,7 +384,9 @@ def test_fork_keeps_merged_page_sources_owned_by_new_version(client, paged_draft
         version.status = "ACTIVE"  # version isolation fixture, not an activation bypass
         session.get(Template, version.template_id).active_version_id = version_id
         session.commit()
-    fork = TemplateVersionService(database, storage).edit(version_id)
+    fork = TemplateVersionService(database, storage).edit(
+        version_id, expected_revision=saved["state"]["revision"]
+    )
     fork_url = f"/api/v1/template-versions/{fork.id}/print-layout"
     fork_state = client.get(fork_url).json()
     assert fork_state["source"]["unsupported"] == []
@@ -422,7 +426,9 @@ def test_imported_excel_merged_ranges_keep_complete_source_parts(client, monkeyp
         original.status = "ACTIVE"
         session.get(Template, original.template_id).active_version_id = version
         session.commit()
-    fork = TemplateVersionService(database, storage).edit(version)
+    fork = TemplateVersionService(database, storage).edit(
+        version, expected_revision=response.json()["state"]["revision"]
+    )
     fork_url = f"/api/v1/template-versions/{fork.id}/print-layout"
     fork_state = client.get(fork_url).json()
     fork_field = next(f for f in fork_state["source"]["fields"] if f.get("sourceParts"))

@@ -8,11 +8,56 @@ export type PrintCell = {
 export type ReferenceQualification = {
   status: "UNVERIFIED" | "UNSUPPORTED" | "FAIL" | "PASS";
   qualified: boolean; codes?: string[]; detail?: string;
+  qualificationIssued?: boolean;
+  environmentQualified?: boolean;
+  geometryQualified?: boolean;
+  unresolvedBlockers?: string[];
+  issuedAt?: number | null;
+  expiresAt?: number | null;
+  templateVersionRevision?: string;
   renderer?: { type: string; version: string } | null;
   productionBlockers?: string[];
+  safetyStages?: {
+    policy: "paged-two-stage-safety-v1";
+    activation: {
+      status: "BLOCKED" | "READY_FOR_QUALIFICATION" | "QUALIFIED";
+      codes: string[]; requiresSubmittedScan: false; certificateIssued: boolean;
+    };
+    execution: {
+      status: "NOT_EVALUATED"; requiredBefore: "PROVIDER_REQUEST";
+      checks: string[]; requiresSubmittedScan: true;
+    };
+  };
   pages?: { page: number; status: string; maxErrorPx?: number | null;
     meanErrorPx?: number | null; codes?: string[]; code?: string }[];
 };
+
+export type ReferenceQualificationState = "LOADING" | "PASS" | "UNVERIFIED" | "FAIL" | "EXPIRED";
+
+export function referenceQualificationState(
+  evidence: ReferenceQualification | null,
+  fallbackExpiresAt?: number | null,
+  nowSeconds = Date.now() / 1000,
+): Exclude<ReferenceQualificationState, "LOADING"> {
+  const expiresAt = evidence?.expiresAt ?? fallbackExpiresAt;
+  if (typeof expiresAt === "number" && expiresAt <= nowSeconds) return "EXPIRED";
+  if (!evidence) return "UNVERIFIED";
+  const unresolved = evidence.unresolvedBlockers ?? [];
+  const blockers = evidence.productionBlockers ?? [];
+  if (
+    evidence.status === "PASS"
+    && evidence.qualified === true
+    && evidence.qualificationIssued === true
+    && evidence.environmentQualified === true
+    && evidence.geometryQualified === true
+    && unresolved.length === 0
+    && blockers.length === 0
+    && typeof evidence.expiresAt === "number"
+    && evidence.expiresAt > nowSeconds
+  ) return "PASS";
+  if (evidence.status === "FAIL" || evidence.status === "UNSUPPORTED") return "FAIL";
+  return "UNVERIFIED";
+}
 export type PrintPage = {
   page: number; range: string; startRow: number; endRow: number;
   width: number; height: number;
@@ -33,6 +78,7 @@ export type PrintRequest = {
 };
 export type PrintPlan = Omit<PrintRequest, "baseRevision" | "breakAfterRows" | "autoArrange"> & {
   commonScale: number; pages: PrintPage[]; warnings: string[]; ocrReady: false;
+  printFiles?: { renderKey: string };
 };
 export type PrintState = {
   revision: string; editable: boolean; saved: PrintPlan | null;

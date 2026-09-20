@@ -91,9 +91,12 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 - legacy single-page OCRと新しいXLSX `printLayout` / paged OCRは別経路です。旧canonical rectangle・preview・X/Y画像合わせ補正・過去jobを新geometryで再計算しません。`lo-import-twip-v1`は新規printLayout用で、旧保存プランのgeometryも維持します。
 - `printLayout`の所有者はTemplate系列ではなくTemplateVersionです。ページ編集はDRAFTとrevision照合を守ります。現在のGUI対象は横1ページ・縦Nページです。
 - 新経路は1 logical document/jobに明示的なページidentityと入力bindingを持ちます。配列indexをidentityにせず、受付時のimmutable snapshotから実行・retryします。現在のTemplateVersionからranges・fields・mappings・基準画像・OCR設定を差し替えません。
-- ページ別実行基盤は存在しますが、新結果のレビュー・補正・確定・出力は未対応で明示拒否します。Page 1だけを旧経路へ流して完成扱いにしません。
-- Geometry / Reference QualificationとRenderer Environment Qualificationは別条件です。両方の有効なevidenceとcrop安全性が必要で、描画成功・fixture通過・保存booleanだけでは本番認定できません。
-- 現在は`environmentQualified=false`、`productionQualified=false`です。新printLayout版のACTIVE化は`PRINT_LAYOUT_OCR_NOT_AVAILABLE`、paged OCR受付は`PRINT_REFERENCE_NOT_VALIDATED`でfail-closedです。これは未認定renderer環境を本番へ流さない安全境界です。作業都合のフラグ変更やmockで解除しません。
+- ページ別実行基盤と専用レビュー・補正・全ページ確定/再編集・記入済みXLSX取得経路は存在します。書類一覧への統合は未対応です。新結果は`PagedReview`/`PagedConfirmation`と受付page identityを使用し、旧単一OcrResultへ流しません。[ページ別レビュー](docs/paged-review.md)、[全ページ確定](docs/paged-confirmation.md)、[全ページXLSX出力](docs/paged-output.md)の適用・検証状況を確認してください。
+- 新paged出力は受付時に固定したadapter・所有原本SHA・全ページの明示cell binding・確定revisionを使用します。取得時に現行版から出力先を補充しません。元sheet名・他sheet・書式・印刷設定を保持し、原本を再保存しません。未対応の旧受付に新adapterを後付けしないでください。
+- ページ別の文書識別ヒントは全体設定を検証してから所有mappingへ限定します。識別groupや役割をページごとに付け替えず、書類名候補で入力中の名前を上書きしません。[文書metadata](docs/paged-document-metadata.md)を参照してください。
+- 新paged OpenAIの呼出し予算は文書全体・全attemptで共有し、送信前にDB予約します。失敗や再起動で払い戻さず、後続ページの最低枠を保護します。[文書全体API予算](docs/paged-ocr-budget.md)を参照してください。
+- Geometry / Reference QualificationとRenderer Environment Qualificationは別条件です。2026-09-13の明示承認により、有効化時のテンプレート/環境検証と、OCR実行時の実入力/位置合わせ/crop検証を分離します。前者は原本・全ページの描画/座標・mapping/crop領域の定義・隔離環境の証拠を要求し、記入済み画像を要求しません。後者はprovider送信前に実入力を検証し、未検証なら停止します。描画成功・fixture通過・保存booleanだけではどちらも認定できません。詳細はSafety Contract §12.6/§12.8を参照してください。
+- `wsl-calc-print-grid-v1`の新printLayout版は、保存booleanではなく現在の正式reference/environment/geometry資格、原本・graph・artifact・実装・lease期限を承認transaction内で再検証した場合だけACTIVE化できます。legacy版は従来readinessを維持します。ACTIVE化後もpaged OCR受付は`PRINT_REFERENCE_NOT_VALIDATED`でfail-closedであり、実入力のidentity/registration/crop/ink検査とprovider送信は別gateです。作業都合のフラグ変更やmockで解除しません。
 - AppContainerではローカル接続probeの通信拒否を実測していますが、LibreOffice 26.2.3.2のXLSX→PDFはWindows named pipe IPC互換性の問題で成立していません。Officeの完全sandbox化が済んだとは扱いません。
 - 新reference rendererのPDFium parse/rasterは専用helper process内です。native処理を安易にbackend内へ戻しません。helperのnetwork isolation、実font・runtime依存、実帳票crop clearance等も認定の残課題です。
 - renderer isolation / container方式の再設計は別infraタスクとして保留できます。gateを閉じたままlegacyや他の安全な機能開発を継続できます。再開時は下記Sandbox Closureの残条件と実コードを照合し、正式なqualificationを経てから本番開放を設計します。

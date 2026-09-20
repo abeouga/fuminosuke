@@ -34,6 +34,18 @@ class OcrProviderRequest:
     template_id: str = "cow-breeding-ledger-v1"
     template_version: str = "1"
     should_cancel: Callable[[], bool] | None = None
+    call_budget: OcrCallBudget | None = None
+    transcription_prompt: str | None = None
+
+
+class OcrCallBudget(Protocol):
+    """Orchestration-owned durable budget; OCR calculation has no DB dependency."""
+
+    def remaining(self) -> int: ...
+
+    def reserve(self) -> int | None:
+        """Commit a non-refundable reservation; return its document-wide ordinal."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

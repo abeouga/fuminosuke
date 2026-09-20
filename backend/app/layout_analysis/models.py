@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 
 from app.core.errors import to_camel
 from app.domain.polygon import PolygonPoint, validate_polygon
@@ -81,12 +92,36 @@ class LayoutCell(LayoutModel):
     shape_type: Literal["rectangle", "polygon"] = "rectangle"
     vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
     virtual: bool = False
+    # Only virtual headings use page-local coordinates; physical cells stay canonical.
+    page_range: str | None = Field(default=None, min_length=1, max_length=40)
     parent_label_cell_id: str | None = Field(default=None, max_length=100)
     mark_sets: list[LayoutMarkSet] = Field(default_factory=list, max_length=10)
     composite_subfields: list[LayoutCompositeSubfield] = Field(
         default_factory=list,
         max_length=10,
     )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        # Preserve the declared schema despite the optional-field wrap serializer.
+        def declared_model(node: core_schema.CoreSchema) -> core_schema.CoreSchema:
+            declared = dict(node)
+            declared.pop("serialization", None)
+            if node["type"] != "model" and isinstance(declared.get("schema"), dict):
+                declared["schema"] = declared_model(declared["schema"])
+            return cast(core_schema.CoreSchema, declared)
+
+        return handler(declared_model(schema))
+
+    @model_serializer(mode="wrap")
+    def serialize_page_range(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.page_range is None:
+            data.pop("pageRange", None)
+            data.pop("page_range", None)
+        return data
 
     @model_validator(mode="after")
     def validate_shape(self) -> Self:
@@ -98,6 +133,10 @@ class LayoutCell(LayoutModel):
             or self.shape_type != "rectangle" or not self.text.strip()
         ):
             raise ValueError("Virtual cells must be named manual headings")
+        if self.page_range is not None and (
+            not self.virtual or self.mark_sets or self.composite_subfields
+        ):
+            raise ValueError("Page-local coordinates are only allowed for virtual headings")
         return self
 
     @field_validator("text", "printed_label_text", mode="before")
@@ -415,6 +454,9 @@ class LayoutDefinition(LayoutModel):
         if len(pool_paths) != len(set(pool_paths)):
             raise ValueError("Label pool target paths must be unique")
         for cell in self.cells:
+            if cell.page_range is not None:
+                # The save service checks these against the version's saved page.
+                continue
             if cell.x + cell.width > self.canonical_width:
                 raise ValueError(f"Cell {cell.id} exceeds canonical width")
             if cell.y + cell.height > self.canonical_height:

@@ -1,4 +1,4 @@
-"""Print PDF conversion. AppContainer is mandatory; no uncontained fallback."""
+"""Print PDF conversion in explicitly selected isolated backends; no uncontained fallback."""
 
 from __future__ import annotations
 
@@ -66,5 +66,30 @@ def render_print_pdf(workbook: bytes, plan: dict[str, Any]) -> bytes:
             (directory / "page.xlsx").write_bytes(workbook)
             office.convert_office_file(directory, identity, sandboxed=True)
             return validate_pdf(directory, plan)
+    finally:
+        office._RENDER_LOCK.release()
+
+
+def render_wsl_print_pdf(workbook: bytes, plan: dict[str, Any], distribution: str) -> bytes:
+    from app.services.renderer_wsl import render_wsl_pdf
+
+    if not office._RENDER_LOCK.acquire(blocking=False):
+        raise print_error("別のPDF変換を実行中です。", "RENDERER_BUSY", 409)
+    try:
+        with renderer_mutex():
+            pdf, report = render_wsl_pdf(workbook, distribution=distribution)
+        if report["pageCount"] != len(plan["pages"]):
+            raise print_error("PDFのページ数が保存済み設定と一致しません。", "PAGE_COUNT_MISMATCH")
+        paper = PAPER_MM[plan["paperSize"]]
+        if plan["orientation"] == "landscape":
+            paper = paper[::-1]
+        if any(
+            len(size) != 2 or any(not math.isclose(a, b * 72 / 25.4, abs_tol=0.1)
+                                 for a, b in zip(size, paper, strict=True))
+            for size in report["sizes"]
+        ):
+            raise print_error(
+                "PDFの用紙寸法が保存済み設定と一致しません。", "PAGE_GEOMETRY_MISMATCH")
+        return pdf
     finally:
         office._RENDER_LOCK.release()

@@ -13,10 +13,17 @@ from app.core.config import Settings
 from app.db.models import JobArtifact, JobInput, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.job_pages import PagedSubmission, template_page_id
+from app.domain.paged_document_metadata import has_document_metadata, page_context
 from app.domain.print_layout import print_error
 from app.domain.template_config import TemplateConfig, parse_template_config
 from app.image_processing.image_loader import ImageLoader
 from app.repositories.job_repository import JobRepository
+from app.services.paged_document_snapshot import capture_document_snapshot, load_document_snapshot
+from app.services.paged_ocr_budget import budget_policy, initialize_budget
+from app.services.paged_transcription_resources import (
+    accepted_transcription_prompt,
+    capture_transcription_resources,
+)
 from app.services.print_layout_service import PrintLayoutService, digest
 from app.services.reference_qualification_service import ReferenceQualificationService
 from app.services.template_mutation import begin_immediate, template_mutation_lock
@@ -166,8 +173,6 @@ class JobPageService:
             config = parse_template_config(
                 self.storage.read_bytes(version.config_relative_path).decode()
             )
-            if config.document_identity or config.document_identity_fields or config.document_name:
-                fail("ページをまたぐ文書識別設定は未対応です。", "PRINT_PAGE_CONFIG_UNSUPPORTED")
             job_id = str(uuid4())
             accepted = []
             seen_fields: set[str] = set()
@@ -247,18 +252,33 @@ class JobPageService:
                 )
             if seen_fields != {m.mapping_id for m in config.field_mappings if m.enabled}:
                 fail("全読み取り項目のページ対応を確認できません。")
+            if has_document_metadata(config):
+                for page in accepted:
+                    page["documentContext"] = page_context(config, page["fieldMappings"])
+            document_snapshot = capture_document_snapshot(
+                session,
+                self.storage,
+                job_id=job_id,
+                version=version,
+                config=config,
+                pages=accepted,
+            )
             session.refresh(version)
             if self.revision(version) != request.template_revision or version.status != "ACTIVE":
                 fail(
                     "受付中にテンプレートが変更されています。", "TEMPLATE_CHANGED_DURING_ACCEPTANCE"
                 )
             bundle = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "templateRevision": request.template_revision,
                 "printLayout": plan,
                 "pages": accepted,
                 "executionConfig": execution_config(self.settings),
+                "documentSnapshot": document_snapshot,
             }
+            if self.settings.ocr.provider == "openai":
+                bundle["ocrCallBudget"] = budget_policy(self.settings.ocr.max_calls_per_job)
+                bundle["transcriptionResources"] = capture_transcription_resources()
             job = ProcessingJob(
                 id=job_id,
                 job_type="EXTRACT_DOCUMENT",
@@ -272,13 +292,19 @@ class JobPageService:
                 config_snapshot_json={"jobPages": bundle, "jobPagesSha256": digest(bundle)},
             )
             session.add(job)
+            if self.settings.ocr.provider == "openai":
+                session.flush()
+                initialize_budget(session, job)
             session.commit()
             return job
 
     def _require_qualified_reference(self, plan: dict[str, Any]) -> None:
         version_id = plan.get("templateVersionId")
-        evidence = ReferenceQualificationService(self.database, self.storage).status(
-            version_id) if version_id else {"status": "UNVERIFIED"}
+        evidence = (
+            ReferenceQualificationService(self.database, self.storage).status(version_id)
+            if version_id
+            else {"status": "UNVERIFIED"}
+        )
         # Evidence validation is connected, but no production renderer is admitted
         # by the current policy. Neither qualified nor ocrReady JSON flags override it.
         fail(
@@ -292,8 +318,14 @@ class JobPageService:
             "jobPagesSha256"
         ):
             fail("受付ページsnapshotの整合性を確認できません。")
+        if bundle.get("schemaVersion") not in {1, 2}:
+            fail("未対応の受付ページsnapshotです。")
         if bundle["executionConfig"] != execution_config(self.settings):
             fail("受付時の実行設定と現在の設定が異なります。", "PAGE_EXECUTION_CONFIG_CHANGED")
+        if self.settings.ocr.provider == "openai":
+            accepted_transcription_prompt(job.config_snapshot_json)
+        if bundle.get("schemaVersion") == 2:
+            load_document_snapshot(job, self.storage)
         inputs = {i.id: i for i in JobRepository(session).list_inputs(job.id)}
         pages = bundle["pages"]
         if (

@@ -2,13 +2,28 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Request, Response
 
-from app.domain.print_layout import PrintLayoutRequest
+from app.domain.print_layout import PrintLayoutRequest, print_error
 from app.layout_analysis.models import LayoutDefinition
 from app.services.print_layout_service import PrintLayoutService
+from app.services.print_preparation_service import PrintPreparationService
 from app.services.reference_qualification_service import ReferenceQualificationService
 from app.services.template_print_service import TemplatePrintService
 
 router = APIRouter(prefix="/template-versions/{version_id}/print-layout", tags=["templates"])
+
+
+@router.post("/prepare")
+def prepare_print_files(
+    request: Request, version_id: str,
+    base_revision: Annotated[str, Query(min_length=64, max_length=64)],
+    geometry_model: Literal["wsl-calc-print-grid-v1"] | None = None,
+) -> dict[str, Any]:
+    if request.app.state.settings.app.print_pdf_renderer != "wsl":
+        raise print_error("WSLの印刷用変換環境を設定してください。", "RENDERER_UNAVAILABLE", 409)
+    return PrintPreparationService(request.app.state.database, request.app.state.storage).prepare(
+        version_id, base_revision, request.app.state.settings.app.print_wsl_distribution,
+        runtime_id=request.app.state.settings.app.print_wsl_runtime_id,
+        geometry_model=geometry_model)
 
 
 @router.get("/files/{format}")
@@ -19,7 +34,9 @@ def printable_file(
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
 ) -> Response:
     content = TemplatePrintService(request.app.state.database, request.app.state.storage).export(
-        version_id, format, base_revision
+        version_id, format, base_revision,
+        pdf_renderer=request.app.state.settings.app.print_pdf_renderer,
+        wsl_distribution=request.app.state.settings.app.print_wsl_distribution,
     )
     return Response(
         content,
@@ -49,7 +66,9 @@ def qualify_reference(
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
 ) -> dict[str, Any]:
     return ReferenceQualificationService(
-        request.app.state.database, request.app.state.storage).qualify(version_id, base_revision)
+        request.app.state.database, request.app.state.storage).qualify(
+            version_id, base_revision,
+            wsl_distribution=request.app.state.settings.app.print_wsl_distribution)
 
 
 def _service(request: Request) -> PrintLayoutService:

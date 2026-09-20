@@ -438,6 +438,21 @@ OCR動作を変更していない場合は「既存OCR contractを維持した�
 
 geometry modelの変更を旧保存プラン・legacy canonical rectangle・preview・受付済みjob・OCR結果へ暗黙適用しない。旧X/Y画像合わせ補正も一律にuniform print scaleへ置換しない。旧データの移行が必要なら、§10に従い明示的な版変更・migration設計と比較検証を分離する。
 
+2026-09-14追加の `wsl-calc-print-grid-v1` は、明示印刷確定APIで新モデルを選択した
+DRAFTだけに適用する。固定runtime ID、原本/FODS SHAと固定inch出力を要求し、
+fit/中央配置用の公称twipと、各寸法を整数化して累積する描画グリッドを分離する。
+旧版のGET・通常保存で移行せず、既に新モデルの版は再確定で旧モデルへ戻さない。
+canonical layout・元セル範囲・意味づけ・過去jobは保持する。印刷範囲が成立しない場合は
+候補を拒否し、座標clampや許容値拡大で救済しない。
+FODSだけではUNO寸法exportのoverflow不在を証明できないため、この下書きモデルと
+artifact生成成功を本番資格へ昇格させない。詳細は[Calc印刷グリッド](verification/calc-print-grid-20260913.md)。
+
+新Calcモデルの参照検証は、測定開始前・資格レポート保存前・保存済み資格のGETで、
+所有原本/canonical layout/configと保存寸法からページを再計算し、全cell/fieldの元範囲・
+bindings・座標・transform・ページ所属を保存planと照合する。不一致を再保存して修復せず拒否する。
+描画上同じ `shrinkToFit` の省略/falseだけを比較時に揃え、identityや座標を正規化しない。
+旧geometryモデルや過去jobへの適用、GETでのOffice起動、資格発行・本番gate解除は含めない。
+
 ### 12.2 ページを含むphysical identityと入力binding
 
 新経路のfieldは`TemplateVersion → TemplatePage identity → source cell/range → mapping → page-local rectangle`を一意に追跡できなければならない。同じX/Yでも別ページのfieldは別の物理領域であり、ページ情報なしで保存・処理しない。
@@ -451,11 +466,28 @@ geometry modelの変更を旧保存プラン・legacy canonical rectangle・prev
 - TemplateVersion、page identity・順序・ranges、元XLSXのidentity / SHA
 - ページ別基準画像・参照元artifact・SHA、transform、source cell/rangeを持つfields、fieldMappings
 - OCR設定とprovider / prompt / schema識別子、画像処理・registration等の実行設定
+- 新OpenAI paged受付は[prompt本文と応答model schema](paged-transcription-resources.md)も
+  内容・SHA付きで保存する。実行時の本文再読込や欠落snapshotの暗黙補充を行わず、
+  現在の応答model schemaとの不一致は画像処理/provider呼出し前に拒否する。
+  この検査だけでSDK/native依存等のruntime全体を固定・認定したとは扱わない。
 - 入力ページidentity、binding、inputRevision、入力SHA
+
+文書識別・書類名設定がある新規受付では、検証済み全体configを維持し、
+`documentMetadataAdapter=paged-document-fields-v1`とページ別`documentContext`を固定する。
+識別項目のページ所属はmapping IDとtargetPathの一致で決め、全体のgroup/役割/順序を変更しない。
+読込時にも全体configからの所有権と各contextの完全一致を検証する。旧受付へ後付けしない。
 
 実行・retryは受付snapshotを正本とし、現行TemplateVersionからranges・fields・mappings・基準画像・設定を差し替えない。全ページの入力・基準画像SHAとsnapshot整合性を最初のprovider呼出し前に検証する。保存画像を再生成して不一致を隠さない。
 
 現実行設定が受付時と異なる場合、最新設定で続行せず明示拒否する。retryで成功ページを再利用できるのは保存結果のSHAとページsnapshotが一致する場合だけであり、同じ受付snapshotで失敗ページを再実行する。過去jobの再現性を新しいgeometryや認定artifactの適用で変更しない。
+
+新規OpenAI paged受付は文書全体の`ocrCallBudget`と専用予算表を同じtransactionで固定する。
+全page/attemptで上限を共有し、送信前にpage ID・attempt付き予約と使用回数をcommitする。
+失敗・応答消失・再起動・再試行で予約を払い戻さない。予算のない旧受付へ後付けしない。
+未完了全ページの最低呼出し数が不足する場合は最初の送信前に拒否し、
+optional再読取から後続ページの最低枠を保護する。予約済み回数と実送信済み回数を混同しない。
+既存の単一ページ予算契約とprovider association方式は維持する。
+詳細・migration・失敗復旧は[文書全体API予算](paged-ocr-budget.md)を参照する。
 
 ### 12.4 全ページ処理と未対応操作
 
@@ -463,13 +495,59 @@ geometry modelの変更を旧保存プラン・legacy canonical rectangle・prev
 
 全結果を`documentPages`へ集約し、一部失敗を文書全体成功と扱わない。現実装では部分失敗はjobをFAILEDとし、成功ページの証拠を保持する。OCR計算の全ページ成功もレビュー・確定・出力完了の代用にはならない。
 
-未対応のレビュー・補正・確定・出力は明示拒否する。Page 1だけのOCR・レビュー・exportへ縮退して成功扱いにしない。ページ設定を扱えないpackage出力等でもmetadataを黙って落とさない。
+未対応の操作は明示拒否する。Page 1だけのOCR・レビュー・exportへ縮退して成功扱いにしない。ページ設定を扱えないpackage出力等でもmetadataを黙って落とさない。
+
+2026-09-13の本番化要求に基づき、専用`page-review`取得・補正APIと`PagedReview`を追加した。
+全ページ成功と受付snapshot・page/input/reference・field/cropの一致を確認した結果だけを保存する。
+legacyの`OcrResult`へ上書きせず、page IDをキーとする全ページの原候補と現在値を分離する。
+全ページ共通revisionの条件付き更新と、編集page ID付き履歴を同じtransactionで保存する。
+補正では受付mapping IDが当該ページに所属することを要求し、sourceRegionId・boundingBoxを
+クライアントから受理しない。他ページの値・物理対応・原候補・認識diagnosticsを変更しない。
+画像品質を含む既存の決定的検証を再適用する。現在のTemplateVersionやruntime設定で
+レビューを再構成せず、成功ページの再実行・再公開で補正済み値を初期化しない。
+保存中の閲覧・追加編集・ページ切替を維持し、遅い応答で新しい下書きを上書きしない。
+通信断・revision競合では下書きを保持し、明示的な最新結果取得後に再試行できる。
+続けて、受付bundle schemaVersion 2の文書全体snapshotと全ページ確定・reopenを追加した。
+受付transactionでlayout全体（見出し・繰り返し・結合を含む）、config、reviewStructure、
+logicalFieldIds、承認済み汎用定義、既存XLSX出力snapshot、page ID/source rangeによる出力bindingを固定する。
+原本のSHAを確認したjob専用コピーを所有artifactとして保持し、元作成jobや現行版の変更を参照しない。
+旧schemaVersion 1を実行・レビュー時に暗黙更新せず、必要な出力snapshotがない場合の全ページ確定は拒否する。
+新形式の実行では所有コピーの範囲・SHAも最初のprovider呼出しより前に検証する。
+
+確定は全ページ共通baseRevisionと全page IDの明示確認、既存の値/画像品質検証を要求する。
+PagedConfirmationへ全ページの現在値・文書名・受付bundle SHAを一括保存し、jobのCONFIRMEDと同じtransactionでcommitする。
+OCR値・statusを自動昇格せず、既存単一ConfirmedResultやLedgerDocumentPageへPage 1を代入しない。
+新paged経路では確定・reopenもrevisionを増分する。旧単一reopenのrevision維持は変更しない。
+これによりreopen後の古い確定/補正要求を拒否し、過去の確定snapshotと全履歴を保持する。
+確定の成否が不明な通信失敗では再取得まで状態変更/編集を止めるが、通常の補正保存では追加編集を維持する。
+競合で保持した下書きは確定済み値として表示せず、明示reopen後に編集値として復元する。
+書類一覧への統合は未実装。既存単一ページ用APIの拒否と本番受付gateは維持する。
+意図的な新paged保存/確定契約の拡張と残る制限は[全ページ確定](paged-confirmation.md)に記録する。
+詳細とmigration適用状況は[ページ別レビュー](paged-review.md)を参照する。
+
+識別項目のOCRヒントは当該ページの検証済みcontextだけから既存request準備へ渡す。
+書類名候補は受付全体設定の順序で、全構成項目が非空readableの場合だけ生成する。
+候補の更新で入力中の書類名・確定済み名を上書きせず、自動確定や書類間結合に使用しない。
+詳細と互換性・制限は[ページ別の文書metadata](paged-document-metadata.md)を参照する。
+
+新規受付は`documentSnapshot.outputAdapter=ooxml-paged-values-v1`も固定する。
+専用XLSX取得は全ページ確定済みの指定revisionだけを対象とし、受付の所有原本SHA、
+page ID・mapping ID・targetPath・sourceRange/sourceParts・anchorの対応を再検証する。
+現行版や準備job、画面の配置・項目名から出力先を推定しない。生成はDB書込lockの外で行い、
+応答前に同じ確定revisionと受付SHAを再確認する。出力失敗だけで確定解除・値変更を行わない。
+新adapterのない旧受付は後付け更新せず出力を拒否する。詳細は[全ページXLSX出力](paged-output.md)。
 
 ### 12.5 原本保持とunsupported workbook
 
 原本XLSXを不変とし、可能な箇所でSHAを照合する。図形・画像・controls・高度なOOXMLの削除、hidden行列の可視化、根拠のないused range切捨て、数式の値化、未対応要素を失うopenpyxl再保存、元pageSetupの破壊によって対応済みに見せない。原本を変更して同じ帳票と主張しない。
 
 新renderer用の一時コピーは原本と区別し、検証済みadapterが保存page range・印刷条件を反映するための必要最小限の変更に限定する。未編集のセル・style・ZIPパートを保持し、対応を証明できない形式は拒否する。内部printLayoutの管理を、出力XLSXの印刷設定を変更する根拠にしない。既存出力契約は§7に従う。
+
+新pagedの記入済みXLSXは別adapterによる結果成果物であり、元sheet名・非表示管理sheet・
+印刷設定を保持する。全体をopenpyxlで再保存せず、明示所有セルの文字列値と検証済み手動結合だけを
+OOXMLのbyte範囲で更新する。空白確定値は当該セルの元placeholderを消す。数式として書き込まず、
+先頭ゼロ・改行・エスケープ様文字列を保持する。結合の範囲、内部値、他項目との重複を検査し、
+同じ物理セルへ異なる値が要求された場合は拒否する。旧単一ページの出力仕様は変更しない。
 
 離れたprint area、print titles / repeated rows・columns、header/footer、横複数ページ、hidden行列、shapes / controls / formulas、高度な書式・OOXML、未確認font、過大range等を推測処理しない。安全な対応が未検証ならunsupportedまたは未認定として本番への流入を止める。OOXML属性の未指定とライブラリdefaultも区別し、取得できない設定を推測で正規化しない。
 
@@ -484,20 +562,31 @@ OCR結果出力（§7）は変更しない。小数％倍率等、既存adapter�
 目視によるページ編集は[ページ単位の目視編集](page-authoring.md)に従う。
 `draft-visible-cells-v1`は非表示行列を表示幅・高さから除き、セル内縮小を参考描画する
 未認定の表示モデルである。保存済みlegacy/LOモデルを自動更新しない。原本の設定・セルを
-書き換えず、元セルIDからページ表示座標を参照する。表示座標はlayoutへ保存しない。
+書き換えず、元セルIDからページ表示座標を参照する。元セルの表示座標はlayoutへ保存しない。
 `PUT print-layout/authoring`はDRAFT/revisionを確認する。通常矩形と結合partsへ展開した元セル集合は
 重複のない既存集合の部分集合とし、残存元セルのphysical ID・canonical座標・形状を保持する。
 既存LayoutServiceへ人間の区分・意味づけ・明示的な削除・同一ページ内の結合/解除を保存する。
 結合親は元partsの外接矩形と一致し、元XLSXから解決したpartsの範囲は欠落・重複のない連続矩形に限る。
-追加IDは検証済み結合親と保存partsの復元だけを許可する。field.sourcePartsにcellId/sourceRangeを保存し、
+物理セルの追加IDは検証済み結合親と保存partsの復元だけを許可する。field.sourcePartsにcellId/sourceRangeを保存し、
 表示位置や配列順から部品を推定しない。元範囲・内部値保護・ページ境界の検証をDB/config保存前に行い、
 不正要求で保存済みlayout/config/planを変更しない。ページ境界・transform・参考画像を保持する。
-枠追加・任意の移動/変形・ページをまたぐ結合は拒否する。これは2026-09-11の明示要求による
+物理枠追加・任意の移動/変形・ページをまたぐ結合は拒否する。これは2026-09-11の明示要求による
 ページ手動編集契約の拡張であり、既存jobのcrop・mapping・provider association契約は変更しない。
 ページfields/bindingsとlayout SHAを更新する。過去のqualificationは新版の証明に流用しない。
 この表示モデルでは既存のqualificationモデル照合が不成立となり、本番gateは閉じたままとする。
 Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR受付・実行・レビューの
 制限は変更しない。追加の自動区分・自動意味づけは実装しない。
+
+2026-09-12の明示要求により、保存ページ上の仮想見出しだけを追加・移動できる。
+`virtual=true` の名前付きmanual見出しに `pageRange` を保存し、そのセルの矩形座標だけを
+当該保存ページ内の表示位置として解釈する。元セルのcanonical座標とは混同しない。
+ページ所属は版内の保存rangeに一致させ、配列indexや近傍セルから推定しない。
+仮想見出し自身は元Excelセル、page.fields、field mappings、ラベルOCRの対象に含めない。
+既存の物理IDから仮想への置換、仮想を含む結合、ページ不在・範囲外の配置は保存前に拒否する。
+ページ範囲・用紙変更や解除で所属・位置が無効になる場合も拒否し、対象見出しの明示的な削除を要求する。
+旧セルのJSONへ未指定pageRangeを追加せず、旧layout hash・geometryの暗黙移行を行わない。
+見出しの階層・繰り返し群への接続は既存の明示ID経路を使用する。本番gateは解除しない。
+これはページ手動編集契約の拡張であり、既存OCR contractを維持する。
 
 新規XLSX取込のlegacyプレビューでは、同じ一時コピーをOfficeで読んだ行高・列幅を
 `quality_json.spreadsheetPreviewGeometry`へ保存し、元セル由来の矩形座標に利用する。
@@ -508,13 +597,251 @@ Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR
 
 reference imageの生成成功はqualificationではない。元XLSX、TemplateVersion、printLayout revision、geometry model / implementation、ページ別reference SHA、field geometry、renderer evidenceの対応を検証する。版・設定・画像・実装・環境の変更や証拠の欠落で有効性を失った結果を再利用しない。
 
+依存ファイルのサイズ・時刻の一致だけで以前のSHAを再利用しない。
+同一metadataでも内容が変わる場合を拒否する。[依存SHAの再検証](renderer-identity-freshness.md)を参照する。
+
 Geometry / Reference QualificationとRenderer Environment Qualificationを区別し、両方の有効な証拠を要求する。network / resource isolation、実選択font、runtime依存、rasterizer、crop安全性・本番閾値の未認定条件を、座標精度のPASSで代替しない。hostにfontが存在することはOfficeの実選択fontの証明ではなく、fallback先を推測して認定しない。
+
+2026-09-13の「承認する」により、新paged経路の検証を二段階へ分離する契約変更を承認した。
+有効化時は、版/原本/全ページ参照画像のidentityとSHA、描画・座標・明示field/mapping、
+定義されたcrop領域とページ境界、隔離環境の有効な証拠を要求する。
+まだ存在しない記入画像のink clearanceは有効化の前提にせず、空のreferenceから成功と推定もしない。
+実入力のpage binding/SHA、位置合わせ、crop対応と実筆画の安全条件は、受付snapshotの条件で
+provider送信前に検証する。未対応・失効・欠落・不成立なら送信を止め、理由と対応するページを保持する。
+有効化は各入力の読取成功を保証せず、失敗・再試行時の補正値とimmutable snapshotを維持する。
+
+新しい資格APIの `safetyStages` は段階別の診断であって資格証そのものではない。
+記入画像がない時点の `DEFERRED_UNTIL_INPUT` / `NOT_EVALUATED` は成功を意味しない。
+診断codesが空でも `READY_FOR_QUALIFICATION` にとどまり、証拠検証・資格発行を迂回しない。
+GETでは保存された段階status/booleanを信用せず、所有証拠を確認してから段階情報を再生成する。
+実行時enforcementを未実装のままgateを開放しない。旧単一ページと過去jobをこの契約へ暗黙移行しない。
+
+2026-09-14のPhase 3では、`wsl-calc-print-grid-v1` に限る正式なreference/environment
+qualificationを追加した。environment判定はlease v2を資格証とはせず、現在のhost/runtime/font/
+worker/bootstrap/native dependency identity、prepared graph、非特権・network/host filesystem隔離、
+no-new-privileges、read-only Windows font mount、resource limits、effective unit controls、worker/broker
+core guardを合わせて評価する。認定scopeは固定prepared-reference invocationであり、host全体の完全な
+dependency closure、全dynamic load trace、実入力scanを含めない。このscopeに必要な証拠が欠落・失効・
+不一致なら `environmentQualified=false` とする。
+
+同Calc geometry判定は、原本/layout/configからのplan・全binding再計算、全必要field四辺の独立vector
+観測、PDF整数座標一致、所有raster/vector証拠、150dpi・整数scaleの数理的表現誤差境界を同時に要求する。
+過去実測に合わせた閾値変更はせず、X方向は `0.5 + 150/72/2000` px以下、Y方向はそれに
+page-height換算の厳密な上限を加えた値未満とする。文字可視性、実scan registration/crop対応、実筆画
+clearanceはこの資格に含めず、provider送信前検証へ残す。
+
+旧 `REFERENCE_ANCHORS_INSUFFICIENT` は診断から削除しない。上記Calc geometry資格が完全に成立した版だけ
+activation判定の非blocking診断へ分離する。legacy/不明geometry、edge・binding・plan・coordinate・
+raster/vector証拠の欠落または変更では従来どおりblockingとする。
+
+正式recordはTemplateVersion ID/revision、原本SHA、printLayout SHA、geometry model、prepared graph、
+renderer/reference/evidence SHA、environment identity、各issuerと全体のimplementation fingerprint、policy、
+issuedAt/expiresAt、未解決blockerへ束縛する。GETは現原本・plan・所有artifact・graph・実装・現在環境・
+lease freshness・geometry integrityを読取専用で再評価し、補完・延長・DB修復をしない。変更・欠落・期限切れ
+では再qualificationを要求する。この資格発行だけではDRAFTをACTIVEにせず、承認成功経路またはOCR受付gateを
+開放しない。
+
+2026-09-14のPhase 4では、既存TemplateVersion承認APIに限り、`printLayout`を持つDRAFTを上記の
+正式資格へ接続した。paged版は要求時のprint revisionを必須とし、既存のtemplate mutation lockと
+`BEGIN IMMEDIATE`の内側でPhase 3のGETと同じvalidatorを実行する。現在の原本/config/plan/bindings、
+prepared graph、所有artifactとSHA、issuer/qualification実装、environment identityとlease期限を再検証し、
+正式policy、environment/geometry両component、資格証、activation stageがPASSで未解決blockerがない場合だけ
+既存の原子的なACTIVE切替へ進む。保存boolean、古いreport、fixture、期限延長を承認入力にしない。
+printLayoutのないlegacy版は従来のmapping/document identity、layout verification/readinessを維持する。
+paged版では旧`layoutVerified`/`xlsx-structure` booleanを偽装せず、正式paged資格をその代替承認条件とする。
+承認は旧ACTIVEのARCHIVED化、対象版のACTIVE化、系列`active_version_id`、元準備jobの確定を1 transactionで
+更新し、失敗時は全更新をrollbackする。ACTIVEになっても実入力stageは`NOT_EVALUATED`のままであり、
+`PAGE_INPUT_IDENTITY`、`SCAN_REGISTRATION`、`CROP_CORRESPONDENCE`、`INK_CLEARANCE`とpaged OCR受付/provider
+送信gateを開放しない。
+
+2026-09-16の実Chrome検証では、Step 5が表示中TemplateVersion自身の正式資格をGETし、PASSかつ未失効で
+blockerなしの場合だけ、取得済みcurrent revisionを`base_revision`として上記approve APIへ送信した。
+承認成功後は既知の所有Template IDからauthoritative detailを再取得し、対象ACTIVE、旧版ARCHIVED、
+`active_version_id`一致、他ACTIVEなしを確認してからUIを更新する。一覧summaryの省略された`versions`、
+保存boolean、approve response単独をACTIVE表示の根拠にしない。対象実版のV2 ACTIVE化後もpaged OCR受付は
+`PRINT_REFERENCE_NOT_VALIDATED`で閉鎖され、provider送信は発生していない。実証値とfrontend修正は
+[GUI Migration Phase 5](verification/gui-migration-phase5-20260916.md)を参照する。
+
+送信前の `CROP_CORRESPONDENCE` は、受付全ページ検証後、当該page/config/attemptと
+所有全体画像・参照画像のSHA/保存範囲を再確認して行う。期待region集合・padding込みbboxと、
+全5variantの実crop画素を照合する。抽出結果や保存PASS booleanだけでproviderを生成しない。
+不一致は送信前に拒否し、ページ別の理由を保持する。検証成功もscan registrationの局所誤差・
+実筆画clearance・本番資格の代替ではない。詳細は[送信前crop照合](verification/paged-crop-correspondence-20260913.md)。
 
 `qualified` / `ocrReady` / `productionReady` / `environmentQualified` / `productionQualified`等の保存booleanだけでACTIVE化・production paged OCRを許可しない。認定対象のidentity・evidence SHA・失効条件と未解決条件を再検証する。fixtureのgate置換やmock通過は本番環境の証明ではない。
 
 認定が不成立なら本番gateをfail-closedに維持する。renderer isolation / container設計は別infraタスクとして保留できるが、保留を理由に拒否を緩めない。再開時は実環境で正式なqualificationを行い、§10の変更手順と回帰検証を満たしてから本番開放する。
 
 ### 12.7 Renderer隔離とnative処理
+
+2026-09-12に本番化と印刷用PDF取得の明示要求、およびWSL依存導入の許可を受け、
+印刷用PDFに限り`PRINT_PDF_RENDERER=wsl`で選択する別rendererを追加した。
+固定入力のOffice変換・PDF構造検査をbubblewrapの非特権・ネットワーク分離namespaceへ収容し、
+systemd cgroupの資源上限と所有者leaseによる終了を要求する。非隔離fallbackは許可しない。
+Windows版のgeometry/font evidenceをLinux版へ流用せず、PDF生成成功で本番OCRのgateを解除しない。
+2026-09-13に同じ隔離境界での固定FODS寸法読取と、明示選択時だけWindows system fontsを
+固定readonly mountする診断を追加した。fontconfigの解決probeをOffice実描画中の全font/runtime
+証拠と同一視しない。新printAdapterの明示版選択だけが原本保持の拡張コピーを利用できる。
+旧planのadapter/小数倍率/geometryを自動更新せず、新geometry測定値は旧座標へ流し込まない。
+同日の明示確定APIでは、DRAFT/revision/原本/configを照合し、保存済みページ範囲を維持した
+新WSL geometryと整数印刷倍率を版へ保存できる。元canonical layoutと過去OCR snapshotは不変。
+PDFと全ページPNGを同一の隔離変換から生成し、SHA・寸法・全件数を確認する。
+renderer実行中はDB mutation lockを保持せず、生成後の再照合前に版を更新しない。
+印刷条件が同じ意味づけ編集では確定ファイルを再生成せず、条件変更時は再確定を要求する。
+このAPIの成功やprintFilesの存在はqualificationの代替ではなく、既存ACTIVE/受付gateを解除しない。
+実装・現時点の検証・未完了範囲は[複数ページ本番化](production-paged-ocr.md)を参照する。
+
+同日の追加で、WSL runtime imageのSHAを明示した呼出しに限り、root-ownedの読み取り専用
+SquashfsからOffice/Python/Popplerと設定を使用できる。内容を保持したdescriptorで前後SHAを
+検証し、private mount namespaceと従来cgroup/bubblewrap条件を維持する。
+image欠落・変更・mount失敗からlive runtimeへfallbackしない。未指定の旧経路は維持する。
+Windows fonts・host bootstrap・kernel等を含む完全な環境認定とは区別し、既存版/過去jobへ
+自動適用しない。詳細と残条件は[WSL runtime image](wsl-runtime-image.md)を参照する。
+
+固定runtimeのWindows fonts経路では、readonly font mountの全regular file集合を
+変換前後に内容hashし、追加・削除・変更を拒否する。候補fontだけやsize/mtimeだけで
+集合identityを代替しない。既存live経路/保存reportへ後付けしない。
+この一致は実描画glyph・文字対応や完全な環境資格の代替ではない。
+[font集合の検証](verification/wsl-font-directory-20260913.md)を参照する。
+
+`PRINT_WSL_RUNTIME_ID`を明示した新しい印刷確定では、寸法測定とreference生成へ同じIDを渡し、
+runtimeImageとfontDirectoryIdentityの完全一致を保存前に検査する。証拠欠落や不一致で
+下書き・config snapshot・成果物を更新せず、現在設定を既存版/過去job/保存済み取得へ後付けしない。
+これは[印刷確定の環境固定](pinned-print-preparation.md)であり、本番資格やgate解除ではない。
+
+固定runtimeの新呼出しはworkerソースを実行専用snapshotにし、Linux側のprivateな
+read-onlyコピーを実行する。隔離側の前後内容SHAと起動側のSHAを照合し、
+寸法測定とPDF生成の`workerIdentity`も保存前に一致させる。
+欠落/変更を許容せず、旧reportには後付けしない。host bootstrap全体の認定とは区別する。
+実装と失敗注入検証は[worker identity](verification/wsl-worker-identity-20260913.md)を参照する。
+
+WSLのOffice/PDF/font workerと入力を保持するbrokerは、入力の読取・解析より前に
+process-localなcore dump抑止を要求する。Linux pipe型core handler向けのsoft/hard limit 1と、
+CORE limit変更を拒否する検証済みseccomp filterを併用し、getter・他resource操作は維持する。
+変更拒否・実効値・filter/library SHAを両processの証拠として新しい変換応答に記録する。
+証拠欠落・不一致・未対応ABIでは変換応答を拒否し、非隔離fallbackや全WSLの設定変更はしない。
+旧保存reportへ成功証拠を補完しない。worker実装変更で以前の参照資格を失効させる。
+これは[クラッシュダンプ境界](verification/wsl-core-dump-boundary-20260914.md)の追加保護であり、
+環境全体の資格発行・本番gate解除・geometryやOCRデータ契約の変更ではない。
+
+固定runtimeを明示する新変換では、root bootstrapのPython検索treeを変換前後で内容hashし、
+実行ファイル・検索ZIPの有無・stdlib全entry・file linkの解決先を含む一致を要求する。
+isolated/no-site/no-bytecodeの実値、root所有と非書込条件、件数/bytes上限、読取中の変更を検査する。
+未知の検索経路、installation外へのlink、未対応directory link、欠落したlink先は拒否する。
+Office/glyph/vectorの新応答に `bootstrapPythonIdentity` を保存し、寸法測定・参照画像生成・
+再描画の間でも一致を要求する。旧reportには後付けせず、getterで現在の環境を成功として補完しない。
+この境界は[Python起動入力の前後照合](verification/wsl-bootstrap-python-enforcement-20260914.md)であり、
+さらにv2では、固定のhost起動ツール・Python拡張・libseccompのELF起動時依存を
+`nativeDependencies` として同じ前後照合・保存・再描画比較に含める。
+固定loaderの `--list` はroot所有のinstallation内ELFだけに使用し、帳票を渡さない。
+解決不能/未知の出力、loader環境変数、preload file、所有権/権限違反、集合/内容変更は拒否する。
+内容hashと依存graphに結び付く[ELF起動依存の照合](verification/wsl-native-bootstrap-enforcement-20260914.md)であり、
+動的dlopenの完全trace・systemd設定・Windows/WSLの完全な環境認定を代替しない。
+
+新しいWSL資格検証では、bootstrap証拠を持つ保存版について、帳票を渡さない独立した
+環境照会で選択runtimeの実体SHA・全font集合・worker・Python/ELF起動依存・broker core guardを
+再取得し、保存された参照画像の実行条件との完全一致を要求する。
+この一致の証拠は版・所有artifact graphに結び付け、24時間の上限付きで別のJobArtifactへ保存する。
+GETでは所有者・SHA・版・期限を先に検査し、その後に現在の実体を再読取する。
+期限切れ・未来時刻・graph変更・現物不一致を、保存booleanや期限延長で通さない。
+旧reportに新証拠を後付けせず、GETでDBを更新しない。
+これは [環境identityの期限付き照合](verification/wsl-environment-identity-lease-20260914.md) であり、
+scopeは `identity-freshness-only`。完全な環境認定証ではなく、これだけでACTIVE/送信を許可しない。
+
+新規lease v2はWindows build/UBR/DisplayVersion、architecture、WSL launcher実体SHAと
+version応答の生bytes SHAも記録し、Linux照会前後・GET再検査で完全一致を要求する。
+旧leaseへのhost情報の補完はしない。これは資格記録取得時のhost更新検出であり、
+元の帳票変換時のhost状態やOS依存全体を遡って認定しない。
+
+保存済みWSL実行報告の読取では、installation identityの一致だけで隔離条件を認めない。
+非特権UID、loopbackのみのinterface、通信拒否、no-new-privileges、host領域非公開、
+固定したmemory/swap/pids/CPU上限、Windows font mountのreadonlyを型も含めて照合する。
+新しいbootstrap証拠を持つreport、または隔離観測を一部でも持つreportでは全項目を要求する。
+寸法測定と参照画像の片側だけから観測を削除して旧形式扱いに戻すことも拒否する。
+観測のない旧reportは補完せず、現在の環境leaseを発行しない。
+固定runtimeの新変換応答、保存graph、再描画比較、環境lease保存/読取へ同じ検査を適用する。
+これは[実行時隔離証拠の検証](verification/wsl-execution-evidence-20260914.md)であり、
+環境全体の資格発行・native動作全体の認定・ACTIVE/受付の成功経路ではない。
+
+新しいCalcモデルの明示印刷確定では、同じread-only UNO documentから列幅・行高と
+単一セルrange Sizeを観測し、そのdocumentをFODSへ出力する。観測は出力前後で一致させ、
+要求したシート/行列prefix・原本SHA・FODS SHA・固定runtime/worker/fontに束縛する。
+FODSだけでは判別不能なuint16桁あふれを、独立したwide寸法と累積座標の整数丸めで拒否する。
+UNO欠落からCLI再読込へfallbackしない。要求prefixは行列合計20000以内とし、固定I/O・
+network/resource/lease隔離を広げない。旧下書きの閲覧に新証拠を後付けせず、Calcの参照資格
+検証には独立観測を要求する。これは寸法照合であり、本番許容値・環境資格・crop/inkの認定や
+gate解除ではない。[同一読込の寸法観測](verification/uno-same-import-20260914.md)を参照する。
+
+固定runtimeの新しいOffice/glyph/vector変換では、所有unitの時間・終了・file-size等の
+実効設定をbrokerで確認するまで、子は入力解析を待つ。成功記録をroot-owned directoryへ
+atomicに公開し、子はreadonly mount・file不変・実RLIMIT_FSIZEを検査する。
+欠落/不一致/起動失敗/時間切れは解析前に停止し、所有者切断時の既存停止境界も維持する。
+保存/bridge/再描画/leaseのunitControlsは完全な検証を要求し、旧reportへ成功を補完しない。
+これは[解析前の実効設定検査](verification/wsl-unit-admission-20260914.md)であり、
+環境全体の資格発行・geometry認定・ACTIVE/受付の成功経路を代替しない。
+
+WSL印刷確定版の参照検証は、その版に保存した原本・印刷XLSX/PDF・測定report・全ページ画像の
+artifact所有者と内容SHAを照合する。Windows版Officeで再生成して代替しない。
+検証実装/版/成果物の変更で失効し、保存前の再照合と既存geometry/crop条件を維持する。
+これは[保存成果物の参照検証](prepared-reference-qualification.md)としてPhase 2証拠を構成し、
+Phase 3の正式issuerはこの所有証拠を現在条件で再評価する。保存booleanや成果物一致だけで
+environment資格へ昇格させず、資格が成立してもACTIVE/受付gateを解除しない。
+
+固定環境を記録したWSL版の明示参照検証では、保存印刷XLSXを同じruntime IDで再描画し、
+入力/環境条件と全ページの順序・寸法・画像bytes/SHAを照合する。
+比較用画像は同じsource jobの別artifactとし、元印刷成果物/意味づけを置換しない。
+GETでの証拠再検査にOffice実行を含めず、保存済み一致booleanだけでは通過させない。
+詳細は[再描画比較](prepared-reference-replay.md)。これは環境/字形/crop資格の代替ではない。
+
+固定環境を持つ WSL 版の明示参照検証は、所有された保存 PDF を専用 glyph helper に渡せる。
+PDF/font parse は固定依存・read-only code/input/font 集合・network/cgroup/lease 境界内に置く。
+全使用文字 code の Unicode・source/embedded glyph・metrics/hints を照合する。
+結果を版・印刷成果物 graph と同じ source job の別 artifact に束縛し、GET で所有者・内容 SHA・
+入力・実装 identity を再検査する。表示 boolean だけで未検証条件を解除しない。
+この一致で除けるのは glyph の未検証条件だけで、宣言 face と異なる実 face には fallback の
+未認定条件を残す。環境全体・文字位置・可視性・crop・手書き OCR の安全性へ流用しない。
+既存版/原本/印刷 PDF の暗黙置換、旧 report の補完、本番 gate の解除は行わない。
+詳細は[字形検証](renderer-glyph-validation.md)を参照する。
+
+固定環境を持つWSL版では、各fieldの四辺と最終PNGの観測を版所有artifactとして追加保存できる。
+不足する罫線の測定コピーは元印刷ファイルから再生成可能な最小変更に限定し、文字プログラム・
+font resource・用紙・環境の一致、測定線近傍以外の画素不変を要求する。原本・印刷成果物・
+保存座標やmappingを置換しない。GETでは所有者/内容/実装/入力graphを再検証して計算し直す。
+元のanchor診断を削除せず、座標観測 `MEASURED` や暗い画素の存在だけで可視性・本番の許容値・
+環境を認定しない。詳細は[項目別四辺の保存証拠](verification/prepared-field-geometry-20260913.md)。
+
+細い破線の観測には、隔離内で純粋なstroke命令1個だけを抑止したPDF測定コピーと、
+全ページRGB差分を追加できる。元のdecoded contentは当該1 byte以外保持し、用紙・数値・
+文字/font resourceを照合する。元PNGとの画素identityと対象外差分を再検査し、GETでも
+保存summaryではなく所有されたhelper証拠から再計算する。既存raster診断は消さない。
+subpixelのpaint componentと実線交点候補は別に記録し、交点候補だけで成功としない。
+破線片に描画寄与がなく、他の実線の独立したink/contrast観測でも裏付けられない場合は
+未検証を維持する。これは[描画寄与の観測](verification/stroke-differential-20260913.md)であり、
+資格発行・本番許容値・cropや文字の可視性の認定ではない。
+
+同じ線が複数欄を横断する場合は、明示field/bindingsと辺の範囲に限った
+subpixel描画寄与を追加検査できる。欄外componentを当該欄の要件に含めないが、
+既存端点guard・画素/contrast閾値は広げず、欄内に未観測componentがあれば拒否を維持する。
+実測したink欠落や差分証拠の欠落・不完全・ゼロを救済しない。元の全線診断を保存し、
+GETで所有証拠から再計算する。これは[欄別観測](verification/field-raster-scope-20260913.md)であり、
+独立したgeometry誤差・可視性・環境・本番資格を証明しない。
+
+独立した単一segmentのsubpixel実線では、同じ固定helperの校正PDF生RGBを再検証した場合に限り、
+Splashのstroke adjustmentから予測した画素位置を別の補助観測として使用できる。
+校正の入力/code/runtime identityと全256ケースを要求し、元の全線観測・geometry誤差は保持する。
+画素探索・端点guard/閾値の拡大・座標の変更はせず、予測画素にもinkがなければ未検証を維持する。
+校正なし・不一致、破線・複合path・curve・clip・shear等を推測で救済しない。
+保存/GETでは所有helper証拠の生RGBから再計算し、保存summaryを成功根拠にしない。
+これは[細線の丸め位置の観測](verification/splash-stroke-quantization-20260913.md)であり、
+環境資格・本番許容値・cropや文字可視性・ACTIVE/受付gateの認定を代替しない。
+
+保存済みCalcモデルの参照検証では、原本に束縛された寸法・ページ/field範囲から整数グリッドを
+再計算し、固定した整数point PDF出力と観測四辺の数値同一性を追加照合する。
+保存rectangleの丸め不一致・min=1拡張・未観測/曖昧な辺・未対応座標系を成功扱いにしない。
+保存/GETとも所有vector/rasterから再計算し、計算/照合実装のSHA変更で旧資格を失効させる。
+旧geometry・座標・意味づけを移行せず、既存診断の削除や画像fit、許容値拡大を行わない。
+これは[整数PDF座標との対応](verification/calc-pdf-coordinate-precision-20260914.md)であり、
+数値一致だけで本番許容値・可視性・環境・crop・ACTIVE/受付を認定しない。
 
 AppContainerの通信拒否probeが通っても、実Officeの変換・IPC・filesystem・lifecycleが同じ隔離条件で成立する証明にはならない。Job Objectの資源制限とnetwork isolationも同一視しない。隔離失敗時に無制限processや広い権限へfallbackしない。
 
@@ -523,6 +850,10 @@ Office互換性のためのbinary patch・hook・独自再ビルドは通常修�
 未信頼PDFのnative parse / raster失敗をbackend本体へ波及させない。新reference rendererのPDFium helper process境界を維持し、無条件にbackend内native処理へ戻さない。helper自身のnetwork・資源・入出力・依存関係も認定対象とする。timeout・cancel・親終了時は所有processと一時領域だけを回収し、他jobやユーザーのOffice processを終了しない。
 
 ### 12.8 Geometry誤差とcrop安全性
+
+§12.6の承認済み二段階契約では、以下の実筆画・scan registrationの検査は実入力を得た
+OCR実行時の責務である。テンプレート側のcrop領域定義・対応・参照geometryの検証は有効化前に残る。
+検査の時期を分けても、clearance証拠の欠落をPASSに変えたり、providerへ先に送信してはいけない。
 
 geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、内容と境界・隣接内容とのclearance、paddingを区別して評価する。独立したclearance証拠がなければ未検証とし、空の基準画像や人工fixtureだけから実手書きの安全性を推定しない。padding増加や閾値緩和でgeometry誤差を隠さない。
 

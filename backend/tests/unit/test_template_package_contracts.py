@@ -259,6 +259,20 @@ def test_canonical_template_rejects_local_model_fields() -> None:
         CanonicalTemplate.model_validate(payload)
 
 
+def test_package_v1_cannot_silently_drop_virtual_heading_page_ownership() -> None:
+    payload = _generic_template_payload()
+    layout = payload["layout"]
+    assert isinstance(layout, dict)
+    heading = {"id": "virtual", "role": "parent_label", "source": "manual", "virtual": True,
+               "text": "分類", "confidence": 1, "x": 1, "y": 1, "width": 30, "height": 20}
+    layout["cells"].append(heading)
+    # Legacy virtual headings remain portable; only page-owned nodes are unsupported.
+    CanonicalTemplate.model_validate(payload)
+    heading["pageRange"] = "A1:D31"
+    with pytest.raises(ValidationError, match="Page virtual headings require printLayout"):
+        CanonicalTemplate.model_validate(payload)
+
+
 def test_spreadsheet_template_requires_a_sanitized_source_workbook() -> None:
     payload = _generic_template_payload()
     payload["mode"] = TemplateMode.SPREADSHEET_TEMPLATE.value

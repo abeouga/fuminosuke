@@ -16,6 +16,10 @@ from app.services.print_layout_source import read_source
 
 def workbook_copy(content: bytes, plan: dict[str, Any]) -> bytes:
     """Reuse the preserving Office adapter, then add the saved manual row breaks."""
+    if plan.get("printAdapter") is not None:
+        from app.services.preserving_print_workbook import workbook_copy as preserving_copy
+
+        return preserving_copy(content, plan)
     try:
         inspect_package(content)
         pages = plan["pages"]

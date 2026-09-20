@@ -336,6 +336,17 @@ class LayoutService:
 
             require_draft(version)
             require_isolated_structure(version, layout.model_dump(mode="json", by_alias=True))
+            from app.services.page_authoring_validation import (
+                validate_page_edit,
+                validate_page_headings,
+            )
+
+            proposed = layout.model_dump(mode="json", by_alias=True)
+            validate_page_headings(proposed, version.quality_json.get("printLayout"))
+            if (any(cell.page_range is not None for cell in layout.cells)
+                    or any(c.get("pageRange") for c in version.layout_json.get("cells", []))):
+                # The ordinary layout endpoint must not bypass source identity checks.
+                validate_page_edit(version.layout_json, proposed)
             if (
                 layout.canonical_width != version.canonical_width
                 or layout.canonical_height != version.canonical_height

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,17 @@ class AppSettings(BaseModel):
     host: Literal["127.0.0.1", "localhost", "::1"]
     port: int = Field(ge=1, le=65535)
     frontend_origins: tuple[str, ...]
+    print_pdf_renderer: Literal["appcontainer", "wsl"] = "appcontainer"
+    print_wsl_distribution: str = Field(
+        default="Ubuntu-22.04", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    print_wsl_runtime_id: str | None = None
+
+    @field_validator("print_wsl_runtime_id")
+    @classmethod
+    def validate_print_runtime_id(cls, value: str | None) -> str | None:
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("Invalid print runtime identity: expected a lowercase SHA-256")
+        return value
 
     @field_validator("frontend_origins")
     @classmethod
@@ -198,6 +210,12 @@ class RawSettings(BaseSettings):
         default="127.0.0.1", validation_alias="APP_HOST"
     )
     app_port: int = Field(default=8000, validation_alias="APP_PORT")
+    print_pdf_renderer: Literal["appcontainer", "wsl"] = Field(
+        default="appcontainer", validation_alias="PRINT_PDF_RENDERER")
+    print_wsl_distribution: str = Field(
+        default="Ubuntu-22.04", validation_alias="PRINT_WSL_DISTRIBUTION")
+    print_wsl_runtime_id: str | None = Field(
+        default=None, validation_alias="PRINT_WSL_RUNTIME_ID")
     app_log_level: str = Field(default="INFO", validation_alias="APP_LOG_LEVEL")
     frontend_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
@@ -379,6 +397,9 @@ class Settings:
                 host=raw.app_host,
                 port=raw.app_port,
                 frontend_origins=origins,
+                print_pdf_renderer=raw.print_pdf_renderer,
+                print_wsl_distribution=raw.print_wsl_distribution,
+                print_wsl_runtime_id=raw.print_wsl_runtime_id,
             ),
             storage=StorageSettings(
                 data_dir=data_dir,

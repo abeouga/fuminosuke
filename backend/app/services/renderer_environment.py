@@ -137,7 +137,7 @@ def environment_report(identity: dict[str, Any]) -> dict[str, Any]:
                 "requiredPrivileges": "standard user", "networkCapabilities": [],
                 "qualified": False, "productionPathEnabled": False},
             "runtimeDependencies": {"method": "job-pids-psapi-poll-v1",
-                "completeTrace": False, "hashCache": "path-size-mtime-ctime-v1"},
+                "completeTrace": False, "hashCache": "none-content-rehashed-v1"},
             "cropSafety": {"qualified": False, "policy": THRESHOLD_POLICY},
             "resourceIsolation": {"qualified": False, "policy": RESOURCE_POLICY,
                                   "osEnforcementImplemented": True},

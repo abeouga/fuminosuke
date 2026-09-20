@@ -11,6 +11,8 @@ from typing import Any, Literal
 from pydantic import Field
 
 from app.core.errors import AppError
+from app.domain.calc_print_grid import MODEL as CALC_GEOMETRY_MODEL
+from app.domain.calc_print_grid import frame_origin
 from app.layout_analysis.models import LayoutModel
 
 MIN_SAFE_PRINT_SCALE = 0.70
@@ -64,6 +66,11 @@ def page_plan(
         raise print_error(" / ".join(source["unsupported"]), "PRINT_LAYOUT_UNSUPPORTED")
     first, last = source["startRow"], source["endRow"]
     boundaries = {item["row"]: item["y"] for item in source["rowBoundaries"]}
+    calc_grid = source.get("geometryModelVersion") == CALC_GEOMETRY_MODEL
+    fitting = ({item["row"]: item["y"] for item in source["nominalRowBoundaries"]}
+               if calc_grid else boundaries)
+    fit_width = source["nominalWidth"] if calc_grid else source["width"]
+    fit_height = source["nominalHeight"] if calc_grid else source["height"]
     valid = set(source["validBreakRows"])
     paper_w, paper_h = PAPER_MM[request.paper_size]
     if request.orientation == "landscape":
@@ -96,20 +103,20 @@ def page_plan(
                 choices = [b for b in ordered if not breaks or b > breaks[-1]]
                 if remaining:
                     choices = choices[:-remaining]
-                desired = source["height"] * index / count
-                breaks.append(min(choices, key=lambda b: (abs(boundaries[b + 1] - desired), b)))
+                desired = fit_height * index / count
+                breaks.append(min(choices, key=lambda b: (abs(fitting[b + 1] - desired), b)))
         else:
-            width_scale = min(1.0, available_w / source["width"])
+            width_scale = min(1.0, available_w / fit_width)
             capacity = available_h / width_scale
             start = 0.0
-            while source["height"] - start > capacity + 0.001:
-                choices = [b for b in ordered if boundaries[b + 1] > start]
+            while fit_height - start > capacity + 0.001:
+                choices = [b for b in ordered if fitting[b + 1] > start]
                 if not choices:
                     break
-                fitting = [b for b in choices if boundaries[b + 1] - start <= capacity]
-                boundary = max(fitting) if fitting else choices[0]
+                fits = [b for b in choices if fitting[b + 1] - start <= capacity]
+                boundary = max(fits) if fits else choices[0]
                 breaks.append(boundary)
-                start = boundaries[boundary + 1]
+                start = fitting[boundary + 1]
                 if len(breaks) >= MAX_PAGES:
                     raise print_error("ページ数の上限50ページを超えます。")
     if breaks != sorted(set(breaks)) or any(b not in valid for b in breaks):
@@ -118,10 +125,15 @@ def page_plan(
         )
     starts = [first, *[b + 1 for b in breaks]]
     ends = [*breaks, last]
-    heights = [boundaries[b + 1] - boundaries[a] for a, b in zip(starts, ends, strict=True)]
+    heights = [fitting[b + 1] - fitting[a] for a, b in zip(starts, ends, strict=True)]
     if any(h <= 0 for h in heights):
         raise print_error("空のページは作成できません。")
-    scale = min(1.0, available_w / source["width"], *[available_h / h for h in heights])
+    scale = min(1.0, available_w / fit_width, *[available_h / h for h in heights])
+    integer_scale = source.get("printScalePolicy") == "integer-percent-v1"
+    if integer_scale:
+        scale = math.floor(scale * 100 + 1e-9) / 100
+        if scale < 0.10:
+            raise print_error("印刷倍率がExcelの対応下限10%を下回ります。")
     raster = RENDER_DPI / 72
     warnings = list(source["warnings"])
     if scale < MIN_SAFE_PRINT_SCALE:
@@ -140,6 +152,24 @@ def page_plan(
             x_offset += (available_w - source["width"] * scale) / 2
         if request.vertical_centering:
             y_offset += (available_h - h * scale) / 2
+        if calc_grid:
+            grid = source["printGrid"]
+            zoom = round(scale * 100)
+            try:
+                x_offset = frame_origin(
+                    round(paper_w * 1440 / 25.4), round(margins.left * 1440 / 25.4),
+                    round(margins.right * 1440 / 25.4),
+                    sum(grid["columns"][source["startCol"] - 1:source["endCol"]]), zoom,
+                    centered=request.horizontal_centering,
+                ) * scale * 72 / 2540
+                y_offset = frame_origin(
+                    round(paper_h * 1440 / 25.4), round(margins.top * 1440 / 25.4),
+                    round(margins.bottom * 1440 / 25.4), sum(grid["rows"][a - 1:b]), zoom,
+                    centered=request.vertical_centering,
+                ) * scale * 72 / 2540
+            except ValueError as exc:
+                raise print_error("Calcの整数印刷範囲内にページを配置できません。",
+                                  "PAGE_GEOMETRY_MISMATCH") from exc
         transform = {
             "scale": scale * raster,
             "offsetX": x_offset * raster,
@@ -192,6 +222,8 @@ def page_plan(
         "targetPagesWide": 1,
         "targetPagesTall": request.target_pages_tall,
         "commonScale": scale,
+        **({"printScalePolicy": "integer-percent-v1", "printAdapter": source["printAdapter"]}
+           if integer_scale else {}),
         "pages": pages,
         "warnings": warnings,
         "importedSettings": source["importedSettings"],

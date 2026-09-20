@@ -1,0 +1,95 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { LayoutDefinition } from "../types";
+import type { PageView } from "../pageAuthoring";
+import { LayoutEditor } from "./LayoutEditor";
+
+const initial: LayoutDefinition = { canonicalWidth: 400, canonicalHeight: 300, relations: [], warnings: [],
+  detector: "test", ocrAvailable: false, allowCrossAxisLabels: true, cells: [
+  { id: "h", role: "parent_label", virtual: true, source: "manual", text: "見出し",
+    x: 10, y: 10, width: 40, height: 30, confidence: 1, textConfidence: null },
+  ...[0, 1].map(i => ({ id: `child${i}`, role: "label" as const, parentLabelCellId: "h", source: "manual" as const,
+    text: `項目${i}`, x: 200 + i * 60, y: 120, width: 40, height: 30, confidence: 1, textConfidence: null })),
+] };
+let curves = vi.fn();
+beforeEach(() => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.stubGlobal("Image", class {
+    onload: (() => void) | null = null;
+    set src(_value: string) { this.onload?.(); }
+  });
+  curves = vi.fn();
+  const context = new Proxy({ bezierCurveTo: curves, measureText: () => ({ width: 20 }) }, {
+    get: (target, property) => Reflect.get(target, property) ?? vi.fn(),
+    set: (target, property, value) => Reflect.set(target, property, value),
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+function canvas() {
+  const element = screen.getByLabelText("帳票レイアウト編集キャンバス");
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0,
+    right: 400, bottom: 300, width: 400, height: 300, toJSON: () => ({}) });
+  return element;
+}
+
+test.each(["classify", "meaning", "records", "review"] as const)("%s shows only hovered heading connections, not persistent selection", workflowStep => {
+  const onSave = vi.fn(), onDirtyChange = vi.fn();
+  render(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
+    onDetect={vi.fn()} onDirtyChange={onDirtyChange} workflowStep={workflowStep} />);
+  const element = canvas();
+  expect(curves).not.toHaveBeenCalled();
+  fireEvent.pointerMove(element, { clientX: 20, clientY: 20, buttons: 0 });
+  expect(curves).toHaveBeenCalledTimes(2);
+  curves.mockClear();
+  fireEvent.pointerMove(element, { clientX: 210, clientY: 130, buttons: 0 });
+  expect(curves).toHaveBeenCalledTimes(1);
+  fireEvent.pointerDown(element, { clientX: 210, clientY: 130 });
+  fireEvent.pointerUp(element, { clientX: 210, clientY: 130 });
+  curves.mockClear();
+  fireEvent.pointerMove(element, { clientX: 380, clientY: 280, buttons: 0 });
+  expect(curves).not.toHaveBeenCalled();
+  fireEvent.pointerMove(element, { clientX: 20, clientY: 20, buttons: 0 });
+  curves.mockClear();
+  fireEvent.pointerLeave(element);
+  expect(curves).not.toHaveBeenCalled();
+  expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  expect(onSave).not.toHaveBeenCalled();
+});
+
+test("page switching clears hover and uses page-local coordinates without revealing other pages", () => {
+  const layout = { ...initial, cells: initial.cells.map(cell => cell.id === "h" ? { ...cell, pageRange: "A1:D10" } : cell) };
+  const page: PageView = { page: 1, range: "A1:D10", startRow: 1, endRow: 10, width: 400, height: 300,
+    imageUrl: "page.png", cells: [], transform: { scale: 1, offsetX: 0, offsetY: 0, originX: 0, originY: 0 },
+    fields: initial.cells.slice(1).map(cell => ({ cellId: cell.id, sourceRange: "B2", templatePage: 1,
+      rectangle: { x: cell.x, y: cell.y, width: cell.width, height: cell.height } })) };
+  const props = { source: "preview.png", initialLayout: layout, targets: [], onSave: vi.fn(), onDetect: vi.fn(), workflowStep: "meaning" as const };
+  const view = render(<LayoutEditor {...props} pageView={page} />);
+  fireEvent.pointerMove(canvas(), { clientX: 20, clientY: 20, buttons: 0 });
+  expect(curves).toHaveBeenCalledTimes(2);
+  curves.mockClear();
+  view.rerender(<LayoutEditor {...props} pageView={{ ...page, page: 2, range: "A11:D20", fields: [] }} />);
+  fireEvent.pointerMove(canvas(), { clientX: 20, clientY: 20, buttons: 0 });
+  expect(curves).not.toHaveBeenCalled();
+  view.rerender(<LayoutEditor {...props} pageView={page} />);
+  expect(curves).not.toHaveBeenCalled();
+});
+
+test("hovering the repeated band's gap reveals one group connection without changing column ownership", () => {
+  const layout: LayoutDefinition = { ...initial, cells: initial.cells.map(cell => ({ ...cell, parentLabelCellId: null })),
+    recordSections: [{ id: "band", title: "一覧", recordType: "generic", collectionPath: "genericRecords.test",
+      recordLabelCellIds: ["child0", "child1"], parentLabelCellId: "h", rowKeyStrategy: "position", source: "manual" }] };
+  const onSave = vi.fn(), onDirtyChange = vi.fn();
+  render(<LayoutEditor source="preview.png" initialLayout={layout} targets={[]} onSave={onSave}
+    onDetect={vi.fn()} onDirtyChange={onDirtyChange} workflowStep="records" />);
+  const element = canvas();
+  expect(curves).not.toHaveBeenCalled();
+  fireEvent.pointerMove(element, { clientX: 250, clientY: 135, buttons: 0 });
+  expect(curves).toHaveBeenCalledTimes(1);
+  curves.mockClear();
+  fireEvent.pointerLeave(element);
+  expect(curves).not.toHaveBeenCalled();
+  expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  expect(onSave).not.toHaveBeenCalled();
+});

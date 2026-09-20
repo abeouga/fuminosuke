@@ -34,6 +34,7 @@ layout-ocr = [
   "paddlepaddle>=3.0,<4.0",
 ]
 dev = [
+  "fonttools==4.65.0",
   "httpx==0.28.1",
   "mypy==1.17.0",
   "pytest==8.4.1",

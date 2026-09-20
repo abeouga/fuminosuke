@@ -15,6 +15,7 @@ import { FilePicker } from "../components/FilePicker";
 import { showToast } from "../components/Toast";
 import { JobProgress } from "../components/JobProgress";
 import { TemplatePackageDialog } from "../components/TemplatePackageDialog";
+import { TemplatePrintFiles } from "../components/TemplatePrintFiles";
 import { useJobPoller } from "../hooks/useJobPoller";
 import {
   navigateToSpreadsheet,
@@ -291,7 +292,13 @@ export function OcrPage({
     };
   }, [mappingRetryToken, versionId]);
   const { job, connectionLost } = useJobPoller(jobId, (terminal) => {
-    if (terminal.status !== "REVIEW_REQUIRED" || activeVersion?.quality.printLayout != null) return;
+    if (terminal.status !== "REVIEW_REQUIRED") return;
+    if (activeVersion?.quality.printLayout != null) {
+      void api.pageReview(terminal.id).then(() => openReview(terminal.id))
+        .catch((reason) => showToast({ tone: "error", title: "ページ結果を開けませんでした",
+          message: reason instanceof Error ? reason.message : "バックエンドとの接続を確認してください。" }));
+      return;
+    }
     void api.result(terminal.id)
       .then((result) => {
         const sync = result.spreadsheetSync;
@@ -431,6 +438,12 @@ export function OcrPage({
                             </small>
                           </span>
                         </button>
+                        {version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE" && (
+                          <div className="ocr-template-print-files">
+                            <TemplatePrintFiles key={version.id} versionId={version.id} disabled={deleting}
+                              disabledReason={version.quality.printLayout ? undefined : "印刷ページ設定が保存されていません。"} />
+                          </div>
+                        )}
                         <span className="ocr-template-card-actions">
                           <button
                             type="button"

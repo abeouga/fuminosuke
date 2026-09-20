@@ -7,6 +7,7 @@ from typing import cast
 
 from app.core.errors import AppError
 from app.domain.ocr_models import ReadingStatus
+from app.domain.paged_document_metadata import request_identity_fields
 from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
 from app.domain.template_candidates import normalize_candidate_target
 from app.domain.template_config import FieldMappingConfig
@@ -134,7 +135,7 @@ class OcrRequestPreparer:
         preview_text_regions: list[OcrRegionInput] = []
         fixed_record_regions: list[OcrRegionInput] = []
         local_resolution_by_id: dict[str, str] = {}
-        document_identity_fields = extraction.config.effective_document_identity_fields()
+        document_identity_fields = request_identity_fields(extraction.config, job_snapshot)
         for region in region_configs:
             mapping_config = mapping_by_id.get(region.region_id)
             if mapping_config is not None and mapping_config.mapping_type == "mark":

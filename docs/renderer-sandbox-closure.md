@@ -1,5 +1,9 @@
 # Renderer Sandbox & Production Qualification Closure — 2026-09-08
 
+2026-09-13追記: 本文のmetadataベースSHA cacheは、通常の短時間書換えでも古い値を返す
+不具合が全体試験で検出されたため除去した。[依存SHAの再検証](renderer-identity-freshness.md)を参照。
+以下は2026-09-08時点の履歴であり、本番認定済みの証明ではない。
+
 **本番認定は不成立、ACTIVE・複数ページOCR受付は閉鎖を維持する。** AppContainer起動、通信拒否の実測、Office停止原因のnamed pipe検証、埋込みfontの照合、実行時DLL manifest、PDFium helper、crop clearanceの計算と拒否境界を実装した。現LibreOfficeバイナリはAppContainer内でPDFを生成できず、helperのネットワーク隔離と実帳票のcrop clearanceも未認定である。
 
 正本は[環境artifact](reference-renderer-evidence/closure/environment.json)、[通信・Office試験](reference-renderer-evidence/closure/network.json)、[font試験](reference-renderer-evidence/closure/fonts.json)、[resource試験](reference-renderer-evidence/closure/resources.json)。前Phaseのenvironment/calibration evidenceは保持した。

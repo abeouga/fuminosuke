@@ -262,8 +262,9 @@ test("creates a virtual heading and groups mapped merged and mark cells, with a 
   const ui = setup(initial, "records");
   fireEvent.click(ui.editor.getByRole("button", { name: "仮想見出し" }));
   ui.click(5, 10);
-  fireEvent.change(ui.editor.getByRole("textbox", { name: "仮想見出しの名称" }), { target: { value: "記入日" } });
-  fireEvent.click(ui.editor.getByRole("button", { name: "見出しを配置" }));
+  const inlineEditor = ui.editor.getByRole("textbox", { name: "仮想見出し名" });
+  fireEvent.change(inlineEditor, { target: { value: "記入日" } });
+  fireEvent.keyDown(inlineEditor, { key: "Enter" });
   ui.drag(10, 20, 320, 120);
   fireEvent.click(ui.editor.getByRole("button", { name: "親項目を接続" }));
   ui.drag(270, 25, 20, 25);

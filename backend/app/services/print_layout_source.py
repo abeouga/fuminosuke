@@ -238,6 +238,10 @@ def _read_source(
         fields = []
         authored_merges = {m["parentCellId"]: m for m in layout.get("cellMerges", [])}
         for field in layout.get("cells", []):
+            # A page-owned virtual heading is a display node, never a source range.
+            if (field.get("virtual") is True and field.get("role") == "parent_label"
+                    and field.get("source") == "manual" and field.get("pageRange")):
+                continue
             merge = authored_merges.get(field["id"])
             if merge:
                 # Resolve exact source ranges with the same contiguous-rectangle

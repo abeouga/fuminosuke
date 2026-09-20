@@ -14,8 +14,12 @@ from sqlalchemy import select
 from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
 from app.domain.job_pages import PagedSubmission, template_page_id
+from app.domain.ocr_factory import blank_ocr_document
+from app.domain.ocr_models import BoundingBox, FieldReading
 from app.domain.template_config import FieldMappingConfig, parse_template_config
 from app.jobs.runner import JobRunner
+from app.ocr.base import OcrProviderResponse
+from app.ocr.deterministic_mapper import assign_mapped_reading
 from app.services.extraction_service import ImageExtractionService
 from app.services.job_page_service import JobPageService
 from app.services.job_service import JobService, UploadPayload
@@ -159,6 +163,24 @@ def execution(service):
     workflow = OcrWorkflowService(
         settings=service.settings, database=service.database, storage=service.storage
     )
+    class PageFixtureProvider:
+        async def extract(self, request):
+            # The generic mock-result.json is a cattle-ledger document with unrelated
+            # values and no crop provenance. Use request-bound readings for page tests.
+            document = blank_ocr_document(provider="mock", source_regions=[])
+            for region in request.regions:
+                assert region.target_path and region.bounding_box
+                x, y, width, height = region.bounding_box
+                assign_mapped_reading(document, region.target_path, FieldReading(
+                    raw=None, normalized=None, status="blank",
+                    source_region_id=region.source_region_id or region.region_id,
+                    bounding_box=BoundingBox(x=x, y=y, width=width, height=height),
+                ))
+            return OcrProviderResponse(
+                document=document, provider="mock", model_id="page-fixture",
+                prompt_version="fixture", api_call_count=0,
+            )
+    workflow._create_provider = lambda name: PageFixtureProvider()
     return PagedOcrExecution(service, extraction, workflow)
 
 

@@ -248,14 +248,31 @@ class TemplateAligner:
                 borderValue=(255, 255, 255),
             )
         else:
-            homography = np.eye(3, dtype=np.float64)
+            # cv2.resize maps pixel centers, not corner coordinates. Preserve
+            # the same resized pixels while recording their actual transform.
+            sx = target_width / source_rgb.shape[1]
+            sy = target_height / source_rgb.shape[0]
+            homography = np.array(
+                [[sx, 0.0, (sx - 1.0) / 2],
+                 [0.0, sy, (sy - 1.0) / 2], [0.0, 0.0, 1.0]], dtype=np.float64,
+            )
             aligned = cv2.resize(
                 source_rgb, (target_width, target_height), interpolation=cv2.INTER_CUBIC
             )
             quality.registration_method = "IDENTITY_ECC_FALLBACK"
             quality.warnings.append("ORB_REGISTRATION_FALLBACK")
 
-        aligned, ecc_score = _ecc_refine(aligned, template_rgb)
+        aligned, ecc_score, ecc_warp = _ecc_refine_transform(aligned, template_rgb)
+        if not np.isfinite(ecc_warp).all() or abs(float(np.linalg.det(ecc_warp))) < 1e-8:
+            raise AppError(
+                status=422, code="LOW_REGISTRATION_CONFIDENCE",
+                title="Low registration confidence",
+                detail="帳票とテンプレートを十分な精度で位置合わせできません。",
+                metadata={"rejectionReason": "DEGENERATE_ECC_TRANSFORM"},
+            )
+        # ECC uses WARP_INVERSE_MAP. Its inverse must be composed with the
+        # preceding source -> aligned mapping; do not resample the image again.
+        homography = np.linalg.inv(ecc_warp) @ homography
         quality.ecc_score = ecc_score
         quality.edge_overlap = _edge_overlap(aligned, template_rgb)
         if quality.registration_method == "IDENTITY_ECC_FALLBACK":

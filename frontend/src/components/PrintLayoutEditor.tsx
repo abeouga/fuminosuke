@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { nearestBreak, printDefaults, type PrintCell, type PrintPlan, type PrintRequest, type PrintState } from "../printLayout";
 import "./PrintLayoutEditor.css";
-import { ReferenceQualification } from "./ReferenceQualification";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 
 function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boolean }) {
@@ -41,6 +40,8 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const [plan, setPlan] = useState<PrintPlan | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [prepareMessage, setPrepareMessage] = useState("");
   const [dirty, setDirty] = useState(false);
   const [pendingPreview, setPendingPreview] = useState(false);
   const [selectedPage, setSelectedPage] = useState(0);
@@ -49,11 +50,16 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const [zoom, setZoom] = useState(1);
   const [addRow, setAddRow] = useState("");
   const sequence = useRef(0);
+  const prepareSequence = useRef(0);
   const lock = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
+  useEffect(() => {
+    setPreparing(false); setPrepareMessage("");
+    return () => { ++prepareSequence.current; };
+  }, [versionId]);
   const apply = (next: PrintState) => {
     setState(next); setRequest(printDefaults(next)); setPlan(next.saved);
     setDirty(false); onSavedChange(Boolean(next.saved)); setSelectedPage(0);
@@ -78,6 +84,11 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   }, [externalState]);
   useEffect(() => {
     if (!opened || !request || !state || state.source.unsupported.length) return;
+    if (state.saved && !dirty) {
+      ++sequence.current;
+      setPlan(state.saved); setPendingPreview(false);
+      return;
+    }
     const token = ++sequence.current;
     setPendingPreview(true);
     setPlan(null);
@@ -92,7 +103,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
       });
     }, 180);
     return () => { window.clearTimeout(timeout); ++sequence.current; };
-  }, [opened, request, state, versionId]);
+  }, [opened, request, state, versionId, dirty]);
   const update = (next: Partial<PrintRequest>) => {
     if (!request) return;
     // Freeze current candidate ranges before changing paper/margins/targets.
@@ -109,8 +120,28 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     catch (e) { setError(e instanceof Error ? e.message : "保存できません。編集内容は保持しています。"); }
     finally { lock.current = false; setBusy(false); }
   };
+  const prepare = async () => {
+    if (!state?.saved || !state.editable || dirty || busy || preparing || disabled) return;
+    const token = ++prepareSequence.current;
+    const editingToken = sequence.current;
+    setPreparing(true); setPrepareMessage(""); setError("");
+    try {
+      const next = await api.preparePrintFiles(versionId, state.revision);
+      if (prepareSequence.current !== token) return;
+      if (sequence.current !== editingToken) {
+        setPrepareMessage("印刷用ファイルを生成しました。新しい編集内容は保持しています。保存後に設定を再取得してください。");
+        return;
+      }
+      apply(next);
+      setPrepareMessage(`印刷用ファイルを確定しました（${next.saved?.pages.length}ページ・${((next.saved?.commonScale ?? 0) * 100).toFixed(0)}%）。`);
+    } catch (e) {
+      if (prepareSequence.current === token) setError(e instanceof Error ? e.message : "印刷用ファイルを生成できません。編集内容は保持しています。");
+    } finally {
+      if (prepareSequence.current === token) setPreparing(false);
+    }
+  };
   const breaks = request?.breakAfterRows ?? plan?.pages.slice(0, -1).map(p => p.endRow) ?? [];
-  const blocked = disabled || busy || !state?.editable || Boolean(state?.source.unsupported.length);
+  const blocked = disabled || busy || preparing || !state?.editable || Boolean(state?.source.unsupported.length);
   const current = plan?.pages[selectedPage];
   const availableRows = state?.source.validBreakRows.filter(r => !breaks.includes(r)) ?? [];
   const addBoundary = () => {
@@ -136,7 +167,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     <button type="button" className="secondary" disabled={busy} aria-expanded={opened}
       onClick={() => { setOpened(!opened); if (!state && !opened) void load(); }}>印刷ページを編集</button>
     {opened && <>
-      <p className="inline-warning">下書きのページ設計に対応しています。ページ別の実OCR・補正・確定は未対応です。設定を保存した版は有効化できません。</p>
+      <p className="inline-warning">下書きのページ設計に対応しています。ページ別の実OCR・補正・確定は別の安全検査が必要です。印刷設定を変更した場合は、正式資格を再確認してください。</p>
       {error && <p role="alert" className="error-box">{error}</p>}
       {!state && <button type="button" disabled={busy} onClick={() => void load()}>読み込みを再試行</button>}
       {state && request && <>
@@ -246,13 +277,14 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
           </div>
         </div>
         <div className="print-controls">
-          {state.saved && <button type="button" disabled={disabled || busy || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button>}
+          {state.saved && <button type="button" disabled={disabled || busy || preparing || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button>}
+          {state.saved && state.editable && <button type="button" disabled={blocked || dirty || pendingPreview}
+            onClick={() => void prepare()}>{preparing ? "印刷用ファイルを生成中…" : "印刷用ファイルを確定"}</button>}
         </div>
+        {state.saved && state.editable && <p>保存済みのページ範囲を維持し、指定フォントと整数%の倍率でXLSX・PDF・基準画像を作成します。</p>}
+        {prepareMessage && <p role="status">{prepareMessage}</p>}
         {state.saved && <TemplatePrintFiles key={versionId} versionId={versionId} revision={state.revision}
           disabled={disabled || busy || dirty} />}
-        {state.saved && <ReferenceQualification versionId={versionId} revision={state.revision}
-          disabled={disabled || busy || dirty || !state.editable}
-          onBusyChange={setBusy} />}
       </>}
     </>}
   </section>;

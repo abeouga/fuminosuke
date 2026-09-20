@@ -228,14 +228,15 @@ def test_active_paged_template_cannot_silently_run_page_one(client, print_templa
     assert response.json()["code"] == "PRINT_LAYOUT_OCR_NOT_AVAILABLE"
 
 
-def test_fork_copies_page_artifacts_and_snapshot_without_changing_v1(client, print_template):
+def test_fork_keeps_page_plan_but_requires_own_prepared_graph(client, print_template):
     from app.db.models import Template
     from app.services.template_version_service import TemplateVersionService
 
     version_id, _, _, _ = print_template
     url = f"/api/v1/template-versions/{version_id}/print-layout"
     state = client.get(url).json()
-    saved = client.put(url, json=body(state)).json()["saved"]
+    prepared = client.put(url, json=body(state)).json()
+    saved = prepared["saved"]
     database, storage = client.app.state.database, client.app.state.storage
     # Exercise cloning defensively for imported/future persisted page metadata.
     # Current public activation intentionally refuses these plans.
@@ -244,7 +245,9 @@ def test_fork_copies_page_artifacts_and_snapshot_without_changing_v1(client, pri
         version.status = "ACTIVE"
         session.get(Template, version.template_id).active_version_id = version_id
         session.commit()
-    fork = TemplateVersionService(database, storage).edit(version_id)
+    fork = TemplateVersionService(database, storage).edit(
+        version_id, expected_revision=prepared["revision"]
+    )
     cloned = client.get(f"/api/v1/template-versions/{fork.id}/print-layout").json()
     assert cloned["source"]["unsupported"] == []
     for original, page in zip(saved["pages"], cloned["saved"]["pages"], strict=True):
@@ -254,6 +257,7 @@ def test_fork_copies_page_artifacts_and_snapshot_without_changing_v1(client, pri
         assert original["referenceImage"]["artifactId"] != page["referenceImage"]["artifactId"]
         assert original["referenceImage"]["sha256"] == page["referenceImage"]["sha256"]
         assert original["fields"][0]["cellId"] != page["fields"][0]["cellId"]
+    assert "printFiles" not in cloned["saved"]
     with database.session() as session:
         assert session.get(TemplateVersion, version_id).quality_json["printLayout"] == saved
         assert (

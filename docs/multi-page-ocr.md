@@ -1,5 +1,11 @@
 # 複数ページOCR実行基盤の実装報告
 
+2026-09-13追記: [ページ別レビュー](paged-review.md)で専用レビュー・補正と保存表を追加した。
+さらに[全ページ確定](paged-confirmation.md)と受付schemaVersion 2を追加した。
+以下の未対応記述・migrationなしは初期基盤の記録。[全ページXLSX出力](paged-output.md)と
+[ページ別の文書識別・名前候補](paged-document-metadata.md)を追加したが、
+書類一覧統合と本番開放は未完了。
+
 2026-09-07。**基盤は実装・fixture検証済み。本番の複数ページOCRは未開放であり、Phase全体は未完了。**
 指定XLSXの主要帳票は既存参考rendererの対象外、または印刷画像との位置精度が未検証です。
 拒否を解除するための精度証明を省略していません。実OpenAI / Google API呼出しは0回です。

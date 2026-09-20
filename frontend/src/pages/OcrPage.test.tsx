@@ -73,6 +73,34 @@ test("keeps a previously active template visible while editing and blocks OCR us
   expect(fetchMock.mock.calls.every(([input]) => String(input).includes("/artifacts"))).toBe(true);
 });
 
+test("active XLSX cards download their published print files without selecting another template", async () => {
+  const published = { ...templates[0].versions[0], mode: "SPREADSHEET_TEMPLATE" as const,
+    quality: { layoutVerified: true, printLayout: { pages: [{}] } } };
+  const sheet: Template = { ...templates[0], id: "sheet-template", name: "公開帳票", versions: [published,
+    { ...published, id: "draft-newer", status: "DRAFT", versionNumber: 4 } ] };
+  const fetch = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/artifacts")) return Promise.resolve(new Response(JSON.stringify({ items: [] })));
+    if (url.endsWith("/print-layout")) return Promise.resolve(new Response(JSON.stringify({ revision: "published-r" })));
+    if (url.includes("/files/")) return Promise.resolve(new Response(new Blob(["print fixture"])));
+    throw new Error(`Unexpected request ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  try {
+    render(<OcrPage templates={[sheet]} rememberJob={vi.fn()} openReview={vi.fn()} openTemplates={vi.fn()} />);
+    const card = screen.getByText("公開帳票").closest("article")!;
+    for (const format of ["XLSX", "PDF"]) {
+      fireEvent.click(within(card).getByRole("button", { name: `印刷用${format}` }));
+      await within(card).findByText(`印刷用${format}を取得し、ブラウザーへダウンロードを渡しました。`);
+      expect(fetch.mock.calls.some(([input]) => String(input).includes(
+        `/version-12345678/print-layout/files/${format.toLowerCase()}?base_revision=published-r`))).toBe(true);
+    }
+    expect(fetch.mock.calls.some(([input]) => String(input).includes("draft-newer"))).toBe(false);
+    expect(click).toHaveBeenCalledTimes(2);
+  } finally { click.mockRestore(); }
+});
+
 test("keeps an active template with a newer draft visible but unavailable for OCR", () => {
   const activeWithDraft: Template[] = [{
     ...templates[0],

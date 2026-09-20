@@ -18,6 +18,10 @@ fieldの識別は版内のmapping ID、矩形ID、generic field/context由来の
 1. `POST /api/v1/template-versions/{activeId}/edit` は現在のACTIVEを確認する。
    既存DRAFTが1つなら再開し、なければ同じ原本から独立したDRAFTを作る。
    既存DRAFTが複数なら409で停止し、勝手に選択しない。
+   `printLayout`版では更新元の現在revisionを`base_revision`として必須とし、stale要求を
+   409で拒否する。既存DRAFTの再開前に、更新元ID、系列、mode、DRAFT status、
+   version/job snapshotのlineage、所有するsource workbookの実bytes SHAを再検証する。
+   不一致を別DRAFTの新規作成で回避しない。
 2. 作成時に `max(version_number)+1` を確定する。途中保存は同じ版を更新する。
    却下された版番号は再利用しない。
 3. ACTIVE/ARCHIVED版のlayout、field mappings、mask、汎用定義の保存・検証を409で拒否する。
@@ -33,8 +37,24 @@ fieldの識別は版内のmapping ID、矩形ID、generic field/context由来の
 forkと承認・却下は既存のプロセス内mutation lockとSQLite `BEGIN IMMEDIATE` を使用する。
 承認では旧版status、新版status、active pointer、新準備job確定を1回のcommitで更新する。
 commit直前にflush後の例外を注入し、全DB状態が戻ることを検証する。
-fork失敗時もDBの半端な版・jobは残らない。ただし、DB rollback以前に複製済みの
-新規UUID配下ファイルは孤立ファイルとして残り得る。旧版ファイルを上書きしない。
+fork失敗時もDBの半端な版・jobは残らない。artifactは
+`jobs/{newJob}/1/{newArtifactId}.{sourceExtension}`へ複製し、元filenameをidentityに
+使用しない。複製元はjob/attempt所有関係と保存SHAを確認し、複製後に実bytes SHAを再読取する。
+保存先衝突、SHA不一致、copy途中失敗ではcommitせず、当該要求が新規作成したpathだけを削除する。
+旧版および過去jobのファイルは上書き・cleanupしない。
+
+新DRAFTへは編集継続に必要なlayout、page ranges、source関係、logical identityを継承するが、
+`referenceQualification`、資格boolean/certificate、`printFiles`、prepared graphや
+renderer/environmentの正式証拠は現在資格として継承しない。安全に複製したpage imageと
+保存済みgeometry/layout入力は編集継続用に保持できるが、それだけではprepared/qualifiedに
+ならず、新DRAFT自身の明示prepareとformal qualificationが必要である。
+
+2026-09-14以降、`printLayout`を持つpaged DRAFTの承認は、要求時のprint revisionと
+`wsl-prepared-reference-v2`正式資格を必須とする。承認transaction内でPhase 3と同じvalidatorを使い、
+version/source/plan/graph/artifact/environment/implementation/expiryを現在条件で再検証する。
+有効なenvironment資格とgeometry資格、未解決blockerなしを満たす場合だけ上記の既存切替を行う。
+printLayoutのない版は従来のlegacy readinessを維持する。paged版をACTIVEにしてもpaged OCR受付と
+provider送信は許可されず、実入力のidentity/registration/crop/ink検査は別の送信前gateに残る。
 
 ## Identity
 
@@ -101,8 +121,9 @@ XLSX出力先番地、旧job output bindingと旧job snapshotは維持する。
 既存のGoogle Sheets出力layout revisionと系列単位の候補設定は別の既存機能であり、
 それらの設定lifecycleは今回変更しない。
 
-同じ原本の複製までを対象とする。forkしたdraftのprepare再実行は409で拒否し、
-既存のlayout確認を使用する。新規テンプレートの初回DRAFTの再処理は従来どおり。
+同じ原本の複製までを対象とする。forkしたpaged DRAFTは版自身の明示prepare経路で
+version-bound artifact graphを再生成できるが、fork操作からprepareを自動連鎖しない。
+新規テンプレートの初回DRAFTの再処理は従来どおり。
 原本差し替え、再検出による原本migration、semantic matching、SPLIT/MERGE GUI、
 Correction Telemetry、モデルエスカレーションは未実装。
 
@@ -125,8 +146,25 @@ Correction Telemetry、モデルエスカレーションは未実装。
   `layout_service.py` の既存nullable文字列処理にもエラーあり。新規versioningモジュールの
   型エラーは解消済み。pytest既存cacheの権限警告は独立したtempとcache無効化で回避した。
 - `git diff --check` 通過。
-- 実ブラウザー操作、実データDB更新、実OpenAI/Google APIは実施していない。
-  API callsは0。実APIのmismatch/認識誤りは未実測であり0件とは扱わない。
+- 当初のversioning実装検証では、実ブラウザー操作、実データDB更新、実OpenAI/Google APIは
+  実施していなかった。その後の実Chrome承認は次節に記録する。OCR実APIのmismatch/認識誤りは
+  今回も未実測であり0件とは扱わない。
 - 自動テストはmock/fixtureでの契約検証であり、全帳票のGolden replayや実画像精度保証ではない。
   原本・field対応、補正とsnapshotの既存OCR contractを維持した。
 - commit / pushなし。
+
+## 2026-09-16 実Chromeでの更新版承認
+
+「キャリア・プラン作成補助シート001」で、既存ACTIVE V1から安全に分離したDRAFT V2について、
+V2自身のprepared graphと正式資格を使用し、実ChromeのStep 5からcurrent `base_revision`付きapproveを
+1回実行した。結果はV2 `ACTIVE`、V1 `ARCHIVED`、系列`active_version_id=V2`で、version数は2のまま、
+V3は作成されていない。承認前後でsource、graph、mapping、artifact bytes、過去job snapshotを維持した。
+
+承認後のauthoritative再取得では、一覧summaryの空`versions`から所有系列を検索していたfrontend不具合を
+修正した。画面が既に保持するTemplate IDからdetailを取得し、ACTIVE pointer、対象ACTIVE、他ACTIVEなしを
+再検証する。approveの成功responseだけで表示を確定せず、revision競合時の自動再送もしない。
+対象frontend 42件、frontend full 382件、buildに成功した。実証の詳細は
+[GUI Migration Phase 5](verification/gui-migration-phase5-20260916.md)を参照する。
+
+ACTIVE化後もpaged OCR admissionは`available=false / PRINT_REFERENCE_NOT_VALIDATED`であり、provider送信、
+OpenAI API、Google APIは実行していない。実入力のidentity/registration/crop/ink検査は引き続き別gateである。

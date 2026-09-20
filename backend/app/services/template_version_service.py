@@ -3,12 +3,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import yaml
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.db.models import (
@@ -100,12 +102,236 @@ def fork_layout(raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     return remap(raw, replacements), replacements
 
 
+_VERSION_BOUND_QUALITY_KEYS = {
+    "activationCertificate",
+    "environmentQualificationCertificate",
+    "environmentQualified",
+    "geometryQualificationCertificate",
+    "geometryQualified",
+    "productionQualified",
+    "qualification",
+    "qualified",
+    "referenceQualification",
+    "rendererEnvironmentQualified",
+}
+
+
+def without_current_qualification(raw: dict[str, Any]) -> dict[str, Any]:
+    """Keep authoring state while requiring the fork to prepare and qualify itself."""
+    value = copy.deepcopy(raw)
+    for key in _VERSION_BOUND_QUALITY_KEYS:
+        value.pop(key, None)
+    plan = value.get("printLayout")
+    if isinstance(plan, dict):
+        for key in (
+            "environmentEvidence",
+            "geometryQualification",
+            "preparedArtifactGraphSha256",
+            "printFiles",
+            "qualification",
+            "referenceArtifacts",
+            "rendererEvidence",
+        ):
+            plan.pop(key, None)
+        for page in plan.get("pages", []):
+            if isinstance(page, dict):
+                page.pop("rendererEvidence", None)
+    return value
+
+
 class TemplateVersionService:
     def __init__(self, database: Database, storage: LocalStorageService) -> None:
         self.database = database
         self.storage = storage
 
-    def edit(self, version_id: str) -> TemplateVersion:
+    @staticmethod
+    def _conflict(code: str, detail: str) -> AppError:
+        return AppError(status=409, code=code, title="Template draft conflict", detail=detail)
+
+    def _check_revision(self, version: TemplateVersion, expected: str | None) -> None:
+        if version.quality_json.get("printLayout") is None:
+            return
+        if expected is None:
+            raise self._conflict(
+                "TEMPLATE_VERSION_REVISION_REQUIRED",
+                "複数ページ版の編集には現在のrevisionが必要です。",
+            )
+        from app.services.print_layout_service import PrintLayoutService
+
+        if PrintLayoutService.revision(version) != expected:
+            raise self._conflict(
+                "TEMPLATE_VERSION_CONFLICT",
+                "更新元の内容が変更されています。再取得してから編集してください。",
+            )
+
+    def _artifact_bytes(
+        self,
+        artifact: JobArtifact,
+        *,
+        owner_job: ProcessingJob,
+    ) -> tuple[bytes, str]:
+        if (
+            artifact.job_id != owner_job.id
+            or artifact.attempt_number != owner_job.attempt_number
+        ):
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_OWNERSHIP_MISMATCH",
+                "複製元artifactのjob/attempt所有関係が一致しません。",
+            )
+        try:
+            content = self.storage.read_bytes(artifact.relative_path)
+        except OSError as exc:
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_SOURCE_MISSING",
+                "複製元artifactが保存先にありません。",
+            ) from exc
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != artifact.sha256:
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_SOURCE_CHANGED",
+                "複製元artifactの保存SHAと実ファイルSHAが一致しません。",
+            )
+        return content, actual
+
+    def _source_identity(
+        self,
+        session: Session,
+        version: TemplateVersion,
+    ) -> tuple[str, str]:
+        job = session.get(ProcessingJob, version.source_job_id)
+        if job is None:
+            raise self._conflict("SOURCE_IMAGE_NOT_READY", "元ジョブがありません。")
+        if version.mode == "SPREADSHEET_TEMPLATE":
+            artifact = session.scalar(
+                select(JobArtifact).where(
+                    JobArtifact.job_id == job.id,
+                    JobArtifact.attempt_number == job.attempt_number,
+                    JobArtifact.artifact_name == "sourceWorkbook",
+                )
+            )
+            if artifact is None:
+                raise self._conflict(
+                    "TEMPLATE_SOURCE_WORKBOOK_MISSING", "版所有の元XLSXがありません。"
+                )
+        else:
+            artifact = session.get(JobArtifact, version.clean_template_artifact_id)
+            if artifact is None:
+                raise self._conflict("SOURCE_IMAGE_NOT_READY", "版所有の元画像がありません。")
+        _, actual = self._artifact_bytes(artifact, owner_job=job)
+        plan = version.quality_json.get("printLayout")
+        declared = plan.get("sourceSha256") if isinstance(plan, dict) else None
+        if declared is not None and declared != actual:
+            raise self._conflict(
+                "TEMPLATE_DRAFT_SOURCE_MISMATCH",
+                "版のsource bindingと所有する元XLSXのSHAが一致しません。",
+            )
+        return artifact.id, actual
+
+    def _validate_resume(
+        self,
+        session: Session,
+        source: TemplateVersion,
+        draft: TemplateVersion,
+    ) -> None:
+        if (
+            draft.status != "DRAFT"
+            or draft.template_id != source.template_id
+            or draft.mode != source.mode
+        ):
+            raise self._conflict(
+                "TEMPLATE_DRAFT_LINEAGE_MISMATCH",
+                "既存DRAFTの系列、mode、statusが更新元と一致しません。",
+            )
+        if (
+            draft.quality_json.get("forkParentVersionId") != source.id
+            or draft.version_number <= source.version_number
+            or draft.source_job_id == source.source_job_id
+        ):
+            raise self._conflict(
+                "TEMPLATE_DRAFT_LINEAGE_MISMATCH",
+                "既存DRAFTは指定した更新元versionから派生した版ではありません。",
+            )
+        draft_job = session.get(ProcessingJob, draft.source_job_id)
+        snapshot = draft_job.config_snapshot_json if draft_job is not None else {}
+        if (
+            draft_job is None
+            or draft_job.template_version_id != draft.id
+            or snapshot.get("templateId") != source.template_id
+            or snapshot.get("templateVersionId") != draft.id
+            or snapshot.get("forkParentVersionId") != source.id
+        ):
+            raise self._conflict(
+                "TEMPLATE_DRAFT_LINEAGE_MISMATCH",
+                "既存DRAFTのjob snapshotとversion lineageが一致しません。",
+            )
+        _, source_sha = self._source_identity(session, source)
+        _, draft_sha = self._source_identity(session, draft)
+        if source_sha != draft_sha or any(
+            source.quality_json.get(key) != draft.quality_json.get(key)
+            for key in ("sourceFileName", "sourceSheetName")
+        ):
+            raise self._conflict(
+                "TEMPLATE_DRAFT_SOURCE_MISMATCH",
+                "既存DRAFTは更新元と同じsource workbookを所有していません。",
+            )
+
+    def _write_verified(
+        self,
+        target: str,
+        content: bytes,
+        created_paths: list[str],
+    ) -> tuple[str, str]:
+        normalized = Path(target).as_posix()
+        if normalized in created_paths or self.storage.exists(normalized):
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_DESTINATION_COLLISION",
+                "artifact複製先が既存pathと衝突しました。",
+            )
+        created_paths.append(normalized)
+        stored = self.storage.write_bytes(normalized, content)
+        stored = Path(stored).as_posix()
+        if stored != normalized:
+            created_paths.append(stored)
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_DESTINATION_COLLISION",
+                "artifact保存先が要求した一意pathと一致しません。",
+            )
+        expected = hashlib.sha256(content).hexdigest()
+        try:
+            actual = hashlib.sha256(self.storage.read_bytes(stored)).hexdigest()
+        except OSError as exc:
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_COPY_CHANGED",
+                "複製後artifactを再読取できません。",
+            ) from exc
+        if actual != expected:
+            raise self._conflict(
+                "TEMPLATE_ARTIFACT_COPY_CHANGED",
+                "複製元と複製先の内容SHAが一致しません。",
+            )
+        return stored, actual
+
+    def edit(
+        self,
+        version_id: str,
+        *,
+        expected_revision: str | None = None,
+    ) -> TemplateVersion:
+        created_paths: list[str] = []
+        try:
+            return self._edit_locked(version_id, expected_revision, created_paths)
+        except Exception:
+            for path in reversed(created_paths):
+                with suppress(OSError):
+                    self.storage.delete_file(path)
+            raise
+
+    def _edit_locked(
+        self,
+        version_id: str,
+        expected_revision: str | None,
+        created_paths: list[str],
+    ) -> TemplateVersion:
         with template_mutation_lock(), self.database.session() as session:
             begin_immediate(session)
             repository = TemplateRepository(session)
@@ -126,7 +352,26 @@ class TemplateVersionService:
                     detail="削除済みテンプレートです。",
                 )
             drafts = [v for v in repository.list_versions(template.id) if v.status == "DRAFT"]
+            self._check_revision(source, expected_revision)
+            if len(drafts) > 1:
+                raise AppError(
+                    status=409,
+                    code="TEMPLATE_DRAFT_AMBIGUOUS",
+                    title="Multiple drafts exist",
+                    detail="複数の下書きがあります。履歴から編集対象を選択してください。",
+                )
             if source.status == "DRAFT":
+                parent_id = source.quality_json.get("forkParentVersionId")
+                if isinstance(parent_id, str):
+                    parent = repository.get_version(parent_id)
+                    if parent is None:
+                        raise self._conflict(
+                            "TEMPLATE_DRAFT_LINEAGE_MISMATCH",
+                            "DRAFTの更新元versionがありません。",
+                        )
+                    self._validate_resume(session, parent, source)
+                else:
+                    self._source_identity(session, source)
                 return source
             if source.id != template.active_version_id or source.status != "ACTIVE":
                 raise AppError(
@@ -135,14 +380,8 @@ class TemplateVersionService:
                     title="Active template required",
                     detail="現在の有効版から編集してください。",
                 )
-            if len(drafts) > 1:
-                raise AppError(
-                    status=409,
-                    code="TEMPLATE_DRAFT_AMBIGUOUS",
-                    title="Multiple drafts exist",
-                    detail="複数の下書きがあります。履歴から編集対象を選択してください。",
-                )
             if drafts:
+                self._validate_resume(session, source, drafts[0])
                 return drafts[0]
             source_job = session.get(ProcessingJob, source.source_job_id)
             if source_job is None:
@@ -152,6 +391,7 @@ class TemplateVersionService:
                     title="Source missing",
                     detail="元ジョブがありません。",
                 )
+            self._source_identity(session, source)
             config = parse_template_config(
                 self.storage.read_bytes(source.config_relative_path).decode("utf-8")
             )
@@ -264,10 +504,17 @@ class TemplateVersionService:
                 )
             )
             for artifact in artifacts:
-                content = self.storage.read_bytes(artifact.relative_path)
-                target = f"jobs/{job_id}/1/{Path(artifact.relative_path).name}"
-                self.storage.write_bytes(target, content)
                 clone_id = str(uuid4())
+                content, source_sha = self._artifact_bytes(artifact, owner_job=source_job)
+                target = f"jobs/{job_id}/1/{clone_id}{Path(artifact.relative_path).suffix}"
+                target, destination_sha = self._write_verified(
+                    target, content, created_paths
+                )
+                if destination_sha != source_sha:
+                    raise self._conflict(
+                        "TEMPLATE_ARTIFACT_COPY_CHANGED",
+                        "複製元と複製先のartifact SHAが一致しません。",
+                    )
                 session.add(
                     JobArtifact(
                         id=clone_id,
@@ -276,7 +523,7 @@ class TemplateVersionService:
                         artifact_name=artifact.artifact_name,
                         media_type=artifact.media_type,
                         relative_path=target,
-                        sha256=hashlib.sha256(content).hexdigest(),
+                        sha256=source_sha,
                         width=artifact.width,
                         height=artifact.height,
                     )
@@ -285,7 +532,20 @@ class TemplateVersionService:
                 path_map[artifact.relative_path] = target
             for item in session.scalars(select(JobInput).where(JobInput.job_id == source_job.id)):
                 target = f"uploads/{job_id}/{item.input_index}_{Path(item.relative_path).name}"
-                self.storage.write_bytes(target, self.storage.read_bytes(item.relative_path))
+                content = self.storage.read_bytes(item.relative_path)
+                if hashlib.sha256(content).hexdigest() != item.sha256:
+                    raise self._conflict(
+                        "TEMPLATE_ARTIFACT_SOURCE_CHANGED",
+                        "複製元inputの保存SHAと実ファイルSHAが一致しません。",
+                    )
+                target, destination_sha = self._write_verified(
+                    target, content, created_paths
+                )
+                if destination_sha != item.sha256:
+                    raise self._conflict(
+                        "TEMPLATE_ARTIFACT_COPY_CHANGED",
+                        "複製元と複製先のinput SHAが一致しません。",
+                    )
                 path_map[item.relative_path] = target
                 session.add(
                     JobInput(
@@ -301,7 +561,9 @@ class TemplateVersionService:
                         content_bytes=item.content_bytes,
                     )
                 )
-            quality = remap(source.quality_json, {**replacements, **artifact_map, **path_map})
+            quality = without_current_qualification(
+                remap(source.quality_json, {**replacements, **artifact_map, **path_map})
+            )
             if quality.get("printLayout") is not None:
                 from app.services.print_layout_service import digest
 
@@ -310,8 +572,10 @@ class TemplateVersionService:
             for key in ("spreadsheetSourcePath", "spreadsheetPrintablePdfPath"):
                 path = quality.get(key)
                 if isinstance(path, str) and path not in path_map.values():
-                    target = f"{base}/{Path(path).name}"
-                    self.storage.write_bytes(target, self.storage.read_bytes(path))
+                    target = f"{base}/inherited/{key}/{Path(path).name}"
+                    target, _ = self._write_verified(
+                        target, self.storage.read_bytes(path), created_paths
+                    )
                     quality[key] = target
             quality.update({"forkParentVersionId": source.id, "layoutVerified": False})
             quality["protectedPhysicalIds"] = sorted(
@@ -348,7 +612,22 @@ class TemplateVersionService:
             session.flush()
             session.add(version)
             session.flush()
-            self.storage.write_text(config_path, yaml.safe_dump(config_data, allow_unicode=True))
+            if self.storage.exists(config_path):
+                raise self._conflict(
+                    "TEMPLATE_ARTIFACT_DESTINATION_COLLISION",
+                    "DRAFT configの保存先が既存pathと衝突しました。",
+                )
+            created_paths.append(config_path)
+            config_text = yaml.safe_dump(config_data, allow_unicode=True)
+            stored_config = self.storage.write_text(config_path, config_text)
+            if (
+                Path(stored_config).as_posix() != config_path
+                or self.storage.read_bytes(config_path) != config_text.encode("utf-8")
+            ):
+                raise self._conflict(
+                    "TEMPLATE_ARTIFACT_COPY_CHANGED",
+                    "DRAFT configの保存内容を再検証できません。",
+                )
             source_identities = identities(session, source, config.field_mappings)
             for key, logical_id in source_identities.items():
                 bind(session, source, key, logical_id)
@@ -388,7 +667,9 @@ class TemplateVersionService:
                     session.add(model(**values))
             job.template_version_id = new_id
             job.config_snapshot_json = {
-                **remap(source_job.config_snapshot_json, {**path_map, **replacements}),
+                **without_current_qualification(
+                    remap(source_job.config_snapshot_json, {**path_map, **replacements})
+                ),
                 "templateId": template.id,
                 "templateVersionId": new_id,
                 "forkParentVersionId": source.id,

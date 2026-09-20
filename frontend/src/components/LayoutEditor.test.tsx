@@ -913,10 +913,13 @@ describe("range classification", () => {
 
     expect(screen.getByText("範囲選択: 2 セル")).toBeTruthy();
     expect(screen.queryByText(/セルをまとめて選択しました/)).not.toBeInTheDocument();
-    const classifyAsLabel = screen.getByRole("button", { name: "項目名にする" });
+    expect(screen.queryByRole("button", { name: "項目名にする" })).not.toBeInTheDocument();
+    const classifyAsLabel = screen.getByRole("button", { name: "項目名" });
     expect(classifyAsLabel).toBeTruthy();
-    expect(screen.getByRole("button", { name: "記入欄にする" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "選択した枠を読み取らない" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "記入欄" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "読み取らない" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "選択セルを結合" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "選択解除" })).toBeEnabled();
     fireEvent.click(classifyAsLabel);
     const cellSelect = screen.getByLabelText("セル一覧から選択");
     expect(within(cellSelect).getAllByRole("option", { name: /項目名/ })).toHaveLength(2);
@@ -1064,7 +1067,8 @@ describe("range classification", () => {
     const cellSelect = scope.getByLabelText("セル一覧から選択");
     expect(within(cellSelect).queryAllByRole("option", { name: /項目名/ })).toHaveLength(0);
     expect(within(cellSelect).getAllByRole("option", { name: /記入欄/ })).toHaveLength(3);
-    fireEvent.click(scope.getByRole("button", { name: "項目名にする" }));
+    expect(scope.queryByRole("button", { name: "項目名にする" })).toBeNull();
+    fireEvent.click(scope.getByRole("button", { name: "項目名" }));
     expect(within(cellSelect).getAllByRole("option", { name: /項目名/ })).toHaveLength(2);
     expect(within(cellSelect).getAllByRole("option", { name: /記入欄/ })).toHaveLength(1);
 
@@ -1425,6 +1429,10 @@ describe("linkLaneCells", () => {
 });
 
 describe("record section display names", () => {
+  const sectionHeading: LayoutCell = {
+    id: "education_heading", role: "parent_label", x: 100, y: 25, width: 220, height: 30,
+    confidence: 1, text: "学歴見出し", textConfidence: 1, source: "manual",
+  };
   const labels: LayoutCell[] = [
     {
       id: "year_label", role: "label", x: 100, y: 80, width: 80, height: 30,
@@ -1456,7 +1464,7 @@ describe("record section display names", () => {
     targetPath: `customFields.${index % labels.length === 0 ? "年" : "学校名"}_${Math.floor(index / labels.length) + 1}`,
   }));
 
-  test("opens the anchored name editor after creation and preserves the name and identity on save/reload", async () => {
+  test("creates an unnamed section, selects its band on click, and selects one cell on double click", async () => {
     const originalPointerEvent = window.PointerEvent;
     Object.defineProperty(window, "PointerEvent", {
       configurable: true,
@@ -1469,7 +1477,7 @@ describe("record section display names", () => {
       canonicalHeight: 300,
       detector: "test",
       ocrAvailable: false,
-      cells: [...labels, ...inputs],
+      cells: [sectionHeading, ...labels, ...inputs],
       relations,
       allowCrossAxisLabels: true,
       warnings: [],
@@ -1496,36 +1504,36 @@ describe("record section display names", () => {
     fireEvent.pointerMove(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
     fireEvent.pointerUp(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
 
-    const popover = editor.getByRole("form", { name: "繰り返し表の名称編集" });
-    expect(popover).toBeInTheDocument();
-    expect(popover).toHaveStyle({ left: "210px", top: "95px" });
-    fireEvent.change(within(popover).getByLabelText("繰り返し表の表示名"), {
-      target: { value: "学歴" },
-    });
-    fireEvent.click(within(popover).getByRole("button", { name: "保存" }));
-    expect(editor.getByRole("button", { name: /学歴.*2レコード/ })).toBeInTheDocument();
+    expect(editor.queryByRole("form", { name: "繰り返し表の名称編集" })).not.toBeInTheDocument();
+    expect(editor.getByRole("button", { name: /名称なしの繰り返し表.*2レコード/ }))
+      .toBeInTheDocument();
+    expect(editor.getByRole("radio", { name: "名前を付けない" })).toBeChecked();
+    expect(editor.queryByRole("textbox", { name: "繰り返し部分の名前" })).not.toBeInTheDocument();
 
-    fireEvent.pointerDown(canvas, { clientX: 210, clientY: 107, pointerId: 2 });
-    fireEvent.pointerUp(canvas, { clientX: 210, clientY: 107, pointerId: 2 });
-    const reopened = editor.getByRole("form", { name: "繰り返し表の名称編集" });
-    expect(within(reopened).getByLabelText("繰り返し表の表示名")).toHaveValue("学歴");
-    fireEvent.change(within(reopened).getByLabelText("繰り返し表の表示名"), {
-      target: { value: "学歴・職歴" },
-    });
-    fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
+    fireEvent.pointerDown(canvas, { clientX: 210, clientY: 95, pointerId: 2 });
+    fireEvent.pointerUp(canvas, { clientX: 210, clientY: 95, pointerId: 2 });
+    expect(editor.getByText(/繰り返し部分を選択しました/)).toBeInTheDocument();
+    expect(editor.getByLabelText("セル一覧から選択")).toHaveValue("year_label");
 
-    const sidePanelName = editor.getByLabelText("表の表示名");
-    fireEvent.change(sidePanelName, { target: { value: "学歴" } });
-    fireEvent.blur(sidePanelName);
+    fireEvent.doubleClick(canvas, { clientX: 280, clientY: 95 });
+    expect(editor.getByText("繰り返し部分のセルを1つ選択しました。")).toBeInTheDocument();
+    expect(editor.getByLabelText("セル一覧から選択")).toHaveValue("school_label");
+
+    fireEvent.change(editor.getByLabelText("帳票上の見出し（任意）"), {
+      target: { value: sectionHeading.id },
+    });
+    expect(editor.getByRole("button", { name: /学歴見出し.*2レコード/ })).toBeInTheDocument();
     fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const saved = onSave.mock.calls[0]![0];
     expect(saved.recordSections).toHaveLength(1);
     expect(saved.recordSections?.[0]).toEqual(expect.objectContaining({
-      displayName: "学歴",
-      parentLabelCellId: null,
+      displayName: null,
+      parentLabelCellId: sectionHeading.id,
     }));
     const originalId = saved.recordSections?.[0].id;
+    const originalCollectionPath = saved.recordSections?.[0].collectionPath;
+    const originalGroupIds = saved.recordGroups?.map((group) => group.id);
 
     view.unmount();
     const reloaded = render(
@@ -1537,15 +1545,106 @@ describe("record section display names", () => {
         onSave={vi.fn(async (current: LayoutDefinition) => current)}
       />,
     );
-    expect(within(reloaded.container).getByRole("button", { name: /学歴.*2レコード/ }))
+    const reloadedEditor = within(reloaded.container);
+    expect(reloadedEditor.getByRole("button", { name: /学歴見出し.*2レコード/ }))
       .toBeInTheDocument();
+    expect(reloadedEditor.getByRole("radio", { name: "名前を付けない" })).toBeChecked();
+    expect(reloadedEditor.getByLabelText("帳票上の見出し（任意）"))
+      .toHaveValue(sectionHeading.id);
     expect(saved.recordSections?.[0].id).toBe(originalId);
+    expect(saved.recordSections?.[0].collectionPath).toBe(originalCollectionPath);
+    expect(saved.recordGroups?.map((group) => group.id)).toEqual(originalGroupIds);
     reloaded.unmount();
     Object.defineProperty(window, "PointerEvent", {
       configurable: true,
       writable: true,
       value: originalPointerEvent,
     });
+  });
+
+  test("adds and removes only the optional section name from the sidebar", async () => {
+    const section: LayoutRecordSection = {
+      id: "education",
+      title: "明細",
+      displayName: null,
+      collectionPath: "genericRecords.education",
+      recordType: "generic",
+      recordLabelCellIds: labels.map((label) => label.id),
+      parentLabelCellId: sectionHeading.id,
+      rowKeyStrategy: "position",
+      rowKeyCellIds: [],
+      includeEmptyRows: false,
+      source: "manual",
+    };
+    const groups: LayoutRecordGroup[] = [0, 1].map((row) => ({
+      id: `record_education_${row + 1}`,
+      sectionId: section.id,
+      order: row + 1,
+      x: 100,
+      y: 130 + row * 50,
+      width: 220,
+      height: 35,
+      inputCellIds: inputs.slice(row * 2, row * 2 + 2).map((cell) => cell.id),
+      recordKeyField: "rowNumber",
+      recordKeyValue: String(row + 1),
+      recordKeyCellId: null,
+      source: "manual",
+    }));
+    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          canonicalWidth: 500,
+          canonicalHeight: 300,
+          detector: "test",
+          ocrAvailable: false,
+          cells: [sectionHeading, ...labels, ...inputs],
+          relations,
+          recordSections: [section],
+          recordGroups: groups,
+          recordStructureVerified: true,
+          allowCrossAxisLabels: true,
+          warnings: [],
+        }}
+        targets={[]}
+        onDetect={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+    const editor = within(view.container);
+    fireEvent.click(editor.getByRole("radio", { name: "名前を付ける" }));
+    const nameInput = editor.getByRole("textbox", { name: "繰り返し部分の名前" });
+    expect(nameInput).toHaveValue("明細");
+    fireEvent.change(nameInput, { target: { value: "学歴" } });
+    fireEvent.blur(nameInput);
+    expect(editor.getByRole("button", { name: /学歴.*2レコード/ })).toBeInTheDocument();
+
+    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const named = onSave.mock.calls[0]![0];
+    expect(named.recordSections?.[0]).toEqual(expect.objectContaining({
+      id: section.id,
+      displayName: "学歴",
+      collectionPath: section.collectionPath,
+      parentLabelCellId: sectionHeading.id,
+      recordLabelCellIds: section.recordLabelCellIds,
+    }));
+    expect(named.recordGroups).toEqual(groups);
+
+    fireEvent.click(editor.getByRole("radio", { name: "名前を付けない" }));
+    expect(editor.queryByRole("textbox", { name: "繰り返し部分の名前" })).not.toBeInTheDocument();
+    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    const unnamed = onSave.mock.calls[1]![0];
+    expect(unnamed.recordSections?.[0]).toEqual(expect.objectContaining({
+      id: section.id,
+      displayName: null,
+      collectionPath: section.collectionPath,
+      parentLabelCellId: sectionHeading.id,
+      recordLabelCellIds: section.recordLabelCellIds,
+    }));
+    expect(unnamed.recordGroups).toEqual(groups);
   });
 
   test("keeps legacy titles as fallback and maps three same-title sections by ID", () => {
@@ -1560,9 +1659,19 @@ describe("record section display names", () => {
       source: "manual",
     }));
     const legacy = { ...sections[0], id: "legacy", displayName: undefined };
+    const unnamed = {
+      ...sections[0],
+      id: "unnamed",
+      displayName: null,
+      parentLabelCellId: sectionHeading.id,
+    };
 
     expect(recordSectionDisplayName(legacy)).toBe("明細");
-    expect(sections.map(recordSectionDisplayName)).toEqual(["学歴", "職歴", "資格"]);
+    expect(recordSectionDisplayName(unnamed)).toBe("名称なしの繰り返し表");
+    expect(recordSectionDisplayName(unnamed, new Map([[sectionHeading.id, sectionHeading]])))
+      .toBe("学歴見出し");
+    expect(sections.map((section) => recordSectionDisplayName(section)))
+      .toEqual(["学歴", "職歴", "資格"]);
     expect(new Set(sections.map((section) => section.id)).size).toBe(3);
   });
 
@@ -1611,7 +1720,8 @@ describe("record section display names", () => {
     fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const sections = onSave.mock.calls[0]![0].recordSections ?? [];
-    expect(sections.map(recordSectionDisplayName)).toEqual(["明細", "明細"]);
+    expect(sections.map((section) => recordSectionDisplayName(section)))
+      .toEqual(["明細", "明細"]);
     expect(new Set(sections.map((section) => section.id)).size).toBe(2);
     expect(new Set(sections.map((section) => section.collectionPath)).size).toBe(2);
   });

@@ -55,6 +55,16 @@ class _TranscriptionResponse:
 
 
 class OpenAIOcrProvider:
+    @staticmethod
+    def minimum_call_count(region_count: int, identity_count: int) -> int:
+        """Same batch policy as _batched_requests, for document admission preflight."""
+        if not 0 <= identity_count <= region_count:
+            raise ValueError("Invalid OCR region counts")
+        regular_count = region_count - identity_count
+        return max(
+            1, (regular_count + _MAX_REGIONS_PER_CALL - 1) // _MAX_REGIONS_PER_CALL + identity_count
+        )
+
     def __init__(self, settings: OcrSettings) -> None:
         self._settings = settings
         key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
@@ -92,7 +102,10 @@ class OpenAIOcrProvider:
             "OCR_PROVIDER_ERROR",
         }
         requests = self._batched_requests(request)
-        if len(requests) > self._settings.max_calls_per_job:
+        available_calls = self._settings.max_calls_per_job
+        if request.call_budget is not None:
+            available_calls = min(available_calls, request.call_budget.remaining())
+        if len(requests) > available_calls:
             raise self._provider_error(
                 409,
                 "OCR_CALL_BUDGET_TOO_SMALL",
@@ -104,6 +117,12 @@ class OpenAIOcrProvider:
             async with call_lock:
                 if call_count >= self._settings.max_calls_per_job:
                     return None
+                if request.call_budget is not None:
+                    ordinal = request.call_budget.reserve()
+                    if ordinal is None:
+                        return None
+                    call_count += 1
+                    return ordinal
                 call_count += 1
                 return call_count
 
@@ -121,6 +140,8 @@ class OpenAIOcrProvider:
                         break
                     try:
                         async with semaphore:
+                            if request.call_budget is not None:
+                                self._raise_if_cancelled(request)
                             if detail is None:
                                 return await self._call(batch_request, model, reserved)
                             return await self._call_detail(
@@ -154,6 +175,8 @@ class OpenAIOcrProvider:
                 region for region in request.regions if region.region_id in uncertain_ids
             ]
             remaining_calls = self._settings.max_calls_per_job - call_count
+            if request.call_budget is not None:
+                remaining_calls = min(remaining_calls, request.call_budget.remaining())
             if retry_regions and remaining_calls > 0:
                 retry_request = self._request_with_regions(request, retry_regions)
                 retry_batches = self._batched_requests(retry_request)[:remaining_calls]
@@ -252,6 +275,8 @@ class OpenAIOcrProvider:
             template_id=request.template_id,
             template_version=request.template_version,
             should_cancel=request.should_cancel,
+            call_budget=request.call_budget,
+            transcription_prompt=request.transcription_prompt,
         )
 
     @staticmethod
@@ -303,7 +328,11 @@ class OpenAIOcrProvider:
         try:
             response = await self._client.responses.parse(
                 model=model,
-                instructions=load_transcription_prompt(),
+                instructions=(
+                    request.transcription_prompt
+                    if request.transcription_prompt is not None
+                    else load_transcription_prompt()
+                ),
                 input=response_input,
                 text_format=CompactTranscriptionBatch,
                 max_output_tokens=min(

@@ -116,13 +116,19 @@ def test_cross_process_mutex_and_local_network_not_isolated(tmp_path):
     assert result["exitCode"] == 0
 
 
-def test_private_temp_error_cleanup_and_stale_ownership():
+def test_private_temp_error_cleanup_and_stale_ownership(tmp_path, monkeypatch):
+    from app.services import renderer_temp
+
+    # Exercise the real private-root ACL and lease code, but do not enumerate
+    # unrelated renderer leftovers from another run in the user's system temp.
+    monkeypatch.setattr(renderer_temp.tempfile, "gettempdir", lambda: str(tmp_path))
     with renderer_mutex():
         with pytest.raises(RuntimeError), render_directory() as path:
             (path / "source.xlsx").write_bytes(b"synthetic")
             raise RuntimeError("render failure")
         assert not path.exists()
         with render_directory() as active:
+            assert active.parent == tmp_path / OWNER
             assert clean_stale(active.parent, age=0) == []
             stale = active.parent / ("render-" + "a" * 32)
             stale.mkdir()

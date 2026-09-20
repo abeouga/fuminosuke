@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Annotated, Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Header, Request, UploadFile
+from fastapi import APIRouter, File, Form, Header, Query, Request, Response, UploadFile
 from pydantic import ValidationError
 from sqlalchemy import select
 
@@ -12,10 +13,56 @@ from app.api.v1.routes.shared import JobAccepted, job_accepted
 from app.api.v1.routes.uploads import read_upload
 from app.db.models import JobArtifact
 from app.domain.job_pages import PagedSubmission
+from app.domain.paged_review import PageConfirmation, PageCorrection, PageReopen
 from app.domain.print_layout import print_error
 from app.services.job_page_service import JobPageService
+from app.services.paged_output_service import PagedOutputService
+from app.services.paged_review_service import PagedReviewService
 
 router = APIRouter(tags=["ocr"])
+
+
+@router.get("/ocr-jobs/{job_id}/page-review/output.xlsx")
+def output_pages(request: Request, job_id: str, revision: Annotated[int, Query(ge=1)]) -> Response:
+    output = PagedOutputService(request.app.state.database, request.app.state.storage).render(
+        job_id, revision
+    )
+    return Response(
+        output.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''"
+            + quote(output.file_name, safe=""),
+            "Cache-Control": "no-store",
+            "X-Result-Revision": str(output.revision),
+            "ETag": '"' + hashlib.sha256(output.content).hexdigest() + '"',
+        },
+    )
+
+
+@router.get("/ocr-jobs/{job_id}/page-review")
+def get_page_review(request: Request, job_id: str) -> dict[str, Any]:
+    return PagedReviewService(request.app.state.database).get(job_id)
+
+
+@router.post("/ocr-jobs/{job_id}/page-review/{page_id}/corrections")
+def correct_page(
+    request: Request,
+    job_id: str,
+    page_id: str,
+    body: PageCorrection,
+) -> dict[str, Any]:
+    return PagedReviewService(request.app.state.database).correct(job_id, page_id, body)
+
+
+@router.post("/ocr-jobs/{job_id}/page-review/confirm")
+def confirm_pages(request: Request, job_id: str, body: PageConfirmation) -> dict[str, Any]:
+    return PagedReviewService(request.app.state.database).confirm(job_id, body)
+
+
+@router.post("/ocr-jobs/{job_id}/page-review/reopen")
+def reopen_pages(request: Request, job_id: str, body: PageReopen) -> dict[str, Any]:
+    return PagedReviewService(request.app.state.database).reopen(job_id, body)
 
 
 def service(request: Request) -> JobPageService:
