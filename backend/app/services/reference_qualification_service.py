@@ -566,7 +566,22 @@ class ReferenceQualificationService(PrintLayoutService):
                 if report.get("renderer") and report["renderer"] != renderer_identity():
                     return {"status": "UNVERIFIED", "qualified": False,
                             "codes": ["RENDERER_CHANGED"]}
-                environment_ref = report["environmentQualification"]
+                environment_ref = report.get("environmentQualification")
+                if not isinstance(environment_ref, dict):
+                    # A legacy diagnostic can fail while deriving the renderer
+                    # environment itself (for example, during workbook
+                    # preflight).  Such a report deliberately has no
+                    # environment artifact.  Preserve its verified failure
+                    # reason instead of misreporting the missing success-only
+                    # evidence as REFERENCE_EVIDENCE_CHANGED.
+                    if (
+                        report.get("status") in {"FAIL", "UNSUPPORTED"}
+                        and report.get("qualified") is False
+                        and isinstance(report.get("codes"), list)
+                        and report["codes"]
+                    ):
+                        return report
+                    raise ValueError("Environment qualification evidence is missing")
                 environment_bytes = self.storage.read_bytes(environment_ref["relativePath"])
                 if hashlib.sha256(environment_bytes).hexdigest() != environment_ref["sha256"]:
                     raise ValueError("Environment artifact changed")
@@ -1005,5 +1020,12 @@ class ReferenceQualificationService(PrintLayoutService):
                 **version.quality_json,
                 "referenceQualification": record,
             }
+            if report.get("qualified") is True:
+                # A newly issued full certificate supersedes candidate-only
+                # readiness. Failed rechecks must retain the candidate record.
+                version.quality_json = {
+                    key: value for key, value in version.quality_json.items()
+                    if key != "candidateReadiness"
+                }
             session.commit()
         return report

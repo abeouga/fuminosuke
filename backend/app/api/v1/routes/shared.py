@@ -18,6 +18,7 @@ class JobAccepted(ApiModel):
 class JobError(ApiModel):
     code: str
     message: str
+    stack_trace: str | None = None
 
 
 class JobDetail(ApiModel):
@@ -42,12 +43,13 @@ def job_accepted(job: ProcessingJob) -> JobAccepted:
     )
 
 
-def job_detail(job: ProcessingJob) -> JobDetail:
+def job_detail(job: ProcessingJob, *, stack_trace: str | None = None) -> JobDetail:
     error = None
     if job.error_code:
         error = JobError(
             code=job.error_code,
             message=job.error_message_safe or "処理に失敗しました。",
+            stack_trace=stack_trace,
         )
     return JobDetail(
         id=job.id,

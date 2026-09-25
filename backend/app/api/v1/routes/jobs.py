@@ -25,7 +25,9 @@ def list_jobs(
 
 @router.get("/jobs/{job_id}", response_model=JobDetail, response_model_by_alias=True)
 def get_job(request: Request, job_id: str) -> JobDetail:
-    return job_detail(get_job_service(request).get(job_id))
+    service = get_job_service(request)
+    job = service.get(job_id)
+    return job_detail(job, stack_trace=service.failure_stack_trace(job))
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobDetail, response_model_by_alias=True)

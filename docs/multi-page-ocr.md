@@ -1,5 +1,10 @@
 # 複数ページOCR実行基盤の実装報告
 
+2026-09-21追記: 以下は初期実装の履歴です。現在の候補OCR受付はSafety Contract §12.9、
+環境更新後の別準備確認は§12.10を正本とします。正式資格を偽装せず、現証拠を検証した
+`CANDIDATE_READY`でも人間レビュー前提の有効化/受付を可能にします。
+[検証記録](verification/candidate-readiness-20260921.md)で実環境到達状況を分けて記載します。
+
 2026-09-13追記: [ページ別レビュー](paged-review.md)で専用レビュー・補正と保存表を追加した。
 さらに[全ページ確定](paged-confirmation.md)と受付schemaVersion 2を追加した。
 以下の未対応記述・migrationなしは初期基盤の記録。[全ページXLSX出力](paged-output.md)と
@@ -89,7 +94,9 @@ OcrPageの新printLayout選択時に、Page N・range・基準thumbnail・個別
 取得失敗時にPage 1だけの旧画面へfallbackしません。新jobの旧レビュー自動遷移も止めています。
 現在は新printLayoutのACTIVE化も拒否されるため、この画面を通常運用で利用可能とはしていません。
 
-**本番解除条件は未実装です。** `JobPageService._require_qualified_reference`は常に
+**以下は初期実装時の状態です。** 2026-09-21の人間レビュー付き候補受付は
+[OCR Safety Contract §12.9](ocr-safety-contract.md#129-人間レビューを必須とする候補ocr受付--2026-09-21)を参照してください。
+初期実装では`JobPageService._require_qualified_reference`は常に
 PRINT_REFERENCE_NOT_VALIDATEDを返します。適格性を証明できたrendererがまだないためです。
 DBのocrReadyフラグだけでこの制約を解除する経路はありません。テストは特定synthetic fixtureについてのみ
 この適格性チェックを置換し、その他の受付・snapshot・画像処理・永続化は実装を通しています。

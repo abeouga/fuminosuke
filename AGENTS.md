@@ -88,6 +88,12 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 
 ## 9. XLSX複数ページOCR / Reference Renderer
 
+- 現在の通常利用はSafety Contract §12.12の`paged-candidate-readiness-v3`を優先する。
+  GUIのページ指定→必要な印刷見本の生成→対応検証→有効化を一操作で行い、初回利用に正式資格や
+  geometry/glyph認定を要求しない。以下の正式資格・v1/v2記述は既存経路の契約として保持する。
+  実行隔離、原本/ページ/セル対応、実入力検査、人間の全ページ確認・補正は省略しない。
+  通常操作を増やす新しい審査機構・全面的な再設計をこのUX修正へ持ち込まない。
+
 - legacy single-page OCRと新しいXLSX `printLayout` / paged OCRは別経路です。旧canonical rectangle・preview・X/Y画像合わせ補正・過去jobを新geometryで再計算しません。`lo-import-twip-v1`は新規printLayout用で、旧保存プランのgeometryも維持します。
 - `printLayout`の所有者はTemplate系列ではなくTemplateVersionです。ページ編集はDRAFTとrevision照合を守ります。現在のGUI対象は横1ページ・縦Nページです。
 - 新経路は1 logical document/jobに明示的なページidentityと入力bindingを持ちます。配列indexをidentityにせず、受付時のimmutable snapshotから実行・retryします。現在のTemplateVersionからranges・fields・mappings・基準画像・OCR設定を差し替えません。
@@ -96,10 +102,13 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 - ページ別の文書識別ヒントは全体設定を検証してから所有mappingへ限定します。識別groupや役割をページごとに付け替えず、書類名候補で入力中の名前を上書きしません。[文書metadata](docs/paged-document-metadata.md)を参照してください。
 - 新paged OpenAIの呼出し予算は文書全体・全attemptで共有し、送信前にDB予約します。失敗や再起動で払い戻さず、後続ページの最低枠を保護します。[文書全体API予算](docs/paged-ocr-budget.md)を参照してください。
 - Geometry / Reference QualificationとRenderer Environment Qualificationは別条件です。2026-09-13の明示承認により、有効化時のテンプレート/環境検証と、OCR実行時の実入力/位置合わせ/crop検証を分離します。前者は原本・全ページの描画/座標・mapping/crop領域の定義・隔離環境の証拠を要求し、記入済み画像を要求しません。後者はprovider送信前に実入力を検証し、未検証なら停止します。描画成功・fixture通過・保存booleanだけではどちらも認定できません。詳細はSafety Contract §12.6/§12.8を参照してください。
-- `wsl-calc-print-grid-v1`の新printLayout版は、保存booleanではなく現在の正式reference/environment/geometry資格、原本・graph・artifact・実装・lease期限を承認transaction内で再検証した場合だけACTIVE化できます。legacy版は従来readinessを維持します。ACTIVE化後もpaged OCR受付は`PRINT_REFERENCE_NOT_VALIDATED`でfail-closedであり、実入力のidentity/registration/crop/ink検査とprovider送信は別gateです。作業都合のフラグ変更やmockで解除しません。
+- `wsl-calc-print-grid-v1`の新printLayout版は、保存booleanだけではACTIVE化・OCR受付できません。正式資格経路は現在のreference/environment/geometry資格、原本・graph・artifact・実装・lease期限を承認transaction内で再検証します。候補経路はSafety Contract §12.9〜§12.11に従い、明示準備時の完全検証を版所有artifactへ固定し、通常利用ではその変更有無を検証します。実入力のidentity/registration/crop対応は送信前に検査し、ink clearanceは未認定のまま全ページの人間レビューを必須とします。作業都合のフラグ変更やmockで資格を解除しません。
 - AppContainerではローカル接続probeの通信拒否を実測していますが、LibreOffice 26.2.3.2のXLSX→PDFはWindows named pipe IPC互換性の問題で成立していません。Officeの完全sandbox化が済んだとは扱いません。
 - 新reference rendererのPDFium parse/rasterは専用helper process内です。native処理を安易にbackend内へ戻しません。helperのnetwork isolation、実font・runtime依存、実帳票crop clearance等も認定の残課題です。
 - renderer isolation / container方式の再設計は別infraタスクとして保留できます。gateを閉じたままlegacyや他の安全な機能開発を継続できます。再開時は下記Sandbox Closureの残条件と実コードを照合し、正式なqualificationを経てから本番開放を設計します。
+- 2026-09-21追記: Safety Contract §12.10に、正式資格とは別の`CANDIDATE_READY`経路を追加しました。bootstrap native依存差分だけを、現環境の明示再描画と全ページ画像一致、所有geometry/glyph証拠の再検証により扱います。旧資格のPASS化やhash無視ではありません。有効化/受付で現証拠を再検証し、人間レビュー・既存OCR対応関係のguardを維持します。
+- 製品ゴールは文字列の完全一致をシステムだけで証明することではなく、正しいページ・欄との対応を保った実用的なOCR候補を提示し、利用者が全ページを確認・手動修正して確定することです。通常利用のたびにOffice再描画や正式資格の全再発行を繰り返しません。ただし、実入力のpage identity・registration・crop・association検査、低信頼表示、revision付き補正、未確定出力拒否は省略しません。詳細はSafety Contract §1.2を参照してください。
+- 2026-09-21追記: Safety Contract §12.11の`paged-candidate-readiness-v2`では、重いgeometry/glyph/native環境検証を明示的な候補準備に限定します。通常のGET・有効化・catalog・受付は変更まで有効な保存bindingを軽量検証し、受付時のreference PNG内容SHAと実入力検査は維持します。この境界を変更する場合はcandidate policyと実装markerを同時に更新し、旧artifactを黙って新しい意味へ書き換えないでください。
 
 この領域の変更前にはSafety Contract全体（特に§12）と、以下を読みます。Phase報告の旧記述は実コードと後続evidenceで再確認し、最新仕様として無条件に採用しません。
 
@@ -114,3 +123,13 @@ OCR精度・OCRロジック・対応関係の改善を明示的なタスクと�
 多角形のmaskは新しい多角形だけに適用し、矩形のcropとsnapshot形式を維持します。
 見出しの整理で既存の意味づけ・targetPath・結合・IDを再生成しません。
 別形式のAI汎用定義への変換やページ単位編集で、新metadataを黙って落とさないでください。
+
+## 11. テスト設計・実行の品質と時間
+
+この節はテストの質と実行コストを定めます。必須検証の選択は§7とOCR Safety Contract §8に従い、この節を理由に必要な検証を省略しません。
+
+- TDDでは、実装前に受け入れ条件と失敗条件を具体化し、まずそれを検証するテストを書きます。実装後に、コードが増えたという理由だけでユニットテストを追加しません。既知の仕様・不具合に未検証の振る舞いがある場合は、その欠落を示してから最小のテストを追加します。
+- 不具合修正の回帰テストは、製品側に再現可能な欠落が確認できた場合に限ります。失敗する入力・状態と期待結果を特定し、修正を通すためだけのテストや、すでに製品挙動を検証している既存テストの複製を作りません。
+- 複数コンポーネントにまたがる機能では、実装前に利用者操作と期待結果、必要な故障条件を定め、まず影響範囲の短いテストで検証します。unit / integration / contract検証は§7およびSafety Contract §8に従います。E2Eは、その境界を短いテストで確認できない場合に対象シナリオを限定して実行します。
+- 恒真・同値の再表明など、実装や前提を言い換えるだけのトートロジカルなテストは追加しません。「変更検出テスト」とは、意味上の仕様を確かめず、ソース差分・snapshot差分・内部構造の変化だけを検出するテストを指します。そのようなテストは追加しません。依存境界や禁止操作など、明示されたアーキテクチャ契約を検証する静的テストはこの禁止に含めません。
+- 通常の開発反復と各タスクの最終検証では、E2E全件実行を既定にしません。変更に関係する最小のテストから始め、完了時には§7の必須検証を満たします。E2E全件実行は、明示的な依頼またはリリース・節目の検証で必要な場合に限ります。実行したE2Eが成功した場合は、再現に必要なfixture・実行条件と結果artifact（ログ・レポート等）を保存します。

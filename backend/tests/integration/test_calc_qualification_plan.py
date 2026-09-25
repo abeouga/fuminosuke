@@ -2,19 +2,29 @@
 import copy
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob, Template, TemplateVersion
 from app.domain.calc_print_grid import MODEL
+from app.domain.job_pages import PagedSubmission
+from app.domain.template_config import FieldMappingConfig, parse_template_config
 from app.services import print_preparation_service as preparation
 from app.services import reference_qualification_service as qualification
+from app.services.job_page_service import JobPageService
+from app.services.job_service import UploadPayload
 from app.services.prepared_print_contract import render_key
 from tests.integration import test_calc_print_preparation as existing
+from tests.integration import test_print_layout_api
+from tests.unit.test_print_layout import workbook_bytes
 
 calc_fixture = existing.calc_fixture
 prepared_fixture = existing.prepared_fixture
@@ -453,6 +463,126 @@ def _assert_draft_is_unchanged(client, version: str, active_id: str | None = Non
         draft = db.get(TemplateVersion, version)
         assert draft.status == "DRAFT"
         assert db.get(Template, draft.template_id).active_version_id == active_id
+
+
+@pytest.fixture
+def candidate_calc_activation(client, monkeypatch, request):
+    # Unlike the activation-only fixture, candidate OCR needs a field on EVERY
+    # page. Add it before preparing/qualifying, never alter an issued plan.
+    content = workbook_bytes(rows=33, manual=9)
+    monkeypatch.setattr(test_print_layout_api, "workbook_bytes", lambda: content)
+    print_template = request.getfixturevalue("print_template")
+    with client.app.state.database.session() as db:
+        version = db.get(TemplateVersion, print_template[0])
+        config = parse_template_config(
+            client.app.state.storage.read_bytes(version.config_relative_path).decode()
+        )
+        cell = next(c for c in version.layout_json["cells"] if c["id"] == "xlsx_C2")
+        config.field_mappings.append(FieldMappingConfig(
+            mapping_id="layout_xlsx_C2", target_path="document.cattleName", label="Name",
+            **{k: cell[k] for k in ("x", "y", "width", "height")},
+        ))
+        client.app.state.storage.write_text(version.config_relative_path,
+            yaml.safe_dump(config.model_dump(mode="json", by_alias=True)))
+    return request.getfixturevalue("qualified_calc_activation")
+
+
+def _candidate_submission(client, version_id):
+    state = client.app.state
+    service = JobPageService(state.database, state.storage, state.settings)
+    catalog = service.catalog(version_id)
+    with state.database.session() as db:
+        version = db.get(TemplateVersion, version_id)
+        images = []
+        for index, page in enumerate(version.quality_json["printLayout"]["pages"]):
+            image = Image.open(BytesIO(
+                state.storage.read_bytes(page["referenceImage"]["relativePath"])
+            )).convert("RGB")
+            # Renderer stubs return identical reference pixels. Submitted scans
+            # must be distinct; keep the duplicate-input rejection intact.
+            image.putpixel((0, 0), (index, 0, 0))
+            output = BytesIO()
+            image.save(output, format="PNG")
+            images.append(output.getvalue())
+    request = PagedSubmission.model_validate({
+        "templateVersionId": version_id, "templateRevision": catalog["templateRevision"],
+        "uploadIds": [f"input-{i}" for i in range(len(images))],
+        "bindings": [{"templatePageId": page["pageId"], "inputId": f"input-{i}",
+                      "inputRevision": 1, "inputSha256": hashlib.sha256(images[i]).hexdigest()}
+                     for i, page in enumerate(catalog["pages"])],
+    })
+    return service, catalog, request, [UploadPayload(image, "image/png") for image in images]
+
+
+def test_formal_qualification_admits_review_candidates_without_legacy_boolean(
+    client, candidate_calc_activation,
+):
+    version, _, ready, _ = candidate_calc_activation
+    response = client.post(f"/api/v1/template-versions/{version}/approve",
+                           params={"base_revision": ready["revision"]})
+    assert response.status_code == 200, response.text
+    with client.app.state.database.session() as db:
+        before = copy.deepcopy(db.get(TemplateVersion, version).quality_json)
+        assert before.get("layoutVerified") is not True
+    service, catalog, request, uploads = _candidate_submission(client, version)
+    assert catalog["available"] is True and catalog["reason"] == ""
+    assert catalog["reviewRequired"] is True
+    job = service.accept(request, uploads, "candidate-acceptance")
+    assert job.status == "QUEUED"
+    admission = job.config_snapshot_json["jobPages"]["admission"]
+    assert admission["policy"] == "paged-reviewed-candidates-v1"
+    assert admission["reviewRequired"] is True
+    assert admission["inkClearanceVerified"] is False
+    binding = admission["referenceQualification"]["qualificationBinding"]
+    assert binding["templateVersionId"] == version
+    assert service.accept(request, uploads, "candidate-acceptance").id == job.id
+    with service.database.session() as db:
+        assert db.get(TemplateVersion, version).quality_json == before
+        assert len(service.validate(db, job)) == len(uploads)
+
+
+@pytest.mark.parametrize("failure", ["expired", "graph", "source", "draft", "archived", "layout"])
+def test_candidate_catalog_and_acceptance_recheck_qualification(
+    client, candidate_calc_activation, monkeypatch, failure,
+):
+    version, _, ready, lease = candidate_calc_activation
+    response = client.post(f"/api/v1/template-versions/{version}/approve",
+                           params={"base_revision": ready["revision"]})
+    assert response.status_code == 200, response.text
+    service, catalog, request, uploads = _candidate_submission(client, version)
+    assert catalog["available"] is True
+    with service.database.session() as db:
+        before_jobs = set(db.scalars(select(ProcessingJob.id)))
+        saved = db.get(TemplateVersion, version)
+        if failure in {"draft", "archived"}:
+            saved.status = failure.upper()
+        elif failure == "layout":
+            saved.layout_json = {**saved.layout_json, "testChanged": True}
+        elif failure == "graph":
+            reference = saved.quality_json["printLayout"]["pages"][0]["referenceImage"]
+            service.storage.write_bytes(reference["relativePath"], b"changed")
+        elif failure == "source":
+            source = db.scalar(select(JobArtifact).where(
+                JobArtifact.job_id == saved.source_job_id,
+                JobArtifact.artifact_name == "sourceWorkbook"))
+            service.storage.write_bytes(source.relative_path, b"changed")
+        db.commit()
+    if failure == "expired":
+        monkeypatch.setattr(qualification.time, "time", lambda: lease["expiresAt"] + 1)
+    current = service.catalog(version)
+    assert current["available"] is False
+    expected = (
+        "TEMPLATE_LAYOUT_NOT_VERIFIED" if failure in {"draft", "archived"}
+        else "PRINT_LAYOUT_STALE" if failure == "layout" else "PRINT_REFERENCE_NOT_VALIDATED"
+    )
+    assert current["reason"] == expected
+    with pytest.raises(AppError) as caught:
+        service.accept(request, uploads)
+    assert caught.value.code == (
+        "TEMPLATE_CHANGED_DURING_ACCEPTANCE" if failure == "layout" else expected
+    )
+    with service.database.session() as db:
+        assert set(db.scalars(select(ProcessingJob.id))) == before_jobs
 
 
 def test_formally_qualified_calc_approval_archives_old_active_atomically(

@@ -145,7 +145,10 @@ class TemplateRepository:
             if qualification_service is None or expected_revision is None:
                 require_legacy_ocr(version.quality_json)
                 raise RuntimeError("Paged approval guard did not reject an incomplete caller")
-            qualification_service.require_for_activation(
+            from app.services.candidate_readiness_service import require_for_use
+
+            require_for_use(
+                qualification_service,
                 self._session,
                 version,
                 expected_revision,

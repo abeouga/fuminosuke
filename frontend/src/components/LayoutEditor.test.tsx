@@ -839,12 +839,12 @@ describe("range classification", () => {
 
     clickInput();
     expect(scope.getByRole("button", { name: "記入欄" })).toHaveClass("active");
-    expect(scope.getByRole("button", { name: "選択欄" })).not.toHaveClass("active");
+    expect(scope.getByRole("button", { name: "印刷された選択肢から選ぶ" })).not.toHaveClass("active");
 
     fireEvent.click(scope.getByRole("button", { name: "区分変更" }));
     clickInput();
     expect(scope.getByRole("button", { name: "記入欄" })).toHaveClass("active");
-    expect(scope.getByRole("button", { name: "選択欄" })).not.toHaveClass("active");
+    expect(scope.getByRole("button", { name: "印刷された選択肢から選ぶ" })).not.toHaveClass("active");
 
     view.unmount();
     Object.defineProperty(window, "PointerEvent", {
@@ -1464,7 +1464,7 @@ describe("record section display names", () => {
     targetPath: `customFields.${index % labels.length === 0 ? "年" : "学校名"}_${Math.floor(index / labels.length) + 1}`,
   }));
 
-  test("creates an unnamed section, selects its band on click, and selects one cell on double click", async () => {
+  test("creates an unnamed section from the toolbar while the lower settings panel stays hidden", async () => {
     const originalPointerEvent = window.PointerEvent;
     Object.defineProperty(window, "PointerEvent", {
       configurable: true,
@@ -1504,10 +1504,9 @@ describe("record section display names", () => {
     fireEvent.pointerMove(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
     fireEvent.pointerUp(canvas, { clientX: 280, clientY: 95, pointerId: 1 });
 
-    expect(editor.queryByRole("form", { name: "繰り返し表の名称編集" })).not.toBeInTheDocument();
-    expect(editor.getByRole("button", { name: /名称なしの繰り返し表.*2レコード/ }))
-      .toBeInTheDocument();
-    expect(editor.getByRole("radio", { name: "名前を付けない" })).toBeChecked();
+    expect(view.container.querySelector(".record-structure-editor")).not.toBeVisible();
+    expect(editor.queryByRole("heading", { name: "繰り返し表の行と列" }))
+      .not.toBeInTheDocument();
     expect(editor.queryByRole("textbox", { name: "繰り返し部分の名前" })).not.toBeInTheDocument();
 
     fireEvent.pointerDown(canvas, { clientX: 210, clientY: 95, pointerId: 2 });
@@ -1519,10 +1518,10 @@ describe("record section display names", () => {
     expect(editor.getByText("繰り返し部分のセルを1つ選択しました。")).toBeInTheDocument();
     expect(editor.getByLabelText("セル一覧から選択")).toHaveValue("school_label");
 
-    fireEvent.change(editor.getByLabelText("帳票上の見出し（任意）"), {
-      target: { value: sectionHeading.id },
-    });
-    expect(editor.getByRole("button", { name: /学歴見出し.*2レコード/ })).toBeInTheDocument();
+    fireEvent.click(editor.getByRole("button", { name: "見出しへ接続" }));
+    fireEvent.pointerDown(canvas, { clientX: 150, clientY: 40, pointerId: 3 });
+    fireEvent.pointerMove(canvas, { clientX: 140, clientY: 95, pointerId: 3 });
+    fireEvent.pointerUp(canvas, { clientX: 140, clientY: 95, pointerId: 3 });
     fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const saved = onSave.mock.calls[0]![0];
@@ -1546,11 +1545,11 @@ describe("record section display names", () => {
       />,
     );
     const reloadedEditor = within(reloaded.container);
-    expect(reloadedEditor.getByRole("button", { name: /学歴見出し.*2レコード/ }))
+    expect(reloaded.container.querySelector(".record-structure-editor")).not.toBeVisible();
+    expect(reloadedEditor.getByRole("button", { name: "繰り返し部分をまとめる" }))
       .toBeInTheDocument();
-    expect(reloadedEditor.getByRole("radio", { name: "名前を付けない" })).toBeChecked();
-    expect(reloadedEditor.getByLabelText("帳票上の見出し（任意）"))
-      .toHaveValue(sectionHeading.id);
+    expect(reloadedEditor.getByRole("button", { name: "見出しへ接続" }))
+      .toBeInTheDocument();
     expect(saved.recordSections?.[0].id).toBe(originalId);
     expect(saved.recordSections?.[0].collectionPath).toBe(originalCollectionPath);
     expect(saved.recordGroups?.map((group) => group.id)).toEqual(originalGroupIds);
@@ -1562,7 +1561,7 @@ describe("record section display names", () => {
     });
   });
 
-  test("adds and removes only the optional section name from the sidebar", async () => {
+  test("preserves existing section metadata while the lower settings panel is hidden", async () => {
     const section: LayoutRecordSection = {
       id: "education",
       title: "明細",
@@ -1610,41 +1609,24 @@ describe("record section display names", () => {
         targets={[]}
         onDetect={vi.fn()}
         onSave={onSave}
+        allowUnchangedSave
       />,
     );
     const editor = within(view.container);
-    fireEvent.click(editor.getByRole("radio", { name: "名前を付ける" }));
-    const nameInput = editor.getByRole("textbox", { name: "繰り返し部分の名前" });
-    expect(nameInput).toHaveValue("明細");
-    fireEvent.change(nameInput, { target: { value: "学歴" } });
-    fireEvent.blur(nameInput);
-    expect(editor.getByRole("button", { name: /学歴.*2レコード/ })).toBeInTheDocument();
+    expect(view.container.querySelector(".record-structure-editor")).not.toBeVisible();
+    expect(editor.queryByRole("radio", { name: "名前を付ける" })).not.toBeInTheDocument();
 
     fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    const named = onSave.mock.calls[0]![0];
-    expect(named.recordSections?.[0]).toEqual(expect.objectContaining({
-      id: section.id,
-      displayName: "学歴",
-      collectionPath: section.collectionPath,
-      parentLabelCellId: sectionHeading.id,
-      recordLabelCellIds: section.recordLabelCellIds,
-    }));
-    expect(named.recordGroups).toEqual(groups);
-
-    fireEvent.click(editor.getByRole("radio", { name: "名前を付けない" }));
-    expect(editor.queryByRole("textbox", { name: "繰り返し部分の名前" })).not.toBeInTheDocument();
-    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
-    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
-    const unnamed = onSave.mock.calls[1]![0];
-    expect(unnamed.recordSections?.[0]).toEqual(expect.objectContaining({
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved.recordSections?.[0]).toEqual(expect.objectContaining({
       id: section.id,
       displayName: null,
       collectionPath: section.collectionPath,
       parentLabelCellId: sectionHeading.id,
       recordLabelCellIds: section.recordLabelCellIds,
     }));
-    expect(unnamed.recordGroups).toEqual(groups);
+    expect(saved.recordGroups).toEqual(groups);
   });
 
   test("keeps legacy titles as fallback and maps three same-title sections by ID", () => {
@@ -1692,8 +1674,7 @@ describe("record section display names", () => {
     expect(recordSectionAtPoint({ x: 210, y: 125 }, [section], labels, 16)).toBeNull();
   });
 
-  test("allows duplicate display names while retaining distinct internal IDs", async () => {
-    const onSave = vi.fn(async (saved: LayoutDefinition) => saved);
+  test("does not expose manual section creation while retaining the toolbar tools", () => {
     const view = render(
       <LayoutEditor
         source="data:image/png;base64,"
@@ -1709,21 +1690,15 @@ describe("record section display names", () => {
         }}
         targets={[]}
         onDetect={vi.fn()}
-        onSave={onSave}
+        onSave={vi.fn()}
+        workflowStep="records"
       />,
     );
     const editor = within(view.container);
-    fireEvent.click(editor.getByRole("button", { name: "繰り返し表を追加" }));
-    fireEvent.click(editor.getByRole("button", { name: "繰り返し表を追加" }));
-    expect(editor.getAllByRole("button", { name: /明細.*0レコード/ })).toHaveLength(2);
-
-    fireEvent.click(editor.getByRole("button", { name: /レイアウト.*保存/ }));
-    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    const sections = onSave.mock.calls[0]![0].recordSections ?? [];
-    expect(sections.map((section) => recordSectionDisplayName(section)))
-      .toEqual(["明細", "明細"]);
-    expect(new Set(sections.map((section) => section.id)).size).toBe(2);
-    expect(new Set(sections.map((section) => section.collectionPath)).size).toBe(2);
+    expect(view.container.querySelector(".record-structure-editor")).not.toBeVisible();
+    expect(editor.queryByRole("button", { name: "繰り返し表を追加" })).not.toBeInTheDocument();
+    expect(editor.getByRole("button", { name: "繰り返し部分をまとめる" })).toBeEnabled();
+    expect(editor.getByRole("button", { name: "見出しへ接続" })).toBeEnabled();
   });
 });
 
@@ -2274,6 +2249,10 @@ describe("custom JSON target", () => {
     );
 
     const editor = within(view.container);
+    const catalog = view.container.querySelector(".meaning-target-manager") as HTMLDetailsElement;
+    expect(catalog.open).toBe(false);
+    fireEvent.click(catalog.querySelector("summary")!);
+    expect(catalog.open).toBe(true);
     expect(editor.getByText("このテンプレートには保存する項目が登録されていません"))
       .toBeVisible();
     expect(editor.queryByLabelText("登録済み項目を検索")).not.toBeInTheDocument();
@@ -2305,8 +2284,11 @@ describe("custom JSON target", () => {
 
     const editor = within(view.container);
     const preview = view.container.querySelector(".layout-workbench")!;
-    const catalog = view.container.querySelector(".meaning-target-manager")!;
+    const catalog = view.container.querySelector(".meaning-target-manager") as HTMLDetailsElement;
+    expect(catalog.open).toBe(false);
     expect(preview.compareDocumentPosition(catalog) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(catalog.querySelector("summary")!);
+    expect(catalog.open).toBe(true);
     const catalogAddition = editor.getByRole("button", { name: "一覧にない項目を追加" })
       .closest(".meaning-target-addition") as HTMLElement;
     const filters = view.container.querySelector(".meaning-target-filters")!;
@@ -2325,6 +2307,10 @@ describe("custom JSON target", () => {
       target: { value: "該当なし" },
     });
     expect(editor.getByText("条件に一致する登録済み項目はありません。")).toBeVisible();
+    fireEvent.click(catalog.querySelector("summary")!);
+    expect(catalog.open).toBe(false);
+    fireEvent.click(catalog.querySelector("summary")!);
+    expect(editor.getByLabelText("登録済み項目を検索")).toHaveValue("該当なし");
 
     const disclosure = view.container.querySelector(".relation-table-disclosure") as HTMLDetailsElement;
     expect(disclosure.open).toBe(false);
@@ -2723,6 +2709,32 @@ describe("editing safety regressions", () => {
     expect(editor.getByText("保存判定")).toBeInTheDocument();
     expect(editor.queryByRole("button", { name: /未設定/ })).not.toBeInTheDocument();
     expect(editor.queryByRole("button", { name: "繰り返し部分をまとめる" })).not.toBeInTheDocument();
+  });
+
+  test("hides review-only setup notices while retaining actionable warnings", () => {
+    const view = render(
+      <LayoutEditor
+        source="data:image/png;base64,"
+        initialLayout={{
+          ...layout(),
+          warnings: [
+            "XLSXのセル構造から自動作成した案です。区分、意味、繰り返し構造を確認してください。",
+            "LibreOfficeの印刷プレビュー上の罫線へXLSXセル座標を補正しました。",
+            "実際に修正が必要な警告です。",
+          ],
+        }}
+        targets={[scalarTarget]}
+        workflowStep="review"
+        onDetect={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    const editor = within(view.container);
+
+    expect(editor.queryByText(/XLSXのセル構造から自動作成/)).not.toBeInTheDocument();
+    expect(editor.queryByText(/LibreOfficeの印刷プレビュー上/)).not.toBeInTheDocument();
+    expect(editor.queryByText("レイアウト変更は保存済みです。")).not.toBeInTheDocument();
+    expect(editor.getByText("実際に修正が必要な警告です。")).toBeVisible();
   });
 
   test("strongly focuses unassigned meaning cells without making the layout dirty", async () => {
@@ -3894,7 +3906,7 @@ describe("editing safety regressions", () => {
     });
     const properties = within(view.container.querySelector(".property-form")!);
 
-    fireEvent.click(properties.getByRole("button", { name: "選択欄" }));
+    fireEvent.click(properties.getByRole("button", { name: "印刷された選択肢から選ぶ" }));
 
     expect(properties.getByText("分娩状況の選択マーク")).toBeInTheDocument();
     for (const label of ["双", "早", "流", "死", "♂", "♀"]) {
@@ -3965,7 +3977,7 @@ describe("editing safety regressions", () => {
     });
     const properties = within(view.container.querySelector(".property-form")!);
 
-    fireEvent.click(properties.getByRole("button", { name: "選択欄" }));
+    fireEvent.click(properties.getByRole("button", { name: "印刷された選択肢から選ぶ" }));
 
     expect(properties.getByText("選択欄の設定")).toBeInTheDocument();
     expect(properties.queryByText("分娩状況の選択マーク")).not.toBeInTheDocument();
@@ -3995,7 +4007,7 @@ describe("editing safety regressions", () => {
     });
     const properties = within(view.container.querySelector(".property-form")!);
 
-    fireEvent.click(properties.getByRole("button", { name: "選択欄" }));
+    fireEvent.click(properties.getByRole("button", { name: "印刷された選択肢から選ぶ" }));
 
     expect(properties.getByText("選択欄の設定")).toBeInTheDocument();
     expect(properties.getByLabelText("判定方法")).toHaveValue("manual");

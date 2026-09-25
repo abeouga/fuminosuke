@@ -14,15 +14,34 @@ from PIL import Image
 from sqlalchemy import select
 
 from app.core.errors import AppError
-from app.db.models import JobArtifact, ProcessingJob, Template, TemplateVersion
+from app.db.models import (
+    JobArtifact,
+    OutputLayoutTemplateRevision,
+    ProcessingJob,
+    Template,
+    TemplateCandidateBinding,
+    TemplateCandidateSet,
+    TemplateVersion,
+)
 from app.domain.template_config import (
     DocumentIdentityConfig,
     FieldMappingConfig,
     build_blank_template_config,
+    parse_template_config,
 )
-from app.services.print_layout_service import PrintLayoutService
+from app.services.print_layout_service import PrintLayoutService, digest
 from app.services.reference_qualification_service import ReferenceQualificationService
+from app.services.template_duplicate_service import TemplateDuplicateService
 from app.services.template_version_service import TemplateVersionService
+from tests.integration.test_calc_qualification_plan import (  # noqa: F401
+    calc_fixture,
+    calc_reference,
+    prepared_fixture,
+    print_template,
+    saved_template,
+)
+from tests.integration.test_candidate_readiness_api import reviewed_pages  # noqa: F401
+from tests.integration.test_ocr_review_api import _active_template
 
 
 @pytest.fixture
@@ -178,6 +197,460 @@ def _edit(client: TestClient, version: str, *, revision: str | None = None) -> d
     response = client.post(f"/api/v1/template-versions/{version}/edit", params=params)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_duplicate_creates_an_independent_editable_template(client, versioned_source):
+    source_id, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        source_template_id = source.template_id
+        candidate = TemplateCandidateSet(
+            template_id=source_template_id, name="氏名候補", normalized_name="氏名候補",
+            values_json=["花子"], allowed_suffixes_json=[],
+        )
+        session.add(candidate)
+        session.flush()
+        session.add(TemplateCandidateBinding(
+            template_id=source_template_id, candidate_set_id=candidate.id,
+            target_pattern="document.cattleName", field_label="氏名",
+        ))
+        session.add(OutputLayoutTemplateRevision(
+            owner_key="local", template_version_id=source_id, revision=1,
+            layout_json={"sourceTemplateVersionId": source_id, "sheetName": "原本"},
+            source_sheet_name="原本", source_job_id=source.source_job_id,
+        ))
+        session.commit()
+
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "Versioning のコピー"},
+    )
+    assert response.status_code == 201, response.text
+    copied = response.json()
+    assert copied["templateId"] != source_template_id
+    assert copied["templateVersionId"] != source_id
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        target = session.get(TemplateVersion, copied["templateVersionId"])
+        template = session.get(Template, copied["templateId"])
+        target_id = target.id
+        copied_template_id = template.id
+        assert source.status == "ACTIVE"
+        assert template.name == "Versioning のコピー"
+        assert template.active_version_id is None
+        assert target.template_id == template.id
+        assert target.version_number == 1
+        assert target.status == "DRAFT"
+        assert target.source_job_id != source.source_job_id
+        assert target.clean_template_artifact_id != source.clean_template_artifact_id
+        assert "forkParentVersionId" not in target.quality_json
+        assert target.quality_json["layoutVerified"] is False
+        original_config = parse_template_config(
+            storage.read_bytes(source.config_relative_path).decode()
+        )
+        copied_config = parse_template_config(
+            storage.read_bytes(target.config_relative_path).decode()
+        )
+        assert copied_config.template_id == template.id
+        assert copied_config.template_version == 1
+        assert copied_config.name == template.name
+        assert {m.target_path for m in copied_config.field_mappings} == {
+            m.target_path for m in original_config.field_mappings
+        }
+        assert {m.mapping_id for m in copied_config.field_mappings}.isdisjoint(
+            m.mapping_id for m in original_config.field_mappings
+        )
+        assert {c["id"] for c in target.layout_json["cells"]}.isdisjoint(
+            c["id"] for c in source.layout_json["cells"]
+        )
+        old_artifacts = list(session.scalars(select(JobArtifact).where(
+            JobArtifact.job_id == source.source_job_id,
+        )))
+        new_artifacts = list(session.scalars(select(JobArtifact).where(
+            JobArtifact.job_id == target.source_job_id,
+        )))
+        assert len(new_artifacts) == len(old_artifacts)
+        assert {a.relative_path for a in old_artifacts}.isdisjoint(
+            a.relative_path for a in new_artifacts
+        )
+        assert sorted(a.sha256 for a in new_artifacts) == sorted(a.sha256 for a in old_artifacts)
+        copied_sets = list(session.scalars(select(TemplateCandidateSet).where(
+            TemplateCandidateSet.template_id == template.id,
+        )))
+        assert len(copied_sets) == 1
+        assert copied_sets[0].id != candidate.id
+        assert copied_sets[0].values_json == ["花子"]
+        copied_output = session.scalar(select(OutputLayoutTemplateRevision).where(
+            OutputLayoutTemplateRevision.template_version_id == target_id,
+        ))
+        assert copied_output.layout_json["sourceTemplateVersionId"] == target_id
+        assert copied_output.source_job_id == target.source_job_id
+
+    old_ids = client.get(f"/api/v1/template-versions/{source_id}/field-identities").json()
+    new_ids = client.get(
+        f"/api/v1/template-versions/{copied['templateVersionId']}/field-identities"
+    ).json()
+    assert set(old_ids.values()).isdisjoint(new_ids.values())
+    changed_candidates = client.put(
+        f"/api/v1/templates/{copied_template_id}/candidate-settings",
+        json={
+            "templateVersionId": target_id,
+            "sets": [{
+                "name": "氏名候補", "values": ["次郎"], "allowedSuffixes": [],
+                "targetPatterns": ["document.cattleName"],
+            }],
+        },
+    )
+    assert changed_candidates.status_code == 200, changed_candidates.text
+    original_candidates = client.get(
+        f"/api/v1/templates/{source_template_id}/candidate-settings"
+    ).json()
+    assert original_candidates["sets"][0]["values"] == ["花子"]
+    assert client.delete(f"/api/v1/templates/{source_template_id}").status_code == 200
+    assert client.get(f"/api/v1/templates/{copied_template_id}").status_code == 200
+    assert client.get(f"/api/v1/template-versions/{target_id}/layout").status_code == 200
+
+
+def test_duplicate_for_reading_activates_an_independent_single_page_copy(
+    client, versioned_source,
+):
+    source_id, _ = versioned_source
+    database = client.app.state.database
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "Versioning の読み取り用コピー", "activate": True},
+    )
+    assert response.status_code == 201, response.text
+    copied = response.json()
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        target = session.get(TemplateVersion, copied["templateVersionId"])
+        template = session.get(Template, copied["templateId"])
+        assert source.status == "ACTIVE"
+        assert target.status == "ACTIVE"
+        assert template.active_version_id == target.id
+        assert template.id != source.template_id
+        assert target.source_job_id != source.source_job_id
+        assert target.quality_json["layoutVerified"] is True
+        assert target.quality_json["layoutVerificationFingerprint"]
+    assert client.get(f"/api/v1/templates/{copied['templateId']}").json()[
+        "activeVersionId"
+    ] == copied["templateVersionId"]
+
+
+def test_duplicate_for_reading_prepares_its_own_paged_readiness(
+    client, reviewed_pages,  # noqa: F811
+):
+    source_id, url, ready, _ = reviewed_pages
+    assert client.post(url + "/ocr-readiness", params={
+        "base_revision": ready["revision"],
+    }).status_code == 200
+    assert client.post(
+        f"/api/v1/template-versions/{source_id}/approve",
+        params={"base_revision": ready["revision"]},
+    ).status_code == 200
+
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "ページ帳票の読み取り用コピー", "activate": True},
+    )
+    assert response.status_code == 201, response.text
+    copied = response.json()
+    with client.app.state.database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        target = session.get(TemplateVersion, copied["templateVersionId"])
+        assert source.status == target.status == "ACTIVE"
+        assert target.quality_json["candidateReadiness"]["artifactId"] != (
+            source.quality_json["candidateReadiness"]["artifactId"]
+        )
+        assert target.quality_json["printLayout"]["printFiles"]["xlsx"]["artifactId"] != (
+            source.quality_json["printLayout"]["printFiles"]["xlsx"]["artifactId"]
+        )
+    catalog = client.get(f"/api/v1/template-versions/{copied['templateVersionId']}/ocr-pages")
+    assert catalog.status_code == 200, catalog.text
+    assert catalog.json()["available"] is True
+
+
+@pytest.mark.parametrize("mode", ["REFERENCE_TEMPLATE", "SINGLE_IMAGE_EXPERIMENTAL"])
+def test_duplicate_for_reading_reverifies_an_image_template(client, mode):
+    source_id = _active_template(client)
+    if mode == "SINGLE_IMAGE_EXPERIMENTAL":
+        with client.app.state.database.session() as session:
+            source = session.get(TemplateVersion, source_id)
+            source.mode = mode
+            session.get(ProcessingJob, source.source_job_id).mode = mode
+            session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "画像帳票の読み取り用コピー", "activate": True},
+    )
+    assert response.status_code == 201, response.text
+    copied = response.json()
+    with client.app.state.database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        target = session.get(TemplateVersion, copied["templateVersionId"])
+        assert source.status == target.status == "ACTIVE"
+        assert target.mode == mode
+        assert target.source_job_id != source.source_job_id
+        assert target.quality_json["layoutVerificationFingerprint"] != (
+            source.quality_json["layoutVerificationFingerprint"]
+        )
+    mappings = client.get(
+        f"/api/v1/template-versions/{copied['templateVersionId']}/field-mappings"
+    )
+    assert mappings.status_code == 200, mappings.text
+    assert mappings.json()["validForOcr"] is True
+
+
+def test_duplicate_page_template_keeps_pages_but_requires_its_own_readiness(
+    client, versioned_source,
+):
+    source_id, png = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        job = session.get(ProcessingJob, source.source_job_id)
+        reference_path = storage.write_bytes(f"jobs/{job.id}/1/reference.png", png)
+        reference = JobArtifact(
+            job_id=job.id, attempt_number=1, artifact_name="pageReference",
+            relative_path=reference_path, media_type="image/png",
+            sha256=hashlib.sha256(png).hexdigest(), width=300, height=100,
+        )
+        session.add(reference)
+        session.flush()
+        workbook = session.scalar(select(JobArtifact).where(
+            JobArtifact.job_id == job.id, JobArtifact.artifact_name == "sourceWorkbook",
+        ))
+        source.quality_json = {
+            **source.quality_json,
+            "candidateReadiness": {"status": "CANDIDATE_READY", "versionId": source_id},
+            "printLayout": {
+                "sourceSha256": workbook.sha256,
+                "layoutSha256": digest(source.layout_json),
+                "printFiles": {"renderKey": "old"},
+                "pages": [{
+                    "page": 1, "range": "A1:C3",
+                    "referenceImage": {"artifactId": reference.id,
+                                       "relativePath": reference.relative_path,
+                                       "sha256": reference.sha256},
+                }],
+            },
+        }
+        session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "ページ帳票のコピー"},
+    )
+    assert response.status_code == 201, response.text
+    copied_id = response.json()["templateVersionId"]
+    with database.session() as session:
+        copied = session.get(TemplateVersion, copied_id)
+        plan = copied.quality_json["printLayout"]
+        assert copied.status == "DRAFT"
+        assert plan["pages"][0]["range"] == "A1:C3"
+        assert plan["pages"][0]["referenceImage"]["artifactId"] != reference.id
+        assert plan["pages"][0]["referenceImage"]["relativePath"] != reference_path
+        assert "printFiles" not in plan
+        assert "candidateReadiness" not in copied.quality_json
+    assert client.get(f"/api/v1/template-versions/{copied_id}/print-layout").status_code == 200
+    refused = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "ページ帳票の未検証コピー", "activate": True},
+    )
+    assert refused.status_code == 409, refused.text
+    with database.session() as session:
+        assert [item.name for item in session.scalars(select(Template))] == [
+            "Versioning", "ページ帳票のコピー",
+        ]
+
+
+def test_duplicate_name_conflict_leaves_the_source_unchanged(client, versioned_source):
+    source_id, _ = versioned_source
+    database = client.app.state.database
+    with database.session() as session:
+        before = session.scalar(select(TemplateVersion).where(TemplateVersion.id == source_id))
+        source_template_id = before.template_id
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "  versioning  "},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "TEMPLATE_NAME_CONFLICT"
+    with database.session() as session:
+        assert len(list(session.scalars(select(Template)))) == 1
+        source = session.get(TemplateVersion, source_id)
+        assert source.template_id == source_template_id
+        assert source.status == "ACTIVE"
+
+
+@pytest.mark.parametrize("mode", ["REFERENCE_TEMPLATE", "SINGLE_IMAGE_EXPERIMENTAL"])
+def test_duplicate_image_modes_use_separate_source_artifacts(client, versioned_source, mode):
+    source_id, _ = versioned_source
+    database = client.app.state.database
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        source.mode = mode
+        session.get(ProcessingJob, source.source_job_id).mode = mode
+        session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": f"Image copy {mode}"},
+    )
+    assert response.status_code == 201, response.text
+    with database.session() as session:
+        original = session.get(TemplateVersion, source_id)
+        copied = session.get(TemplateVersion, response.json()["templateVersionId"])
+        assert copied.mode == mode
+        assert copied.clean_template_artifact_id != original.clean_template_artifact_id
+        assert copied.source_job_id != original.source_job_id
+
+
+def test_duplicate_rejects_changed_source_bytes_without_creating_a_copy(
+    client, versioned_source,
+):
+    source_id, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        artifact = session.get(JobArtifact, source.clean_template_artifact_id)
+        storage.write_bytes(artifact.relative_path, b"changed")
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "Must not exist"},
+    )
+    assert response.status_code == 409
+    with database.session() as session:
+        assert len(list(session.scalars(select(Template)))) == 1
+        assert session.get(TemplateVersion, source_id).status == "ACTIVE"
+
+
+def test_duplicate_rejects_a_stale_page_reference(client, versioned_source):
+    source_id, _ = versioned_source
+    database = client.app.state.database
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        workbook = session.scalar(select(JobArtifact).where(
+            JobArtifact.job_id == source.source_job_id,
+            JobArtifact.artifact_name == "sourceWorkbook",
+        ))
+        reference = session.get(JobArtifact, source.clean_template_artifact_id)
+        source.quality_json = {
+            **source.quality_json,
+            "printLayout": {
+                "sourceSha256": workbook.sha256,
+                "layoutSha256": digest(source.layout_json),
+                "pages": [{
+                    "page": 1, "range": "A1:C3",
+                    "referenceImage": {
+                        "artifactId": reference.id,
+                        "relativePath": reference.relative_path,
+                        "sha256": "0" * 64,
+                    },
+                }],
+            },
+        }
+        session.commit()
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "Invalid page copy"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "PRINT_REFERENCE_NOT_VALIDATED"
+    with database.session() as session:
+        assert len(list(session.scalars(select(Template)))) == 1
+
+
+def test_duplicate_copy_failure_rolls_back_new_records_and_files(
+    client, versioned_source, monkeypatch,
+):
+    source_id, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    original_write = storage.write_bytes
+    written: list[str] = []
+
+    def fail_second_copy(path, content):
+        normalized = Path(path).as_posix()
+        if normalized.startswith("jobs/") and written:
+            raise OSError("injected duplicate copy failure")
+        stored = original_write(path, content)
+        if normalized.startswith("jobs/"):
+            written.append(stored)
+        return stored
+
+    monkeypatch.setattr(storage, "write_bytes", fail_second_copy)
+    with pytest.raises(OSError, match="injected duplicate copy failure"):
+        TemplateDuplicateService(database, storage).duplicate(source_id, "Failed copy")
+    assert written
+    assert all(not storage.exists(path) for path in written)
+    with database.session() as session:
+        assert len(list(session.scalars(select(Template)))) == 1
+        assert len(list(session.scalars(select(TemplateVersion)))) == 1
+        assert len(list(session.scalars(select(ProcessingJob)))) == 1
+        assert len(list(session.scalars(select(JobArtifact)))) == 3
+
+
+def test_duplicate_generic_definition_regenerates_mapping_and_logical_ids(
+    client, versioned_source,
+):
+    from app.db.models import TemplateDefinitionRevision
+    from app.domain.generic_template_mapping import generic_field_locations
+    from app.domain.template_definition import TemplateDefinition, TemplateField
+    from app.layout_analysis.models import LayoutDefinition
+    from app.services.template_definition_service import TemplateDefinitionService
+
+    source_id, _ = versioned_source
+    database, storage = client.app.state.database, client.app.state.storage
+    with database.session() as session:
+        source = session.get(TemplateVersion, source_id)
+        definition = TemplateDefinition(
+            template_version_id=source_id,
+            template_name="Versioning", state="APPROVED",
+            canonical_width=300, canonical_height=100, confidence=1,
+            cells=TemplateDefinitionService._cells_from_layout(
+                LayoutDefinition.model_validate(source.layout_json)
+            ),
+            standalone_fields=[TemplateField(
+                id="name-field", key="name", name="氏名",
+                value_cell_id="xlsx_A1", confidence=1,
+            )],
+        )
+        original_key = next(generic_field_locations(definition)).mapping_key
+        config = parse_template_config(storage.read_bytes(source.config_relative_path).decode())
+        mapping = config.field_mappings[0].model_copy(update={
+            "mapping_id": original_key,
+            "target_path": f"customFields.{original_key}",
+        })
+        config = config.model_copy(update={
+            "field_mappings": [mapping], "document_identity": None,
+        })
+        storage.write_text(source.config_relative_path, config.model_dump_json(by_alias=True))
+        session.add(TemplateDefinitionRevision(
+            template_version_id=source_id, revision=1, source="APPROVED",
+            definition_json=definition.model_dump(mode="json", by_alias=True),
+            validation_json={"valid": True, "issues": []},
+        ))
+        session.commit()
+    original_ids = _get(client, source_id, "field-identities")
+    response = client.post(
+        f"/api/v1/template-versions/{source_id}/duplicate",
+        json={"name": "Independent generic copy"},
+    )
+    assert response.status_code == 201, response.text
+    copied_id = response.json()["templateVersionId"]
+    with database.session() as session:
+        stored = session.scalar(select(TemplateDefinitionRevision).where(
+            TemplateDefinitionRevision.template_version_id == copied_id,
+        ))
+        copied_definition = TemplateDefinition.model_validate(stored.definition_json)
+        new_key = next(generic_field_locations(copied_definition)).mapping_key
+        assert new_key != original_key
+        assert copied_definition.template_version_id == copied_id
+        assert copied_definition.template_name == "Independent generic copy"
+        assert copied_definition.standalone_fields[0].value_cell_id != "xlsx_A1"
+    copied_ids = _get(client, copied_id, "field-identities")
+    assert copied_ids[new_key] != original_ids[original_key]
+    assert _get(client, copied_id, "field-mappings")["mappings"][0]["mappingId"] == new_key
 
 
 def _make_paged(client: TestClient, version_id: str, **quality_updates: object) -> str:

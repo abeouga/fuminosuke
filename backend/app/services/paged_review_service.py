@@ -229,6 +229,8 @@ class PagedReviewService:
                     "inputRevision": page["inputRevision"],
                     "inputSha256": page["inputSha256"],
                     "referenceImageSha256": page["templateSnapshot"]["cleanTemplateSha256"],
+                    "pageImageUrl": f"/api/v1/jobs/{job.id}/artifacts/"
+                    + quote(f"page.{page['pageId']}.alignedSource", safe=""),
                     "fields": fields,
                     "result": current["result"],
                     "validation": current["validation"],
@@ -248,6 +250,7 @@ class PagedReviewService:
             **metadata,
             "jobId": job.id,
             "revision": stored.revision,
+            "reviewStructure": snapshot.get("reviewStructure"),
             "pages": result_pages,
             "confirmed": job.status == "CONFIRMED",
             "documentName": stored.document_name,

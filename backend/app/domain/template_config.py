@@ -134,13 +134,21 @@ class FieldMappingConfig(PolygonConfigModel):
         return self
     printed_label_text: str = Field(default="", max_length=300)
     mapping_type: Literal["text", "mark"] = "text"
-    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
+    mark_recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
     mark_selection_mode: Literal["single", "multiple"] = "multiple"
     mark_options: list[MarkOptionConfig] = Field(default_factory=list, max_length=50)
     composite_subfields: list[CompositeSubfieldConfig] = Field(
         default_factory=list,
         max_length=10,
     )
+
+    @model_validator(mode="after")
+    def validate_symbol_mode(self) -> FieldMappingConfig:
+        if self.mark_recognition_mode == "symbol" and (
+            self.mapping_type != "mark" or self.mark_selection_mode != "single"
+        ):
+            raise ValueError("Symbol recognition requires a single-choice mark mapping")
+        return self
 
     @field_validator("label", "printed_label_text", mode="before")
     @classmethod

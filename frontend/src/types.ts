@@ -185,7 +185,7 @@ export type Job = {
   progressStage: string | null;
   progressPercent: number;
   attemptNumber: number;
-  error: { code: string; message: string } | null;
+  error: { code: string; message: string; stackTrace?: string | null } | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -314,7 +314,7 @@ export type FieldMapping = {
   vertices?: { x: number; y: number }[];
   printedLabelText?: string;
   mappingType?: "text" | "mark";
-  markRecognitionMode?: "automatic" | "manual";
+  markRecognitionMode?: "automatic" | "manual" | "symbol";
   markSelectionMode?: "single" | "multiple";
   markOptions?: Array<{
     id: string;
@@ -440,7 +440,7 @@ export type LayoutMarkOption = {
 export type LayoutMarkSet = {
   id: string;
   targetPath: string;
-  recognitionMode: "automatic" | "manual";
+  recognitionMode: "automatic" | "manual" | "symbol";
   selectionMode: "single" | "multiple";
   options: LayoutMarkOption[];
 };
@@ -717,7 +717,7 @@ export type OcrFieldPreview = {
   recordGroupId?: string | null;
   fieldKey?: string | null;
   mappingType?: "text" | "mark";
-  markRecognitionMode?: "automatic" | "manual";
+  markRecognitionMode?: "automatic" | "manual" | "symbol";
   markSelectionMode?: "single" | "multiple";
   markOptions?: Array<{ label: string; value: string }>;
 };

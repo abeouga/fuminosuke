@@ -82,8 +82,8 @@ def pages_case(client, print_template):  # noqa: F811 - imported pytest fixture
 
 def accept(case, monkeypatch, **changes):
     service, manifest, images = case
-    # Only this synthetic fixture qualifies. Production admission remains closed.
-    monkeypatch.setattr(service, "_require_qualified_reference", lambda plan: None)
+    # Synthetic execution fixture only; formal admission is tested separately.
+    monkeypatch.setattr(service, "_require_qualified_reference", lambda session, version: None)
     body = {**copy.deepcopy(manifest), **changes}
     return service.accept(
         PagedSubmission.model_validate(body), [UploadPayload(b, "image/png") for b in images]

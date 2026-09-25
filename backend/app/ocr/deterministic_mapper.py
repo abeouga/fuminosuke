@@ -251,8 +251,12 @@ def _reading(
             normalized = None
             review_reason = "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
             issue_code = review_reason
-    elif candidate_type == "mark_choice" and status is not ReadingStatus.BLANK:
-        selected = _selected_mark_labels(raw, candidates)
+    elif candidate_type in {"mark_choice", "symbol_choice"} and status is not ReadingStatus.BLANK:
+        selected = (
+            ([raw] if raw in candidates else [])
+            if candidate_type == "symbol_choice"
+            else _selected_mark_labels(raw, candidates)
+        )
         canonical = "・".join(selected) if selected else None
         if status is ReadingStatus.READABLE and canonical is not None:
             raw = canonical

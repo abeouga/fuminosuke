@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import traceback
 from datetime import UTC, datetime
 
 import anyio
@@ -95,10 +96,25 @@ class JobRunner:
             await anyio.to_thread.run_sync(self._handler, job_id)
             self._finish(job_id)
         except AppError as exc:
-            self._fail(job_id, exc.code, exc.detail)
-        except Exception:
+            self._fail(job_id, exc.code, exc.detail, self._stack_trace(exc))
+        except Exception as exc:
             logger.exception("Job processing failed", extra={"jobId": job_id})
-            self._fail(job_id, "PROCESSING_FAILED", "処理に失敗しました。再試行できます。")
+            self._fail(
+                job_id,
+                "PROCESSING_FAILED",
+                "処理に失敗しました。再試行できます。",
+                self._stack_trace(exc),
+            )
+
+    @staticmethod
+    def _stack_trace(exc: Exception) -> str:
+        trace = exc.__traceback__
+        frames = traceback.extract_tb(trace)[-40:] if trace is not None else []
+        return "".join([
+            "Traceback (most recent call last):\n",
+            *traceback.format_list(frames),
+            f"{type(exc).__name__}\n",
+        ])
 
     def _begin(self, job_id: str) -> bool:
         with self._database.session() as session:
@@ -156,7 +172,7 @@ class JobRunner:
                 metadata={"attemptNumber": job.attempt_number},
             )
 
-    def _fail(self, job_id: str, code: str, safe_message: str) -> None:
+    def _fail(self, job_id: str, code: str, safe_message: str, stack_trace: str) -> None:
         with self._database.session() as session:
             repository = JobRepository(session)
             job = repository.get(job_id)
@@ -178,19 +194,16 @@ class JobRunner:
                     metadata={"attemptNumber": job.attempt_number},
                 )
                 return
-            repository.update(
-                job_id,
-                status=JobStatus.FAILED,
-                error_code=code,
-                error_message_safe=safe_message,
-                completed_at=datetime.now(UTC),
-            )
+            job.status = JobStatus.FAILED.value
+            job.error_code = code
+            job.error_message_safe = safe_message
+            job.completed_at = datetime.now(UTC)
             repository.add_event(
                 job_id=job_id,
                 level="ERROR",
                 event_code=code,
                 stage=job.progress_stage,
-                metadata={"attemptNumber": job.attempt_number},
+                metadata={"attemptNumber": job.attempt_number, "stackTrace": stack_trace},
             )
 
     def _created_job_is_complete(

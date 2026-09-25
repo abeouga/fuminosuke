@@ -6,6 +6,16 @@ import type { Job } from "../types";
 
 const RETRYABLE = new Set(["FAILED", "INTERRUPTED"]);
 const CANCELLABLE = new Set(["QUEUED", "PROCESSING"]);
+const NEW_READING_REQUIRED_ERRORS = new Set([
+  "INCOMPLETE_JOB_INPUTS",
+  "OCR_TEMPLATE_SNAPSHOT_INVALID",
+  "OCR_CALL_BUDGET_TOO_SMALL",
+  "OCR_CALL_BUDGET_EXHAUSTED",
+  "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED",
+  "PAGE_OCR_BUDGET_REQUIRED",
+  "PAGE_OCR_BUDGET_INVALID",
+  "PAGE_EXECUTION_CONFIG_CHANGED",
+]);
 
 export function JobPage({
   jobId,
@@ -136,6 +146,7 @@ export function JobPage({
 function nextActionTitle(job: Job) {
   if (hasIncompleteJobInputs(job)) return "元画像の保存が完了していません";
   if (hasInvalidTemplateSnapshot(job)) return "受付時のテンプレートを確認できません";
+  if (hasUnusableCallBudget(job)) return "この受付のOCR呼び出し予算は再利用できません";
   if (job.status === "REVIEW_REQUIRED") {
     return job.jobType === "EXTRACT_DOCUMENT"
       ? "読み取り結果を確認できます"
@@ -157,6 +168,9 @@ function nextActionDescription(job: Job) {
   if (hasInvalidTemplateSnapshot(job)) {
     return "受付時に固定したテンプレート画像または設定を確認できないため、安全に再試行できません。画像を選び直して、新しい読み取りを開始してください。";
   }
+  if (hasUnusableCallBudget(job)) {
+    return "受付済みジョブの予算と実行設定は変更できません。現在の設定で画像を選び直し、新しい読み取りを開始してください。";
+  }
   if (RETRYABLE.has(job.status)) return "元画像と設定は保存されています。同じ内容で安全に再試行できます。";
   if (job.status === "CANCELLED") return "新しく読み取りを開始する場合は、左側の「読み取り」を選んでください。";
   if (job.status === "REVIEW_REQUIRED") return "内容を目視確認してから確定保存してください。";
@@ -171,6 +185,12 @@ function hasInvalidTemplateSnapshot(job: Job) {
   return job.status === "FAILED" && job.error?.code === "OCR_TEMPLATE_SNAPSHOT_INVALID";
 }
 
+function hasUnusableCallBudget(job: Job) {
+  return job.status === "FAILED" && NEW_READING_REQUIRED_ERRORS.has(job.error?.code ?? "")
+    && !hasIncompleteJobInputs(job)
+    && !hasInvalidTemplateSnapshot(job);
+}
+
 function cannotRetrySafely(job: Job) {
-  return hasIncompleteJobInputs(job) || hasInvalidTemplateSnapshot(job);
+  return job.status === "FAILED" && NEW_READING_REQUIRED_ERRORS.has(job.error?.code ?? "");
 }

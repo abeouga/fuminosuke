@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  FiCopy,
   FiDownload,
+  FiEdit2,
   FiFilePlus,
   FiPlus,
-  FiSettings,
   FiTrash2,
   FiUpload,
   FiX,
@@ -39,10 +40,20 @@ type ReadingTemplateCard = {
   template: Template;
   version: Template["versions"][number];
   editVersion: Template["versions"][number];
-  ocrAvailable: boolean;
+  inputAvailable: boolean;
 };
 
 const EMPTY_TEMPLATE_REFRESH = async () => undefined;
+
+function suggestedDuplicateName(template: Template, templates: Template[]): string {
+  const base = `${template.name} のコピー`;
+  const existing = new Set(templates.map((item) => item.name.normalize("NFKC").trim().toLocaleLowerCase()));
+  for (let number = 1; ; number += 1) {
+    const suffix = number === 1 ? "" : ` ${number}`;
+    const name = `${base.slice(0, 200 - suffix.length)}${suffix}`;
+    if (!existing.has(name.normalize("NFKC").trim().toLocaleLowerCase())) return name;
+  }
+}
 
 const OCR_STEPS = [
   { number: 1 as const, title: "型を選択", caption: "テンプレート" },
@@ -56,6 +67,17 @@ const TEMPLATE_PREVIEW_PRIORITY = [
   "normalized",
   "alignedSource.1",
 ] as const;
+
+const NEW_READING_REQUIRED_ERRORS = new Set([
+  "INCOMPLETE_JOB_INPUTS",
+  "OCR_TEMPLATE_SNAPSHOT_INVALID",
+  "OCR_CALL_BUDGET_TOO_SMALL",
+  "OCR_CALL_BUDGET_EXHAUSTED",
+  "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED",
+  "PAGE_OCR_BUDGET_REQUIRED",
+  "PAGE_OCR_BUDGET_INVALID",
+  "PAGE_EXECUTION_CONFIG_CHANGED",
+]);
 
 export function OcrPage({
   templates,
@@ -101,17 +123,19 @@ export function OcrPage({
       template,
       version: activeVersion,
       editVersion: draftVersion ?? activeVersion,
-      ocrAvailable: activeVersion.status === "ACTIVE"
-        && activeVersion.quality.layoutVerified === true
+      // Opening page bindings is not OCR admission; the server catalog gates submission.
+      inputAvailable: activeVersion.status === "ACTIVE"
+        && (activeVersion.quality.layoutVerified === true
+          || (activeVersion.mode === "SPREADSHEET_TEMPLATE" && activeVersion.quality.printLayout != null))
         && !draftVersion,
     }];
   }), [templates]);
   const versions = useMemo(
-    () => templateCards.filter((card) => card.ocrAvailable),
+    () => templateCards.filter((card) => card.inputAvailable),
     [templateCards],
   );
   const unverifiedVersions = useMemo(
-    () => templateCards.filter((card) => !card.ocrAvailable),
+    () => templateCards.filter((card) => !card.inputAvailable),
     [templateCards],
   );
   const [versionId, setVersionId] = useState(libraryContext?.templateVersionId ?? versions[0]?.version.id ?? "");
@@ -120,6 +144,9 @@ export function OcrPage({
   const [enabled, setEnabled] = useState(true);
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryRequestedForAttempt, setRetryRequestedForAttempt] = useState<number | null>(null);
+  const [jobPollRevision, setJobPollRevision] = useState(0);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [mappingPreview, setMappingPreview] = useState<FieldMapping[] | null>(null);
   const [mappingValid, setMappingValid] = useState(false);
@@ -130,6 +157,11 @@ export function OcrPage({
   const [templatePreviews, setTemplatePreviews] = useState<Record<string, string>>({});
   const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [duplicateBusyTemplateId, setDuplicateBusyTemplateId] = useState<string | null>(null);
+  const [recentCopies, setRecentCopies] = useState<Array<{
+    sourceTemplateId: string; copyTemplateId: string;
+  }>>([]);
+  const [pendingCopyVersionId, setPendingCopyVersionId] = useState<string | null>(null);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
   const [packageDialog, setPackageDialog] = useState<
     | { mode: "import" }
@@ -142,16 +174,33 @@ export function OcrPage({
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
   const visibleVersions = useMemo(() => {
+    const ordered = [...templateCards];
+    for (const { sourceTemplateId, copyTemplateId } of recentCopies) {
+      const sourceIndex = ordered.findIndex(({ template }) => template.id === sourceTemplateId);
+      const copyIndex = ordered.findIndex(({ template }) => template.id === copyTemplateId);
+      if (sourceIndex < 0 || copyIndex < 0) continue;
+      const [copy] = ordered.splice(copyIndex, 1);
+      const nextSourceIndex = ordered.findIndex(({ template }) => template.id === sourceTemplateId);
+      ordered.splice(nextSourceIndex + 1, 0, copy);
+    }
     const query = templateQuery.trim().toLocaleLowerCase("ja-JP");
-    if (!query) return templateCards;
-    return templateCards.filter(({ template }) => (
+    if (!query) return ordered;
+    return ordered.filter(({ template }) => (
       template.name.toLocaleLowerCase("ja-JP").includes(query)
     ));
-  }, [templateCards, templateQuery]);
+  }, [recentCopies, templateCards, templateQuery]);
   const mappedReadingReady = !enabled || (
     Boolean(mappingPreview?.length)
     && mappingValid
   );
+  const openReadingSetup = (nextVersionId: string) => {
+    idempotencyKeyRef.current = null;
+    setSelectionInvalidated(false);
+    if (nextVersionId !== versionId) setFile(null);
+    setVersionId(nextVersionId);
+    setCameraOpen(false);
+    setStep(2);
+  };
   const openTemplateWorkspace = (
     workspace: TemplateWorkspace,
     editVersionId?: string,
@@ -202,6 +251,68 @@ export function OcrPage({
       setDeletingTemplateId((current) => current === template.id ? null : current);
     }
   };
+  const duplicateTemplate = async (template: Template, version: Template["versions"][number]) => {
+    if (duplicateBusyTemplateId) return;
+    const name = suggestedDuplicateName(template, templates);
+    setDuplicateBusyTemplateId(template.id);
+    try {
+      const result = await api.duplicateTemplateVersion(version.id, name, true);
+      let copied: Template;
+      try {
+        copied = await api.template(result.templateId);
+      } catch {
+        try { await refreshTemplates(); } catch { /* The operation outcome is still unknown. */ }
+        showToast({
+          tone: "warning", title: "複製結果を確認できませんでした",
+          message: "コピーが作成された可能性があります。一覧を確認してから再操作してください。",
+        });
+        return;
+      }
+      const copiedVersion = copied.versions.find((item) => item.id === result.templateVersionId);
+      if (copied.activeVersionId !== result.templateVersionId || copiedVersion?.status !== "ACTIVE") {
+        try { await refreshTemplates(); } catch { /* The draft is still not reading-ready. */ }
+        showToast({
+          tone: "error", title: "コピーは読み取り用に有効化されていません",
+          message: `「${name}」は下書きとして作成されました。バックエンドを更新してから再操作してください。`,
+        });
+        return;
+      }
+      try {
+        await refreshTemplates();
+      } catch {
+        showToast({
+          tone: "error", title: "複製は完了しました",
+          message: "一覧を更新できませんでした。画面を再読み込みしてコピーを確認してください。",
+        });
+        return;
+      }
+      setRecentCopies((current) => [...current, {
+        sourceTemplateId: template.id, copyTemplateId: result.templateId,
+      }]);
+      setPendingCopyVersionId(result.templateVersionId);
+      setVersionId(result.templateVersionId);
+      setSelectionInvalidated(false);
+      showToast({
+        tone: "success", title: "テンプレートを複製しました",
+        message: `「${name}」を読み取り用テンプレートに追加しました。`,
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        showToast({
+          tone: "error", title: "テンプレートを複製できませんでした",
+          message: error.message,
+        });
+      } else {
+        try { await refreshTemplates(); } catch { /* The operation outcome is still unknown. */ }
+        showToast({
+          tone: "warning", title: "複製結果を確認できませんでした",
+          message: "通信が切れた可能性があります。一覧を確認してから再操作してください。",
+        });
+      }
+    } finally {
+      setDuplicateBusyTemplateId(null);
+    }
+  };
   useEffect(() => {
     if (!templateWorkspaceRequest) return;
     setTemplateWorkspace(templateWorkspaceRequest);
@@ -216,6 +327,7 @@ export function OcrPage({
     return () => onTemplateWorkspaceVisibilityChange?.(false);
   }, [onTemplateWorkspaceVisibilityChange, templateWorkspace]);
   useEffect(() => {
+    if (versionId === pendingCopyVersionId) return;
     if (versions.some((item) => item.version.id === versionId)) return;
     idempotencyKeyRef.current = null;
     if (versionId) {
@@ -229,7 +341,12 @@ export function OcrPage({
         ? libraryContext?.templateVersionId ?? ""
         : versions[0]?.version.id ?? "",
     );
-  }, [libraryContext?.templateVersionId, selectionInvalidated, versionId, versions]);
+  }, [libraryContext?.templateVersionId, pendingCopyVersionId, selectionInvalidated, versionId, versions]);
+  useEffect(() => {
+    if (pendingCopyVersionId && versions.some((item) => item.version.id === pendingCopyVersionId)) {
+      setPendingCopyVersionId(null);
+    }
+  }, [pendingCopyVersionId, versions]);
   useEffect(() => {
     let cancelled = false;
     const previewSources = templateCards.filter(({ version }) => version.sourceJobId);
@@ -310,7 +427,38 @@ export function OcrPage({
         openReview(terminal.id);
       })
       .catch(() => openReview(terminal.id));
-  });
+  }, jobPollRevision);
+  const retryBlocked = job?.status === "FAILED"
+    && NEW_READING_REQUIRED_ERRORS.has(job.error?.code ?? "");
+  const canRetry = Boolean(job && ["FAILED", "INTERRUPTED"].includes(job.status) && !retryBlocked);
+  const retryPending = retryRequestedForAttempt === job?.attemptNumber;
+
+  const startNewReading = () => {
+    idempotencyKeyRef.current = null;
+    setFile(null);
+    setJobId(null);
+    setRetryBusy(false);
+    setRetryRequestedForAttempt(null);
+    setStep(2);
+  };
+
+  const retryJob = async () => {
+    if (!job || !canRetry || retryBusy || retryPending) return;
+    setRetryBusy(true);
+    try {
+      await api.retry(job.id);
+      setRetryRequestedForAttempt(job.attemptNumber);
+      setJobPollRevision((current) => current + 1);
+    } catch (error) {
+      showToast({
+        tone: "error",
+        title: "再試行を開始できませんでした",
+        message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
+      });
+    } finally {
+      setRetryBusy(false);
+    }
+  };
   if (templateWorkspace) {
     return (
       <TemplatePage
@@ -333,13 +481,65 @@ export function OcrPage({
   }
   return (
     <div className="page-stack narrow">
-      <header className="page-header split">
-        <div>
-          <span className="eyebrow">NEW READING</span>
-          <h1>{libraryContext?.action === "RESCAN_PAGE" ? `${libraryContext.pageNumber ?? "選択した"}ページ目を読み直す` : libraryContext?.action === "ADD_PAGE" ? "続きのページを追加" : libraryContext?.action === "NEW_DOCUMENT" ? "同じ分類の別書類を読み取る" : "書類を読み取る"}</h1>
-          <p>{libraryContext ? "書類ライブラリで選択した書類に紐付けて読み取ります。" : "テンプレートと画像を選ぶと、設定済みの項目を自動で読み取ります。"}</p>
-        </div>
+      <header className="page-header split ocr-page-header">
+        <nav className="ocr-breadcrumb" aria-label="パンくずリスト">
+          <span>読み取り</span>
+          <span aria-hidden="true">›</span>
+          <strong>{step === 1 ? "テンプレート選択" : step === 2 ? "画像を準備" : "内容確認・実行"}</strong>
+        </nav>
       </header>
+      {jobId ? (
+        <section className="ocr-progress-stage" aria-label="OCRの進捗">
+          {job ? (
+            <>
+              <JobProgress job={job} connectionLost={connectionLost} />
+              {canRetry && (
+                <div className="ocr-progress-actions">
+                  <p role="status">
+                    {job.error?.code === "MULTI_PAGE_PARTIAL_FAILURE"
+                      ? "成功したページは保持したまま、失敗したページだけを再試行します。"
+                      : "受付時の画像と設定を使って、処理を再試行します。"}
+                  </p>
+                  <button className="primary" type="button" disabled={retryBusy || retryPending} onClick={() => void retryJob()}>
+                    {retryBusy || retryPending ? "再試行を開始中…" : job.error?.code === "MULTI_PAGE_PARTIAL_FAILURE"
+                      ? "失敗したページを再試行"
+                      : "処理を再試行"}
+                  </button>
+                </div>
+              )}
+              {retryBlocked && (
+                <div className="ocr-progress-actions">
+                  <p role="status">
+                    {job.error?.code.startsWith("OCR_CALL_BUDGET")
+                      || job.error?.code.startsWith("PAGE_OCR_BUDGET")
+                      || job.error?.code === "PAGE_EXECUTION_CONFIG_CHANGED"
+                      ? "この受付の呼び出し予算または実行設定は変更できません。現在の設定で新しい読み取りを受け付け直してください。"
+                      : "この受付は安全に再試行できません。画像を選び直して、新しい読み取りを開始してください。"}
+                  </p>
+                  <button className="primary" type="button" onClick={startNewReading}>
+                    新しい読み取りを開始
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <section className="progress-card" aria-live="polite">
+              <div className="progress-head">
+                <div>
+                  <span className="status-pill status-queued">受付済み</span>
+                  <strong>処理状況を確認しています</strong>
+                </div>
+                <span className="progress-number">--%</span>
+              </div>
+              <div className="progress-track ocr-progress-pending" aria-hidden="true">
+                <span />
+              </div>
+              {connectionLost && <p className="inline-warning">接続を再試行しています。処理はバックエンドで継続します。</p>}
+            </section>
+          )}
+        </section>
+      ) : (
+        <>
       {libraryContext && <aside className="notice compact"><strong>書類ライブラリから開始</strong><span>{libraryContext.action === "RESCAN_PAGE" ? "新しい画像を以前のページと比較し、承認後に差分を反映します。" : libraryContext.action === "ADD_PAGE" ? "この書類の続きとして新しいページ番号を付けます。" : "現在の書類とは別の書類・別のスプレッドシートとして保存します。"}</span></aside>}
       {unverifiedVersions.length > 0 && (
         <aside className="notice compact action-message" role="status">
@@ -367,13 +567,17 @@ export function OcrPage({
             ))}
           </ol>
 
-          <section className="form-card ocr-step-card">
+          <section className={`form-card ocr-step-card${step === 1 ? " ocr-template-select-card" : ""}`}>
             {step === 1 && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-template">
                 <div className="ocr-step-heading">
-                  <span>STEP 1</span>
-                  <h2 id="ocr-step-template">読み取る書類の種類を選ぶ</h2>
-                  <p>読み取る書類と同じ見た目のテンプレートを選択してください。</p>
+                  <span className="ocr-template-heading-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                      <path d="M7 3.75h7l4 4v12.5H7z" />
+                      <path d="M14 3.75v4h4M10 12h5M10 15.5h5" />
+                    </svg>
+                  </span>
+                  <h2 id="ocr-step-template">読み取る書類のテンプレートを選ぶ</h2>
                 </div>
                 {templateCards.length > 6 && (
                   <label className="ocr-template-search">
@@ -387,28 +591,22 @@ export function OcrPage({
                   </label>
                 )}
                 <div className="ocr-template-grid" aria-label="使用するテンプレート">
-                  {visibleVersions.map(({ template, version, editVersion, ocrAvailable }) => {
-                    const selected = version.id === versionId;
+                  {visibleVersions.map(({ template, version, editVersion, inputAvailable }) => {
                     const deleting = deletingTemplateId === template.id;
-                    const editing = !ocrAvailable;
+                    const editing = !inputAvailable;
                     return (
                       <article
                         key={version.id}
-                        className={`ocr-template-card${selected ? " selected" : ""}${editing ? " editing" : ""}`}
+                        className={`ocr-template-card${editing ? " editing" : ""}`}
                       >
                         <button
                           type="button"
                           className="ocr-template-card-select"
-                          aria-pressed={selected}
                           aria-label={editing
                             ? `${template.name} v${version.versionNumber}は編集中のためOCRに使用できません`
-                            : `${template.name} v${version.versionNumber}を選択`}
+                            : `${template.name} v${version.versionNumber}の読み取り画像を準備`}
                           disabled={editing || deleting}
-                          onClick={() => {
-                            idempotencyKeyRef.current = null;
-                            setSelectionInvalidated(false);
-                            setVersionId(version.id);
-                          }}
+                          onClick={() => openReadingSetup(version.id)}
                         >
                           <span className="ocr-template-card-visual">
                             <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>
@@ -425,7 +623,6 @@ export function OcrPage({
                                 }}
                               />
                             )}
-                            {selected && <span className="ocr-template-card-check" aria-hidden="true">✓</span>}
                             {editing && (
                               <span className="ocr-template-editing-badge">編集中</span>
                             )}
@@ -435,21 +632,35 @@ export function OcrPage({
                             <small>
                               バージョン {version.versionNumber}
                               {editing && " · OCR利用不可"}
+                              {!editing && version.quality.printLayout != null && " · ページ別の受付条件を確認"}
                             </small>
                           </span>
                         </button>
                         {version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE" && (
                           <div className="ocr-template-print-files">
                             <TemplatePrintFiles key={version.id} versionId={version.id} disabled={deleting}
-                              disabledReason={version.quality.printLayout ? undefined : "印刷ページ設定が保存されていません。"} />
+                              legacy={version.quality.printLayout == null && version.quality.sourceType === "xlsx"}
+                              disabledReason={version.quality.printLayout != null || version.quality.sourceType === "xlsx"
+                                ? undefined : "印刷用ファイルを取得できるXLSX原本がありません。"} />
                           </div>
                         )}
                         <span className="ocr-template-card-actions">
                           <button
                             type="button"
                             className="secondary compact"
-                            aria-label={`${template.name}を配布用に書き出す`}
-                            disabled={deleting}
+                            aria-label={`${template.name}を複製`}
+                            disabled={deleting || duplicateBusyTemplateId !== null}
+                            onClick={() => { void duplicateTemplate(template, version); }}
+                          >
+                            <FiCopy aria-hidden="true" focusable="false" />
+                            {duplicateBusyTemplateId === template.id ? "複製中…" : "複製する"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary compact template-package-export-button"
+                            aria-label={`${template.name}を配布用に書き出す（準備中）`}
+                            title="テンプレート配布機能は実装中です。"
+                            disabled
                             onClick={() => setPackageDialog({ mode: "export", template, version })}
                           >
                             <FiDownload aria-hidden="true" focusable="false" />
@@ -458,12 +669,12 @@ export function OcrPage({
                           <button
                             type="button"
                             className="secondary compact"
-                            aria-label={`${template.name}の設定を確認・修正`}
+                            aria-label={`${template.name}のテンプレートを編集`}
                             disabled={!editVersion.sourceJobId || deleting}
                             onClick={() => openTemplateWorkspace("manage", editVersion.id)}
                           >
-                            <FiSettings aria-hidden="true" focusable="false" />
-                            設定を確認・修正
+                            <FiEdit2 aria-hidden="true" focusable="false" />
+                            テンプレートを編集
                           </button>
                           <button
                             type="button"
@@ -537,69 +748,74 @@ export function OcrPage({
                 {templateCards.length > 0 && visibleVersions.length === 0 && (
                   <p className="ocr-template-empty">検索条件に一致するテンプレートがありません。</p>
                 )}
-                {mappingError && (
-                  <div className="mapping-load-error" role="alert">
-                    <p className="inline-warning">テンプレート設定を確認できませんでした。</p>
-                    <button
-                      type="button"
-                      className="secondary compact"
-                      onClick={() => setMappingRetryToken((value) => value + 1)}
-                    >
-                      もう一度読み込む
-                    </button>
-                  </div>
-                )}
-                {mappingPreview !== null && !mappedReadingReady && !mappingError && (
-                  <p className="inline-warning" role="status">
-                    このテンプレートは現在読み取りに使用できません。テンプレート設定を確認してください。
-                  </p>
-                )}
-                <div className="ocr-step-actions">
-                  <span />
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={!versionId || mappingPreview === null || !mappedReadingReady}
-                    onClick={() => setStep(2)}
-                  >
-                    画像の準備へ
-                  </button>
-                </div>
+                {libraryContext && activeVersion?.quality.printLayout != null && <p role="status">
+                  ページ別OCRは書類ライブラリへの追加・再読取に未対応です。通常の読み取り画面から開始してください。
+                </p>}
               </section>
             )}
 
             {step === 2 && activeVersion?.quality.printLayout != null && (
-              <OcrPageBindings key={versionId} versionId={versionId} onAccepted={(id) => {
+              <OcrPageBindings key={versionId} versionId={versionId} libraryContextUnsupported={Boolean(libraryContext)}
+                templateName={activeSelection?.template.name ?? "選択したテンプレート"}
+                versionNumber={activeVersion.versionNumber}
+                onBack={() => setStep(1)} onAccepted={(id) => {
                 setJobId(id); rememberJob(id);
               }} />
             )}
-            {step === 2 && activeVersion?.quality.printLayout == null && (
+            {step === 2 && activeVersion && activeVersion.quality.printLayout == null && (
               <section className="ocr-step-panel" aria-labelledby="ocr-step-image">
                 <div className="ocr-step-heading">
                   <span>STEP 2</span>
                   <h2 id="ocr-step-image">読み取る帳票画像を準備</h2>
-                  <p>画像ファイルを選択するか、カメラで帳票を撮影してください。</p>
+                  <p>{activeSelection?.template.name} · v{activeVersion.versionNumber} と同じ書類の画像を指定してください。</p>
                 </div>
-                <div className="input-source-tabs">
-                  <div><strong>帳票画像</strong><small>テスト段階では画像ファイルの利用を推奨します。</small></div>
-                  <button type="button" className="secondary" onClick={() => setCameraOpen(true)}>カメラを起動</button>
+                <div className="ocr-reading-setup">
+                  <figure className="ocr-reading-reference">
+                    <div>
+                      {templatePreviews[activeVersion.id]
+                        ? <img src={templatePreviews[activeVersion.id]} alt={`${activeSelection?.template.name ?? "選択したテンプレート"}の書類見本`} />
+                        : <span>書類見本を読み込んでいます</span>}
+                    </div>
+                    <figcaption>
+                      <strong>{activeSelection?.template.name}</strong>
+                      <small>この書類と同じ帳票を撮影・選択してください</small>
+                    </figcaption>
+                  </figure>
+                  <div className="ocr-reading-input-panel">
+                    <div className="input-source-tabs">
+                      <div><strong>読み取る帳票画像</strong><small>画像ファイルを選択するか、枠内へドロップしてください。</small></div>
+                      <button type="button" className="secondary compact" onClick={() => setCameraOpen(true)}>カメラを起動</button>
+                    </div>
+                    <FilePicker key={versionId} multiple={false} enableDrop onChange={(files) => {
+                      idempotencyKeyRef.current = null;
+                      setFile(files[0] ?? null);
+                    }} label="帳票画像を選択またはドロップ" />
+                    {file && <p className="selected-file">選択中: <strong>{file.name}</strong></p>}
+                    <label className="switch-row">
+                      <span><strong>文字読み取りも実行する</strong><small>オフにすると画像処理と領域切り出しだけを行います。</small></span>
+                      <input type="checkbox" checked={enabled} onChange={(event) => {
+                        idempotencyKeyRef.current = null;
+                        setEnabled(event.target.checked);
+                      }} /><i />
+                    </label>
+                    {!enabled && <aside className="notice compact"><strong>画像処理のみ</strong><span>結果欄は空欄として作成され、手入力できます。</span></aside>}
+                    {mappingError && (
+                      <div className="mapping-load-error" role="alert">
+                        <p className="inline-warning">テンプレート設定を確認できませんでした。</p>
+                        <button type="button" className="secondary compact"
+                          onClick={() => setMappingRetryToken((value) => value + 1)}>もう一度読み込む</button>
+                      </div>
+                    )}
+                    {mappingPreview !== null && !mappedReadingReady && !mappingError && (
+                      <p className="inline-warning" role="status">このテンプレートは現在読み取りに使用できません。テンプレートを編集してください。</p>
+                    )}
+                  </div>
                 </div>
-                <FilePicker multiple={false} onChange={(files) => {
-                  idempotencyKeyRef.current = null;
-                  setFile(files[0] ?? null);
-                }} label="PNGなどの帳票画像を選択" />
-                {file && <p className="selected-file">選択中: <strong>{file.name}</strong></p>}
-                <label className="switch-row">
-                  <span><strong>文字読み取りも実行する</strong><small>オフにすると画像処理と領域切り出しだけを行います。</small></span>
-                  <input type="checkbox" checked={enabled} onChange={(event) => {
-                    idempotencyKeyRef.current = null;
-                    setEnabled(event.target.checked);
-                  }} /><i />
-                </label>
-                {!enabled && <aside className="notice compact"><strong>画像処理のみ</strong><span>結果欄は空欄として作成され、手入力できます。</span></aside>}
                 <div className="ocr-step-actions">
-                  <button type="button" className="secondary" onClick={() => setStep(1)}>戻る</button>
-                  <button type="button" className="primary" disabled={!file} onClick={() => setStep(3)}>内容確認へ</button>
+                  <button type="button" className="secondary" onClick={() => setStep(1)}>別のテンプレートを選ぶ</button>
+                  <button type="button" className="primary"
+                    disabled={!file || mappingPreview === null || !mappedReadingReady || Boolean(mappingError)}
+                    onClick={() => setStep(3)}>内容確認へ</button>
                 </div>
               </section>
             )}
@@ -657,7 +873,8 @@ export function OcrPage({
               </section>
             )}
           </section>
-      <JobProgress job={job} connectionLost={connectionLost} />
+        </>
+      )}
       {cameraOpen && <CameraCapture
         documentAspect={(activeVersion?.canonicalWidth ?? 1400) / (activeVersion?.canonicalHeight ?? 990)}
         onCapture={(captured) => {

@@ -33,6 +33,12 @@ export function JobProgress({ job, connectionLost }: { job: Job | null; connecti
         <p className="inline-warning">バックエンドの再起動で中断されました。再試行できます。</p>
       )}
       {job.error && <p className="error-box">{job.error.message}</p>}
+      {job.error?.stackTrace && (
+        <div className="job-error-trace">
+          <strong>スタックトレース</strong>
+          <pre>{job.error.stackTrace}</pre>
+        </div>
+      )}
     </section>
   );
 }

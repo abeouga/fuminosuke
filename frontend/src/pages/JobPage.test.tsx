@@ -172,6 +172,42 @@ test("does not retry an OCR job whose accepted template snapshot is invalid", as
   expect(onStartNewReading).toHaveBeenCalledOnce();
 });
 
+test("does not retry a job whose immutable OCR call budget is exhausted", async () => {
+  let retryCalls = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith("/jobs/job-1/retry") && init?.method === "POST") {
+      retryCalls += 1;
+    }
+    if (path.endsWith("/jobs/job-1")) {
+      return new Response(JSON.stringify(job("FAILED", {
+        errorCode: "OCR_CALL_BUDGET_TOO_SMALL",
+      })), { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }));
+  const onStartNewReading = vi.fn();
+
+  render(
+    <JobPage
+      jobId="job-1"
+      onClose={() => undefined}
+      onOpenReview={() => undefined}
+      onOpenTemplates={() => undefined}
+      onStartNewReading={onStartNewReading}
+    />,
+  );
+
+  expect(await screen.findByRole("heading", {
+    name: "この受付のOCR呼び出し予算は再利用できません",
+  })).toBeInTheDocument();
+  expect(screen.getByText(/受付済みジョブの予算と実行設定は変更できません/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "処理を再試行" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "新しい読み取りを開始" }));
+  expect(retryCalls).toBe(0);
+  expect(onStartNewReading).toHaveBeenCalledOnce();
+});
+
 function job(
   status: string,
   options: {

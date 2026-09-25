@@ -6,14 +6,21 @@ export type PrintCell = {
   rectangle?: { x: number; y: number; width: number; height: number };
 };
 export type ReferenceQualification = {
-  status: "UNVERIFIED" | "UNSUPPORTED" | "FAIL" | "PASS";
+  status: "UNVERIFIED" | "UNSUPPORTED" | "FAIL" | "PASS" | "CANDIDATE_READY";
+  qualificationPolicy?: string;
+  sourceQualificationPolicy?: string;
+  reviewRequired?: boolean;
+  validUntilChange?: boolean;
+  environmentDifference?: { changed: boolean };
   qualified: boolean; codes?: string[]; detail?: string;
   qualificationIssued?: boolean;
   environmentQualified?: boolean;
   geometryQualified?: boolean;
+  pageBindingsVerified?: boolean;
   unresolvedBlockers?: string[];
   issuedAt?: number | null;
   expiresAt?: number | null;
+  preparationEvidenceExpiresAt?: number | null;
   templateVersionRevision?: string;
   renderer?: { type: string; version: string } | null;
   productionBlockers?: string[];
@@ -32,18 +39,38 @@ export type ReferenceQualification = {
     meanErrorPx?: number | null; codes?: string[]; code?: string }[];
 };
 
-export type ReferenceQualificationState = "LOADING" | "PASS" | "UNVERIFIED" | "FAIL" | "EXPIRED";
+export type ReferenceQualificationState = "LOADING" | "PASS" | "CANDIDATE_READY" | "UNVERIFIED" | "FAIL" | "EXPIRED";
 
 export function referenceQualificationState(
   evidence: ReferenceQualification | null,
   fallbackExpiresAt?: number | null,
   nowSeconds = Date.now() / 1000,
 ): Exclude<ReferenceQualificationState, "LOADING"> {
-  const expiresAt = evidence?.expiresAt ?? fallbackExpiresAt;
+  const immutableCandidate = evidence?.status === "CANDIDATE_READY"
+    && ["paged-candidate-readiness-v2", "paged-candidate-readiness-v3"].includes(evidence.qualificationPolicy ?? "")
+    && evidence.validUntilChange === true;
+  const expiresAt = evidence?.status === "CANDIDATE_READY"
+    ? immutableCandidate ? null : evidence.expiresAt
+    : evidence?.expiresAt ?? fallbackExpiresAt;
   if (typeof expiresAt === "number" && expiresAt <= nowSeconds) return "EXPIRED";
   if (!evidence) return "UNVERIFIED";
   const unresolved = evidence.unresolvedBlockers ?? [];
   const blockers = evidence.productionBlockers ?? [];
+  const candidatePolicy = evidence.qualificationPolicy;
+  const candidateLifetimeValid = candidatePolicy === "paged-candidate-readiness-v2" || candidatePolicy === "paged-candidate-readiness-v3"
+    ? evidence.validUntilChange === true && evidence.expiresAt == null
+    : candidatePolicy === "paged-candidate-readiness-v1"
+      && typeof evidence.expiresAt === "number" && evidence.expiresAt > nowSeconds;
+  if (evidence.status === "CANDIDATE_READY"
+    && candidateLifetimeValid
+    && evidence.reviewRequired === true
+    && (candidatePolicy === "paged-candidate-readiness-v3"
+      ? evidence.pageBindingsVerified === true : evidence.geometryQualified === true)
+    && evidence.qualified === false && evidence.qualificationIssued === false
+    && evidence.codes?.length === 0 && evidence.unresolvedBlockers?.length === 0
+    && evidence.productionBlockers?.length === 0
+    && typeof evidence.issuedAt === "number" && evidence.issuedAt <= nowSeconds
+  ) return "CANDIDATE_READY";
   if (
     evidence.status === "PASS"
     && evidence.qualified === true
@@ -69,6 +96,7 @@ export type PrintPage = {
   referenceImage?: { sha256: string };
 };
 export type PrintRequest = {
+  pageHeadingMoves?: { cellId: string; fromRange: string; toRange: string }[];
   baseRevision: string; paperSize: "A4" | "A3" | "Letter";
   orientation: "portrait" | "landscape";
   margins: { left: number; right: number; top: number; bottom: number };
@@ -76,11 +104,15 @@ export type PrintRequest = {
   targetPagesWide: 1; targetPagesTall: number | null;
   breakAfterRows: number[] | null; autoArrange: boolean;
 };
-export type PrintPlan = Omit<PrintRequest, "baseRevision" | "breakAfterRows" | "autoArrange"> & {
+export type PrintPlan = Omit<PrintRequest, "baseRevision" | "breakAfterRows" | "autoArrange" | "pageHeadingMoves"> & {
   commonScale: number; pages: PrintPage[]; warnings: string[]; ocrReady: false;
+  geometryModelVersion?: string;
+  rendererVersion?: string;
   printFiles?: { renderKey: string };
 };
 export type PrintState = {
+  pageHeadings?: { cellId: string; text: string; pageRange: string }[];
+  layout?: import("./types").LayoutDefinition;
   revision: string; editable: boolean; saved: PrintPlan | null;
   source: {
     sheetName: string; startRow: number; endRow: number; width: number; height: number;
@@ -93,6 +125,13 @@ export type PrintState = {
     };
   };
 };
+
+export function formalReferencePreparationReady(plan: PrintPlan | null | undefined): boolean {
+  return plan?.geometryModelVersion === "wsl-calc-print-grid-v1"
+    && plan.rendererVersion === "wsl-print-reference-v1"
+    && typeof plan.printFiles?.renderKey === "string"
+    && plan.printFiles.renderKey.length > 0;
+}
 
 export function printDefaults(state: PrintState): PrintRequest {
   const saved = state.saved;

@@ -43,12 +43,14 @@ class LayoutMarkOption(LayoutModel):
 class LayoutMarkSet(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
     target_path: str = Field(default="", max_length=200)
-    recognition_mode: Literal["automatic", "manual"] = "automatic"
+    recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
     options: list[LayoutMarkOption] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_unique_options(self) -> Self:
+        if self.recognition_mode == "symbol" and self.selection_mode != "single":
+            raise ValueError("Symbol recognition requires single selection")
         for attribute in ("id", "label", "value"):
             values = [getattr(option, attribute) for option in self.options]
             if len(values) != len(set(values)):

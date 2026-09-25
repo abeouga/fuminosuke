@@ -1,5 +1,12 @@
 # 保存済みTemplateVersionの印刷用XLSX / PDF
 
+2026-09-25追記: 読み取り画面のACTIVEな旧単一ページXLSX由来テンプレートでは、
+既存の「印刷用XLSX」「印刷用PDF」ボタンから未記入帳票を取得する。
+`printLayout`がない版は`GET /api/v1/template-versions/{version_id}/blank-files/{xlsx|pdf}`を使い、
+版の取込jobに属する原本`sourceWorkbook`と取込時の1ページ`printablePdf`を返す。
+原本・PDFの保存SHAと版に保存したパスの内容を照合し、失敗時は別版や再変換へ切り替えない。
+OCR結果・補正値は含めない。`printLayout`がある版の既存取得経路は以下のままとする。
+
 2026-09-12追記: [複数ページ本番化](production-paged-ocr.md)で、利用者が導入を許可した
 WSL/bubblewrap/cgroup経路を印刷用PDFの選択肢に追加した。`PRINT_PDF_RENDERER=wsl`のときは
 この経路だけを使い、失敗時に非隔離/旧1ページへfallbackしない。人工1/2/3ページの実生成を確認した。

@@ -46,7 +46,58 @@ beforeEach(() => {
 });
 
 describe("印刷ページ編集", () => {
-  it("prepares print files explicitly without taking the global editing lock", async () => {
+  it("publishes the authoritative moved layout only after save succeeds", async () => {
+    const onLayoutSaved = vi.fn();
+    const initial = { ...state, saved: planned(printDefaults(state)), pageHeadings: [
+      { cellId: "virtual-1", text: "名前", pageRange: "B2:D3" },
+    ] };
+    const layout = { cells: [], relations: [] } as unknown as NonNullable<PrintState["layout"]>;
+    vi.mocked(api.printLayout).mockResolvedValue(initial);
+    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, body) => ({
+      ...initial, revision: "b".repeat(64), saved: planned(body), layout,
+      pageHeadings: [{ ...initial.pageHeadings[0], pageRange: "B2:D2" }],
+    }));
+    render(<PrintLayoutEditor versionId="v1" disabled={false} onDirtyChange={dirty}
+      onBusyChange={busy} onSavedChange={saved} onLayoutSaved={onLayoutSaved} />);
+    fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
+    await screen.findByText("2ページ / 共通縮小率 96.0%");
+    fireEvent.change(screen.getByLabelText("Page 1 最終行"), { target: { value: "2" } });
+    await waitFor(() => expect(screen.getByLabelText("仮想見出し 名前 の移動先範囲")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("仮想見出し 名前 の移動先範囲"), { target: { value: "B2:D2" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "印刷ページを下書き保存" })).not.toBeDisabled());
+    expect(onLayoutSaved).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "印刷ページを下書き保存" }));
+    await waitFor(() => expect(onLayoutSaved).toHaveBeenCalledExactlyOnceWith(layout));
+    fireEvent.click(screen.getByText("見出しを載せるページ"));
+    expect(screen.getByText("名前（現在: B2:D2）")).toBeVisible();
+    expect(screen.getByLabelText("仮想見出し 名前 の移動先範囲")).toHaveValue("");
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
+    expect(api.preparePrintFiles).not.toHaveBeenCalled();
+  });
+  it("sends explicit heading bindings and keeps them after a save failure", async () => {
+    const initial = { ...state, saved: planned(printDefaults(state)), pageHeadings: [
+      { cellId: "virtual-1", text: "名前", pageRange: "B2:D3" },
+    ] };
+    vi.mocked(api.printLayout).mockResolvedValue(initial);
+    vi.mocked(api.savePrintLayout).mockRejectedValue(new Error("保存競合"));
+    await open();
+    expect(api.savePrintLayout).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Page 1 最終行"), { target: { value: "2" } });
+    await waitFor(() => expect(screen.getByLabelText("仮想見出し 名前 の移動先範囲")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("仮想見出し 名前 の移動先範囲"), { target: { value: "B2:D2" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "印刷ページを下書き保存" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "印刷ページを下書き保存" }));
+    await screen.findByText("保存競合");
+    expect(api.savePrintLayout).toHaveBeenLastCalledWith("v1", expect.objectContaining({
+      baseRevision: state.revision, breakAfterRows: [2],
+      pageHeadingMoves: [{ cellId: "virtual-1", fromRange: "B2:D3", toRange: "B2:D2" }],
+    }));
+    expect(screen.getByLabelText("仮想見出し 名前 の移動先範囲")).toHaveValue("B2:D2");
+    expect(api.preparePrintFiles).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "変更を取消" }));
+    expect(screen.getByLabelText("仮想見出し 名前 の移動先範囲")).toHaveValue("");
+  });
+  it("reports preparation busy to prevent concurrent activation while allowing preview zoom", async () => {
     const initial = { ...state, saved: planned(printDefaults(state)) };
     vi.mocked(api.printLayout).mockResolvedValue(initial);
     let finish!: (value: PrintState) => void;
@@ -55,10 +106,10 @@ describe("印刷ページ編集", () => {
     expect(api.preparePrintFiles).not.toHaveBeenCalled();
     expect(api.previewPrintLayout).not.toHaveBeenCalled();
     busy.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    fireEvent.click(screen.getByRole("button", { name: "印刷見本を作る" }));
     expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
-    expect(screen.getByRole("button", { name: "印刷用ファイルを生成中…" })).toBeDisabled();
-    expect(busy).not.toHaveBeenCalledWith(true);
+    expect(screen.getByRole("button", { name: "印刷見本を作成中…" })).toBeDisabled();
+    expect(busy).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "拡大" })).not.toBeDisabled();
     finish({ ...initial, revision: "c".repeat(64), saved: { ...initial.saved, commonScale: .95 } });
     await screen.findByText("印刷用ファイルを確定しました（2ページ・95%）。");
@@ -68,12 +119,12 @@ describe("印刷ページ編集", () => {
     vi.mocked(api.printLayout).mockResolvedValue({ ...state, saved: planned(printDefaults(state)) });
     vi.mocked(api.preparePrintFiles).mockRejectedValue(new Error("生成中に設定が変更されました"));
     await open();
-    await waitFor(() => expect(screen.getByRole("button", { name: "印刷用ファイルを確定" })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "印刷見本を作る" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "印刷見本を作る" }));
     expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
     await screen.findByText("生成中に設定が変更されました");
     expect(screen.getByText("保存済み・2ページ")).toBeVisible();
-    expect(screen.getByRole("button", { name: "印刷用ファイルを確定" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "印刷見本を作る" })).not.toBeDisabled();
     expect(api.savePrintLayout).not.toHaveBeenCalled();
   });
   it("does not replace newer authoring state with a delayed preparation response", async () => {
@@ -85,7 +136,7 @@ describe("印刷ページ編集", () => {
     const view = render(<PrintLayoutEditor {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
     await screen.findByText("2ページ / 共通縮小率 96.0%");
-    fireEvent.click(screen.getByRole("button", { name: "印刷用ファイルを確定" }));
+    fireEvent.click(screen.getByRole("button", { name: "印刷見本を作る" }));
     const newer = { ...initial, revision: "n".repeat(64), saved: planned({ ...printDefaults(initial), breakAfterRows: [] }) };
     view.rerender(<PrintLayoutEditor {...props} externalState={newer} />);
     await screen.findByText("1ページ / 共通縮小率 96.0%");
@@ -193,7 +244,8 @@ describe("印刷ページ編集", () => {
     vi.mocked(api.savePrintLayout).mockImplementation(async (_id, body) => ({ ...state, revision: "b".repeat(64), saved: planned(body) }));
     await screen.findByText("2ページ / 共通縮小率 96.0%");
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを下書き保存" }));
-    await screen.findByRole("button", { name: "印刷ページ設定を解除して旧方式を使う" });
+    await screen.findByText("旧方式への切り替え");
+    fireEvent.click(screen.getByText("旧方式への切り替え"));
     expect(screen.getByRole("button", { name: "印刷用XLSX" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Page 1 最終行"), { target: { value: "5" } });
     expect(screen.getByRole("button", { name: "印刷用XLSX" })).toBeDisabled();

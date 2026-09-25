@@ -304,7 +304,7 @@ export default function App() {
         </button>
         <nav aria-label="メインメニュー">
           <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
-          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={openReadingRoot} />
+          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="テンプレート" onClick={openReadingRoot} />
           <NavButton active={page === "library"} icon="library" label="書類ライブラリ" onClick={() => { setLibraryDocumentId(null); navigateTo("library"); }} />
           <NavButton active={page === "records"} icon="search" label="データ検索" onClick={() => navigateTo("records")} />
           <NavButton active={page === "drive"} icon="drive" label="保存先設定" onClick={() => navigateTo("drive")} />
@@ -602,7 +602,7 @@ function NavButton({ active, icon, label, onClick }: { active: boolean; icon: Si
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
-  if (name === "ocr") return <svg {...props}><rect x="3" y="7" width="18" height="12" rx="2" /><path d="M8 7 9.5 4h5L16 7M12 10v6m-3-3h6" /></svg>;
+  if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
   if (name === "library") return <svg {...props}><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17.5H6.5A2.5 2.5 0 0 0 4 22Z" /><path d="M4 4.5V22m4-15h8m-8 4h8" /></svg>;
   if (name === "search") return <svg {...props}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>;
   if (name === "drive") return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M7 15h.01M11 15h6" /></svg>;

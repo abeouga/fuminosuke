@@ -54,6 +54,12 @@ Excelのフォント・組版再現や本番OCRの座標保証を意味しない
 
 ## 保存APIと安全境界
 
+旧layoutで省略された `shapeType=rectangle`、`vertices=[]`、`virtual=false` は、
+ページ編集の保存前比較で既定値と同値に扱う（通常セルと既存結合parts）。
+保存済みJSONを読み取り時に移行したり、revision / layout SHA照合を迂回したりしない。
+明示的な形状変更・既存結合情報の変更は従来どおり拒否する。
+詳細は [旧形状既定値の保存互換検証](verification/page-authoring-legacy-shape-save-20260920.md) を参照。
+
 `PUT /api/v1/template-versions/{id}/print-layout/authoring?base_revision=...`
 
 bodyは既存LayoutDefinition。DRAFT、revision、保存planのlayout SHAを検証する。
@@ -95,6 +101,10 @@ reference qualificationのモデル照合、Office adapterのhidden行列拒否�
 通常layout APIでも同じ検証を行う。所属rangeが消える改ページ変更・ページ設定解除や、
 用紙縮小で範囲外になる変更は `PRINT_VIRTUAL_HEADING_PAGE_INVALID` で保存前に拒否する。
 対象の見出しを明示的に削除してからページ設定を変更し、必要な位置に再作成する。
+2026-09-21追加: 意味づけを保持する場合は、印刷ページ編集の「仮想見出しの所属ページ」で
+各見出しの移動先rangeを明示し、改ページと一緒に保存できる。空欄は所属を変更しない。
+既存ID・名称・位置・接続を保ち、変更前rangeとrevisionを検証する。
+保存失敗では入力を保持し、未知ID・物理セル・重複ID・存在しない範囲・配置範囲外を拒否する。
 見出しを自動的に他ページへ移す・消す・通常のOCR枠へ変換する処理はない。
 パッケージv1はprintLayout未対応のため、ページ仮想見出しだけを混入させるimportも拒否する。
 従来のページ所属を持たない仮想見出しのパッケージ互換性は維持する。

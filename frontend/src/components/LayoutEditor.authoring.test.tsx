@@ -13,6 +13,74 @@ const cell = (id: string, x: number, y: number, role: LayoutCell["role"] = "inpu
 });
 const layout = (cells: LayoutCell[]): LayoutDefinition => ({ canonicalWidth: 400, canonicalHeight: 300,
   cells, relations: [], detector: "test", ocrAvailable: false, allowCrossAxisLabels: true, warnings: [] });
+
+test("symbol reading is nested under input and survives save and reopening", async () => {
+  const initial = layout([cell("answer", 100, 20)]);
+  initial.relations = [{ id: "answer-relation", inputCellId: "answer", labelCellIds: [], axis: "horizontal", order: 0,
+    targetPath: "customFields.answer" }];
+  const ui = setup(initial);
+  fireEvent.change(ui.view.container.querySelector(".accessible-cell-select select")!, {
+    target: { value: "answer" },
+  });
+  expect(ui.editor.queryByRole("button", { name: "選択欄" })).not.toBeInTheDocument();
+  fireEvent.click(ui.editor.getByRole("button", { name: "この欄に書かれた記号を判定する" }));
+  const saved = await ui.save();
+  expect(saved.cells[0]).toMatchObject({ id: "answer", x: 100, y: 20, width: 40, height: 30,
+    role: "mark", markSets: [{ id: "choice", targetPath: "customFields.answer",
+      recognitionMode: "symbol", selectionMode: "single", options: [
+        expect.objectContaining({ label: "○" }), expect.objectContaining({ label: "◎" }),
+        expect.objectContaining({ label: "×" }), expect.objectContaining({ label: "△" }),
+      ] }] });
+  ui.view.unmount();
+  const reopened = setup(saved);
+  fireEvent.change(reopened.view.container.querySelector(".accessible-cell-select select")!, {
+    target: { value: "answer" },
+  });
+  expect(reopened.editor.getByRole("button", { name: "この欄に書かれた記号を判定する" }))
+    .toHaveAttribute("aria-pressed", "true");
+  // Clicking the parent category must not silently reset its subtype.
+  fireEvent.click(reopened.editor.getByRole("button", { name: "記入欄" }));
+  expect(reopened.props.onDirtyChange).toHaveBeenLastCalledWith(false);
+  fireEvent.click(reopened.editor.getByRole("button", { name: "文字を読む" }));
+  const text = await reopened.save();
+  expect(text.cells[0].role).toBe("input");
+  expect(text.relations).toEqual(saved.relations);
+});
+
+test("switching a saved symbol field to text retains its current destination", async () => {
+  const initial = layout([{ ...cell("answer", 100, 20, "mark"), markSets: [{
+    id: "choice", targetPath: "customFields.current", recognitionMode: "symbol",
+    selectionMode: "single", options: [{ id: "circle", label: "○", value: "○",
+      x: 0, y: 0, width: 40, height: 30 }],
+  }] }]);
+  const ui = setup(initial);
+  fireEvent.change(ui.view.container.querySelector(".accessible-cell-select select")!, {
+    target: { value: "answer" },
+  });
+  fireEvent.click(ui.editor.getByRole("button", { name: "文字を読む" }));
+  const saved = await ui.save();
+  expect(saved.relations).toEqual([expect.objectContaining({
+    inputCellId: "answer", targetPath: "customFields.current",
+  })]);
+});
+
+test("symbol candidates can be edited without per-option rectangles or internal values", async () => {
+  const initial = layout([{ ...cell("answer", 100, 20, "mark"), markSets: [{
+    id: "choice", targetPath: "customFields.answer", recognitionMode: "symbol",
+    selectionMode: "single", options: [{ id: "circle", label: "○", value: "○",
+      x: 0, y: 0, width: 40, height: 30 }],
+  }] }]);
+  const ui = setup(initial, "meaning");
+  fireEvent.change(ui.view.container.querySelector(".accessible-cell-select select")!, {
+    target: { value: "answer" },
+  });
+  expect(ui.editor.getByText("記号の候補と保存先")).toBeInTheDocument();
+  expect(ui.editor.queryByLabelText("内部識別値")).not.toBeInTheDocument();
+  expect(ui.view.container.querySelector(".mark-option-canvas")).toBeNull();
+  fireEvent.change(ui.editor.getByLabelText("記号"), { target: { value: "□" } });
+  const saved = await ui.save();
+  expect(saved.cells[0].markSets![0].options[0]).toMatchObject({ id: "circle", label: "□", value: "□" });
+});
 function setup(initial: LayoutDefinition, workflowStep: "classify" | "meaning" | "records" = "classify") {
   const onSave = vi.fn(async (current: LayoutDefinition) => JSON.parse(JSON.stringify(current)) as LayoutDefinition);
   const ref = createRef<LayoutEditorHandle>();

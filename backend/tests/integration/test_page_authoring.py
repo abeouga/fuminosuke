@@ -247,6 +247,101 @@ def merge_cells(layout, ids):
     return result
 
 
+@pytest.fixture
+def legacy_paged_draft(client, monkeypatch, request):
+    monkeypatch.setattr(existing, "workbook_bytes", draft_workbook)
+    version_id, _, _, layout = request.getfixturevalue("print_template")
+    if getattr(request, "param", False):
+        layout = merge_cells(layout, ["xlsx_B33", "xlsx_C33"])
+    cells = layout["cells"] + [p["cell"] for m in layout["cellMerges"] for p in m["parts"]]
+    for cell in cells:
+        for key in ("shapeType", "vertices", "virtual"):
+            cell.pop(key, None)
+    with client.app.state.database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        version.layout_json = copy.deepcopy(layout)
+        session.commit()
+        config_path = version.config_relative_path
+    url = f"/api/v1/template-versions/{version_id}/print-layout"
+    state = client.get(url).json()
+    response = client.put(url, json={"baseRevision": state["revision"]})
+    assert response.status_code == 200, response.text
+    # Reading/default expansion must not migrate the stored layout or its hash.
+    proposed = client.get(f"/api/v1/template-versions/{version_id}/layout").json()
+    assert all(c["shapeType"] == "rectangle" and c["vertices"] == []
+               and c["virtual"] is False for c in proposed["cells"])
+    with client.app.state.database.session() as session:
+        assert session.get(TemplateVersion, version_id).layout_json == layout
+    return version_id, url, response.json(), layout, proposed, config_path
+
+
+@pytest.mark.parametrize("legacy_paged_draft", [True], indirect=True)
+def test_legacy_existing_merge_defaults_can_save_without_changing_parts(client, legacy_paged_draft):
+    version_id, url, state, _, proposed, _ = legacy_paged_draft
+    response = client.put(url + "/authoring", params={"base_revision": state["revision"]},
+                          json=proposed)
+    assert response.status_code == 200, response.text
+    assert response.json()["layout"]["cellMerges"] == proposed["cellMerges"]
+    reloaded = client.get(f"/api/v1/template-versions/{version_id}/layout").json()
+    assert reloaded == response.json()["layout"]
+
+
+@pytest.mark.parametrize("edit", ["unchanged", "meaning", "merge", "delete"])
+def test_legacy_page_shape_defaults_allow_source_preserving_save(client, legacy_paged_draft, edit):
+    version_id, url, state, legacy, proposed, _ = legacy_paged_draft
+    if edit == "meaning":
+        target = next(c for c in proposed["cells"] if c["id"] == "xlsx_C32")
+        target.update(role="input", source="manual")
+        proposed["relations"] = [{"id": "meaning", "inputCellId": target["id"],
+                                  "labelCellIds": [], "parentLabelCellId": None,
+                                  "axis": "horizontal", "order": 1,
+                                  "targetPath": "document.unifiedEarTag"}]
+    elif edit == "merge":
+        proposed = merge_cells(proposed, ["xlsx_B33", "xlsx_C33"])
+    elif edit == "delete":
+        proposed["cells"] = [c for c in proposed["cells"] if c["id"] != "xlsx_C32"]
+    response = client.put(url + "/authoring", params={"base_revision": state["revision"]},
+                          json=proposed)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert client.get(f"/api/v1/template-versions/{version_id}/layout").json() == saved["layout"]
+    assert saved["layout"]["relations"] == proposed["relations"]
+    assert saved["layout"]["cellMerges"] == proposed["cellMerges"]
+    for old, new in zip(state["saved"]["pages"], saved["state"]["saved"]["pages"], strict=True):
+        for key in ("range", "transform", "referenceImage", "cells"):
+            assert new[key] == old[key]
+    before = {c["id"]: c for c in legacy["cells"]}
+    for cell in saved["layout"]["cells"]:
+        if cell["id"] in before:
+            assert all(cell[k] == before[cell["id"]][k] for k in ("x", "y", "width", "height"))
+
+
+@pytest.mark.parametrize("mutation", ["geometry", "polygon", "vertices", "virtual"])
+def test_legacy_shape_compatibility_still_rejects_physical_changes(
+    client, legacy_paged_draft, mutation,
+):
+    version_id, url, state, legacy, proposed, path = legacy_paged_draft
+    cell = proposed["cells"][0]
+    if mutation == "geometry":
+        cell["x"] += 1
+    elif mutation in {"polygon", "vertices"}:
+        cell["vertices"] = [{"x": cell["x"], "y": cell["y"]},
+                            {"x": cell["x"] + cell["width"], "y": cell["y"]},
+                            {"x": cell["x"], "y": cell["y"] + cell["height"]}]
+        if mutation == "polygon":
+            cell["shapeType"] = "polygon"
+    else:
+        cell.update(virtual=True, role="parent_label", source="manual", text="Heading")
+    config = client.app.state.storage.read_bytes(path)
+    response = client.put(url + "/authoring", params={"base_revision": state["revision"]},
+                          json=proposed)
+    assert response.status_code == (422 if mutation == "vertices" else 409), response.text
+    assert client.get(url).json() == state
+    assert client.app.state.storage.read_bytes(path) == config
+    with client.app.state.database.session() as session:
+        assert session.get(TemplateVersion, version_id).layout_json == legacy
+
+
 @pytest.mark.parametrize("ids,page_index,expected_range", [
     (["xlsx_B3", "xlsx_C3"], 0, "B3:C3"),
     (["xlsx_B33", "xlsx_C33"], 1, "B33:C33"),

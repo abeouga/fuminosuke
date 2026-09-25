@@ -51,9 +51,13 @@ def test_shared_mark_validation_cases(case):
         assert error.field_errors[0].field == "cells.mark_incomplete.markSets.choice.options"
 
 
-def test_failed_draft_preserves_mappings_and_identity_and_blocks_consumers(client):
+@pytest.mark.parametrize("recognition_mode", ["manual", "symbol"])
+def test_failed_draft_preserves_mappings_and_identity_and_blocks_consumers(
+    client, recognition_mode,
+):
     database, storage = client.app.state.database, client.app.state.storage
     payload = copy.deepcopy(FIXTURE["layout"])
+    payload["cells"][1]["markSets"][0]["recognitionMode"] = recognition_mode
     valid_subset = copy.deepcopy(payload)
     valid_subset["cells"].pop()
     with database.session() as session:
@@ -95,6 +99,9 @@ def test_failed_draft_preserves_mappings_and_identity_and_blocks_consumers(clien
     management = TemplateManagementService(database, storage)
     service.save(version_id, LayoutDefinition.model_validate(valid_subset))
     mappings = management.get_field_mappings(version_id)[2]
+    saved_mark = next(mapping for mapping in mappings if mapping.mapping_type == "mark")
+    assert saved_mark.mark_recognition_mode == recognition_mode
+    assert service.get(version_id).cells[1].mark_sets[0].recognition_mode == recognition_mode
     identity = DocumentIdentityConfig(
         mapping_id=mappings[0].mapping_id,
         target_path=mappings[0].target_path,

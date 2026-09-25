@@ -20,7 +20,7 @@ from tests.unit.test_openai_call_budget import _response
 
 def test_acceptance_to_both_page_requests_uses_saved_prompt(pages_case, monkeypatch):  # noqa: F811
     monkeypatch.setattr(resources, "load_transcription_prompt", lambda: "accepted \u03b1")
-    service, job = accepted_openai_case(pages_case, monkeypatch, 2)
+    service, job = accepted_openai_case(pages_case, monkeypatch, 4)
     original = copy.deepcopy(job.config_snapshot_json)
     assert resources.accepted_transcription_prompt(original) == "accepted \u03b1"
     monkeypatch.setattr(resources, "load_transcription_prompt", lambda: "changed β")
@@ -48,7 +48,7 @@ def test_acceptance_to_both_page_requests_uses_saved_prompt(pages_case, monkeypa
 
 @pytest.mark.parametrize("missing", [True, False])
 def test_resource_failure_precedes_extraction_and_budget_use(pages_case, monkeypatch, missing):  # noqa: F811
-    service, job = accepted_openai_case(pages_case, monkeypatch, 2)
+    service, job = accepted_openai_case(pages_case, monkeypatch, 4)
     with service.database.session() as session:
         stored = session.get(ProcessingJob, job.id)
         changed = copy.deepcopy(stored.config_snapshot_json)

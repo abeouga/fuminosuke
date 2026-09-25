@@ -43,6 +43,34 @@ def test_unavailable_renderer_evidence_persists_and_invalidates(client, request,
     assert result["codes"] == ["PRINT_LAYOUT_CHANGED"]
 
 
+def test_unsupported_environment_preflight_remains_visible_after_reload(
+    client, request, monkeypatch,
+):
+    from app.services import reference_qualification_service as module
+
+    version_id = request.getfixturevalue("print_template")[0]
+    url, state = save(client, version_id)
+
+    def unsupported(*args, **kwargs):
+        raise print_error(
+            "Unsupported active or advanced XML element: AlternateContent.",
+            "UNSUPPORTED_XLSX_FEATURE",
+            409,
+        )
+
+    monkeypatch.setattr(module, "environment_identity", unsupported)
+    response = client.post(url + "/qualification", params={"base_revision": state["revision"]})
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["status"] == "UNSUPPORTED"
+    assert report["qualified"] is False
+    assert report["codes"] == ["UNSUPPORTED_XLSX_FEATURE"]
+    assert "AlternateContent" in report["detail"]
+    assert "environmentQualification" not in report
+
+    assert client.get(url + "/qualification").json() == report
+
+
 def test_forged_evidence_and_changed_reference_cannot_be_qualified(client, request, monkeypatch):
     from app.services import reference_qualification_service as module
     from app.services.office_reference_renderer import sha

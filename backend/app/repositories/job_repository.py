@@ -48,6 +48,25 @@ class JobRepository:
     def get(self, job_id: str) -> ProcessingJob | None:
         return self._session.get(ProcessingJob, job_id)
 
+    def latest_failure_stack_trace(
+        self, job_id: str, *, attempt_number: int, error_code: str
+    ) -> str | None:
+        statement = (
+            select(JobEvent.metadata_json)
+            .where(
+                JobEvent.job_id == job_id,
+                JobEvent.level == "ERROR",
+                JobEvent.event_code == error_code,
+            )
+            .order_by(JobEvent.id.desc())
+            .limit(1)
+        )
+        metadata = self._session.scalar(statement)
+        if not isinstance(metadata, dict) or metadata.get("attemptNumber") != attempt_number:
+            return None
+        stack_trace = metadata.get("stackTrace")
+        return stack_trace if isinstance(stack_trace, str) else None
+
     def find_idempotent(self, idempotency_key: str, request_hash: str) -> ProcessingJob | None:
         statement = select(ProcessingJob).where(
             ProcessingJob.idempotency_key == idempotency_key,

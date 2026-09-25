@@ -76,7 +76,13 @@ test("draft save keeps identity and shows the incomplete mark instead of a secon
 
 const markOptionsWarning = "[MARK_OPTIONS_REQUIRED] 不完全選択: 選択肢を1件以上設定してください。";
 
-function renderMarkOptionsWarning(fieldErrors: Array<{ field: string; message: string }>, versionId: string) {
+function renderMarkOptionsWarning(
+  fieldErrors: Array<{ field: string; message: string }>,
+  versionId: string,
+  emptyMarkSets = false,
+  warnings = [markOptionsWarning],
+  layoutOverride?: LayoutDefinition,
+) {
   const createdAt = "2026-09-11T00:00:00Z";
   const template: Template = {
     id: `template-${versionId}`, name: "選択欄テスト", documentType: "minimal", activeVersionId: null, createdAt,
@@ -93,7 +99,10 @@ function renderMarkOptionsWarning(fieldErrors: Array<{ field: string; message: s
       }), { status: 200 });
     }
     if (path.endsWith("/layout")) {
-      return new Response(JSON.stringify(fixture.layout), { status: 200 });
+      return new Response(JSON.stringify(layoutOverride ?? (emptyMarkSets ? {
+        ...fixture.layout,
+        cells: fixture.layout.cells.map((cell) => cell.id === "mark_incomplete" ? { ...cell, markSets: [] } : cell),
+      } : fixture.layout)), { status: 200 });
     }
     if (path.endsWith("/field-mappings")) {
       return new Response(JSON.stringify({
@@ -105,7 +114,7 @@ function renderMarkOptionsWarning(fieldErrors: Array<{ field: string; message: s
         documentName: { fieldPaths: [identity.targetPath], separator: "", prefix: "", suffix: "" },
         targets: [{ path: identity.targetPath, label: identity.label, section: "test" }],
         validForOcr: false,
-        warnings: [markOptionsWarning],
+        warnings,
         fieldErrors,
       }), { status: 200 });
     }
@@ -116,6 +125,58 @@ function renderMarkOptionsWarning(fieldErrors: Array<{ field: string; message: s
     initialEditVersionId={versionId} />);
   return fetchMock;
 }
+
+test("the no mapped meaning warning uses the structured validation target to focus the cell", async () => {
+  const noMappingsWarning = "読み取りに使用できる意味づけ済みセルがありません。";
+  const incompleteOnlyLayout = {
+    ...fixture.layout,
+    cells: [fixture.layout.cells[2]],
+    relations: [],
+  } as LayoutDefinition;
+  const fetchMock = renderMarkOptionsWarning([{
+    field: "cells.mark_incomplete.markSets",
+    message: "選択肢を設定してください。",
+  }], "missing-mapping-cell-focus", true, [noMappingsWarning, markOptionsWarning], incompleteOnlyLayout);
+  const warning = await screen.findByText(noMappingsWarning);
+  const requestCount = fetchMock.mock.calls.length;
+
+  fireEvent.click(warning.closest("button")!);
+
+  await waitFor(() => expect(screen.getByLabelText("セル一覧から選択")).toHaveValue("mark_incomplete"));
+  expect(within(screen.getByRole("navigation", { name: "テンプレート設定の工程" }))
+    .getByRole("button", { name: /2.*読み取る内容/ })).toHaveAttribute("aria-current", "step");
+  expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toHaveFocus();
+  expect(document.querySelector('.layout-warning-cell-highlight[data-cell-id="mark_incomplete"]')).not.toBeNull();
+  expect(screen.getByText(noMappingsWarning)).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledTimes(requestCount);
+  expect(fetchMock.mock.calls.some(([, init]) => ["POST", "PUT", "PATCH", "DELETE"].includes(init?.method ?? "")))
+    .toBe(false);
+});
+
+test("the no mapped meaning warning focuses the first structurally unassigned input without a field error", async () => {
+  const noMappingsWarning = "読み取りに使用できる意味づけ済みセルがありません。";
+  const unassignedLayout = {
+    ...fixture.layout,
+    cells: [fixture.layout.cells[0]],
+    relations: [],
+  } as LayoutDefinition;
+  const fetchMock = renderMarkOptionsWarning(
+    [],
+    "missing-mapping-input-focus",
+    false,
+    [noMappingsWarning],
+    unassignedLayout,
+  );
+  const warning = await screen.findByText(noMappingsWarning);
+  const requestCount = fetchMock.mock.calls.length;
+
+  fireEvent.click(warning.closest("button")!);
+
+  await waitFor(() => expect(screen.getByLabelText("セル一覧から選択")).toHaveValue("text_input"));
+  expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toHaveFocus();
+  expect(document.querySelector('.layout-warning-cell-highlight[data-cell-id="text_input"]')).not.toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(requestCount);
+});
 
 test("MARK_OPTIONS_REQUIRED uses the structured field path to open step 2 and focus the mark editor", async () => {
   const fetchMock = renderMarkOptionsWarning([{
@@ -135,11 +196,94 @@ test("MARK_OPTIONS_REQUIRED uses the structured field path to open step 2 and fo
   expect(fetchMock.mock.calls.some(([, init]) => ["POST", "PUT"].includes(init?.method ?? ""))).toBe(false);
 });
 
+test("a structured cell-level warning focuses the canvas even with no mark sets", async () => {
+  const fetchMock = renderMarkOptionsWarning([{
+    field: "cells.mark_incomplete.markSets", message: "選択肢を設定してください。",
+  }], "mark-cell-focus", true);
+  const warning = await screen.findByText(markOptionsWarning);
+  const requestCount = fetchMock.mock.calls.length;
+  fireEvent.click(warning.closest("button")!);
+  await waitFor(() => expect(screen.getByLabelText("セル一覧から選択")).toHaveValue("mark_incomplete"));
+  expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toHaveFocus();
+  expect(screen.getByLabelText("対象セルの選択肢エディタ")).not.toHaveFocus();
+  expect(document.querySelector('.layout-warning-cell-highlight[data-cell-id="mark_incomplete"]')).not.toBeNull();
+  expect(screen.getByText(markOptionsWarning)).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledTimes(requestCount);
+});
+
+test("a current input draft suppresses stale mark and no-mapping warnings when its meaning is assigned", async () => {
+  const key = "template-layout-draft:mark-cell-draft-role";
+  const draft = {
+    ...fixture.layout,
+    cells: fixture.layout.cells.map((cell) => cell.id === "mark_incomplete"
+      ? { ...cell, role: "input", markSets: [] }
+      : cell),
+    relations: [...fixture.layout.relations, {
+      id: "draft-input-relation",
+      inputCellId: "mark_incomplete",
+      labelCellIds: [],
+      axis: "horizontal",
+      order: 2,
+      targetPath: "customFields.markIncomplete",
+    }],
+  };
+  localStorage.setItem(key, JSON.stringify(draft));
+  try {
+    renderMarkOptionsWarning([{
+      field: "cells.mark_incomplete.markSets", message: "required",
+    }], "mark-cell-draft-role", false, [
+      "読み取りに使用できる意味づけ済みセルがありません。",
+      markOptionsWarning,
+    ]);
+    await screen.findByLabelText("帳票レイアウト編集キャンバス");
+    const before = localStorage.getItem(key);
+    await waitFor(() => expect(screen.queryByText(markOptionsWarning)).not.toBeInTheDocument());
+    expect(screen.queryByText("読み取りに使用できる意味づけ済みセルがありません。")).not.toBeInTheDocument();
+    expect(localStorage.getItem(key)).toBe(before);
+  } finally {
+    localStorage.removeItem(key);
+  }
+});
+
+test("a current unassigned input draft removes the stale mark warning and the generic warning focuses it", async () => {
+  const versionId = "mark-cell-draft-input-unassigned";
+  const key = `template-layout-draft:${versionId}`;
+  const serverLayout = {
+    ...fixture.layout,
+    cells: [fixture.layout.cells[2]],
+    relations: [],
+  } as LayoutDefinition;
+  const draft = {
+    ...serverLayout,
+    cells: [{ ...serverLayout.cells[0], role: "input" as const, markSets: [] }],
+  };
+  localStorage.setItem(key, JSON.stringify(draft));
+  try {
+    const noMappingsWarning = "読み取りに使用できる意味づけ済みセルがありません。";
+    const fetchMock = renderMarkOptionsWarning([{
+      field: "cells.mark_incomplete.markSets", message: "required",
+    }], versionId, false, [noMappingsWarning, markOptionsWarning], serverLayout);
+    const warning = await screen.findByText(noMappingsWarning);
+    await waitFor(() => expect(screen.queryByText(markOptionsWarning)).not.toBeInTheDocument());
+    const requestCount = fetchMock.mock.calls.length;
+
+    fireEvent.click(warning.closest("button")!);
+
+    await waitFor(() => expect(screen.getByLabelText("セル一覧から選択")).toHaveValue("mark_incomplete"));
+    expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toHaveFocus();
+    expect(document.querySelector('.layout-warning-cell-highlight[data-cell-id="mark_incomplete"]')).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(requestCount);
+    expect(fetchMock.mock.calls.some(([, init]) => ["POST", "PUT", "PATCH", "DELETE"].includes(init?.method ?? "")))
+      .toBe(false);
+  } finally {
+    localStorage.removeItem(key);
+  }
+});
+
 test.each([
   ["unknown", [{ field: "relations.mark_incomplete.options", message: "unknown" }]],
   ["malformed", [{ field: "cells.mark_incomplete.markSets.choice", message: "malformed" }]],
-  ["missing mark set", [{ field: "cells.mark_incomplete.markSets", message: "選択肢を設定してください。" }]],
-  ["missing cell", [{ field: "cells.missing.markSets.choice.options", message: "missing" }]],
+  ["ambiguous cells", [{ field: "cells.mark_incomplete.markSets", message: "first" }, { field: "cells.mark_valid.markSets", message: "second" }]],
 ] as const)("MARK_OPTIONS_REQUIRED falls back to step 2 without selecting for %s field path", async (_state, fieldErrors) => {
   const fetchMock = renderMarkOptionsWarning([...fieldErrors], `mark-focus-${_state.replace(" ", "-")}`);
   const warning = await screen.findByText(markOptionsWarning);

@@ -31,14 +31,25 @@
 - `POST /api/v1/ocr-jobs/{jobId}/page-review/{pageId}/corrections`
 - body: `baseRevision`と`fields`。各fieldはmappingIdとraw/normalized/status/alternatives/reviewReason。
   targetPath・sourceRegionId・boundingBoxは編集payloadへ含めない。
-- response: 全ページの明示identity、range、入力revision/SHA、reference SHA、値、検証結果、crop URL。
+- response: 全ページの明示identity、range、入力revision/SHA、reference SHA、値、検証結果、crop URLと、
+  受付時document snapshotに固定された`reviewStructure`。
   cropのartifact名にもpage IDを含む。同名の項目でも別ページの領域へ移らない。
+- 2026-09-22の表示拡張で、responseへ各page ID所有の位置合わせ済み実入力画像URLも追加した。
+  画像はjob artifactの`page.{pageId}.alignedSource`であり、現在のTemplateVersionや基準画像から
+  再生成しない。保存済みreadingのboundingBoxは補正bodyへ送らない。
 - `ReviewPage`は専用のpaged拒否codeだけを`PagedReviewPage`へ分岐する。
   一般的な通信失敗をpaged判定としない。OcrPageは専用結果の存在確認後にレビューを開く。
 - ページ切替と閲覧・入力は保存中も可能。保存ボタンは重複送信を防止する。
   送信後の追加編集だけを残し、古い応答で画面を巻き戻さない。
   通信断/競合は保存成否不明として全下書きを保持し、明示再取得前の再送を止める。
   下書き/送信中は画面移動・beforeunloadの確認を使用する。
+- 専用画面は、帳票プレビューの左右に重ねた前後矢印でページを切り替える。左側には選択中ページの
+  位置合わせ済み帳票全体または選択欄のcropを表示する。上部にページタブは置かない。右側は単一ページの
+  レビューと同じ見出し・繰り返し表・ツールバー、緑/黄の判定色、セル選択、ダブルクリック編集、判定ポップオーバーを使用する。
+  常時表示の判定プルダウンは置かない。ページ移動後もpage ID別の下書きを保持する。
+  OCR実行に記録されたAPI呼出回数、入力/出力/合計token、推定費用が取得できる場合は画面上部へ表示する。
+  確定後は編集を無効化するが画像・表・ページ切替は維持し、明示reopen成功後だけ編集を再開する。
+  legacy単一ページの`ReviewPage`、保存・確定・出力経路は変更しない。
 
 この初期工程ではconfirmAvailable/outputAvailableはfalseだった。後続工程で専用確定/reopenを追加したが、
 [専用XLSX出力](paged-output.md)も追加した。文書ライブラリ統合は残っている。
@@ -46,6 +57,27 @@
 Page 1だけを既存の確定・出力経路へ渡さない。
 
 ## 検証
+
+### 2026-09-22 共通結果UIの適用範囲
+
+右側の表・セル背景色・ツールバー・直接編集・判定ポップオーバーは
+`components/OcrReviewResults.tsx`を単一ページと複数ページで共用する。
+画面は入力元の拡張子やXLSXの範囲文字列で分岐せず、専用レビュー応答のページIDと項目を使用する。
+「次の要確認」は全ページを巡回し、対象ページとcropを同時に表示する。
+選択領域の表示中も現在ページ数を表示し、ページ移動で他ページの下書きを破棄しない。
+
+ただし現行の複数ページ受付は`JobPageService.catalog`の`printLayout`を前提とする。
+この共通UIだけで画像由来テンプレートの複数ページ作成・受付まで対応したとは扱わない。
+画像由来の受付対応にはページ定義・受付snapshot・出力対応の設計と実装が別途必要である。
+この表示工程ではOCRロジック・受付・mapping・補正payload・確定/出力の契約を変更しない。
+
+今回の確認: 対象frontend 49件、`npm test -- --maxWorkers=1`は36ファイル/463件通過、
+`npm run build`成功（既存の500 kB chunk警告あり）、`git diff --check`成功。
+Chromeの既存実結果で4ページの切替、別ページから要確認セルへの移動、選択cropの読込完了、
+セル背景色、記録済みAPI使用量表示を確認した。単一ページ結果の共通ツールバー/表も確認した。
+実データの補正保存・確定・XLSX出力は今回操作していない。追加のOpenAI/Google呼出しはない。
+
+### 初期工程の検証記録
 
 - 開始時OCR契約: `backend/.venv/Scripts/python.exe scripts/verify_ocr_contract.py`、210 passed（60.82秒）。
 - 変更後に同じOCR契約コマンドを直列実行: 210 passed / 1 warning（40.88秒）。

@@ -26,11 +26,12 @@ function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boo
 }
 
 export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyChange, onSavedChange,
-  onStateChange, externalState, initialSaved = false }: {
+  onStateChange, onLayoutSaved, externalState, initialSaved = false }: {
   versionId: string; disabled: boolean;
   onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
   onSavedChange: (saved: boolean) => void;
   onStateChange?: (state: PrintState) => void;
+  onLayoutSaved?: (layout: NonNullable<PrintState["layout"]>) => void;
   externalState?: PrintState | null;
   initialSaved?: boolean;
 }) {
@@ -55,7 +56,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const svg = useRef<SVGSVGElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
-  useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
+  useEffect(() => onBusyChange(busy || preparing), [busy, preparing, onBusyChange]);
   useEffect(() => {
     setPreparing(false); setPrepareMessage("");
     return () => { ++prepareSequence.current; };
@@ -115,8 +116,12 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const save = async (clear = false) => {
     if (!request || !state || lock.current) return;
     lock.current = true; setBusy(true); setError(""); ++sequence.current;
-    try { apply(await (clear ? api.clearPrintLayout(versionId, state.revision)
-      : api.savePrintLayout(versionId, request))); }
+    try {
+      const next = await (clear ? api.clearPrintLayout(versionId, state.revision)
+        : api.savePrintLayout(versionId, request));
+      if (next.layout) onLayoutSaved?.(next.layout);
+      apply(next);
+    }
     catch (e) { setError(e instanceof Error ? e.message : "保存できません。編集内容は保持しています。"); }
     finally { lock.current = false; setBusy(false); }
   };
@@ -167,7 +172,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     <button type="button" className="secondary" disabled={busy} aria-expanded={opened}
       onClick={() => { setOpened(!opened); if (!state && !opened) void load(); }}>印刷ページを編集</button>
     {opened && <>
-      <p className="inline-warning">下書きのページ設計に対応しています。ページ別の実OCR・補正・確定は別の安全検査が必要です。印刷設定を変更した場合は、正式資格を再確認してください。</p>
+      <p>青い区切り線をドラッグして、各ページに印刷する範囲を調整してください。保存後は「このテンプレートでOCRを使う」から続けられます。</p>
       {error && <p role="alert" className="error-box">{error}</p>}
       {!state && <button type="button" disabled={busy} onClick={() => void load()}>読み込みを再試行</button>}
       {state && request && <>
@@ -183,6 +188,9 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
             {["A4", "A3", "Letter"].map(v => <option key={v}>{v}</option>)}</select></label>
           <label>方向<select value={request.orientation} onChange={e => update({ orientation: e.target.value as PrintRequest["orientation"] })}>
             <option value="portrait">縦</option><option value="landscape">横</option></select></label>
+          <button type="button" onClick={() => update({ breakAfterRows: null, autoArrange: true })}>自動配置</button>
+          <button type="button" onClick={() => update({ breakAfterRows: [] })}>全範囲を1ページにする</button>
+          <details><summary>用紙の詳細設定</summary>
           <label>目標の縦ページ数<input type="number" min={1} max={50} value={request.targetPagesTall ?? ""}
             onChange={e => update({ targetPagesTall: e.target.value ? Number(e.target.value) : null })} /></label>
           {(["top", "bottom", "left", "right"] as const).map((key, i) => <label key={key}>
@@ -190,8 +198,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
               onChange={e => update({ margins: { ...request.margins, [key]: Number(e.target.value) } })} /></label>)}
           <label><input type="checkbox" checked={request.horizontalCentering} onChange={e => update({ horizontalCentering: e.target.checked })} />左右中央</label>
           <label><input type="checkbox" checked={request.verticalCentering} onChange={e => update({ verticalCentering: e.target.checked })} />上下中央</label>
-          <button type="button" onClick={() => update({ breakAfterRows: null, autoArrange: true })}>自動配置</button>
-          <button type="button" onClick={() => update({ breakAfterRows: [] })}>全範囲を1ページにする</button>
+          </details>
         </fieldset>
         <div className="print-controls print-actions">
           <button type="button" disabled={blocked || pendingPreview || !plan} onClick={() => void save()}>印刷ページを下書き保存</button>
@@ -199,6 +206,28 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
           <button type="button" disabled={busy || dirty} onClick={() => void load()}>保存済み設定を再取得</button>
           <span role="status">{dirty ? "未保存" : state.saved ? `保存済み・${state.saved.pages.length}ページ` : "未保存のページ案"}</span>
         </div>
+        {(state.pageHeadings?.length ?? 0) > 0 && <details open={Boolean(plan && state.pageHeadings?.some(
+          heading => !plan.pages.some(page => page.range === heading.pageRange),
+        ))}>
+          <summary>見出しを載せるページ</summary>
+          <fieldset disabled={blocked || pendingPreview}>
+          <p>区切り線を変えて見出しの所属ページが変わる場合は、移動先のページを選んでください。</p>
+          {state.pageHeadings!.map(heading => <label key={heading.cellId}>
+            {heading.text}（現在: {heading.pageRange}）
+            <select aria-label={`仮想見出し ${heading.text} の移動先範囲`}
+              value={request.pageHeadingMoves?.find(move => move.cellId === heading.cellId)?.toRange ?? ""}
+              onChange={e => update({ pageHeadingMoves: [
+                ...(request.pageHeadingMoves ?? []).filter(move => move.cellId !== heading.cellId),
+                ...(e.target.value ? [{ cellId: heading.cellId, fromRange: heading.pageRange, toRange: e.target.value }] : []),
+              ] })}>
+              <option value="">所属を変更しない</option>
+              {(plan?.pages ?? state.saved?.pages ?? []).map(page => <option key={page.range} value={page.range}>
+                Page {page.page}: {page.range}
+              </option>)}
+            </select>
+          </label>)}
+          </fieldset>
+        </details>}
         <div className="print-views">
           <div><h3>連続シート・行境界の編集</h3>
             <div className="print-controls">
@@ -272,16 +301,18 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
                   : <Cells cells={current.cells} physical />}
                 {overlay && current.fields.map(f => <rect key={f.cellId} {...f.rectangle} fill="none" stroke="#1571c4" strokeWidth={2} />)}
               </svg>}
-              {plan.warnings.map(w => <p className="inline-warning" key={w}>{w}</p>)}
+              {plan.warnings.length > 0 && <details><summary>ページ計算の詳細</summary>
+                {plan.warnings.map(w => <p key={w}>{w}</p>)}
+              </details>}
             </>}
           </div>
         </div>
         <div className="print-controls">
-          {state.saved && <button type="button" disabled={disabled || busy || preparing || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button>}
+          {state.saved && <details><summary>旧方式への切り替え</summary><button type="button" disabled={disabled || busy || preparing || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button></details>}
           {state.saved && state.editable && <button type="button" disabled={blocked || dirty || pendingPreview}
-            onClick={() => void prepare()}>{preparing ? "印刷用ファイルを生成中…" : "印刷用ファイルを確定"}</button>}
+            onClick={() => void prepare()}>{preparing ? "印刷見本を作成中…" : "印刷見本を作る"}</button>}
         </div>
-        {state.saved && state.editable && <p>保存済みのページ範囲を維持し、指定フォントと整数%の倍率でXLSX・PDF・基準画像を作成します。</p>}
+        {state.saved && state.editable && <p>先に印刷を試す場合は、保存したページ範囲から印刷見本を作成できます。有効化時にも自動で準備します。</p>}
         {prepareMessage && <p role="status">{prepareMessage}</p>}
         {state.saved && <TemplatePrintFiles key={versionId} versionId={versionId} revision={state.revision}
           disabled={disabled || busy || dirty} />}

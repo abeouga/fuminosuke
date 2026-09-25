@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.errors import to_camel
 from app.domain.text_encoding import repair_utf8_mojibake
@@ -42,9 +42,15 @@ class TemplateMarkOption(TemplateDefinitionModel):
 class TemplateMarkSet(TemplateDefinitionModel):
     id: str = Field(min_length=1, max_length=100)
     target_path: str = Field(min_length=1, max_length=200)
-    recognition_mode: Literal["automatic", "manual"] = "automatic"
+    recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
     options: list[TemplateMarkOption] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_symbol_mode(self) -> TemplateMarkSet:
+        if self.recognition_mode == "symbol" and self.selection_mode != "single":
+            raise ValueError("Symbol recognition requires single selection")
+        return self
 
 
 class NormalizedBox(TemplateDefinitionModel):

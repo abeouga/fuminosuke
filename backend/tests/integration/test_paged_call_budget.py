@@ -15,7 +15,13 @@ from app.domain.ocr_models import ReadingStatus
 from app.ocr.base import OcrProviderRequest, OcrRegionInput
 from app.ocr.openai_provider import OpenAIOcrProvider
 from app.ocr.transcription_models import TranscriptionItem
-from app.services.paged_ocr_budget import PagedCallBudget, budget_policy, initialize_budget
+from app.services.paged_ocr_budget import (
+    PagedCallBudget,
+    budget_policy,
+    call_budget_plan,
+    initialize_budget,
+    require_call_budget_plan,
+)
 from app.services.print_layout_service import digest
 from tests.integration.test_job_pages import accept, execution, pages_case  # noqa: F401
 from tests.integration.test_print_layout_api import print_template  # noqa: F401
@@ -243,6 +249,65 @@ def test_minimum_preflight_matches_existing_batch_plan(count, identity_count):
     )
 
 
+def test_admission_plan_is_derived_from_every_template_page():
+    pages = [
+        {
+            "pageId": "page-a",
+            "ocrProvider": "openai",
+            "ocrEnabled": True,
+            "fieldMappings": [{}] * 59,
+            "documentContext": {"identityFields": [{}]},
+        },
+        {
+            "pageId": "page-b",
+            "ocrProvider": "openai",
+            "ocrEnabled": True,
+            "fieldMappings": [{}] * 51,
+        },
+        {
+            "pageId": "page-c",
+            "ocrProvider": "openai",
+            "ocrEnabled": True,
+            "fieldMappings": [{}] * 37,
+        },
+        {
+            "pageId": "page-d",
+            "ocrProvider": "openai",
+            "ocrEnabled": True,
+            "fieldMappings": [{}] * 3,
+        },
+    ]
+
+    plan = require_call_budget_plan(pages, 16)
+
+    assert plan == call_budget_plan(pages, 16)
+    assert plan["pageMinimumCalls"] == [
+        {"pageId": "page-a", "minimumCalls": 3},
+        {"pageId": "page-b", "minimumCalls": 2},
+        {"pageId": "page-c", "minimumCalls": 2},
+        {"pageId": "page-d", "minimumCalls": 1},
+    ]
+    assert plan["minimumCalls"] == 8
+    assert plan["documentRetryReserveCalls"] == 8
+    assert plan["requiredCalls"] == 16
+
+
+def test_admission_plan_rejects_any_template_larger_than_configured_ceiling():
+    pages = [{
+        "pageId": "large-page",
+        "ocrProvider": "openai",
+        "ocrEnabled": True,
+        "fieldMappings": [{}] * 61,
+    }]
+
+    with pytest.raises(AppError) as error:
+        require_call_budget_plan(pages, 5)
+
+    assert error.value.code == "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED"
+    assert "最低3回" in error.value.detail
+    assert "再試行枠を含めて6回" in error.value.detail
+
+
 def accepted_openai_case(case, monkeypatch, maximum):
     service, _, _ = case
     service.settings = replace(service.settings, ocr=_settings(max_calls=maximum, max_retries=1))
@@ -257,7 +322,27 @@ def accepted_openai_case(case, monkeypatch, maximum):
 def test_acceptance_reserves_budget_and_preflight_rejects_before_extraction(
     pages_case, monkeypatch  # noqa: F811
 ):
-    service, job = accepted_openai_case(pages_case, monkeypatch, 1)
+    service, job = accepted_openai_case(pages_case, monkeypatch, 4)
+    assert job.config_snapshot_json["jobPages"]["ocrCallBudgetPlan"] == {
+        "adapter": "paged-ocr-retry-reserve-v1",
+        "pageMinimumCalls": [
+            {"pageId": page["pageId"], "minimumCalls": 1}
+            for page in job.config_snapshot_json["jobPages"]["pages"]
+        ],
+        "minimumCalls": 2,
+        "documentRetryReserveCalls": 2,
+        "requiredCalls": 4,
+        "maxCalls": 4,
+    }
+    pages = job.config_snapshot_json["jobPages"]["pages"]
+    budget = PagedCallBudget(
+        service.database,
+        job.id,
+        pages[0]["pageId"],
+        1,
+        job.config_snapshot_json["jobPagesSha256"],
+    )
+    assert [budget.reserve(), budget.reserve(), budget.reserve()] == [1, 2, 3]
     executor = execution(service)
     executor.extraction.process = lambda *args, **kwargs: pytest.fail("must not extract")
     with pytest.raises(AppError) as error:
@@ -265,15 +350,43 @@ def test_acceptance_reserves_budget_and_preflight_rejects_before_extraction(
     assert error.value.code == "OCR_CALL_BUDGET_TOO_SMALL"
     with service.database.session() as session:
         budget = session.get(PagedOcrBudget, job.id)
-        assert budget.max_calls == 1 and budget.used_calls == 0
+        assert budget.max_calls == 4 and budget.used_calls == 3
         assert budget.snapshot_sha256 == job.config_snapshot_json["jobPagesSha256"]
-        assert session.scalars(select(PagedOcrCall)).all() == []
+        assert len(session.scalars(select(PagedOcrCall)).all()) == 3
+
+
+def test_acceptance_rejects_before_writing_job_when_retry_reserve_does_not_fit(
+    pages_case, monkeypatch  # noqa: F811
+):
+    service, _, _ = pages_case
+    service.settings = replace(service.settings, ocr=_settings(max_calls=3, max_retries=1))
+    monkeypatch.setattr(service, "_require_qualified_reference", lambda session, version: None)
+
+    with pytest.raises(AppError) as error:
+        accept(pages_case, monkeypatch)
+
+    assert error.value.code == "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED"
+    with service.database.session() as session:
+        assert session.scalars(select(PagedOcrBudget)).all() == []
+
+
+def test_catalog_marks_any_template_unavailable_when_retry_reserve_does_not_fit(
+    pages_case, monkeypatch  # noqa: F811
+):
+    service, manifest, _ = pages_case
+    service.settings = replace(service.settings, ocr=_settings(max_calls=3, max_retries=1))
+    monkeypatch.setattr(service, "_require_qualified_reference", lambda session, version: None)
+
+    catalog = service.catalog(manifest["templateVersionId"])
+
+    assert catalog["available"] is False
+    assert catalog["reason"] == "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED"
 
 
 def test_workflow_protects_later_page_and_records_identity_without_live_client(
     pages_case, monkeypatch  # noqa: F811
 ):
-    service, job = accepted_openai_case(pages_case, monkeypatch, 2)
+    service, job = accepted_openai_case(pages_case, monkeypatch, 4)
     original = copy.deepcopy(job.config_snapshot_json)
     executor = execution(service)
     calls = []
@@ -295,23 +408,43 @@ def test_workflow_protects_later_page_and_records_identity_without_live_client(
             ],
         )
 
-    async def forbidden_retry(*args, **kwargs):
-        pytest.fail("optional retry must not consume next page's baseline")
+    async def retry_at_high_detail(request, model, ordinal, *, image_detail):
+        calls.append((ordinal, [region.region_id for region in request.regions]))
+        assert image_detail == "high"
+        return _response(
+            model,
+            ordinal,
+            items=[
+                TranscriptionItem(
+                    mapping_id=region.region_id,
+                    raw="reviewed",
+                    status=ReadingStatus.READABLE,
+                )
+                for region in request.regions
+            ],
+        )
 
     provider._call = send
-    provider._call_detail = forbidden_retry
+    provider._call_detail = retry_at_high_detail
     executor.workflow._create_provider = lambda name: provider
     executor.execute(job.id)
     pages = original["jobPages"]["pages"]
     assert calls == [
         (1, [pages[0]["fieldMappings"][0]["mappingId"]]),
-        (2, [pages[1]["fieldMappings"][0]["mappingId"]]),
+        (2, [pages[0]["fieldMappings"][0]["mappingId"]]),
+        (3, [pages[1]["fieldMappings"][0]["mappingId"]]),
+        (4, [pages[1]["fieldMappings"][0]["mappingId"]]),
     ]
     with service.database.session() as session:
         assert session.get(ProcessingJob, job.id).config_snapshot_json == original
-        assert session.get(PagedOcrBudget, job.id).used_calls == 2
+        assert session.get(PagedOcrBudget, job.id).used_calls == 4
         rows = session.scalars(select(PagedOcrCall).order_by(PagedOcrCall.call_number)).all()
-        assert [r.page_id for r in rows] == [p["pageId"] for p in pages]
+        assert [r.page_id for r in rows] == [
+            pages[0]["pageId"],
+            pages[0]["pageId"],
+            pages[1]["pageId"],
+            pages[1]["pageId"],
+        ]
 
 
 @pytest.mark.parametrize(

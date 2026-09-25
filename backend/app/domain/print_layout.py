@@ -28,6 +28,12 @@ class PrintMargins(LayoutModel):
     bottom: float = Field(default=10, ge=0, le=100, allow_inf_nan=False)
 
 
+class PageHeadingMove(LayoutModel):
+    cell_id: str = Field(min_length=1)
+    from_range: str = Field(min_length=1)
+    to_range: str = Field(min_length=1)
+
+
 class PrintLayoutRequest(LayoutModel):
     base_revision: str = Field(min_length=64, max_length=64)
     paper_size: Literal["A4", "A3", "Letter"] = "A4"
@@ -41,6 +47,7 @@ class PrintLayoutRequest(LayoutModel):
     # [] explicitly requests one page. Saved ranges are never silently replaced.
     break_after_rows: list[int] | None = Field(default=None, max_length=MAX_PAGES - 1)
     auto_arrange: bool = False
+    page_heading_moves: list[PageHeadingMove] = Field(default_factory=list, max_length=1000)
 
 
 def print_error(detail: str, code: str = "PRINT_LAYOUT_INVALID", status: int = 422) -> AppError:

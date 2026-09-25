@@ -12,8 +12,8 @@ const initial: LayoutDefinition = {
 };
 const key = "test-background-layout-save";
 
-beforeEach(() => { vi.useFakeTimers(); window.localStorage.removeItem(key); });
-afterEach(() => { vi.useRealTimers(); window.localStorage.removeItem(key); });
+beforeEach(() => { vi.useFakeTimers(); window.localStorage.removeItem(key); window.localStorage.removeItem(`${key}:baseline`); });
+afterEach(() => { vi.useRealTimers(); window.localStorage.removeItem(key); window.localStorage.removeItem(`${key}:baseline`); });
 
 function setup() {
   const pending: Array<{ layout: LayoutDefinition; resolve: (value: LayoutDefinition) => void;
@@ -190,6 +190,9 @@ test("retains edits on rejection, does not spin retries, and restores them on re
   const reopened = render(<LayoutEditor {...props} />);
   expect(window.localStorage.getItem(key)).not.toBeNull();
   await settleInput();
+  expect(pending).toHaveLength(1);
+  fireEvent.click(within(reopened.container).getByRole("button", { name: "現在の下書きを採用して保存を再開" }));
+  await settleInput();
   expect(pending[1].layout.cells[0].role).toBe("ignored");
   await act(async () => pending[1].resolve(pending[1].layout));
   expect(window.localStorage.getItem(key)).toBeNull();
@@ -223,4 +226,42 @@ test("retains a reverted draft when an error leaves server persistence uncertain
   expect(pending[1].layout.cells[0].role).toBe("input");
   await act(async () => pending[1].resolve(pending[1].layout));
   view.unmount();
+});
+
+test.each(["legacy", "changed server"])("requires draft review before persisting a %s draft", async (state) => {
+  const draft = { ...initial, cells: initial.cells.map(cell => ({ ...cell, role: "ignored" as const })) };
+  window.localStorage.setItem(key, JSON.stringify(draft));
+  if (state === "changed server") window.localStorage.setItem(`${key}:baseline`, "different saved layout");
+  const onSave = vi.fn(async (next: LayoutDefinition) => next);
+  const ref = createRef<LayoutEditorHandle>();
+  const view = render(<LayoutEditor ref={ref} source="data:image/png;base64," initialLayout={initial}
+    targets={[]} onDetect={vi.fn()} onSave={onSave} workflowStep="classify" draftStorageKey={key} />);
+  const ui = within(view.container);
+  await settleInput();
+  expect(onSave).not.toHaveBeenCalled();
+  expect(await ref.current!.saveIfNeeded()).toBe(false);
+  expect(JSON.parse(window.localStorage.getItem(key)!).cells[0].role).toBe("ignored");
+  expect(ui.getByRole("region", { name: "復元した下書きの確認" })).toBeInTheDocument();
+  fireEvent.click(ui.getByRole("button", { name: "現在の下書きを採用して保存を再開" }));
+  await settleInput();
+  expect(onSave).toHaveBeenCalledTimes(1);
+  expect(onSave.mock.calls[0][0].cells[0].role).toBe("ignored");
+  view.unmount();
+  window.localStorage.removeItem(`${key}:baseline`);
+});
+
+test("a draft based on the unchanged saved layout restores legitimate role edits without review", async () => {
+  const { pending, props, view, ui } = setup();
+  fireEvent.click(ui.getByRole("button", { name: "読み取らない" }));
+  expect(window.localStorage.getItem(`${key}:baseline`)).toBeTruthy();
+  view.unmount();
+  const reopened = render(<LayoutEditor {...props} />);
+  expect(within(reopened.container).queryByRole("region", { name: "復元した下書きの確認" })).toBeNull();
+  await settleInput();
+  expect(pending).toHaveLength(1);
+  expect(pending[0].layout.cells[0].role).toBe("ignored");
+  await act(async () => pending[0].resolve(pending[0].layout));
+  expect(window.localStorage.getItem(key)).toBeNull();
+  expect(window.localStorage.getItem(`${key}:baseline`)).toBeNull();
+  reopened.unmount();
 });

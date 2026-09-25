@@ -465,6 +465,10 @@ class OcrRequestPreparer:
     ) -> MarkState:
         if mapping.mark_recognition_mode == "manual":
             return ReadingStatus.UNCERTAIN, None, "MANUAL_CHOICE_REQUIRED"
+        if mapping.mark_recognition_mode == "symbol":
+            # Shapes written in one field have no per-option occupancy regions.
+            # Even a blank crop needs a visual reading; never infer it from marks.
+            return ReadingStatus.UNCERTAIN, None, "MARK_CHOICE_UNRESOLVED"
         result_by_value = {
             item.get("optionValue"): item
             for item in results
@@ -502,7 +506,9 @@ class OcrRequestPreparer:
             source_region_id=mapping.mapping_id,
             bounding_box=crop.bbox,
             candidates=tuple(option.label for option in mapping.mark_options),
-            candidate_type="mark_choice",
+            candidate_type=(
+                "symbol_choice" if mapping.mark_recognition_mode == "symbol" else "mark_choice"
+            ),
         )
 
     @staticmethod

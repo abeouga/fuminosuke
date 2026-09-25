@@ -45,7 +45,7 @@ class OcrFieldPreview(ApiModel):
     record_group_id: str | None = None
     field_key: str | None = None
     mapping_type: Literal["text", "mark"] = "text"
-    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
+    mark_recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
     mark_selection_mode: Literal["single", "multiple"] = "multiple"
     mark_options: list[dict[str, str]] = Field(default_factory=list)
 

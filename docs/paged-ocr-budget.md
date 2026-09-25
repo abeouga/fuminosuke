@@ -50,6 +50,32 @@ request/response計算やproviderにSQLAlchemy・repositoryの直接依存を追
 認識値・判定、画像/crop、mapping/sourceRegionId/targetPath、association token、prompt/model/schema、
 既存の単一ページretry方式は変更しない。意図的な新paged実行予算契約の拡張である。
 
+## 2026-09-22 再試行余力を含む新規受付
+
+特定の4ページ帳票だけを16回へ固定する修正ではない。新規OpenAI paged受付は、現在の
+`fieldMappings`と`documentContext.identityFields`からページ別最低回数を同じbatch規則で計算し、
+`jobPages.ocrCallBudgetPlan`へ次を固定する。
+
+- `adapter=paged-ocr-retry-reserve-v1`
+- ページIDごとの`minimumCalls`
+- 全ページの`minimumCalls`
+- 同数の`documentRetryReserveCalls`
+- 両者を足した`requiredCalls`と設定上限`maxCalls`
+
+catalogとacceptは`maxCalls >= requiredCalls`を要求する。現在の既定上限は16回であり、
+最低8回までのテンプレートは全ページ1回分と同数の再試行余力を持って受付できる。
+最低回数が8回を超える今後のテンプレートは、運用者がhard ceilingを明示的に増やすまで
+利用不可とする。項目を削除・batchを偽装・ページを省略して通さない。
+
+受付時点で確保するのは予算上の余力である。timeout、provider error、Schema不成立などの
+再送も非払戻しで同じ台帳を消費するため、あらゆる失敗後に文書全体1回分が残る保証ではない。
+ただし、上限が最低枠と同値で再試行不能な受付は新たに作らない。既存jobの予算は変更せず、
+予算不足・実行設定変更・予算snapshot不成立では「処理を再試行」を表示せず、新しい受付へ戻す。
+
+`OCR_SCHEMA_INVALID`は破損・途中切れの応答を保存せず、設定済み`OPENAI_MAX_RETRIES`と残予算の
+範囲で同一batchを再送する。mapping ID、targetPath、sourceRegionId、画像、prompt/schema、
+association tokenは変更しない。再送後も不成立なら従来どおりページ失敗として停止する。
+
 ## 変更ファイル
 
 - `backend/app/services/paged_ocr_budget.py`、`db/models.py`、`alembic/versions/0034_paged_ocr_budget.py`

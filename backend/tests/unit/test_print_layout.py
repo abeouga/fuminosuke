@@ -8,7 +8,7 @@ from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook
-from openpyxl.styles import Border, Side
+from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.worksheet.pagebreak import Break
 from PIL import Image
 
@@ -20,7 +20,7 @@ from app.domain.print_layout import (
     transform_rect,
 )
 from app.services.print_layout_renderer import render_page
-from app.services.print_layout_source import NS, read_source
+from app.services.print_layout_source import NS, REL, read_source
 
 
 def workbook_bytes(rows=63, merge=None, manual=None):
@@ -136,6 +136,103 @@ def test_missing_ooxml_is_null_not_openpyxl_defaults():
     assert imported["pageSetup"] is None
     assert imported["margins"] is None
     assert imported["printOptions"] is None
+
+
+def test_empty_drawing_placeholder_does_not_block_print_pages():
+    content = workbook_bytes(rows=3)
+    original_sha = hashlib.sha256(content).hexdigest()
+    output = BytesIO()
+    with ZipFile(BytesIO(content)) as original, ZipFile(output, "w") as edited:
+        for entry in original.infolist():
+            data = original.read(entry.filename)
+            if entry.filename == "xl/worksheets/sheet1.xml":
+                root = ET.fromstring(data)
+                ET.SubElement(root, f"{{{NS['s']}}}drawing", {f"{{{REL}}}id": "rId1"})
+                data = ET.tostring(root)
+            edited.writestr(entry, data)
+        edited.writestr(
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            b'<Relationship Id="rId1" '
+            b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" '
+            b'Target="../drawings/drawing1.xml"/></Relationships>',
+        )
+        edited.writestr(
+            "xl/drawings/drawing1.xml",
+            b'<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>',
+        )
+    source = read_source(output.getvalue(), "帳票", {"cells": []})
+    assert source["unsupported"] == []
+    assert page_plan(source, request())["pages"]
+    assert hashlib.sha256(content).hexdigest() == original_sha
+
+
+def test_real_drawing_object_remains_unsupported():
+    from openpyxl.drawing.image import Image as WorkbookImage
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "帳票"
+    sheet["B2"] = "氏名"
+    png = BytesIO()
+    Image.new("RGB", (2, 2), "black").save(png, format="PNG")
+    png.seek(0)
+    sheet.add_image(WorkbookImage(png), "B3")
+    content = BytesIO()
+    book.save(content)
+    source = read_source(content.getvalue(), "帳票", {"cells": []})
+    assert "図形・画像・フォーム部品を含むページ描画は未対応です。" in source["unsupported"]
+    with pytest.raises(AppError):
+        page_plan(source, request())
+
+
+def oversized_style_tail_workbook(kind: str = "font") -> bytes:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "帳票"
+    sheet["B2"] = "氏名"
+    sheet.merge_cells("B3:D4")
+    sheet["B3"].border = Border(bottom=Side(style="thin"))
+    tail = sheet["CO1000"]
+    if kind == "font":
+        tail.font = Font(name="Arial")
+    elif kind == "value":
+        tail.value = "Tail"
+    elif kind == "formula":
+        tail.value = "=1+1"
+    elif kind == "border":
+        tail.border = Border(bottom=Side(style="thin"))
+    elif kind == "fill":
+        tail.fill = PatternFill("solid", fgColor="FFFF00")
+    elif kind == "merge":
+        sheet.merge_cells("CN999:CO1000")
+    elif kind == "print_area":
+        tail.font = Font(name="Arial")
+        sheet.print_area = "B2:CO1000"
+    buffer = BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_formatted_only_empty_tail_does_not_consume_print_source_cell_budget():
+    content = oversized_style_tail_workbook()
+    before = hashlib.sha256(content).hexdigest()
+    source = read_source(content, "帳票", {"cells": []})
+    assert (source["startCol"], source["startRow"], source["endCol"], source["endRow"]) == (
+        2,
+        2,
+        4,
+        4,
+    )
+    assert hashlib.sha256(content).hexdigest() == before
+
+
+@pytest.mark.parametrize("kind", ["value", "formula", "border", "fill", "merge", "print_area"])
+def test_meaningful_or_explicit_oversized_print_source_is_never_silently_clipped(kind):
+    with pytest.raises(AppError) as caught:
+        read_source(oversized_style_tail_workbook(kind), "帳票", {"cells": []})
+    assert caught.value.code == "PRINT_LAYOUT_INVALID"
+    assert caught.value.detail == "印刷対象は20,000セル以内で指定してください。"
 
 
 @pytest.mark.parametrize("feature", ["hidden", "titles", "areas", "header", "wide", "formula"])

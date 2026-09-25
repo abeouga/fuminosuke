@@ -399,6 +399,16 @@ class JobService:
             session.expunge(job)
             return job
 
+    def failure_stack_trace(self, job: ProcessingJob) -> str | None:
+        if job.status != JobStatus.FAILED.value or not job.error_code:
+            return None
+        with self._database.session() as session:
+            return JobRepository(session).latest_failure_stack_trace(
+                job.id,
+                attempt_number=job.attempt_number,
+                error_code=job.error_code,
+            )
+
     def list_jobs(
         self,
         *,

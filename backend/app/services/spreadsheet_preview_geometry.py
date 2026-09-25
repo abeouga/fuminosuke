@@ -16,14 +16,15 @@ from openpyxl.utils.cell import coordinate_to_tuple
 from app.domain.print_layout import print_error
 from app.layout_analysis.models import LayoutDefinition
 
-MODEL = "spreadsheet-preview-office-v1"
+LEGACY_MODEL = "spreadsheet-preview-office-v1"
+MODEL = "spreadsheet-preview-office-v2"
 
 
 def project_preview_geometry(
     content: bytes, layout: LayoutDefinition, print_cells: list[dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> tuple[LayoutDefinition, list[dict[str, Any]]]:
-    if (snapshot.get("model") != MODEL
+    if (snapshot.get("model") not in {LEGACY_MODEL, MODEL}
             or snapshot.get("sourceSha256") != hashlib.sha256(content).hexdigest()):
         raise print_error("保存したプレビュー寸法と原本が一致しません。",
                           "PRINT_GEOMETRY_CHANGED", 409)
@@ -51,8 +52,13 @@ def project_preview_geometry(
         left, right = [round(float(v or 0) * dpi_x) for v in (margins.left, margins.right)]
         top, bottom = [round(float(v or 0) * dpi_y) for v in (margins.top, margins.bottom)]
         width, height = xs[c2 + 1], ys[r2 + 1]
-        scale = min(max(1, cw - left - right) / max(width, 1),
-                    max(1, ch - top - bottom) / max(height, 1))
+        fit_scale = min(max(1, cw - left - right) / max(width, 1),
+                        max(1, ch - top - bottom) / max(height, 1))
+        # Calc's fit-to-page preview shrinks oversized content but does not
+        # enlarge a short sheet to fill the printable rectangle. Office
+        # dimensions are in points; the canonical preview is in pixels.
+        scale = (fit_scale if snapshot["model"] == LEGACY_MODEL else
+                 min(fit_scale, dpi_x / 72, dpi_y / 72))
         ox, oy = float(left), float(top)
         if sheet.print_options.horizontalCentered:
             ox += max(0, (cw - left - right - width * scale) / 2)

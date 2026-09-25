@@ -103,6 +103,7 @@ def fork_layout(raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
 
 
 _VERSION_BOUND_QUALITY_KEYS = {
+    "candidateReadiness",
     "activationCertificate",
     "environmentQualificationCertificate",
     "environmentQualified",

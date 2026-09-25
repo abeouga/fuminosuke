@@ -110,6 +110,49 @@ def test_cancellation_is_checked_between_explicit_attempts(
     assert calls == [1]
 
 
+def test_schema_invalid_response_is_discarded_and_retried_within_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = OpenAIOcrProvider(_settings(max_calls=2, max_retries=1))
+    calls: list[int] = []
+
+    async def malformed_then_valid(
+        request: OcrProviderRequest,
+        model: str,
+        call_count: int,
+    ) -> _TranscriptionResponse:
+        del request
+        calls.append(call_count)
+        if call_count == 1:
+            raise provider._provider_error(
+                502, "OCR_SCHEMA_INVALID", "OCR応答がSchemaに一致しません。"
+            )
+        return _response(model, call_count)
+
+    monkeypatch.setattr(provider, "_call", malformed_then_valid)
+    class PersistedBudget:
+        def __init__(self) -> None:
+            self.used = 0
+
+        def remaining(self) -> int:
+            return 2 - self.used
+
+        def reserve(self) -> int | None:
+            if self.used >= 2:
+                return None
+            self.used += 1
+            return self.used
+
+    request = OcrProviderRequest(regions=[], call_budget=PersistedBudget())
+    try:
+        response = asyncio.run(provider.extract(request))
+    finally:
+        asyncio.run(provider._client.close())
+
+    assert calls == [1, 2]
+    assert response.api_call_count == 2
+
+
 def _settings(*, max_calls: int, max_retries: int) -> OcrSettings:
     return OcrSettings(
         provider="openai",

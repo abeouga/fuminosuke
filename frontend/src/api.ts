@@ -139,8 +139,22 @@ export const api = {
     );
     return response.blob();
   },
+  downloadLegacyTemplatePrint: async (id: string, format: "xlsx" | "pdf") => {
+    const response = await requestResponse(
+      `/template-versions/${encodeURIComponent(id)}/blank-files/${format}`,
+    );
+    return response.blob();
+  },
   referenceQualification: (id: string) => request<import("./printLayout").ReferenceQualification>(
     `/template-versions/${id}/print-layout/qualification`),
+  prepareReviewedOcr: (id: string, revision: string) => request<import("./printLayout").ReferenceQualification>(
+    `/template-versions/${id}/print-layout/ocr-readiness?base_revision=${encodeURIComponent(revision)}`,
+    { method: "POST" },
+  ),
+  prepareCandidateReadiness: (id: string, revision: string) => request<import("./printLayout").ReferenceQualification>(
+    `/template-versions/${id}/print-layout/candidate-readiness?base_revision=${encodeURIComponent(revision)}`,
+    { method: "POST" },
+  ),
   qualifyReference: (id: string, revision: string) => request<import("./printLayout").ReferenceQualification>(
     `/template-versions/${id}/print-layout/qualification?base_revision=${encodeURIComponent(revision)}`,
     { method: "POST" },
@@ -499,6 +513,14 @@ export const api = {
         ? `?base_revision=${encodeURIComponent(baseRevision)}`
         : ""}`,
       { method: "POST" },
+    ),
+  duplicateTemplateVersion: (id: string, name: string, activate = false) =>
+    request<{ templateId: string; templateVersionId: string }>(
+      `/template-versions/${encodeURIComponent(id)}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, activate }),
+      },
     ),
   reject: (id: string) => request(`/template-versions/${id}/reject`, { method: "POST" }),
   reprocess: (id: string) =>

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import time
 from typing import Any, Never
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.db.models import JobArtifact, JobInput, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.job_pages import PagedSubmission, template_page_id
@@ -19,7 +21,11 @@ from app.domain.template_config import TemplateConfig, parse_template_config
 from app.image_processing.image_loader import ImageLoader
 from app.repositories.job_repository import JobRepository
 from app.services.paged_document_snapshot import capture_document_snapshot, load_document_snapshot
-from app.services.paged_ocr_budget import budget_policy, initialize_budget
+from app.services.paged_ocr_budget import (
+    budget_policy,
+    initialize_budget,
+    require_call_budget_plan,
+)
 from app.services.paged_transcription_resources import (
     accepted_transcription_prompt,
     capture_transcription_resources,
@@ -75,6 +81,28 @@ def page_config(config: TemplateConfig, page: dict[str, Any]) -> TemplateConfig:
     return TemplateConfig.model_validate(raw)
 
 
+def budget_pages(
+    config: TemplateConfig, version_id: str, pages: list[dict[str, Any]], provider: str,
+) -> list[dict[str, Any]]:
+    """Build only the fields needed for the provider call-count admission plan."""
+    planned = []
+    for page in pages:
+        mappings = [
+            mapping.model_dump(mode="json", by_alias=True)
+            for mapping in page_config(config, page).field_mappings
+        ]
+        item: dict[str, Any] = {
+            "pageId": template_page_id(version_id, page),
+            "fieldMappings": mappings,
+            "ocrProvider": provider,
+            "ocrEnabled": True,
+        }
+        if has_document_metadata(config):
+            item["documentContext"] = page_context(config, mappings)
+        planned.append(item)
+    return planned
+
+
 class JobPageService:
     def __init__(self, database: Database, storage: LocalStorageService, settings: Settings):
         self.database, self.storage, self.settings = database, storage, settings
@@ -90,18 +118,31 @@ class JobPageService:
         )
 
     def catalog(self, version_id: str) -> dict[str, Any]:
-        state = PrintLayoutService(self.database, self.storage).get(version_id)
-        plan = state["saved"]
         with self.database.session() as session:
             version = session.get(TemplateVersion, version_id)
             if version is None:
                 fail("テンプレート版がありません。", "TEMPLATE_NOT_FOUND")
             revision = self.revision(version)
+            plan = copy.deepcopy(version.quality_json.get("printLayout"))
+            reason = ""
+            try:
+                self._require_qualified_reference(session, version)
+                if self.settings.ocr.provider == "openai":
+                    config = parse_template_config(
+                        self.storage.read_bytes(version.config_relative_path).decode()
+                    )
+                    require_call_budget_plan(
+                        budget_pages(config, version.id, (plan or {}).get("pages", []), "openai"),
+                        self.settings.ocr.max_calls_per_job,
+                    )
+            except AppError as error:
+                reason = error.code
         return {
             "templateVersionId": version_id,
             "templateRevision": revision,
-            "available": False,
-            "reason": "PRINT_REFERENCE_NOT_VALIDATED",
+            "available": not reason,
+            "reason": reason,
+            "reviewRequired": True,
             "pages": [
                 dict(
                     pageId=template_page_id(version_id, p),
@@ -165,14 +206,18 @@ class JobPageService:
                 fail("全ページを過不足なく指定してください。", "PAGE_BINDING_INVALID")
             if [p["page"] for p in pages] != list(range(1, len(pages) + 1)):
                 fail("保存ページ順序が不正です。")
-            # No production renderer has yet passed physical reference qualification.
-            # Do not accept a client/DB ocrReady flag as evidence of pixel accuracy.
-            self._require_qualified_reference({**plan, "templateVersionId": version.id})
-            if version.status != "ACTIVE" or version.quality_json.get("layoutVerified") is not True:
-                fail("検証済みACTIVE版が必要です。", "TEMPLATE_LAYOUT_NOT_VERIFIED")
+            # Same eligibility as the catalog, freshly checked inside acceptance.
+            # Legacy layoutVerified is not a paged reference certificate.
+            qualification = self._require_qualified_reference(session, version)
             config = parse_template_config(
                 self.storage.read_bytes(version.config_relative_path).decode()
             )
+            budget_plan = None
+            if self.settings.ocr.provider == "openai":
+                budget_plan = require_call_budget_plan(
+                    budget_pages(config, version.id, pages, "openai"),
+                    self.settings.ocr.max_calls_per_job,
+                )
             job_id = str(uuid4())
             accepted = []
             seen_fields: set[str] = set()
@@ -268,6 +313,12 @@ class JobPageService:
                 fail(
                     "受付中にテンプレートが変更されています。", "TEMPLATE_CHANGED_DURING_ACCEPTANCE"
                 )
+            qualification_expires = qualification.get("expiresAt") if qualification else None
+            if (
+                type(qualification_expires) is int
+                and int(time.time()) >= qualification_expires
+            ):
+                fail("受付中に正式資格の期限が切れました。", "PRINT_REFERENCE_NOT_VALIDATED")
             bundle = {
                 "schemaVersion": 2,
                 "templateRevision": request.template_revision,
@@ -275,9 +326,16 @@ class JobPageService:
                 "pages": accepted,
                 "executionConfig": execution_config(self.settings),
                 "documentSnapshot": document_snapshot,
+                "admission": {
+                    "policy": "paged-reviewed-candidates-v1",
+                    "reviewRequired": True,
+                    "inkClearanceVerified": False,
+                    "referenceQualification": qualification,
+                },
             }
             if self.settings.ocr.provider == "openai":
                 bundle["ocrCallBudget"] = budget_policy(self.settings.ocr.max_calls_per_job)
+                bundle["ocrCallBudgetPlan"] = budget_plan
                 bundle["transcriptionResources"] = capture_transcription_resources()
             job = ProcessingJob(
                 id=job_id,
@@ -298,19 +356,44 @@ class JobPageService:
             session.commit()
             return job
 
-    def _require_qualified_reference(self, plan: dict[str, Any]) -> None:
-        version_id = plan.get("templateVersionId")
-        evidence = (
-            ReferenceQualificationService(self.database, self.storage).status(version_id)
-            if version_id
-            else {"status": "UNVERIFIED"}
+    def _require_qualified_reference(
+        self, session: Session, version: TemplateVersion,
+    ) -> dict[str, Any]:
+        """Admit review candidates, never certify submitted handwriting as correct."""
+        if version.status != "ACTIVE":
+            fail("正式資格のあるACTIVE版が必要です。", "TEMPLATE_LAYOUT_NOT_VERIFIED")
+        plan = version.quality_json.get("printLayout")
+        if not plan or plan.get("layoutSha256") != digest(version.layout_json):
+            fail("印刷ページ設定と矩形が一致しません。", "PRINT_LAYOUT_STALE")
+        pages = plan.get("pages", [])
+        if not pages or [p["page"] for p in pages] != list(range(1, len(pages) + 1)):
+            fail("保存ページ順序が不正です。")
+        config = parse_template_config(
+            self.storage.read_bytes(version.config_relative_path).decode()
         )
-        # Evidence validation is connected, but no production renderer is admitted
-        # by the current policy. Neither qualified nor ocrReady JSON flags override it.
-        fail(
-            f"基準画像検証: {evidence['status']}。本番の位置精度・実行隔離条件は未認定です。",
-            "PRINT_REFERENCE_NOT_VALIDATED",
-        )
+        mappings = [m.mapping_id for p in pages for m in page_config(config, p).field_mappings]
+        if len(set(mappings)) != len(mappings) or set(mappings) != {
+            m.mapping_id for m in config.field_mappings if m.enabled
+        }:
+            fail("全読み取り項目のページ対応を確認できません。")
+        try:
+            from app.services.candidate_readiness_service import require_for_use
+
+            evidence = require_for_use(
+                ReferenceQualificationService(self.database, self.storage),
+                session, version, PrintLayoutService.revision(version))
+        except AppError as error:
+            fail(f"基準画像の位置精度・実行隔離の正式資格を確認できません。{error.detail}",
+                 "PRINT_REFERENCE_NOT_VALIDATED")
+        return {
+            "reportSha256": digest(evidence),
+            "qualificationPolicy": evidence["qualificationPolicy"],
+            "qualificationBinding": copy.deepcopy(evidence["qualificationBinding"]),
+            "issuedAt": evidence["issuedAt"],
+            "expiresAt": evidence["expiresAt"],
+            "validUntilChange": evidence.get("validUntilChange") is True,
+            "sourceQualificationPolicy": evidence.get("sourceQualificationPolicy"),
+        }
 
     def validate(self, session: Session, job: ProcessingJob) -> list[dict[str, Any]]:
         bundle = job.config_snapshot_json.get("jobPages")

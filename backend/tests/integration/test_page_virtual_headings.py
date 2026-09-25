@@ -150,6 +150,67 @@ def test_normal_layout_route_cannot_bypass_page_heading_validation(client, paged
     assert client.get(url).json() == state
 
 
+@pytest.mark.parametrize("invalid", [None, "missing", "unknown", "physical", "duplicate",
+                                      "old_range", "destination", "bounds", "stale", "active"])
+def test_explicit_heading_repage_is_atomic_and_preserves_semantics(client, paged_draft, invalid):
+    version, job_id, url, state, layout = paged_draft
+    virtual = heading(state["saved"]["pages"][1])
+    layout["cells"].append(virtual)
+    layout["cells"][0]["parentLabelCellId"] = virtual["id"]
+    response = save(client, url, state, layout)
+    assert response.status_code == 200, response.text
+    before, state = response.json()["layout"], response.json()["state"]
+    to_range = state["saved"]["pages"][1]["range"].replace("32:", "31:")
+    move = {"cellId": virtual["id"], "fromRange": virtual["pageRange"], "toRange": to_range}
+    payload = {"baseRevision": state["revision"], "breakAfterRows": [30],
+               "pageHeadingMoves": [move]}
+    if invalid == "missing":
+        payload["pageHeadingMoves"] = []
+    if invalid == "unknown":
+        move["cellId"] = "unknown"
+    if invalid == "physical":
+        move["cellId"] = before["cells"][0]["id"]
+    if invalid == "duplicate":
+        payload["pageHeadingMoves"].append(dict(move))
+    if invalid == "old_range":
+        move["fromRange"] = "A99:D100"
+    if invalid == "destination":
+        move["toRange"] = "A99:D100"
+    if invalid == "bounds":
+        payload["orientation"] = "landscape"
+    if invalid == "stale":
+        payload["baseRevision"] = "0" * 64
+    with client.app.state.database.session() as session:
+        v = session.get(TemplateVersion, version)
+        config_path = v.config_relative_path
+        if invalid == "active":
+            v.status = "ACTIVE"  # Fixture-only authorization guard test.
+            session.commit()
+    config = client.app.state.storage.read_bytes(config_path)
+    stored_state = client.get(url).json()
+    preview = client.post(url + "/preview", json=payload)
+    assert client.get(f"/api/v1/template-versions/{version}/layout").json() == before
+    response = client.put(url, json=payload)
+    if invalid:
+        assert response.status_code in (409, 422), response.text
+        assert client.get(url).json() == stored_state
+        assert client.get(f"/api/v1/template-versions/{version}/layout").json() == before
+    else:
+        assert preview.status_code == 200, preview.text
+        assert response.status_code == 200, response.text
+        expected = copy.deepcopy(before)
+        expected["cells"][-1]["pageRange"] = to_range
+        assert response.json()["layout"] == expected
+        assert client.get(f"/api/v1/template-versions/{version}/layout").json() == expected
+        assert [p["endRow"] for p in response.json()["saved"]["pages"]] == [30, 63]
+        assert not client.get(url + "/qualification").json()["qualified"]
+        assert client.put(url, json=payload).status_code == 409
+        with client.app.state.database.session() as session:
+            snapshot = session.get(ProcessingJob, job_id).config_snapshot_json
+            assert snapshot["printLayout"] == response.json()["saved"]
+    assert client.app.state.storage.read_bytes(config_path) == config
+
+
 def test_virtual_heading_uses_page_bounds_not_legacy_canonical_bounds(client, paged_draft):
     _, _, url, state, layout = paged_draft
     response = client.put(url, json={"baseRevision": state["revision"], "paperSize": "A3",
@@ -164,6 +225,44 @@ def test_virtual_heading_uses_page_bounds_not_legacy_canonical_bounds(client, pa
     assert response.status_code == 200, response.text
     assert response.json()["layout"]["cells"][-1]["x"] == cell["x"]
     assert response.json()["layout"]["cells"][-1]["y"] == cell["y"]
+
+
+def test_heading_repage_commit_failure_rolls_back_layout_and_pages(client, paged_draft):
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app.domain.print_layout import PrintLayoutRequest
+    from app.services.print_layout_service import PrintLayoutService
+
+    version, job_id, url, state, layout = paged_draft
+    layout["cells"].append(heading(state["saved"]["pages"][1]))
+    response = save(client, url, state, layout)
+    before, state = response.json()["layout"], response.json()["state"]
+    request = PrintLayoutRequest.model_validate({
+        "baseRevision": state["revision"], "breakAfterRows": [30],
+        "pageHeadingMoves": [{"cellId": "virtual_group",
+                              "fromRange": before["cells"][-1]["pageRange"],
+                              "toRange": before["cells"][-1]["pageRange"].replace("32:", "31:")}],
+    })
+    with client.app.state.database.session() as session:
+        snapshot = copy.deepcopy(session.get(ProcessingJob, job_id).config_snapshot_json)
+
+    def fail(session):
+        if any(isinstance(item, TemplateVersion) and item.id == version for item in session.dirty):
+            session.flush()
+            raise RuntimeError("injected commit failure")
+
+    event.listen(Session, "before_commit", fail)
+    try:
+        with pytest.raises(RuntimeError, match="injected commit failure"):
+            service = PrintLayoutService(client.app.state.database, client.app.state.storage)
+            service.save(version, request)
+    finally:
+        event.remove(Session, "before_commit", fail)
+    assert client.get(url).json() == state
+    assert client.get(f"/api/v1/template-versions/{version}/layout").json() == before
+    with client.app.state.database.session() as session:
+        assert session.get(ProcessingJob, job_id).config_snapshot_json == snapshot
 
 
 def test_repeated_section_connects_to_page_virtual_heading_and_rejects_cycles(client, paged_draft):

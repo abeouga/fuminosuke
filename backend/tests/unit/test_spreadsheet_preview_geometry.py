@@ -16,10 +16,11 @@ from app.services.spreadsheet_template_import_service import SpreadsheetTemplate
 from app.storage.local_storage import LocalStorageService
 
 
-def fixture(tmp_path, *, merged=False, count=6):
+def fixture(tmp_path, *, merged=False, count=6, centered=False, print_area=True):
     workbook = Workbook()
     sheet = workbook.active
-    sheet.print_area = f"A1:F{count}"
+    if print_area:
+        sheet.print_area = f"A1:F{count}"
     for row in sheet.iter_rows(min_row=1, max_row=count, max_col=6):
         for cell in row:
             cell.value = cell.coordinate
@@ -27,6 +28,8 @@ def fixture(tmp_path, *, merged=False, count=6):
                                     ("top", "bottom", "left", "right")})
     sheet.column_dimensions["A"].width = .875
     sheet.row_dimensions[2].height = 2.25
+    if centered:
+        sheet.print_options.horizontalCentered = True
     if merged:
         sheet.merge_cells("B2:D3")
     output = BytesIO()
@@ -39,6 +42,35 @@ def fixture(tmp_path, *, merged=False, count=6):
                     columns=[4.8, 8.95, 8.95, 8.95, 8.95, 8.95],
                     rows=[15, 2.25] + [15] * (count - 2))
     return service, content, layout, printed, snapshot
+
+
+def test_narrow_centered_sheet_keeps_its_printed_size(tmp_path):
+    _, content, layout, printed, snapshot = fixture(
+        tmp_path, centered=True, print_area=False,
+    )
+    _, cells = project_preview_geometry(content, layout, printed, snapshot)
+    by_id = {cell["id"]: cell for cell in cells}
+
+    # Office keeps this small sheet at its physical point size and centers it.
+    # The canonical preview is approximately 150 pixels/inch.
+    total_width = sum(snapshot["columns"])
+    expected_width = total_width * layout.canonical_width / (8.27 * 72)
+    assert abs(by_id["xlsx_A1"]["x"] - (layout.canonical_width - expected_width) / 2) <= 2
+    assert abs(by_id["xlsx_F6"]["x"] + by_id["xlsx_F6"]["width"]
+               - (layout.canonical_width + expected_width) / 2) <= 2
+    assert abs(by_id["xlsx_A1"]["height"] - 15 * layout.canonical_height / (11.69 * 72)) <= 2
+
+
+def test_saved_v1_geometry_keeps_its_original_coordinates(tmp_path):
+    _, content, layout, printed, snapshot = fixture(tmp_path)
+    snapshot["model"] = "spreadsheet-preview-office-v1"
+    _, cells = project_preview_geometry(content, layout, printed, snapshot)
+    by_id = {cell["id"]: cell for cell in cells}
+
+    def rectangle(cell_id):
+        return tuple(by_id[cell_id][key] for key in ("x", "y", "width", "height"))
+    assert rectangle("xlsx_A1") == (112, 150, 90, 282)
+    assert rectangle("xlsx_B2") == (202, 432, 169, 43)
 
 
 def test_projected_dimensions_preserve_small_rows_and_column_ratios(tmp_path):

@@ -13,8 +13,6 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree
-from zipfile import BadZipFile, ZipFile
 
 import cv2
 import numpy as np
@@ -23,7 +21,6 @@ import yaml
 from openpyxl import load_workbook
 from openpyxl.cell.cell import Cell
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.cell import range_boundaries
 from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -46,13 +43,20 @@ from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.spreadsheet_preview_geometry import MODEL, project_preview_geometry
+from app.services.spreadsheet_source_bounds import (
+    MAX_SOURCE_CELLS as DEFAULT_MAX_SOURCE_CELLS,
+)
+from app.services.spreadsheet_source_bounds import (
+    effective_worksheet_bounds,
+    empty_tail_is_inspectable,
+)
 from app.services.workbook_geometry import read_office_dimensions
 from app.storage.local_storage import LocalStorageService
 
 
 class SpreadsheetTemplateImportService:
     CANONICAL_PORTRAIT = (1240, 1754)
-    MAX_SOURCE_CELLS = 20_000
+    MAX_SOURCE_CELLS = DEFAULT_MAX_SOURCE_CELLS
     MAX_LAYOUT_CELLS = 1_000
 
     def __init__(self, database: Database, storage: LocalStorageService) -> None:
@@ -944,88 +948,15 @@ class SpreadsheetTemplateImportService:
     def _worksheet_bounds(
         cls, worksheet: Any, *, content: bytes | None = None,
     ) -> tuple[int, int, int, int]:
-        raw_print_area = worksheet.print_area
-        if raw_print_area:
-            matches = re.findall(
-                r"\$?([A-Z]{1,3})\$?(\d+):\$?([A-Z]{1,3})\$?(\d+)",
-                str(raw_print_area).upper(),
-            )
-            if matches:
-                boundaries = [
-                    range_boundaries(f"{start_column}{start_row}:{end_column}{end_row}")
-                    for start_column, start_row, end_column, end_row in matches
-                ]
-                return (
-                    min(item[0] for item in boundaries),
-                    min(item[1] for item in boundaries),
-                    max(item[2] for item in boundaries),
-                    max(item[3] for item in boundaries),
-                )
-        bounds: tuple[int, int, int, int] = range_boundaries(worksheet.calculate_dimension())
-        min_col, min_row, max_col, max_row = bounds
-        # Preserve every previously accepted geometry and every explicit print area.
-        # Only recover oversized sheets whose trailing cells have no printed content.
-        if (max_col - min_col + 1) * (max_row - min_row + 1) <= cls.MAX_SOURCE_CELLS:
-            return bounds
-        if (
-            content is None
-            or worksheet.print_titles
-            or worksheet.print_options.gridLines
-            or worksheet.print_options.headings
-            or worksheet.conditional_formatting
-            or any(d.has_style for d in worksheet.row_dimensions.values())
-            or any(d.has_style for d in worksheet.column_dimensions.values())
-            or not cls._empty_tail_is_inspectable(content)
-        ):
-            return bounds
-
-        last_col, last_row = min_col, min_row
-        # Sparse cells avoid expanding an oversized rectangle just to inspect it.
-        for cell in worksheet._cells.values():
-            border = cell.border
-            visible_border = any(
-                getattr(border, side, None) is not None
-                and getattr(border, side).style is not None
-                for side in ("left", "right", "top", "bottom", "diagonal",
-                             "start", "end", "vertical", "horizontal")
-            )
-            if (cell.value is not None or visible_border or cell.fill.fill_type is not None
-                    or cell.comment or cell.hyperlink):
-                last_col = max(last_col, cell.column)
-                last_row = max(last_row, cell.row)
-        for merged in worksheet.merged_cells.ranges:
-            last_col = max(last_col, merged.max_col)
-            last_row = max(last_row, merged.max_row)
-        return min_col, min_row, last_col, last_row
+        return effective_worksheet_bounds(
+            worksheet,
+            content=content,
+            max_source_cells=cls.MAX_SOURCE_CELLS,
+        )
 
     @staticmethod
     def _empty_tail_is_inspectable(content: bytes) -> bool:
-        # openpyxl can discard unsupported drawings. Inspect original OOXML before
-        # treating blank cells as an empty tail; an empty drawing part is harmless.
-        sheet_tags = {
-            "sheetPr", "dimension", "sheetViews", "sheetFormatPr", "cols", "sheetData",
-            "mergeCells", "printOptions", "pageMargins", "pageSetup", "headerFooter",
-            "rowBreaks", "colBreaks", "drawing",
-        }
-        namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-        try:
-            with ZipFile(io.BytesIO(content)) as package:
-                for name in package.namelist():
-                    if name.endswith(".vml") or name.startswith((
-                        "xl/ctrlProps/", "xl/activeX/", "xl/embeddings/",
-                    )):
-                        return False
-                    if (name.startswith("xl/drawings/") and name.endswith(".xml")
-                            and len(ElementTree.fromstring(package.read(name)))):
-                        return False
-                    if name.startswith("xl/worksheets/") and name.endswith(".xml"):
-                        root = ElementTree.fromstring(package.read(name))
-                        if any(node.tag not in {namespace + tag for tag in sheet_tags}
-                               for node in root):
-                            return False
-        except (BadZipFile, ElementTree.ParseError, KeyError):
-            return False
-        return True
+        return empty_tail_is_inspectable(content)
 
     def _render_workbook_preview(
         self,

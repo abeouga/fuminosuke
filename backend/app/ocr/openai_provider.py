@@ -38,8 +38,6 @@ from app.ocr.transcription_models import (
 logger = logging.getLogger(__name__)
 
 _MAX_REGIONS_PER_CALL = 30
-_MIN_COMPACT_OUTPUT_TOKENS = 800
-_COMPACT_OUTPUT_TOKENS_PER_REGION = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +150,14 @@ class OpenAIOcrProvider:
                             )
                     except AppError as exc:
                         last_error = exc
-                        if exc.code not in retryable_codes:
+                        retryable = exc.code in retryable_codes or (
+                            # Paged jobs have a persisted, non-refundable ledger and
+                            # admission reserve. The malformed response is discarded;
+                            # the immutable batch keeps its mapping and association.
+                            exc.code == "OCR_SCHEMA_INVALID"
+                            and request.call_budget is not None
+                        )
+                        if not retryable:
                             raise
             if last_error is not None:
                 raise last_error
@@ -335,13 +340,7 @@ class OpenAIOcrProvider:
                 ),
                 input=response_input,
                 text_format=CompactTranscriptionBatch,
-                max_output_tokens=min(
-                    self._settings.max_output_tokens,
-                    max(
-                        _MIN_COMPACT_OUTPUT_TOKENS,
-                        len(request.regions) * _COMPACT_OUTPUT_TOKENS_PER_REGION,
-                    ),
-                ),
+                max_output_tokens=self._settings.max_output_tokens,
                 reasoning={"effort": self._settings.reasoning_effort},
                 store=False,
             )
@@ -679,6 +678,16 @@ def build_mapped_input_content(
                 f"{pool_id} candidateType:sale_calf_note_prefix "
                 f"allowedFirstSymbols:{json.dumps(region.candidates, ensure_ascii=False)}"
             )
+        elif region.candidate_type == "symbol_choice":
+            pool_text = (
+                f"{pool_id} candidateType:symbol_choice "
+                f"allowedMarks:{json.dumps(region.candidates, ensure_ascii=False)} "
+                "Read the single handwritten symbol in this field from its shape. "
+                "These are possible symbols, not printed options to select. "
+                "Return the exact allowed symbol only when clearly visible. "
+                "If empty return blank; if ambiguous, outside the candidates, or multiple "
+                "symbols are present return uncertain. do_not_force_a_choice."
+            )
         elif region.candidate_type == "mark_choice":
             pool_text = (
                 f"{pool_id} candidateType:mark_choice "
@@ -894,6 +903,9 @@ def _estimate_cost(
     if model == "gpt-5-mini" or model.startswith("gpt-5-mini-"):
         per_million_input = Decimal("0.25")
         per_million_output = Decimal("2.00")
+    elif model == "gpt-6-luna" or model.startswith("gpt-6-luna-"):
+        per_million_input = Decimal("0.10")
+        per_million_output = Decimal("0.50")
     else:
         return None
     total = (

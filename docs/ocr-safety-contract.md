@@ -17,6 +17,52 @@ document image → crop / physical region → physical cell identity
 
 これは検証境界の列でありartifact書込み順ではない。文字列が正しくても別セルへの誤対応はOCR回帰である。文字認識誤りとmapping / association誤りを分けて評価する。
 
+### 1.1 複数ページOCRの製品ゴールと完了条件
+
+製品ゴールは、記入済みの複数ページ帳票から、各ページの明示的なテンプレートページと
+読み取り欄へ対応付けたOCR候補を生成し、人間が結果・矩形・必要な補正を確認して
+全ページを確定・出力できることに置く。
+
+このゴールにおいて、手書き文字列の完全一致、スキャンと参照画像のピクセル完全一致、
+または人間の確認なしに全筆画の正しさを自動証明することは完了条件ではない。
+スキャンの回転、拡縮、平行移動、許容された射影歪みは位置合わせで吸収し、
+矩形の恒久的な修正は既存DRAFTの明示的なテンプレート編集経路で行う。
+
+ただし「完全一致を要求しない」は、値・ページ・矩形の推測再割当てを許可する意味ではない。
+ページidentity、physical cell identity、mappingId、targetPath、sourceRegionId、crop、
+受付snapshot、association検証、revision付き補正・確定、出力bindingは維持する。
+位置合わせ・crop・associationに根拠が足りない結果は、隣欄へ推測して通すのではなく、
+理由を保持して要確認または拒否とする。
+
+§12の資格、入力identity・位置合わせ・crop対応検査、renderer隔離はこの方針だけで削除・緩和しない。
+本契約は、未実装の自動保証を「複数ページOCRと人間レビューの操作フロー」全体の
+完了条件へ無制限に拡張しないことを定めるが、既存gateを迂回する許可ではない。
+候補OCRへ進める条件の変更は§12.9を参照する。それ以外の条件を変更する場合も、§10に従い、ページ別の根拠・
+要確認への遷移・補正保存・出力対応を検証して明示的に変更する。
+
+### 1.2 認識精度と通常運用コストの方針
+
+通常運用の目的は、システムだけで手書き文字を完全一致させることではなく、利用者が確認・修正できる
+有用なOCR候補を、複数ページの正しい欄との対応を保って提示することである。OCR結果は未確定候補であり、
+利用者が全ページの値と切り出し画像を確認し、必要な手動修正を行った後の明示確定を正本とする。
+低信頼・判定不能を完全一致に見せる補完、自動確定、確認工程の省略は行わない。
+
+必要な精度の最低条件は、文字列の完全一致率ではなく、少なくとも次を満たすことで判定する。
+
+- 入力ページが正しいテンプレートページへ結び付いていること。
+- 位置合わせが既存閾値内で成立し、対象欄のcropとphysical cell / mapping / 出力先の対応が保たれること。
+- 認識結果と低信頼・失敗理由がレビュー可能な形で提示され、利用者の補正がrevision付きで保存されること。
+- 未確定結果を確定済み出力として扱わないこと。
+
+文字単位の実用精度は、代表的な実記入サンプルで候補正答率と手動修正量を測定して評価する。
+現時点で未測定の数値目標を達成済みとは扱わない。一方、完全一致の自動証明を通常利用の開始条件にはしない。
+
+人間レビューを前提とする候補OCRでは、通常の画面表示、OCR受付、OCR実行のたびに、Office再描画、
+正式資格の全再発行、全ページ画像の完全一致確認を繰り返さない。これらの重い処理は、初回準備、対象版・原本・renderer環境・証拠の変更、
+証拠失効時など、再準備が必要な境界で明示的に実行する。通常利用では保存済み証拠の現在性確認と、
+実入力ごとのpage identity・registration・crop correspondence・association検査を残す。
+処理時間を短縮する場合も、失効条件を無視するcache、推測mapping、検査失敗時の継続によって実現しない。
+
 ## 2. 現在の実装境界と保護対象
 
 以下は実装を照合する入口である。表のパスは `backend/app/` 基準（frontendのみリポジトリroot基準）。ファイル名だけでなく、対象データを生成・変換・保存する処理を保護する。
@@ -373,6 +419,27 @@ model・prompt・schema・provider request・association方式変更、または
 
 ## 10. OCR改善と意図的な契約変更
 
+### 記入欄内の記号判定（2026-09-25）
+
+明示された記号読取の要求により、単一ページ経路の `markRecognitionMode` に
+`symbol` を追加する。既存の `automatic`（印刷選択肢の差分検出）と
+`manual`（利用者が選択）の意味・既定値は維持する。
+UI上は記入欄の読み取り方法として文字・記号・印刷選択肢を選ぶ。
+保存表現は既存の `role=mark` / `markSets` を使用し、新しい矩形roleを増やさない。
+
+`symbol` は単一選択に限定し、欄全体の既存cropと候補ラベルを
+`candidateType=symbol_choice` として既存のOpenAI batchへ渡す。
+候補別のgeometryは互換保存用であり、記号の分類やcrop生成には使わない。
+文字検出や選択肢別の差分検出結果を記号の認識結果として扱わない。
+候補と完全一致した確実な応答だけを採用し、空欄・候補外・複数記号・不確実な
+応答を強制的に候補へ補正しない。通常の確認・手動補正・確定経路を維持する。
+
+model、応答schema、association token、mapping/sourceRegion identity、crop、
+受付snapshot、revision、出力先決定は変更しない。新モードのrequest指示だけを追加する。
+既存jobへの後付け移行は行わない。paged経路のmark拒否も維持し、ページ別編集では
+記号モードの新規選択を無効にする。実画像での認識精度はoffline境界テストだけでは保証しない。
+検証の範囲・結果は [記号判定の実装記録](verification/symbol-reading-20260925.md) を参照する。
+
 ### Template編集の版境界
 
 mapping生成validationの失敗を空mappingへの置換保存に変換しない。
@@ -482,10 +549,18 @@ bindings・座標・transform・ページ所属を保存planと照合する。�
 現実行設定が受付時と異なる場合、最新設定で続行せず明示拒否する。retryで成功ページを再利用できるのは保存結果のSHAとページsnapshotが一致する場合だけであり、同じ受付snapshotで失敗ページを再実行する。過去jobの再現性を新しいgeometryや認定artifactの適用で変更しない。
 
 新規OpenAI paged受付は文書全体の`ocrCallBudget`と専用予算表を同じtransactionで固定する。
+2026-09-22以降の新規受付は、各ページの受付mapping数とdocument identity項目数をproviderの
+現batch規則で計算した`ocrCallBudgetPlan=paged-ocr-retry-reserve-v1`も固定する。
+全ページ最低枠と同数の文書再試行余力を受付時に要求し、設定上限が合計必要数未満なら
+catalogを利用不可、acceptを送信前拒否とする。ページ数・帳票名・固定件数では判定しない。
+設定上限は引き続きhard ceilingであり、受付後のjobへ増額・再計算・予算追加を行わない。
 全page/attemptで上限を共有し、送信前にpage ID・attempt付き予約と使用回数をcommitする。
 失敗・応答消失・再起動・再試行で予約を払い戻さない。予算のない旧受付へ後付けしない。
 未完了全ページの最低呼出し数が不足する場合は最初の送信前に拒否し、
 optional再読取から後続ページの最低枠を保護する。予約済み回数と実送信済み回数を混同しない。
+providerがSchema不成立・途中切れとして破棄した応答は、受付snapshot、batch、mapping、associationを
+変更せず、設定済みretry回数と残予算の内側で再送できる。破損応答の値は保存・補完しない。
+この再送も予約を消費するため、受付時の再試行余力が常に未使用のまま残る保証ではない。
 既存の単一ページ予算契約とprovider association方式は維持する。
 詳細・migration・失敗復旧は[文書全体API予算](paged-ocr-budget.md)を参照する。
 
@@ -584,6 +659,12 @@ Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR
 仮想見出し自身は元Excelセル、page.fields、field mappings、ラベルOCRの対象に含めない。
 既存の物理IDから仮想への置換、仮想を含む結合、ページ不在・範囲外の配置は保存前に拒否する。
 ページ範囲・用紙変更や解除で所属・位置が無効になる場合も拒否し、対象見出しの明示的な削除を要求する。
+2026-09-21の明示承認により、改ページ保存要求の `pageHeadingMoves` で既存仮想見出しID・
+変更前range・変更先rangeを指定した場合だけ、所属変更を改ページと同一transactionで保存できる。
+名称・座標・親子接続・意味づけ・mappingは変更せず、ID重複/不在・旧range不一致・
+物理セル・移動先不在・ページ外配置・revision競合・公開版への保存を拒否する。
+未指定の見出しを推測移動しない。所属変更指定なしの既存拒否とページ解除の拒否を維持する。
+新しい印刷成果物・正式資格は改めて取得し、この操作でOCR受付条件を解除しない。
 旧セルのJSONへ未指定pageRangeを追加せず、旧layout hash・geometryの暗黙移行を行わない。
 見出しの階層・繰り返し群への接続は既存の明示ID経路を使用する。本番gateは解除しない。
 これはページ手動編集契約の拡張であり、既存OCR contractを維持する。
@@ -592,6 +673,10 @@ Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR
 `quality_json.spreadsheetPreviewGeometry`へ保存し、元セル由来の矩形座標に利用する。
 このsnapshotがない既存版の復元は従来計算を維持する。snapshotがある版の復元は保存寸法と
 原本SHAを照合し、現在のOfficeで再測定しない。セル数・役割・merged cellsを推測変更しない。
+2026-09-25以降の新規取込は`spreadsheet-preview-office-v2`を保存し、Officeのpt寸法を
+画像pxへ換算した自然倍率を上限として、印刷可能領域に収まらない場合だけ縮小する。
+中央配置設定を反映し、小さい帳票を用紙幅まで拡大しない。保存済みv1版は従来座標のまま
+復元し、既存版・jobの座標を暗黙に更新しない。
 これはprintLayoutのgeometry evidenceやqualificationを代替しない。
 検証と制限は[プレビュー座標・ページ編集検証](spreadsheet-preview-geometry.md)を参照する。
 
@@ -853,8 +938,136 @@ Office互換性のためのbinary patch・hook・独自再ビルドは通常修�
 
 §12.6の承認済み二段階契約では、以下の実筆画・scan registrationの検査は実入力を得た
 OCR実行時の責務である。テンプレート側のcrop領域定義・対応・参照geometryの検証は有効化前に残る。
-検査の時期を分けても、clearance証拠の欠落をPASSに変えたり、providerへ先に送信してはいけない。
+検査の時期を分けても、clearance証拠の欠落をPASSに変えてはいけない。
+自動的に筆画安全性まで認定する経路では、その証拠なしにproviderへ送信してはいけない。
+人間による全ページ確認を前提とする候補OCRの送信条件は、後続の§12.9で明示的に分離する。
 
 geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、内容と境界・隣接内容とのclearance、paddingを区別して評価する。独立したclearance証拠がなければ未検証とし、空の基準画像や人工fixtureだけから実手書きの安全性を推定しない。padding増加や閾値緩和でgeometry誤差を隠さない。
 
 `logical geometry → reference image`の誤差予算と、`reference image → scan registration`の誤差予算を分離する。前者のずれを既存X/Y画像合わせで吸収して認定せず、後者を未測定のまま実OCR精度が保証されたと扱わない。DPI間は物理単位とraster誤差を区別し、数値の根拠・対象条件はPhase evidenceに保存する。
+
+### 12.9 人間レビューを必須とする候補OCR受付 — 2026-09-21
+
+複数ページから文字候補を生成し人間が確認する製品ゴール、および最短開放案への
+「実装開始して」の承認に基づく、§10の意図的な新paged受付契約の変更である。
+旧単一ページ・既存受付snapshot・認識器・位置合わせ閾値・矩形・mappingを変更しない。
+過去のPhase報告にある「受付は常時閉鎖」は当時の状態として保持する。
+
+- catalogとacceptは同じvalidatorでACTIVE、現layout SHA、全ページの対応項目、
+  現在の正式reference/environment/geometry資格を要求する。acceptはmutation lockと
+  transaction内で再検証する。保存booleanや旧`layoutVerified`で資格を代用しない。
+- 原本・plan・所有artifact・prepared graph・実装・現環境・lease期限は既存正式資格validatorで
+  再検証する。失効・不一致・DRAFT・ARCHIVEDは拒否し、資格を自動更新しない。
+- 新受付bundleには`paged-reviewed-candidates-v1`、`reviewRequired=true`、
+  `inkClearanceVerified=false`と受付時の資格binding/期限/report SHAを保存する。
+  過去jobへ新しい資格・policyを後付けしない。retryは既存immutable snapshotを使う。
+- `PAGE_INPUT_IDENTITY`、実scan registrationとその失敗拒否、provider生成前の
+  `CROP_CORRESPONDENCE`、association、文書全体API予算は引き続き必須である。
+  対応不明・位置合わせ失敗・crop改変を人間レビュー予定という理由で通さない。
+- **変更する条件は未実装の全筆画clearance自動認定を候補OCRの前提にしない点**である。
+  `INK_CLEARANCE`の未検証診断や正式資格の実入力`NOT_EVALUATED`は削除・PASS化しない。
+  資格のstage記述は全入力安全性の認定要件として維持し、このcandidate policyは
+  その完全認定ではない。空reference・fixture・crop画素一致を筆画完全性の証拠にしない。
+- 入力画面と専用レビューに未認定範囲を明示する。結果は未確定候補として公開し、
+  各ページの切り出し画像・値を確認/必要な補正後、全ページの明示確認とrevision付き確定を
+  要求する。未確定のXLSX出力、自動確定、旧単一結果へのPage 1転用を追加しない。
+
+変更前後の契約テスト、正式資格失効/改変/版状態の拒否、snapshot・crop・review/confirm/outputの
+回帰検証を行い、fixture通過と実OCR品質は分けて報告する。
+
+### 12.10 環境更新後の候補OCR準備確認 — 2026-09-21
+
+正式資格の完全再発行と、人間レビュー前提の機能開放を分離する承認に基づく、§10の
+意図的な有効化/受付条件の追加である。§12.9の正式資格経路は保持し、以下の別経路を追加する。
+過去の正式資格をPASSへ書き換えたり、環境hashの比較を無条件に省略したりしない。
+
+- `paged-candidate-readiness-v1`は、固定runtimeと所有印刷用XLSXの明示的な再描画を要求する。
+  旧描画との差分を許すのは`bootstrapPythonIdentity.nativeDependencies`だけである。
+  両実行の証拠を検証し、runtime・font・worker・Python tree・隔離/資源制限・core guard等の
+  残りの実行identityは完全一致を要求する。無制限実行へのfallbackはない。
+- 新しい全ページPNGのSHA・サイズ・順序が保存済み基準画像と一致することを要求する。
+  原本/config/layout/print plan/prepared graphと各所有artifactを再検証し、保存済みの
+  glyph/geometry測定証拠を現実装で再計算する。過去のPASS booleanを根拠にしない。
+  座標誤差・画素差の許容値を広げず、異なる基準画像・mappingを自動採用しない。
+- 別の所有artifactに新描画証拠、許容した環境差分、現host、実装fingerprint、版/revision、
+  発行/期限を保持する。期限は24時間。GET/有効化transaction/受付transactionでは
+  現在の環境・原本・artifact・版・実装・期限を再照合するが、Office再描画は行わない。
+  環境観測自体のコストは残る。検証中の変更・期限切れは拒否する。
+- 結果は`CANDIDATE_READY`、`qualified=false`、`qualificationIssued=false`、
+  `reviewRequired=true`であり、正式認定とは区別する。保存booleanだけでは利用を許可しない。
+  有効化/受付は同じvalidatorを使い、受付時にcandidate証拠のbindingをsnapshotへ固定する。
+- 準備確認の発行はDRAFT/revision照合下で行う。保存layout、draft内容、原本、print artifact、
+  mapping identity、geometry、旧正式資格証を変更しない。版fork時はcandidate参照を引き継がない。
+  新しい正式資格の発行に成功した場合のみcandidate参照を外し、正式資格を正本に戻す。
+- ACTIVEの期限切れ証拠を自動更新する機能は追加していない。既存の編集用DRAFTからの
+  準備/検証/承認手順を用いる。旧ACTIVEの不変性を回避して更新しない。
+- 証拠不足、native以外の環境差、異なる描画は引き続き停止する。初回のgeometry/glyph検証を
+  省略する経路ではない。正式資格経路・既存診断は削除しない。
+
+実入力のpage identity、registration、crop correspondence、association、API予算、補正revision、
+全ページの明示確認と未確定出力拒否は§12.9どおり維持する。文字認識精度や筆画完全性は保証しない。
+実装と実環境の検証は[候補OCR準備確認](verification/candidate-readiness-20260921.md)を参照する。
+
+### 12.11 候補準備と通常利用の検証分離 — 2026-09-21
+
+§1.2の通常運用コスト方針と、候補準備後の画面表示・有効化・catalog・OCR受付が
+geometry/glyph再計算とWSL環境照会を繰り返していた実装の再発防止に基づく、§10の意図的な
+候補利用契約変更である。明示的な候補準備では§12.10の再描画、全ページ画像一致、
+geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行する。
+
+- `paged-candidate-readiness-v2`は、準備時に完全検証した版・原本・print plan・実装・
+  prepared graph・renderer report・replay・geometry/glyph証拠の参照を、版所有の候補artifactへ固定する。
+- 通常の資格状態GET、有効化、catalog、受付では、版/revision、layout・plan、config・実装fingerprint、
+  候補artifact本体、原本XLSX、renderer reportの内容SHA、全参照artifactの所有者・登録SHAを照合する。
+  geometry/glyph証拠の再計算、replay画像の全再読込、WSL/hostの現在照会、Office再描画は行わない。
+- 候補の利用期限は固定24時間ではなく、対象版・原本・layout・print plan・config・対象実装・
+  候補artifact・証拠参照のいずれかが変わるまでとする。準備時の24時間値は環境観測の記録として
+  保持するが、保存済み基準画像を使う通常OCRの期限には流用しない。
+- 既存`paged-candidate-readiness-v1`はDBやartifactを書き換えず、旧発行実装fingerprintと
+  保存済みreplay/差分記録を検証してv2利用結果として読む。旧証拠へ新しいPASSを後付けしない。
+- OCR受付transactionでは、実際にsnapshotへ複製する各基準ページPNGの内容SHAを引き続き再確認する。
+  受付後の実入力identity・registration・crop correspondence・association、全ページレビュー、
+  revision付き補正、未確定出力拒否は変更しない。
+- 準備後にrenderer/WSL環境だけが変わっても、固定済み基準画像・mapping・crop定義は変更されないため、
+  通常利用を再準備へ戻さない。新しい印刷準備や正式資格発行で現環境を使用する場合は、
+  その操作の完全検証を改めて要求する。
+
+候補artifact・原本・renderer report・版bindingの改変は通常利用でも拒否する。
+軽量化を理由にreference PNGの受付時SHA確認や実入力検査を省略してはならない。
+
+### 12.12 新規テンプレートの通常OCR準備 — 2026-09-22
+
+「通常利用者に資格審査を操作させず、GUIでページ範囲を指定し、OCR結果を確認・修正する」
+という要求と実装承認に基づく、§10の意図的な有効化/受付契約の変更である。
+§12.9〜§12.11の正式資格・旧候補経路と測定記録は保持するが、通常OCRの初回準備には要求しない。
+
+- `paged-candidate-readiness-v3`を追加する。保存済みの所有原本、config、layout、print plan、
+  全ページのreference画像と描画レポート、mappingのページ対応を既存validatorで確認する。
+  DRAFT・revision照合・mutation lockを守り、版所有の準備artifactだけを追加する。
+  geometry/glyphの測定証拠、過去の正式資格、Office再描画による同一性証明、現WSLの再照会は
+  この準備の前提ではない。既存描画レポートの実行条件・隔離証拠の整合性は検査する。
+- 戻り値は`CANDIDATE_READY`、`reviewRequired=true`、`pageBindingsVerified=true`、
+  `qualified=false`、`qualificationIssued=false`、`geometryQualified=false`。
+  対応関係の検証と印刷精度の正式認定を混同しない。未測定値をPASSへ書き換えない。
+- 新policyと`prepared-pages-human-review-v1` markerをfingerprintへ固定し、原本、config、
+  版/revision、保存planと所有artifact参照、準備artifactの変更で失効する。
+  通常利用はv2同様に内容SHA/所有bindingを検査し、固定時間による再審査は要求しない。
+  v1/v2の保存artifactをv3へ読み替えない。v3の検証意味を変更する際はpolicy/markerを更新する。
+- 各ページに対応するenabled mappingが存在し、全mappingが重複なくページへ所属することを
+  有効化前に既存`page_config`でも検証する。未対応の複合/mark設定、項目のないページを
+  勝手に変換・削除して通さない。
+- 通常UIは「このテンプレートでOCRを使う」の一操作で、必要なら既存の印刷見本生成、
+  v3準備、既存approve、サーバーのACTIVE再取得を順番に行う。生成済み見本は再利用する。
+  新たな描画には従来の隔離・資源制限を適用する。Officeなしの代用描画へfallbackしない。
+  未保存状態では開始しない。失敗は現在画面に表示し、競合時の承認を自動再送しない。
+- 印刷範囲は既存の区切り線ドラッグとページプレビューで指定する。mm入力は任意の詳細設定。
+  見出しの所属変更はページ候補から明示選択し、IDや接続を推測で付け替えない。
+  画像選択画面はcatalogの受付可否を正本にし、独立した正式資格GETで別画面へ戻さない。
+- legacy単一ページ、実入力identity/registration/crop correspondence、association、
+  API予算、受付snapshot、補正revision、全ページの明示確認、未確定出力拒否は変更しない。
+  正式なgeometry/glyph認定を省く結果、印刷と基準矩形の一致や文字・筆画完全性は保証しない。
+  利用者が切り出し画像と文字を確認し、必要な補正後に確定する製品ゴールを維持する。
+
+今回の検証は明示要求に従い対象テスト・build・実画面確認に限定する。
+全体テスト、実WSL再描画、実OCR品質評価は別であり、fixture通過をその証明にしない。
+詳細は[通常OCR準備の検証](verification/reviewed-ocr-entry-20260922.md)を参照する。

@@ -15,10 +15,17 @@ from openpyxl.utils.cell import get_column_letter, range_boundaries
 from openpyxl.worksheet.print_settings import PrintArea
 
 from app.domain.print_layout import print_error
+from app.services.spreadsheet_source_bounds import (
+    MAX_SOURCE_CELLS,
+    effective_worksheet_bounds,
+    rectangular_cell_count,
+)
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 DRAFT_GEOMETRY_VERSION = "draft-visible-cells-v1"
 
 
@@ -27,6 +34,49 @@ def _xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
     if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
         raise print_error("外部定義を含むXMLは扱えません。")
     return ET.fromstring(data)
+
+
+def _empty_drawing_placeholder(
+    archive: zipfile.ZipFile, sheet_path: str, drawing: ET.Element,
+) -> bool:
+    """Accept only an OOXML drawing reference whose owned part has no objects."""
+    relation_id = drawing.get(f"{{{REL}}}id")
+    if not relation_id or len(drawing.attrib) != 1 or len(drawing) or (drawing.text or "").strip():
+        return False
+    sheet_dir = posixpath.dirname(sheet_path)
+    relation_path = posixpath.join(sheet_dir, "_rels", posixpath.basename(sheet_path) + ".rels")
+    if relation_path not in archive.namelist():
+        return False
+    relations = _xml(archive, relation_path)
+    if relations.tag != f"{{{PACKAGE_REL}}}Relationships":
+        return False
+    matches = [item for item in relations if item.get("Id") == relation_id]
+    if len(matches) != 1:
+        return False
+    relation = matches[0]
+    if (
+        relation.tag != f"{{{PACKAGE_REL}}}Relationship"
+        or relation.get("Type") != f"{REL}/drawing"
+        or relation.get("TargetMode") not in (None, "Internal")
+        or set(relation.attrib) - {"Id", "Type", "Target", "TargetMode"}
+    ):
+        return False
+    target = relation.get("Target", "")
+    if not re.fullmatch(r"\.\./drawings/[A-Za-z0-9_.-]+\.xml", target):
+        return False
+    drawing_path = posixpath.normpath(posixpath.join(sheet_dir, target))
+    drawing_relations = posixpath.join(
+        posixpath.dirname(drawing_path), "_rels", posixpath.basename(drawing_path) + ".rels",
+    )
+    if drawing_path not in archive.namelist() or drawing_relations in archive.namelist():
+        return False
+    root = _xml(archive, drawing_path)
+    return (
+        root.tag == f"{{{DRAWING_NS}}}wsDr"
+        and not root.attrib
+        and len(root) == 0
+        and not (root.text or "").strip()
+    )
 
 
 def read_source(
@@ -101,8 +151,13 @@ def _read_source(
         setup = imported["pageSetup"] or {}
         if int(setup.get("fitToWidth", "1")) > 1:
             unsupported.append("横方向の複数ページ指定は未対応です。")
+        drawings = sheet_xml.findall("s:drawing", NS)
+        if drawings and (
+            len(drawings) != 1
+            or not _empty_drawing_placeholder(archive, sheet_path, drawings[0])
+        ):
+            unsupported.append("図形・画像・フォーム部品を含むページ描画は未対応です。")
         for tag in (
-            "drawing",
             "legacyDrawing",
             "legacyDrawingHF",
             "controls",
@@ -119,9 +174,9 @@ def _read_source(
         areas = list(PrintArea.from_string(sheet.print_area).ranges) if sheet.print_area else []
         if len(areas) > 1:
             unsupported.append("離れた複数の印刷範囲は未対応です。")
-        bounds = range_boundaries(str(areas[0]) if len(areas) == 1 else sheet.calculate_dimension())
+        bounds = effective_worksheet_bounds(sheet, content=content)
         c1, r1, c2, r2 = bounds
-        if (r2 - r1 + 1) * (c2 - c1 + 1) > 20_000:
+        if rectangular_cell_count(bounds) > MAX_SOURCE_CELLS:
             raise print_error("印刷対象は20,000セル以内で指定してください。")
         columns: dict[int, float] = {}
         default = sheet.sheet_format.defaultColWidth or sheet.sheet_format.baseColWidth or 8.43

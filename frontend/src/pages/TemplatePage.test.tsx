@@ -119,6 +119,7 @@ function reviewFetch(
   actionPath?: string,
   actionResponse?: () => Promise<Response>,
   mappingOverrides: Partial<FieldMappingsResponse> = {},
+  layoutOverride: LayoutDefinition = layout,
 ) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = String(input);
@@ -172,7 +173,7 @@ function reviewFetch(
       }));
     }
     if (path.endsWith("/template-versions/version-draft/layout")) {
-      return Promise.resolve(jsonResponse(layout));
+      return Promise.resolve(jsonResponse(layoutOverride));
     }
     if (actionPath && path.endsWith(actionPath) && init?.method === "POST" && actionResponse) {
       return actionResponse();
@@ -202,7 +203,11 @@ const pagedState: PrintState = {
     margins: { left: 10, right: 10, top: 10, bottom: 10 },
     targetPagesWide: 1, targetPagesTall: null,
     horizontalCentering: false, verticalCentering: false,
-    commonScale: 1, ocrReady: false, warnings: [], pages: [{
+    commonScale: 1, ocrReady: false, warnings: [],
+    geometryModelVersion: "wsl-calc-print-grid-v1",
+    rendererVersion: "wsl-print-reference-v1",
+    printFiles: { renderKey: "prepared-render-key" },
+    pages: [{
       page: 1, range: "A1:D10", startRow: 1, endRow: 10, width: 600, height: 800,
       transform: { scale: 2, offsetX: 0, offsetY: 0, originX: 0, originY: 0 }, cells: [],
       fields: [{ cellId: "identity-input", sourceRange: "A1", templatePage: 1,
@@ -228,6 +233,7 @@ const passQualification: ReferenceQualification = {
 
 function pagedReviewFetch(evidence: ReferenceQualification, options: {
   approveResponse?: () => Promise<Response>;
+  initialState?: PrintState;
   refreshedState?: PrintState;
   refreshedEvidence?: ReferenceQualification;
   authoritativeTemplate?: Template;
@@ -240,7 +246,13 @@ function pagedReviewFetch(evidence: ReferenceQualification, options: {
     if (path.endsWith("/template-versions/version-draft/print-layout")) {
       printLoads += 1;
       return Promise.resolve(jsonResponse(printLoads > 1 && options.refreshedState
-        ? options.refreshedState : pagedState));
+        ? options.refreshedState : options.initialState ?? pagedState));
+    }
+    if (path.includes("/print-layout/ocr-readiness?") && init?.method === "POST") {
+      return Promise.resolve(jsonResponse({ status: "CANDIDATE_READY" }));
+    }
+    if (path.includes("/print-layout/prepare?") && init?.method === "POST") {
+      return Promise.resolve(jsonResponse({ ...pagedState, revision: "b".repeat(64) }));
     }
     if (path.endsWith("/template-versions/version-draft/print-layout/qualification") && !init?.method) {
       qualificationLoads += 1;
@@ -393,6 +405,7 @@ test("failed close retains draft and specific save error without blaming connect
     // The navigation renders before the asynchronously loaded editor/draft.
     await screen.findByLabelText("帳票レイアウト編集キャンバス");
     expect(JSON.parse(localStorage.getItem(key)!).cells[0].text).toBe("unsaved value");
+    fireEvent.click(screen.getByRole("button", { name: "現在の下書きを採用して保存を再開" }));
     await waitFor(() => expect(next).toBeEnabled());
     fireEvent.click(next);
     expect(await screen.findByText(/編集欄に表示されたエラー内容を確認/)).toBeInTheDocument();
@@ -425,6 +438,7 @@ test("failed background save does not block or reverse step changes and retains 
     fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
     await screen.findByLabelText("帳票レイアウト編集キャンバス");
     vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "現在の下書きを採用して保存を再開" }));
     fireEvent.click(screen.getByRole("button", { name: "次の工程 →" }));
     expect(screen.getByRole("button", { name: "意味付け" })).toBeEnabled();
     expect(writes).toBe(0);
@@ -487,54 +501,23 @@ test("saved pages enable manual authoring while formal qualification is unverifi
   expect(previous).toBeEnabled();
   expect(next).toBeDisabled();
   expect(screen.queryByRole("heading", { name: "XLSXのセル構造を確定" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "このテンプレートでOCRを使う" })).toBeEnabled();
   expect(screen.getByLabelText("テンプレート設定の状態")).not.toHaveTextContent("有効化は未対応");
 });
 
 test.each([
-  {
-    label: "UNVERIFIED",
-    evidence: { status: "UNVERIFIED", qualified: false } satisfies ReferenceQualification,
-    message: "現在の版は資格確認が必要です",
-  },
-  {
-    label: "FAIL",
-    evidence: { status: "FAIL", qualified: false, codes: ["GEOMETRY_TOLERANCE_UNQUALIFIED"] } satisfies ReferenceQualification,
-    message: "正式資格が成立していません",
-  },
-  {
-    label: "EXPIRED",
-    evidence: { ...passQualification, expiresAt: 1 } satisfies ReferenceQualification,
-    message: "正式資格の期限が切れています",
-  },
-])("paged $label keeps approval closed and shows the backend qualification state", async ({ evidence, message }) => {
-  vi.stubGlobal("fetch", pagedReviewFetch(evidence));
-  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
-    quality: { layoutVerified: false, printLayout: pagedState.saved } };
-  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
-    refresh={vi.fn()} rememberJob={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
-  await screen.findByText(message);
-  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
-  expect(screen.getByLabelText("テンプレート設定の状態")).not.toHaveTextContent("有効化は未対応");
-  if (evidence.codes?.length) {
-    expect(screen.getByLabelText("正式資格の未解決条件")).toHaveTextContent(evidence.codes[0]);
-  }
-});
-
-test("paged PASS uses the current print revision and confirms authoritative ACTIVE state", async () => {
-  let approveCalls = 0;
+  { status: "UNVERIFIED", qualified: false },
+  { status: "FAIL", qualified: false, codes: ["GEOMETRY_TOLERANCE_UNQUALIFIED"] },
+  { ...passQualification, expiresAt: 1 },
+] satisfies ReferenceQualification[])("paged $status is prepared inline without requesting formal qualification", async (evidence) => {
+  const initialState = structuredClone(pagedState);
+  if (evidence.status === "UNVERIFIED") delete initialState.saved?.printFiles;
+  const approvedRevision = evidence.status === "UNVERIFIED" ? "b".repeat(64) : pagedRevision;
   const activeVersion = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const, status: "ACTIVE" as const,
     quality: { printLayout: pagedState.saved } };
-  const oldVersion = { ...draftVersion, id: "version-old", versionNumber: 1, status: "ARCHIVED" as const };
-  const authoritativeTemplate = { ...draftTemplate, activeVersionId: activeVersion.id,
-    versions: [activeVersion, oldVersion] };
-  const fetch = pagedReviewFetch(passQualification, {
-    approveResponse: () => {
-      approveCalls += 1;
-      return Promise.resolve(jsonResponse(activeVersion));
-    },
-    authoritativeTemplate,
+  const authoritativeTemplate = { ...draftTemplate, activeVersionId: activeVersion.id, versions: [activeVersion] };
+  const fetch = pagedReviewFetch(evidence, {
+    approveResponse: () => Promise.resolve(jsonResponse(activeVersion)), authoritativeTemplate, initialState,
   });
   vi.stubGlobal("fetch", fetch);
   const refresh = vi.fn(async () => undefined);
@@ -543,64 +526,92 @@ test("paged PASS uses the current print revision and confirms authoritative ACTI
   render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
     refresh={refresh} rememberJob={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
-  await screen.findByText("この版の正式資格は有効です。");
-  const approve = screen.getByRole("button", { name: "承認して有効化" });
-  expect(approve).toBeEnabled();
+  const approve = await screen.findByRole("button", { name: "このテンプレートでOCRを使う" });
+  await waitFor(() => expect(approve).toBeEnabled());
   fireEvent.click(approve);
   fireEvent.click(approve);
   expect(await screen.findByText("このテンプレートは有効です")).toBeInTheDocument();
-  expect(approveCalls).toBe(1);
-  expect(refresh).toHaveBeenCalledTimes(1);
-  expect(fetch.mock.calls.some(([url, init]) => (
-    String(url).endsWith(`/template-versions/version-draft/approve?base_revision=${pagedRevision}`)
-    && init?.method === "POST"
-  ))).toBe(true);
+  const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([url]) => String(url));
+  expect(posts).toEqual([
+    ...(evidence.status === "UNVERIFIED" ? [
+      `/api/v1/template-versions/version-draft/print-layout/prepare?base_revision=${pagedRevision}&geometry_model=wsl-calc-print-grid-v1`,
+    ] : []),
+    `/api/v1/template-versions/version-draft/print-layout/ocr-readiness?base_revision=${approvedRevision}`,
+    `/api/v1/template-versions/version-draft/approve?base_revision=${approvedRevision}`,
+  ]);
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("/qualification"))).toBe(false);
   expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/templates/template-draft"))).toBe(true);
-  expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/templates"))).toBe(false);
-  expect(screen.queryByRole("button", { name: "承認して有効化" })).not.toBeInTheDocument();
+  expect(refresh).toHaveBeenCalledTimes(1);
 });
 
-test("paged qualification loading blocks duplicate actions and explicit recheck can enable approval", async () => {
-  const fallback = reviewFetch();
-  let resolveStatus!: (response: Response) => void;
-  const pendingStatus = new Promise<Response>((resolve) => { resolveStatus = resolve; });
-  let qualificationPosts = 0;
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+test.each(["prepare", "ocr-readiness"] as const)("paged %s failure keeps editing state and retries from the saved preparation", async (failure) => {
+  const initialState = structuredClone(pagedState);
+  delete initialState.saved?.printFiles;
+  const prepared = { ...pagedState, revision: "b".repeat(64) };
+  let attempts = 0;
+  let readinessCalls = 0;
+  const fallback = pagedReviewFetch({ status: "UNVERIFIED", qualified: false }, { initialState });
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = String(input);
-    if (path.endsWith("/print-layout")) return Promise.resolve(jsonResponse(pagedState));
-    if (path.endsWith("/print-layout/qualification") && !init?.method) return pendingStatus;
-    if (path.includes("/print-layout/qualification?base_revision=") && init?.method === "POST") {
-      qualificationPosts += 1;
-      return Promise.resolve(jsonResponse(passQualification));
+    if (path.includes("/print-layout/prepare?")) {
+      attempts++;
+      return Promise.resolve(failure === "prepare" && attempts === 1
+        ? jsonResponse({ detail: "印刷見本の作成失敗" }, 500) : jsonResponse(prepared));
+    }
+    if (path.includes("/ocr-readiness?")) {
+      readinessCalls++;
+      return Promise.resolve(jsonResponse({ detail: "欄の対応を確認できません" }, 409));
     }
     return fallback(input, init);
-  }));
-  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
-    quality: { layoutVerified: false, printLayout: pagedState.saved } };
-  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
-    refresh={vi.fn()} rememberJob={vi.fn()} />);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const, quality: { printLayout: initialState.saved } };
+  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]} refresh={vi.fn()} rememberJob={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
-  expect(await screen.findByText("LOADING")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "資格を再確認" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
-  resolveStatus(jsonResponse({ status: "UNVERIFIED", qualified: false }));
-  const recheck = await screen.findByRole("button", { name: "資格を再確認" });
-  await waitFor(() => expect(recheck).toBeEnabled());
-  fireEvent.click(recheck);
-  fireEvent.click(recheck);
-  await screen.findByText("この版の正式資格は有効です。");
-  expect(qualificationPosts).toBe(1);
-  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeEnabled();
+  const activate = await screen.findByRole("button", { name: "このテンプレートでOCRを使う" });
+  await waitFor(() => expect(activate).toBeEnabled());
+  fireEvent.click(activate);
+  await screen.findByText(failure === "prepare" ? "印刷見本の作成失敗" : "欄の対応を確認できません");
+  expect(screen.getByLabelText("帳票レイアウト編集キャンバス")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "このテンプレートでOCRを使う" }));
+  await waitFor(() => expect(readinessCalls).toBe(failure === "prepare" ? 1 : 2));
+  expect(attempts).toBe(failure === "prepare" ? 2 : 1);
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("/approve"))).toBe(false);
+  expect(fetch.mock.calls.filter(([url]) => String(url).includes("/ocr-readiness?"))
+    .every(([url]) => String(url).endsWith(`base_revision=${prepared.revision}`))).toBe(true);
 });
 
-test("paged stale revision refreshes revision and qualification without retrying approval", async () => {
-  const nextRevision = "c".repeat(64);
+test("paged preparation locks duplicate decisions until approval completes", async () => {
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  const fallback = pagedReviewFetch(passQualification);
+  const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/ocr-readiness?")) return pending;
+    if (String(input).includes("/approve?")) return Promise.resolve(jsonResponse({ detail: "承認失敗" }, 500));
+    return fallback(input, init);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const, quality: { printLayout: pagedState.saved } };
+  render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]} refresh={vi.fn()} rememberJob={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
+  const activate = await screen.findByRole("button", { name: "このテンプレートでOCRを使う" });
+  await waitFor(() => expect(activate).toBeEnabled());
+  fireEvent.click(activate);
+  fireEvent.click(activate);
+  expect(screen.getByRole("button", { name: "準備中…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /一覧へ戻る/ })).toBeDisabled();
+  expect(fetch.mock.calls.filter(([url]) => String(url).includes("/ocr-readiness?"))).toHaveLength(1);
+  finish(jsonResponse({ status: "CANDIDATE_READY" }));
+  await screen.findByText("承認失敗");
+  expect(screen.getByRole("button", { name: "このテンプレートでOCRを使う" })).toBeEnabled();
+});
+
+test("paged stale revision refreshes the saved settings without automatically repeating preparation or approval", async () => {
   const fetch = pagedReviewFetch(passQualification, {
     approveResponse: () => Promise.resolve(jsonResponse({
       code: "PRINT_LAYOUT_CONFLICT", detail: "設定が更新されています。",
     }, 409)),
-    refreshedState: { ...pagedState, revision: nextRevision },
-    refreshedEvidence: { status: "UNVERIFIED", qualified: false, codes: ["PRINT_LAYOUT_CHANGED"] },
+    refreshedState: { ...pagedState, revision: "c".repeat(64) },
   });
   vi.stubGlobal("fetch", fetch);
   const version = { ...draftVersion, mode: "SPREADSHEET_TEMPLATE" as const,
@@ -608,12 +619,13 @@ test("paged stale revision refreshes revision and qualification without retrying
   render(<TemplatePage templates={[{ ...draftTemplate, versions: [version] }]}
     refresh={vi.fn()} rememberJob={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: /確認を再開: 繁殖台帳A/ }));
-  await screen.findByText("この版の正式資格は有効です。");
-  fireEvent.click(screen.getByRole("button", { name: "承認して有効化" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("承認は自動再送していません");
+  const activate = await screen.findByRole("button", { name: "このテンプレートでOCRを使う" });
+  await waitFor(() => expect(activate).toBeEnabled());
+  fireEvent.click(activate);
+  expect(await screen.findByRole("alert")).toHaveTextContent("内容を確認してもう一度実行");
   expect(fetch.mock.calls.filter(([url]) => String(url).includes("/approve?"))).toHaveLength(1);
-  await screen.findByText("現在の版は資格確認が必要です。");
-  expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
+  expect(fetch.mock.calls.filter(([url]) => String(url).includes("/ocr-readiness?"))).toHaveLength(1);
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("/qualification"))).toBe(false);
 });
 
 test("saved print layout exposes version-bound downloads in template management", async () => {
@@ -747,7 +759,7 @@ test("paged active editing sends its current revision and resumes the existing d
   vi.stubGlobal("fetch", fetch);
   render(<TemplatePage templates={[{ ...draftTemplate, versions: [active], activeVersionId: active.id }]}
     refresh={vi.fn(async () => undefined)} rememberJob={vi.fn()} initialEditVersionId={active.id} />);
-  await screen.findByText("現在の版は資格確認が必要です。");
+  await screen.findByRole("button", { name: "このテンプレートでOCRを使う" });
   expect(fetch.mock.calls.filter(([url]) => String(url).includes("/version-active/edit"))).toHaveLength(1);
   expect(fetch.mock.calls.some(([url, init]) => (
     String(url).endsWith(`/version-active/edit?base_revision=${pagedRevision}`)
@@ -828,31 +840,42 @@ test.each([
     name: "missing mapped cells",
     warning: "読み取りに使用できる意味づけ済みセルがありません。",
     expectedHeading: "各欄で読み取る内容を決める",
-    overrides: {},
+    expectedCellFocus: true,
+    overrides: { currentLayout: { ...layout, relations: [] } },
   },
   {
     name: "missing identity settings",
     warning: "書類を見分ける項目が未設定です。",
     expectedHeading: "同じ書類を探す条件と書類名を決める",
+    expectedCellFocus: false,
     overrides: {
       documentIdentity: null,
       documentIdentityFields: [],
       documentName: null,
       validForOcr: false,
+      currentLayout: layout,
     },
   },
   {
     name: "missing mark options",
     warning: "[MARK_OPTIONS_REQUIRED] 選択欄: 選択肢を1件以上設定してください。",
     expectedHeading: "各欄で読み取る内容を決める",
-    overrides: {},
+    expectedCellFocus: false,
+    overrides: { currentLayout: layout },
   },
 ])("moves from a $name warning to its workflow step and focuses the heading", async ({
   warning,
   expectedHeading,
+  expectedCellFocus,
   overrides,
 }) => {
-  vi.stubGlobal("fetch", reviewFetch(undefined, undefined, { warnings: [warning], ...overrides }));
+  const { currentLayout, ...mappingOverrides } = overrides;
+  vi.stubGlobal("fetch", reviewFetch(
+    undefined,
+    undefined,
+    { warnings: [warning], ...mappingOverrides },
+    currentLayout,
+  ));
   render(
     <TemplatePage templates={[draftTemplate]} refresh={vi.fn()} rememberJob={vi.fn()} />,
   );
@@ -865,8 +888,12 @@ test.each([
   fireEvent.click(action!);
 
   const heading = await screen.findByRole("heading", { name: expectedHeading });
-  await waitFor(() => expect(heading).toHaveFocus());
-  expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ behavior: "smooth", block: "center" });
+  await waitFor(() => expect(expectedCellFocus
+    ? screen.getByLabelText("帳票レイアウト編集キャンバス")
+    : heading).toHaveFocus());
+  expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expectedCellFocus
+    ? { behavior: "smooth", block: "center", inline: "nearest" }
+    : { behavior: "smooth", block: "center" });
   expect(within(panel).getByText(warning)).toBeInTheDocument();
 });
 
@@ -888,7 +915,13 @@ test("parses only the exact structured mark-options field path", () => {
   expect(markOptionsTargetFromFieldErrors([{
     field: "cells.mark-cell.markSets.choice.options",
     message: "required",
-  }])).toEqual({ cellId: "mark-cell", markSetId: "choice" });
+  }])).toEqual({ cellId: "mark-cell", markSetId: "choice", purpose: "mark-options" });
+  expect(markOptionsTargetFromFieldErrors([{ field: "cells.mark-cell.markSets", message: "required" }]))
+    .toEqual({ cellId: "mark-cell", purpose: "mark-cell" });
+  expect(markOptionsTargetFromFieldErrors([
+    { field: "cells.mark-cell.markSets.first.options", message: "required" },
+    { field: "cells.mark-cell.markSets.second.options", message: "required" },
+  ])).toEqual({ cellId: "mark-cell", purpose: "mark-cell" });
   expect(markOptionsTargetFromFieldErrors([{
     field: "cells.mark-cell.markSets.choice",
     message: "malformed",
@@ -942,7 +975,7 @@ test("keeps an unknown warning as text without adding a workflow action", async 
 
 test("disables warning navigation while workflow navigation is busy without making a request", async () => {
   const warning = "読み取りに使用できる意味づけ済みセルがありません。";
-  const fallback = reviewFetch(undefined, undefined, { warnings: [warning] });
+  const fallback = reviewFetch(undefined, undefined, { warnings: [warning] }, { ...layout, relations: [] });
   const printLayout = new Promise<Response>(() => undefined);
   const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = String(input);
@@ -977,7 +1010,7 @@ test("disables warning navigation while workflow navigation is busy without maki
   expect(screen.getByRole("heading", { name: "検出された枠の種類を確認する" })).not.toHaveFocus();
 });
 
-test("opens the saved XLSX page identified by sourceParts before focusing the mark cell", async () => {
+test.each(["mark-cell", "mark-options"] as const)("opens the saved XLSX page identified by sourceParts before focusing %s", async (purpose) => {
   const warning = "[MARK_OPTIONS_REQUIRED] 別ページの選択欄: 選択肢を設定してください。";
   const markLayout: LayoutDefinition = {
     ...layout,
@@ -1013,7 +1046,7 @@ test("opens the saved XLSX page identified by sourceParts before focusing the ma
   const fallback = reviewFetch(undefined, undefined, {
     warnings: [warning],
     fieldErrors: [{
-      field: "cells.mark-page-2.markSets.choice.options",
+      field: purpose === "mark-cell" ? "cells.mark-page-2.markSets" : "cells.mark-page-2.markSets.choice.options",
       message: "選択肢を設定してください。",
     }],
     validForOcr: false,
@@ -1049,7 +1082,7 @@ test("opens the saved XLSX page identified by sourceParts before focusing the ma
 
   await waitFor(() => expect(screen.getByLabelText("セル一覧から選択")).toHaveValue("mark-page-2"));
   expect(screen.getByRole("button", { name: "前の編集ページ" })).toHaveAttribute("title", "2 / 2ページ");
-  expect(screen.getByLabelText("対象セルの選択肢エディタ")).toHaveFocus();
+  expect(screen.getByLabelText(purpose === "mark-cell" ? "帳票レイアウト編集キャンバス" : "対象セルの選択肢エディタ")).toHaveFocus();
   expect(fieldMappingRequests()).toBe(beforeFieldMappings);
   expect(fetch.mock.calls.some(([, init]) => ["POST", "PUT", "PATCH", "DELETE"].includes(init?.method ?? "")))
     .toBe(false);
@@ -1057,7 +1090,7 @@ test("opens the saved XLSX page identified by sourceParts before focusing the ma
 });
 
 test("keeps identity-filtered mapping warnings out of the fixed panel", async () => {
-  const visibleWarning = "読み取りに使用できる意味づけ済みセルがありません。";
+  const visibleWarning = "未分類の警告です。";
   const excludedWarning = "書類を見分ける項目が未設定です。";
   vi.stubGlobal("fetch", reviewFetch(undefined, undefined, {
     warnings: [visibleWarning, excludedWarning],
@@ -1175,6 +1208,22 @@ test("prefills an editable template name from the selected XLSX filename", () =>
   expect(nameInput).toHaveValue("繁殖台帳");
   fireEvent.change(nameInput, { target: { value: "繁殖台帳 2026年版" } });
   expect(nameInput).toHaveValue("繁殖台帳 2026年版");
+});
+
+test("selecting an XLSX keeps a template name entered before the file", () => {
+  const { container } = render(
+    <TemplatePage templates={[]} refresh={vi.fn()} rememberJob={vi.fn()} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /元のExcelから/ }));
+  fireEvent.change(screen.getByLabelText("テンプレート名"), {
+    target: { value: "検証用の設備点検票" },
+  });
+  fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+    target: { files: [new File(["xlsx"], "設備点検票.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })] },
+  });
+  expect(screen.getByLabelText("テンプレート名")).toHaveValue("検証用の設備点検票");
 });
 
 test("separates new creation from existing-template maintenance", () => {
@@ -1735,10 +1784,10 @@ test.each(["photo", "xlsx", "paged"] as const)("persists the selected document r
       expect(screen.getByText(/保存しました。次に「XLSX構造を確定」を押してください。/)).toBeInTheDocument();
       await waitFor(() => expect(screen.getByRole("button", { name: "XLSX構造を確定" })).toBeEnabled());
     } else {
-      expect(screen.getByText(/下書きとして保存しました。現在の版について正式資格を再確認してください。/)).toBeInTheDocument();
+      expect(screen.getByText(/保存しました。「このテンプレートでOCRを使う」から続けられます。/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "XLSX構造を確定" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "承認して有効化" })).toBeDisabled();
-      expect(screen.getByLabelText("テンプレート設定の状態")).toHaveTextContent("UNVERIFIED");
+      await waitFor(() => expect(screen.getByRole("button", { name: "このテンプレートでOCRを使う" })).toBeEnabled());
+      expect(screen.getByLabelText("テンプレート設定の状態")).toHaveTextContent("ページ・保存済み");
       expect(screen.getByLabelText("テンプレート設定の状態")).not.toHaveTextContent("有効化は未対応");
       expect(screen.queryByText("設定を保存し、読み取り確認を完了してから承認してください。")).not.toBeInTheDocument();
     }

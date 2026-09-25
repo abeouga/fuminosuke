@@ -12,6 +12,8 @@ const initial: LayoutDefinition = { canonicalWidth: 400, canonicalHeight: 300, r
     text: `項目${i}`, x: 200 + i * 60, y: 120, width: 40, height: 30, confidence: 1, textConfidence: null })),
 ] };
 let curves = vi.fn();
+let strokes = vi.fn();
+let imageDraws = vi.fn();
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   vi.stubGlobal("Image", class {
@@ -19,7 +21,10 @@ beforeEach(() => {
     set src(_value: string) { this.onload?.(); }
   });
   curves = vi.fn();
-  const context = new Proxy({ bezierCurveTo: curves, measureText: () => ({ width: 20 }) }, {
+  strokes = vi.fn();
+  imageDraws = vi.fn();
+  const context = new Proxy({ bezierCurveTo: curves, strokeRect: strokes, drawImage: imageDraws,
+    measureText: () => ({ width: 20 }) }, {
     get: (target, property) => Reflect.get(target, property) ?? vi.fn(),
     set: (target, property, value) => Reflect.set(target, property, value),
   });
@@ -33,6 +38,43 @@ function canvas() {
     right: 400, bottom: 300, width: 400, height: 300, toJSON: () => ({}) });
   return element;
 }
+
+test("hides every canvas rectangle beside the eraser without changing the layout", () => {
+  const onSave = vi.fn(), onDirtyChange = vi.fn();
+  const onDetect = vi.fn();
+  const view = render(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
+    onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="classify" />);
+  const erase = screen.getByRole("button", { name: "消しゴム" });
+  const hide = screen.getByRole("button", { name: "すべての矩形を非表示" });
+  const element = canvas();
+  expect(erase.nextElementSibling).toBe(hide);
+  expect(strokes).toHaveBeenCalled();
+
+  fireEvent.click(erase);
+  strokes.mockClear();
+  imageDraws.mockClear();
+  fireEvent.click(hide);
+  expect(hide).toHaveAttribute("aria-pressed", "true");
+  expect(imageDraws).toHaveBeenCalled();
+  expect(strokes).not.toHaveBeenCalled();
+  expect(element).toHaveStyle({ pointerEvents: "none" });
+  fireEvent.pointerDown(element, { clientX: 25, clientY: 25, pointerId: 1 });
+  fireEvent.pointerUp(element, { clientX: 25, clientY: 25, pointerId: 1 });
+  expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  expect(onSave).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "すべての矩形を表示" }));
+  expect(strokes).toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "すべての矩形を非表示" }))
+    .toHaveAttribute("aria-pressed", "false");
+
+  fireEvent.click(screen.getByRole("button", { name: "すべての矩形を非表示" }));
+  strokes.mockClear();
+  view.rerender(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
+    onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="review" />);
+  expect(strokes).toHaveBeenCalled();
+  expect(element).toHaveAttribute("tabindex", "0");
+});
 
 test.each(["classify", "meaning", "records", "review"] as const)("%s shows only hovered heading connections, not persistent selection", workflowStep => {
   const onSave = vi.fn(), onDirtyChange = vi.fn();

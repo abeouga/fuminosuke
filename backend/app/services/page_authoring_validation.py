@@ -7,6 +7,15 @@ from typing import Any, NoReturn
 from app.domain.print_layout import print_error
 
 
+def _comparable_merge(merge: dict[str, Any]) -> dict[str, Any]:
+    """Expand only legacy shape defaults in a comparison copy, never stored data."""
+    return {**merge, "parts": [
+        {**part, "cell": {"shapeType": "rectangle", "vertices": [], "virtual": False,
+                          **part["cell"]}}
+        for part in merge["parts"]
+    ]}
+
+
 def bounds(cells: list[dict[str, Any]]) -> dict[str, Any]:
     x, y = min(c["x"] for c in cells), min(c["y"] for c in cells)
     return {"x": x, "y": y,
@@ -61,7 +70,11 @@ def validate_page_edit(previous: dict[str, Any], proposed: dict[str, Any]) -> No
         if original is None or any(cell[k] != original[k]
                                    for k in ("x", "y", "width", "height")):
             refuse()
-        if any(cell.get(k) != original.get(k) for k in ("shapeType", "vertices", "virtual")):
+        # Legacy JSON omits these schema defaults; omission is not a geometry edit.
+        # Explicit values (including null) must still compare unchanged.
+        if any(cell.get(k, default) != original.get(k, default)
+               for k, default in (("shapeType", "rectangle"), ("vertices", []),
+                                  ("virtual", False))):
             refuse()
     old_merges = {m["parentCellId"]: m for m in previous.get("cellMerges", [])}
     new_merges = {m["parentCellId"]: m for m in proposed.get("cellMerges", [])}
@@ -83,7 +96,7 @@ def validate_page_edit(previous: dict[str, Any], proposed: dict[str, Any]) -> No
         if parent.get("shapeType") == "polygon" or parent.get("virtual"):
             refuse()
         if parent_id in old_merges:
-            if merge != old_merges[parent_id]:
+            if _comparable_merge(merge) != _comparable_merge(old_merges[parent_id]):
                 refuse()
         else:
             if parent_id in originals or parent_id in previous_cells:

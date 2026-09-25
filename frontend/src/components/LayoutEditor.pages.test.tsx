@@ -51,6 +51,14 @@ function clickAt(element: HTMLElement, x: number, y: number) {
 }
 const targets = [{ path: "document.unifiedEarTag", label: "識別番号", section: "基本" }];
 
+test("paged authoring does not offer unsupported symbol OCR", () => {
+  render(<LayoutEditor source="data:image/png;base64," initialLayout={initial}
+    pageView={first} workflowStep="classify" targets={targets} onDetect={vi.fn()} onSave={vi.fn()} />);
+  clickAt(canvas(), 200, 60);
+  expect(screen.getByRole("button", { name: "この欄に書かれた記号を判定する" })).toBeDisabled();
+  expect(screen.getByText("記号の判定は単一ページのテンプレートで利用できます。")).toBeInTheDocument();
+});
+
 test("page display is keyed by physical ID and never mutates stored cells", () => {
   const before = structuredClone(initial);
   expect(pageDisplayCells(initial, second).map(cell => cell.id)).toEqual(["xlsx_C32"]);

@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 
-vi.mock("../api", () => ({ api: { printLayout: vi.fn(), downloadTemplatePrint: vi.fn() } }));
+vi.mock("../api", () => ({ api: {
+  printLayout: vi.fn(), downloadTemplatePrint: vi.fn(), downloadLegacyTemplatePrint: vi.fn(),
+} }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.clearAllMocks();
@@ -20,6 +22,16 @@ it.each(["xlsx", "pdf"] as const)("downloads saved version and revision as %s", 
   await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce());
   expect(screen.getByRole("status")).toHaveTextContent(`印刷用${format.toUpperCase()}を取得`);
   expect(api.printLayout).not.toHaveBeenCalled();
+});
+
+it.each(["xlsx", "pdf"] as const)("downloads a legacy single-page blank %s from the same version", async format => {
+  vi.mocked(api.downloadLegacyTemplatePrint).mockResolvedValue(new Blob(["blank fixture"]));
+  render(<TemplatePrintFiles versionId="legacy-v1" legacy />);
+  fireEvent.click(screen.getByRole("button", { name: `印刷用${format.toUpperCase()}` }));
+  await waitFor(() => expect(api.downloadLegacyTemplatePrint).toHaveBeenCalledWith("legacy-v1", format));
+  expect(api.printLayout).not.toHaveBeenCalled();
+  expect(api.downloadTemplatePrint).not.toHaveBeenCalled();
+  await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce());
 });
 
 it("keeps renderer failure visible and allows retry for the current revision", async () => {

@@ -1,7 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
 import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
+import {
+  AnchoredReviewPopover,
+  buildReviewDisplayModel,
+  CellStatusPopover,
+  GenericRecordReviewTable,
+  IndependentReviewGroups,
+  KeyValueReviewTable,
+  ReviewResultsToolbar,
+  ReviewTableSection,
+  ReviewValueCell,
+  type ReadingEntry,
+  type ReviewDisplayRecordSection,
+  type ReviewInteractionMode,
+} from "../components/OcrReviewResults";
 import {
   automaticJapaneseEraDatePatch,
   formatJapaneseEraDate,
@@ -21,71 +35,20 @@ import type {
   OcrDocument,
   OcrFieldPreview,
   OcrResult,
-  OutputLayoutTemplateStatus,
-  ReviewStructure,
 } from "../types";
+
+export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
 
 const LEGACY_DOCUMENT_NAME = "__legacy_document_name__";
 
-type ReadingEntry = { path: string; label: string; value: FieldReading };
-type ReviewDisplayRecordSection = {
-  id: string;
-  title: string;
-  collectionPath: string;
-  columns: Array<{ id: string; label: string }>;
-  rows: Array<{
-    id: string;
-    cells: Array<{ columnId: string; entry: ReadingEntry | null }>;
-  }>;
-};
-type ReviewDisplayModel = {
-  recordSections: ReviewDisplayRecordSection[];
-  parentSections: Array<{ id: string; title: string; entries: ReadingEntry[] }>;
-  independentEntries: ReadingEntry[];
-  independentGroups: Array<{ id: string; label: string; entries: ReadingEntry[] }>;
-};
-type RectBounds = { left: number; top: number; right: number; bottom: number };
-type PopoverSize = { width: number; height: number };
-export type ReviewPopoverPosition = {
-  left: number;
-  top: number;
-  placement: "above" | "below";
-};
 type ReviewColumn = { key: string; label: string };
 type CollectionRoot = "saleCalves" | "calvings";
-type ReviewInteractionMode = "edit" | "reorder";
 type RevisionConflictBackup = {
   draft: OcrDocument;
   baseRevision: number;
   latestLoaded: boolean;
 };
 const SALE_NOTE_SEX_SYMBOLS = ["♂", "♀"];
-
-export function positionReviewPopover(
-  anchor: RectBounds,
-  popover: PopoverSize,
-  boundary: RectBounds,
-  gap = 8,
-): ReviewPopoverPosition {
-  const availableAbove = anchor.top - boundary.top;
-  const availableBelow = boundary.bottom - anchor.bottom;
-  const placement = availableAbove >= popover.height + gap || availableAbove >= availableBelow
-    ? "above"
-    : "below";
-  const desiredTop = placement === "above"
-    ? anchor.top - popover.height - gap
-    : anchor.bottom + gap;
-  const maxLeft = Math.max(boundary.left, boundary.right - popover.width);
-  const maxTop = Math.max(boundary.top, boundary.bottom - popover.height);
-  return {
-    left: Math.min(
-      Math.max(anchor.left + (anchor.right - anchor.left - popover.width) / 2, boundary.left),
-      maxLeft,
-    ),
-    top: Math.min(Math.max(desiredTop, boundary.top), maxTop),
-    placement,
-  };
-}
 
 function saleNoteNeedsSymbol(entry: ReadingEntry) {
   if (
@@ -116,14 +79,6 @@ const CALVING_COLUMNS: ReviewColumn[] = [
   { key: "notes", label: "備考" },
 ];
 
-function PenModeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 20l4.2-1 10.6-10.6-3.2-3.2L5 15.8 4 20zm10.5-13.7 3.2 3.2" />
-    </svg>
-  );
-}
-
 function isJapaneseEraDatePath(path: string) {
   return path === "document.birthDate"
     || /^calvings\.\d+\.calvingDate$/.test(path)
@@ -152,14 +107,6 @@ function normalizeReviewDateReadings(document: OcrDocument) {
     });
   }
   return updated;
-}
-
-function PointerModeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M6 3l11.5 10.2-5.2.8 2.7 5.2-2.5 1.3-2.7-5.2L6 19V3z" />
-    </svg>
-  );
 }
 
 function normalizeIndividualIdInput(value: string) {
@@ -263,7 +210,6 @@ export function ReviewPage({
   const [identityStepComplete, setIdentityStepComplete] = useState(false);
   const [comparisonPageByDocument, setComparisonPageByDocument] = useState<Record<string, string>>({});
   const [documentName, setDocumentName] = useState("");
-  const [outputLayout, setOutputLayout] = useState<OutputLayoutTemplateStatus | null>(null);
   const load = async () => {
     setSelectedPath(null);
     setLastSelectedPath(null);
@@ -275,10 +221,9 @@ export function ReviewPage({
     if (autoReopenConfirmed && next.confirmed) {
       next = await api.reopenResult(jobId);
     }
-    const [artifactList, sirePool, layoutStatus] = await Promise.all([
+    const [artifactList, sirePool] = await Promise.all([
       api.artifacts(jobId).catch(() => null),
       api.sireNames().catch(() => null),
-      api.outputLayout(jobId).catch(() => null),
     ]);
     const hydrated = normalizeReviewDateReadings(
       hydrateMappedReadings(next.result, next.fieldPreviews),
@@ -307,7 +252,6 @@ export function ReviewPage({
         sirePool.items.flatMap((item) => [item.name, `${item.name}ET`]),
       );
     }
-    setOutputLayout(layoutStatus);
   };
   useEffect(() => {
     setResult(null);
@@ -322,7 +266,6 @@ export function ReviewPage({
     setComparisonPageByDocument({});
     setConfirming(false);
     setDocumentName("");
-    setOutputLayout(null);
     void load().catch((reason) => {
       if (reason instanceof ApiError && reason.code === "MULTI_PAGE_REVIEW_NOT_AVAILABLE") {
         setPagedJobId(jobId);
@@ -490,7 +433,7 @@ export function ReviewPage({
     setLastSelectedPath(entry.path);
     setSelectedMappingId(preview?.mappingId ?? null);
     const markMatch = preview?.mappingType === "mark"
-      && preview.markRecognitionMode !== "manual"
+      && (preview.markRecognitionMode ?? "automatic") === "automatic"
       ? /^calvings\.(\d+)\.(?:outcome|sex)$/.exec(entry.path)
       : null;
     setMarkEditorRow(markMatch ? Number(markMatch[1]) : null);
@@ -872,29 +815,26 @@ export function ReviewPage({
     ]).size;
   return (
     <div className="page-stack review-page">
-      <header className="page-header split"><div><span className="eyebrow">OCR REVIEW · REVISION {result.revision}</span><h1>読み取り結果を確認</h1><p>画像と項目を見比べ、原文と整形値を必要に応じて修正してください。</p></div><button className="ghost" onClick={onClose}>← ホームへ</button></header>
-      <aside className="notice compact"><strong>使用テンプレート</strong><span>{result.result.templateId} · v{result.result.templateVersion}</span></aside>
-      {!result.confirmed && result.documentName !== undefined && (
-        <section className="form-card document-name-confirmation">
-          <div>
-            <span className="eyebrow">DOCUMENT NAME</span>
-            <h2>書類名を確認</h2>
-            <p>この名前を、書類ライブラリ、保存するXLSX、Googleスプレッドシートで共通使用します。</p>
-          </div>
-          <label>
-            確定する書類名
-            <input
-              type="text"
-              value={documentName}
-              maxLength={180}
-              onChange={(event) => setDocumentName(event.target.value)}
-              placeholder="書類名を入力してください"
-            />
-          </label>
-        </section>
-      )}
+      <header className="page-header split review-page-header">
+        <div>
+          <span className="eyebrow">OCR REVIEW · REVISION {result.revision}</span>
+          <h1>読み取り結果を確認</h1>
+          <p>画像と項目を見比べ、原文と整形値を必要に応じて修正してください。</p>
+        </div>
+        <div className="review-header-actions">
+          {result.provider === "openai" && (
+            <aside className="review-usage-badge" aria-label="開発用API使用量">
+              <strong>{result.modelId ?? "OpenAI OCR"}</strong>
+              <span>入力 {result.inputTokens?.toLocaleString() ?? "-"} / 出力 {result.outputTokens?.toLocaleString() ?? "-"} tokens</span>
+              <span>API推定 {result.estimatedCost == null ? "計算不可" : `$${result.estimatedCost.toFixed(6)}`}</span>
+              <span>prompt {result.promptVersion ?? "-"}</span>
+            </aside>
+          )}
+          <button className="ghost" onClick={onClose}>← ホームへ</button>
+        </div>
+      </header>
+      <aside className="review-template-banner"><strong>使用テンプレート</strong><span>{result.result.templateId} · v{result.result.templateVersion}</span></aside>
       {result.provider === "mock" && <aside className="notice compact"><strong>試運転データ</strong><span>現在の候補は固定fixtureから作られています。</span></aside>}
-      {result.provider === "openai" && <aside className="notice compact"><strong>{result.modelId ?? "OpenAI OCR"}</strong><span>入力 {result.inputTokens?.toLocaleString() ?? "-"} / 出力 {result.outputTokens?.toLocaleString() ?? "-"} tokens · API推定 {result.estimatedCost == null ? "計算不可" : `$${result.estimatedCost.toFixed(6)}`} · prompt {result.promptVersion ?? "-"}</span></aside>}
       {isCattleReview && !identityReady && <aside className="notice external compact"><strong>個体識別番号を確認してください</strong><span>確定保存には、帳票から読み取った10桁の個体識別番号が必要です。</span></aside>}
       {isCattleReview && result.confirmed && result.individualId && <aside className="notice external compact"><strong>登録データへ保存済み</strong><span>データ検索から個体識別番号 {result.individualId} で検索できます。</span></aside>}
       {result.spreadsheetSync?.enabled && result.spreadsheetSync.status === "failed" && (
@@ -918,81 +858,14 @@ export function ReviewPage({
           {result.spreadsheetSync.spreadsheetUrl && <a className="secondary compact" href={result.spreadsheetSync.spreadsheetUrl} target="_blank" rel="noreferrer">スプレッドシートを開く ↗</a>}
         </aside>
       )}
-      {result.spreadsheetSync?.enabled && outputLayout && (
-        <aside className="notice compact output-layout-notice">
-          <strong>
-            {outputLayout.active
-              ? `出力レイアウト保存済み · REVISION ${outputLayout.revision}`
-              : "出力レイアウトは未保存です"}
-          </strong>
+      {result.spreadsheetSync?.enabled && (
+        <aside className="notice compact output-layout-notice is-disabled" aria-disabled="true">
+          <strong>カスタム出力レイアウト · 実装中</strong>
           <span>
-            {!outputLayout.active && "最初にレイアウト用シートを出力してください。"}
-            Googleスプレッドシートの「{outputLayout.sheetName}」で、セル結合・列幅・行高・罫線・色・固定文字を調整してください。調整後に取り込むと、次回から同じ書類テンプレートの出力へ適用します。
+            OCRで読み取った項目と、カスタム出力用シートの出力先セルを紐付ける設定機能を実装中です。
           </span>
-          <button
-            type="button"
-            className="secondary compact"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              setMessage(null);
-              try {
-                const synced = await api.syncSpreadsheet(jobId);
-                setResult(synced);
-                if (synced.spreadsheetSync?.status === "synced") {
-                  setMessage(
-                    outputLayout.active
-                      ? "保存済みレイアウトで帳票レイアウトシートを更新しました。"
-                      : "編集用の帳票レイアウトシートを作成しました。",
-                  );
-                } else {
-                  setError(
-                    synced.spreadsheetSync?.lastError
-                      ?? "帳票レイアウトシートを出力できませんでした。",
-                  );
-                }
-              } catch (reason) {
-                setError(
-                  reason instanceof Error
-                    ? reason.message
-                    : "帳票レイアウトシートを出力できませんでした。",
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {outputLayout.active
-              ? "保存済みレイアウトで再出力"
-              : "レイアウト用シートを初期出力"}
-          </button>
-          <button
-            type="button"
-            className="secondary compact"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              setMessage(null);
-              try {
-                const imported = await api.importOutputLayout(jobId);
-                setOutputLayout(imported);
-                setMessage(
-                  `帳票レイアウトをREVISION ${imported.revision}として保存しました。`,
-                );
-              } catch (reason) {
-                setError(
-                  reason instanceof Error
-                    ? reason.message
-                    : "帳票レイアウトを取り込めませんでした。",
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "取り込み中…" : "シートのレイアウトを取り込む"}
+          <button type="button" className="secondary compact" disabled>
+            カスタム出力用シートを取り込む
           </button>
         </aside>
       )}
@@ -1044,61 +917,23 @@ export function ReviewPage({
           <div className="review-summary"><strong>{unresolved}</strong><span>要確認項目</span><p>「不確実」は空欄とは異なります。画像を見て判断してください。</p></div>
         </aside>
         <main className="field-pane">
-          <div className="field-toolbar">
-            <div className="ocr-cell-legend">
-              <span><i className="legend-ok" />問題なし</span>
-              <span><i className="legend-warning" />要確認</span>
-            </div>
-            <div className="field-toolbar-actions">
-              <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
-                <button
-                  type="button"
-                  className={interactionMode === "edit" ? "active" : ""}
-                  aria-label="結果編集モード"
-                  aria-pressed={interactionMode === "edit"}
-                  title="ペンでセルの内容を編集"
-                  disabled={editingLocked}
-                  onClick={() => setInteractionMode("edit")}
-                >
-                  <PenModeIcon />
-                  <span>編集</span>
-                </button>
-                <button
-                  type="button"
-                  className={interactionMode === "reorder" ? "active" : ""}
-                  aria-label="行移動モード"
-                  aria-pressed={interactionMode === "reorder"}
-                  title="繰り返し表の行全体を移動"
-                  disabled={editingLocked}
-                  onClick={() => {
-                    setInteractionMode("reorder");
-                    setSelectedPath(null);
-                    setSelectedMappingId(null);
-                    setMarkEditorRow(null);
-                    setChoiceEditorPath(null);
-                  }}
-                >
-                  <PointerModeIcon />
-                  <span>移動</span>
-                </button>
-              </div>
-              {!result.confirmed && (
-                <button
-                  type="button"
-                  className="secondary compact"
-                  disabled={warningEntries.length === 0}
-                  onClick={selectNextWarning}
-                >
-                  次の要確認（{warningEntries.length}件）
-                </button>
-              )}
-              <span>{result.confirmed
-                ? "確定済み"
-                : interactionMode === "reorder"
-                  ? "行移動モード"
-                  : `${entries.length}セルを編集中`}</span>
-            </div>
-          </div>
+          <ReviewResultsToolbar
+            interactionMode={interactionMode}
+            editingLocked={editingLocked}
+            confirmed={result.confirmed}
+            warningCount={warningEntries.length}
+            cellCount={entries.length}
+            onInteractionModeChange={(mode) => {
+              setInteractionMode(mode);
+              if (mode === "reorder") {
+                setSelectedPath(null);
+                setSelectedMappingId(null);
+                setMarkEditorRow(null);
+                setChoiceEditorPath(null);
+              }
+            }}
+            onNextWarning={selectNextWarning}
+          />
           {entries.length === 0 ? (
             <div className="empty-state">テンプレートで意味づけされた読み取りセルがありません。</div>
           ) : (
@@ -1233,6 +1068,25 @@ export function ReviewPage({
           )}
         </main>
       </div>
+      {!result.confirmed && result.documentName !== undefined && (
+        <section className="form-card document-name-confirmation">
+          <div>
+            <span className="eyebrow">DOCUMENT NAME</span>
+            <h2>書類名を確認</h2>
+            <p>この名前を、書類ライブラリ、保存するXLSX、Googleスプレッドシートで共通使用します。</p>
+          </div>
+          <label>
+            確定する書類名
+            <input
+              type="text"
+              value={documentName}
+              maxLength={180}
+              onChange={(event) => setDocumentName(event.target.value)}
+              placeholder="書類名を入力してください"
+            />
+          </label>
+        </section>
+      )}
       {revisionConflict && (
         <section className="form-card revision-conflict-recovery" aria-live="assertive">
           <div>
@@ -1557,142 +1411,6 @@ function requiresDedicatedCellEditor(entry: ReadingEntry) {
     || (entry.path.startsWith("saleCalves.") && entry.path.endsWith(".notes"));
 }
 
-function AnchoredReviewPopover({
-  path,
-  wide = false,
-  children,
-  onClose,
-}: {
-  path: string;
-  wide?: boolean;
-  children: ReactNode;
-  onClose: () => void;
-}) {
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  const [position, setPosition] = useState<ReviewPopoverPosition | null>(null);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useLayoutEffect(() => {
-    const updatePosition = () => {
-      const anchor = Array.from(
-        document.querySelectorAll<HTMLElement>("[data-review-path]"),
-      ).find((candidate) => candidate.dataset.reviewPath === path);
-      const popover = popoverRef.current;
-      if (!anchor || !popover) {
-        onCloseRef.current();
-        return;
-      }
-      const anchorRect = anchor.getBoundingClientRect();
-      const paneRect = anchor.closest<HTMLElement>(".field-pane")?.getBoundingClientRect();
-      const viewport = {
-        left: 8,
-        top: 8,
-        right: Math.max(8, window.innerWidth - 8),
-        bottom: Math.max(8, window.innerHeight - 8),
-      };
-      const hasUsablePane = Boolean(
-        paneRect && paneRect.right > paneRect.left && paneRect.bottom > paneRect.top,
-      );
-      const boundary = hasUsablePane && paneRect
-        ? {
-          left: Math.max(viewport.left, paneRect.left + 8),
-          top: Math.max(viewport.top, paneRect.top + 8),
-          right: Math.min(viewport.right, paneRect.right - 8),
-          bottom: Math.min(viewport.bottom, paneRect.bottom - 8),
-        }
-        : viewport;
-      setPosition(positionReviewPopover(
-        anchorRect,
-        {
-          width: popover.offsetWidth || (wide ? 520 : 260),
-          height: popover.offsetHeight || (wide ? 220 : 96),
-        },
-        boundary,
-      ));
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [path, wide]);
-
-  useEffect(() => {
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCloseRef.current();
-    };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, []);
-
-  return (
-    <div
-      ref={popoverRef}
-      className={`ocr-review-popover${wide ? " ocr-review-popover-wide" : ""}`}
-      data-placement={position?.placement}
-      style={{
-        left: position?.left ?? 0,
-        top: position?.top ?? 0,
-        visibility: position ? "visible" : "hidden",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function CellStatusPopover({
-  entry,
-  confirmed,
-  onChange,
-  onClose,
-}: {
-  entry: ReadingEntry;
-  confirmed: boolean;
-  onChange: (patch: Partial<FieldReading>) => void;
-  onClose: () => void;
-}) {
-  const setStatus = (status: FieldReading["status"]) => {
-    onChange(status === "blank"
-      ? { status, raw: null, normalized: null, reviewReason: null }
-      : status === "uncertain"
-        ? { status, normalized: null, raw: entry.value.raw ?? "" }
-        : { status, raw: entry.value.raw ?? "", reviewReason: null });
-  };
-  return (
-    <section className="ocr-cell-status-popover" aria-label="選択セルの判定">
-      <header>
-        <strong>{entry.label}</strong>
-        <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
-      </header>
-      <div role="group" aria-label={`${entry.label}の判定`}>
-        {([
-          ["readable", "読めた"],
-          ["uncertain", "不確実"],
-          ["blank", "空欄"],
-        ] as const).map(([status, label]) => (
-          <button
-            type="button"
-            key={status}
-            className={entry.value.status === status ? "active" : ""}
-            aria-pressed={entry.value.status === status}
-            disabled={confirmed}
-            onClick={() => setStatus(status)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function CellEditor({
   entry,
   confirmed,
@@ -1909,253 +1627,6 @@ function CellEditor({
   );
 }
 
-function ReviewTableSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!children) return null;
-  return (
-    <section className="ocr-edit-section" aria-label={title}>
-      <header><h3>{title}</h3></header>
-      {children}
-    </section>
-  );
-}
-
-function GenericRecordReviewTable({
-  section,
-  selectedPath,
-  warningPaths,
-  choicePaths,
-  confirmed,
-  interactionMode,
-  onSelect,
-  onEdit,
-  onMoveRow,
-}: {
-  section: ReviewDisplayRecordSection;
-  selectedPath: string | null;
-  warningPaths: ReadonlySet<string>;
-  choicePaths: ReadonlySet<string>;
-  confirmed: boolean;
-  interactionMode: ReviewInteractionMode;
-  onSelect: (entry: ReadingEntry) => void;
-  onEdit: (entry: ReadingEntry, text: string) => void;
-  onMoveRow: (
-    section: ReviewDisplayRecordSection,
-    fromIndex: number,
-    toIndex: number,
-  ) => void;
-}) {
-  return (
-    <ReviewTableSection title={section.title}>
-      <div className="ocr-edit-table-wrap">
-        <table
-          className="ocr-edit-table ocr-collection-table ocr-generic-record-table"
-          aria-label={`${section.title}のレコード`}
-        >
-          <thead>
-            <tr>
-              <th scope="col">行</th>
-              {section.columns.map((column) => (
-                <th scope="col" key={column.id}>{column.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {section.rows.map((row, rowIndex) => (
-              <tr key={row.id}>
-                <th scope="row" aria-label={`${rowIndex + 1}行目`}>
-                  <div className="ocr-row-heading">
-                    <span>{rowIndex + 1}</span>
-                    {interactionMode === "reorder" && (
-                      <span className="ocr-row-shift-controls">
-                        <button
-                          type="button"
-                          aria-label={`${section.title} ${rowIndex + 1}行目を上へ移動`}
-                          title="この行の読み取り結果を一行上へ移動"
-                          disabled={confirmed || !canSwapGenericRecordRows(section, rowIndex, rowIndex - 1)}
-                          onClick={() => onMoveRow(section, rowIndex, rowIndex - 1)}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`${section.title} ${rowIndex + 1}行目を下へ移動`}
-                          title="この行の読み取り結果を一行下へ移動"
-                          disabled={confirmed || !canSwapGenericRecordRows(section, rowIndex, rowIndex + 1)}
-                          onClick={() => onMoveRow(section, rowIndex, rowIndex + 1)}
-                        >
-                          ↓
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                </th>
-                {section.columns.map((column) => {
-                  const cell = row.cells.find((item) => item.columnId === column.id);
-                  const entry = cell?.entry;
-                  if (!entry) {
-                    return (
-                      <td
-                        className="ocr-unmapped-cell"
-                        key={column.id}
-                        aria-label={`${rowIndex + 1}行目 ${column.label} 未設定`}
-                      >
-                        —
-                      </td>
-                    );
-                  }
-                  return (
-                    <ReviewValueCell
-                      key={column.id}
-                      entry={entry}
-                      selected={selectedPath === entry.path}
-                      warning={warningPaths.has(entry.path)}
-                      choice={choicePaths.has(entry.path)}
-                      confirmed={confirmed || interactionMode === "reorder"}
-                      onSelect={onSelect}
-                      onEdit={onEdit}
-                    />
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </ReviewTableSection>
-  );
-}
-
-function KeyValueReviewTable({
-  entries,
-  selectedPath,
-  warningPaths,
-  choicePaths,
-  confirmed,
-  onSelect,
-  onEdit,
-}: {
-  entries: ReadingEntry[];
-  selectedPath: string | null;
-  warningPaths: ReadonlySet<string>;
-  choicePaths: ReadonlySet<string>;
-  confirmed: boolean;
-  onSelect: (entry: ReadingEntry) => void;
-  onEdit: (entry: ReadingEntry, text: string) => void;
-}) {
-  if (entries.length === 0) return null;
-  const rows = chunk(entries, 2);
-  return (
-    <div className="ocr-edit-table-wrap">
-      <table className="ocr-edit-table ocr-key-value-table">
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={index}>
-              {row.map((entry) => (
-                <ReviewLabelAndCell
-                  key={entry.path}
-                  entry={entry}
-                  selected={selectedPath === entry.path}
-                  warning={warningPaths.has(entry.path)}
-                  choice={choicePaths.has(entry.path)}
-                  confirmed={confirmed}
-                  onSelect={onSelect}
-                  onEdit={onEdit}
-                />
-              ))}
-              {row.length === 1 && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function IndependentReviewGroups({
-  groups,
-  selectedPath,
-  warningPaths,
-  choicePaths,
-  confirmed,
-  onSelect,
-  onEdit,
-}: {
-  groups: ReviewDisplayModel["independentGroups"];
-  selectedPath: string | null;
-  warningPaths: ReadonlySet<string>;
-  choicePaths: ReadonlySet<string>;
-  confirmed: boolean;
-  onSelect: (entry: ReadingEntry) => void;
-  onEdit: (entry: ReadingEntry, text: string) => void;
-}) {
-  return (
-    <div className="ocr-independent-groups">
-      {groups.map((group) => (
-        <section className="ocr-independent-group" key={group.id}>
-          <h4 className="ocr-independent-label">{group.label}</h4>
-          <table className="ocr-edit-table ocr-independent-values">
-            <tbody>
-              <tr>
-                {group.entries.map((entry) => (
-                  <ReviewValueCell
-                    key={entry.path}
-                    entry={entry}
-                    selected={selectedPath === entry.path}
-                    warning={warningPaths.has(entry.path)}
-                    choice={choicePaths.has(entry.path)}
-                    confirmed={confirmed}
-                    onSelect={onSelect}
-                    onEdit={onEdit}
-                  />
-                ))}
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function ReviewLabelAndCell({
-  entry,
-  selected,
-  warning,
-  choice,
-  confirmed,
-  onSelect,
-  onEdit,
-}: {
-  entry: ReadingEntry;
-  selected: boolean;
-  warning: boolean;
-  choice: boolean;
-  confirmed: boolean;
-  onSelect: (entry: ReadingEntry) => void;
-  onEdit: (entry: ReadingEntry, text: string) => void;
-}) {
-  return (
-    <>
-      <th scope="row">{entry.label}</th>
-      <ReviewValueCell
-        entry={entry}
-        selected={selected}
-        warning={warning}
-        choice={choice}
-        confirmed={confirmed}
-        onSelect={onSelect}
-        onEdit={onEdit}
-      />
-    </>
-  );
-}
-
 function CollectionReviewTable({
   title,
   root,
@@ -2275,125 +1746,6 @@ function CollectionReviewTable({
   );
 }
 
-export function buildReviewDisplayModel(
-  entries: readonly ReadingEntry[],
-  previews: readonly OcrFieldPreview[],
-  structure: ReviewStructure | undefined,
-): ReviewDisplayModel {
-  if (!structure) {
-    const independentEntries = [...entries];
-    return {
-      recordSections: [],
-      parentSections: [],
-      independentEntries,
-      independentGroups: independentEntries.map((entry) => ({
-        id: `path:${entry.path}`,
-        label: entry.label,
-        entries: [entry],
-      })),
-    };
-  }
-
-  const entryByPath = new Map(entries.map((entry) => [entry.path, entry]));
-  const entriesBySource = new Map<string, ReadingEntry[]>();
-  entries.forEach((entry) => {
-    if (entry.value.sourceRegionId !== "unmapped") {
-      const candidates = entriesBySource.get(entry.value.sourceRegionId) ?? [];
-      candidates.push(entry);
-      entriesBySource.set(entry.value.sourceRegionId, candidates);
-    }
-  });
-  const previewByMappingId = new Map(
-    previews.map((preview) => [preview.mappingId, preview]),
-  );
-  const fieldById = new Map(structure.fields.map((field) => [field.id, field]));
-  const consumedPaths = new Set<string>();
-  const resolveField = (fieldId: string | null): ReadingEntry | null => {
-    if (!fieldId) return null;
-    const field = fieldById.get(fieldId);
-    if (!field) return null;
-    const sourceCandidates = entriesBySource.get(field.mappingId) ?? [];
-    const entry = (sourceCandidates.length === 1 ? sourceCandidates[0] : undefined)
-      ?? sourceCandidates.find((candidate) => candidate.path === field.targetPath)
-      ?? sourceCandidates.find(
-        (candidate) => candidate.path === previewByMappingId.get(field.mappingId)?.targetPath,
-      )
-      ?? entryByPath.get(previewByMappingId.get(field.mappingId)?.targetPath ?? "")
-      ?? entryByPath.get(field.targetPath);
-    if (!entry || consumedPaths.has(entry.path)) return null;
-    consumedPaths.add(entry.path);
-    return { ...entry, label: field.label || entry.label };
-  };
-
-  const recordTitleCounts = new Map<string, number>();
-  structure.recordSections.forEach((section) => {
-    recordTitleCounts.set(section.title, (recordTitleCounts.get(section.title) ?? 0) + 1);
-  });
-  const recordTitleIndexes = new Map<string, number>();
-  const recordSections = structure.recordSections.map((section) => {
-    const titleIndex = (recordTitleIndexes.get(section.title) ?? 0) + 1;
-    recordTitleIndexes.set(section.title, titleIndex);
-    return {
-      id: section.id,
-      title: (recordTitleCounts.get(section.title) ?? 0) > 1
-        ? `${section.title} ${titleIndex}`
-        : section.title,
-      collectionPath: section.collectionPath,
-      columns: section.columns.map((column) => ({ ...column })),
-      rows: section.rows.map((row) => ({
-        id: row.id,
-        cells: row.cells.map((cell) => ({
-          columnId: cell.columnId,
-          entry: resolveField(cell.fieldId),
-        })),
-      })),
-    };
-  });
-  const parentSections = structure.parentSections.map((section) => ({
-    id: section.id,
-    title: section.title,
-    entries: section.fieldIds
-      .map((fieldId) => resolveField(fieldId))
-      .filter((entry): entry is ReadingEntry => entry !== null),
-  }));
-
-  const independentEntries: ReadingEntry[] = [];
-  const independentGroups: ReviewDisplayModel["independentGroups"] = [];
-  const independentGroupById = new Map<string, ReviewDisplayModel["independentGroups"][number]>();
-  const appendIndependent = (
-    entry: ReadingEntry,
-    groupId: string,
-    label: string,
-  ) => {
-    independentEntries.push(entry);
-    const existing = independentGroupById.get(groupId);
-    if (existing) {
-      existing.entries.push(entry);
-      return;
-    }
-    const group = { id: groupId, label, entries: [entry] };
-    independentGroupById.set(groupId, group);
-    independentGroups.push(group);
-  };
-  for (const fieldId of [
-    ...structure.independentFieldIds,
-    ...structure.fields.map((field) => field.id),
-  ]) {
-    const entry = resolveField(fieldId);
-    const field = fieldById.get(fieldId);
-    if (entry && field) {
-      appendIndependent(entry, field.groupId ?? `field:${field.id}`, field.label || entry.label);
-    }
-  }
-  entries.forEach((entry) => {
-    if (!consumedPaths.has(entry.path)) {
-      consumedPaths.add(entry.path);
-      appendIndependent(entry, `path:${entry.path}`, entry.label);
-    }
-  });
-  return { recordSections, parentSections, independentEntries, independentGroups };
-}
-
 function collectRecordKeys(
   structure: OcrResult["recordStructure"],
 ): Map<string, string> {
@@ -2410,77 +1762,6 @@ function collectRecordKeys(
     }
   });
   return keys;
-}
-
-function ReviewValueCell({
-  entry,
-  selected,
-  warning,
-  choice,
-  confirmed,
-  onSelect,
-  onEdit,
-}: {
-  entry: ReadingEntry;
-  selected: boolean;
-  warning: boolean;
-  choice: boolean;
-  confirmed: boolean;
-  onSelect: (entry: ReadingEntry) => void;
-  onEdit: (entry: ReadingEntry, text: string) => void;
-}) {
-  const value = entry.value.normalized ?? entry.value.raw;
-  const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState(value ?? "");
-  useEffect(() => {
-    if (!editing) setEditValue(value ?? "");
-  }, [editing, value]);
-  const commit = () => {
-    if (!editing) return;
-    setEditing(false);
-    onEdit(entry, editValue);
-  };
-  return (
-    <td
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}`}
-      data-review-path={entry.path}
-    >
-      {editing ? (
-        <input
-          className="ocr-inline-cell-input"
-          autoFocus
-          aria-label={`${entry.label} ${entry.path} を直接編集`}
-          value={editValue}
-          onChange={(event) => setEditValue(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commit();
-            }
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          aria-label={`${entry.label} ${entry.path} を編集`}
-          title={confirmed || choice ? undefined : "ダブルクリックで直接編集"}
-          onClick={() => onSelect(entry)}
-          onDoubleClick={(event) => {
-            if (confirmed) return;
-            event.preventDefault();
-            onSelect(entry);
-            if (choice) return;
-            setEditValue(value ?? "");
-            setEditing(true);
-          }}
-        >
-          <span>{value || (entry.value.status === "blank" ? "空欄" : "未入力")}</span>
-          <small>{warning ? "要確認" : "OK"}</small>
-        </button>
-      )}
-    </td>
-  );
 }
 
 function orderedEntries(

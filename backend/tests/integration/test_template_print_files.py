@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from io import BytesIO
 
 import pytest
@@ -18,6 +19,76 @@ from app.services.template_version_service import TemplateVersionService
 from tests.integration import test_print_layout_api as existing
 from tests.integration.test_print_layout_api import print_template  # noqa: F401
 from tests.unit.test_print_layout import workbook_bytes
+
+
+@pytest.fixture
+def active_legacy_template(client, request):
+    version_id, job_id, content, _ = request.getfixturevalue("print_template")
+    with client.app.state.database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        version.status = "ACTIVE"
+        session.get(Template, version.template_id).active_version_id = version_id
+        pdf_artifact = session.scalar(select(JobArtifact).where(
+            JobArtifact.job_id == job_id,
+            JobArtifact.artifact_name == "printablePdf",
+        ))
+        pdf = client.app.state.storage.read_bytes(pdf_artifact.relative_path)
+        quality = copy.deepcopy(version.quality_json)
+        session.commit()
+    return version_id, job_id, content, pdf, quality
+
+
+def test_active_legacy_template_downloads_unfilled_source_and_pdf(client, active_legacy_template):
+    version_id, job_id, source, pdf, quality = active_legacy_template
+    url = f"/api/v1/template-versions/{version_id}/blank-files"
+    for format_name, expected in (("xlsx", source), ("pdf", pdf)):
+        result = client.get(f"{url}/{format_name}")
+        assert result.status_code == 200, result.text
+        assert result.content == expected
+        assert result.headers["cache-control"] == "no-store"
+        assert "attachment" in result.headers["content-disposition"]
+        assert result.headers["etag"] == f'"{hashlib.sha256(expected).hexdigest()}"'
+    with client.app.state.database.session() as session:
+        assert session.get(TemplateVersion, version_id).quality_json == quality
+        assert session.get(ProcessingJob, job_id).status == "REVIEW_REQUIRED"
+
+
+@pytest.mark.parametrize("format_name", ["xlsx", "pdf"])
+def test_legacy_download_rejects_changed_source(client, active_legacy_template, format_name):
+    version_id, job_id, _, _, _ = active_legacy_template
+    with client.app.state.database.session() as session:
+        source = session.scalar(select(JobArtifact).where(
+            JobArtifact.job_id == job_id,
+            JobArtifact.artifact_name == "sourceWorkbook",
+        ))
+        client.app.state.storage.write_bytes(source.relative_path, b"changed")
+    result = client.get(f"/api/v1/template-versions/{version_id}/blank-files/{format_name}")
+    assert result.status_code == 409
+    assert result.json()["code"] == "PRINT_FILE_CHANGED"
+
+
+def test_legacy_download_rejects_wrong_version_state_or_pdf(client, active_legacy_template):
+    version_id, job_id, _, _, _ = active_legacy_template
+    url = f"/api/v1/template-versions/{version_id}/blank-files"
+    with client.app.state.database.session() as session:
+        pdf = session.scalar(select(JobArtifact).where(
+            JobArtifact.job_id == job_id,
+            JobArtifact.artifact_name == "printablePdf",
+        ))
+        client.app.state.storage.write_bytes(pdf.relative_path, b"changed")
+    assert client.get(f"{url}/pdf").json()["code"] == "PRINT_FILE_CHANGED"
+    with client.app.state.database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        version.quality_json = {**version.quality_json, "printLayout": {"pages": [{}]}}
+        session.commit()
+    assert client.get(f"{url}/xlsx").json()["code"] == "PRINT_FILE_LEGACY_UNAVAILABLE"
+    with client.app.state.database.session() as session:
+        version = session.get(TemplateVersion, version_id)
+        version.quality_json = {key: value for key, value in version.quality_json.items()
+                                if key != "printLayout"}
+        version.status = "ARCHIVED"
+        session.commit()
+    assert client.get(f"{url}/xlsx").json()["code"] == "PRINT_FILE_LEGACY_UNAVAILABLE"
 
 
 @pytest.fixture

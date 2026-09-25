@@ -22,6 +22,7 @@ from app.services.calc_workbook_geometry import apply_dimensions as apply_calc_d
 from app.services.draft_page_geometry import draft_geometry
 from app.services.page_authoring_validation import (
     bounds,
+    is_page_heading,
     physical_cells,
     validate_page_edit,
     validate_page_headings,
@@ -207,6 +208,9 @@ class PrintLayoutService:
                 "source": self._source(session, version),
                 "saved": copy.deepcopy(version.quality_json.get("printLayout")),
                 "editable": version.status == "DRAFT" and version.approved_at is None,
+                "pageHeadings": [{"cellId": c["id"], "text": c.get("text", ""),
+                                  "pageRange": c["pageRange"]}
+                                 for c in version.layout_json["cells"] if is_page_heading(c)],
             }
 
     def preview(self, version_id: str, request: PrintLayoutRequest) -> dict[str, Any]:
@@ -221,9 +225,28 @@ class PrintLayoutService:
         plan = page_plan(
             self._source(session, version), request, version.quality_json.get("printLayout")
         )
-        validate_page_headings(version.layout_json, plan)
-        plan["layoutSha256"] = digest(version.layout_json)
+        layout = self._heading_layout(version, request, plan)
+        plan["layoutSha256"] = digest(layout)
         return plan
+
+    @staticmethod
+    def _heading_layout(version: TemplateVersion, request: PrintLayoutRequest,
+                        plan: dict[str, Any]) -> dict[str, Any]:
+        # Explicit identity/range bindings only. Never infer a destination by
+        # page index, coordinates, label text or physical field membership.
+        layout = copy.deepcopy(version.layout_json)
+        cells = {c["id"]: c for c in layout["cells"]}
+        seen: set[str] = set()
+        for move in request.page_heading_moves:
+            cell = cells.get(move.cell_id)
+            if (move.cell_id in seen or cell is None or not is_page_heading(cell)
+                    or cell["pageRange"] != move.from_range):
+                raise print_error("仮想見出しのID・変更前ページが一致しません。",
+                                  "PRINT_HEADING_MOVE_INVALID", 409)
+            seen.add(move.cell_id)
+            cell["pageRange"] = move.to_range
+        validate_page_headings(layout, plan)
+        return layout
 
     @staticmethod
     def _check_revision(version: TemplateVersion, expected: str) -> None:
@@ -248,6 +271,7 @@ class PrintLayoutService:
             version = self._version(session, version_id)
             require_draft(version)
             self._check_revision(version, request.base_revision)
+            layout = self._heading_layout(version, request, plan)
             job = session.get(ProcessingJob, version.source_job_id)
             if job is None:
                 raise print_error("準備ジョブがありません。", status=409)
@@ -277,6 +301,8 @@ class PrintLayoutService:
                     "name": name,
                 }
             plan["source"] = "user"
+            if request.page_heading_moves:
+                version.layout_json = layout
             version.quality_json = {**version.quality_json, "printLayout": plan}
             # PREPARE_TEMPLATE is a mutable draft, unlike accepted OCR snapshots.
             job.config_snapshot_json = {
@@ -284,7 +310,10 @@ class PrintLayoutService:
                 "printLayout": copy.deepcopy(plan),
             }
             session.commit()
-        return self.get(version_id)
+        result = self.get(version_id)
+        if request.page_heading_moves:
+            result["layout"] = layout
+        return result
 
     def clear(self, version_id: str, expected: str) -> dict[str, Any]:
         with template_mutation_lock(), self.database.session() as session:

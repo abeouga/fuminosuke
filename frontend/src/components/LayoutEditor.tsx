@@ -35,13 +35,25 @@ export type LayoutEditorHandle = {
 export type LayoutEditorFocusRequest = {
   requestId: number;
   cellId: string;
-  markSetId: string;
-  purpose: "mark-options";
-};
+} & (
+  { purpose: "meaning-cell" | "mark-cell" }
+  | { purpose: "mark-options"; markSetId: string }
+);
 
 export type LayoutEditorFocusResult = {
   requestId: number;
   focused: boolean;
+};
+
+export type LayoutEditorMeaningState = {
+  cells: Array<{
+    id: string;
+    role: LayoutCell["role"];
+    markSetIds: string[];
+  }>;
+  unassignedCellIds: string[];
+  incompleteMarkCellIds: string[];
+  usableMeaningCellCount: number;
 };
 
 type LayoutEditorProps = {
@@ -74,12 +86,17 @@ type LayoutEditorProps = {
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
   onSavingChange?: (saving: boolean) => void;
+  onMeaningStateChange?: (state: LayoutEditorMeaningState) => void;
   draftStorageKey?: string;
   detectLabel?: string;
 };
 
 const DEFAULT_MAGNIFIER_SCALE = 2.5;
 const DEFAULT_MAGNIFIER_SIZE = 220;
+const HIDDEN_REVIEW_INFORMATION_MESSAGES = new Set([
+  "XLSXのセル構造から自動作成した案です。区分、意味、繰り返し構造を確認してください。",
+  "LibreOfficeの印刷プレビュー上の罫線へXLSXセル座標を補正しました。",
+]);
 
 export function recordSectionDisplayName(
   section: LayoutRecordSection,
@@ -690,6 +707,11 @@ export const LAYOUT_ROLE_STYLE = {
   ignored: { stroke: "#59636e", fill: "#59636e", dash: [12, 8] },
 } as const;
 
+const LAYOUT_ROLE_LABEL: Record<LayoutCell["role"], string> = {
+  label: "項目名", parent_label: "見出し", input: "記入欄", mark: "記入欄（選択・記号）",
+  record_key_cell: "記入欄", column_key_cell: "記入欄", ignored: "読み取らない",
+};
+
 const OCR_LABEL_BADGE_STYLE = {
   label: {
     background: "rgba(255, 240, 213, 0.92)",
@@ -931,6 +953,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   onDirtyChange,
   onBusyChange,
   onSavingChange,
+  onMeaningStateChange,
   draftStorageKey,
   detectLabel = "枠を再検出",
 }: LayoutEditorProps, ref) {
@@ -955,11 +978,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const copiedCellMergeRef = useRef<LayoutCellMerge | null>(null);
   const operationLockRef = useRef(false);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
-  const [layout, setLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey, preserveDetectedRoles));
+  const [restoredDraft] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey, preserveDetectedRoles));
+  const [layout, setLayout] = useState(restoredDraft.layout);
+  const [draftReviewRequired, setDraftReviewRequired] = useState(restoredDraft.needsReview);
   const [baselineSignature, setBaselineSignature] = useState(
     () => layoutSignature(normalizeLayout(initialLayout, preserveDetectedRoles)),
   );
   const [mode, setMode] = useState<Mode>("select");
+  const [rectanglesHidden, setRectanglesHidden] = useState(false);
   useEffect(() => { moveDrag.current = null; setDraft(null); }, [mode, pageView?.page, workflowStep]);
   const [drawShape, setDrawShape] = useState<"rectangle" | "polygon">("rectangle");
   const [polygonPoints, setPolygonPoints] = useState<Point[]>([]);
@@ -1015,6 +1041,28 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     () => unassignedMeaningCellIds(layout),
     [layout],
   );
+  const currentIncompleteMeaningIds = useMemo(
+    () => incompleteMeaningCellIds(layout),
+    [layout],
+  );
+  const meaningState = useMemo<LayoutEditorMeaningState>(() => ({
+    cells: layout.cells.map((cell) => ({
+      id: cell.id,
+      role: cell.role,
+      markSetIds: (cell.markSets ?? []).map((markSet) => markSet.id),
+    })),
+    unassignedCellIds: layout.cells
+      .filter((cell) => unassignedMeaningIds.has(cell.id))
+      .map((cell) => cell.id),
+    incompleteMarkCellIds: layout.cells
+      .filter((cell) => currentIncompleteMeaningIds.has(cell.id))
+      .map((cell) => cell.id),
+    usableMeaningCellCount: layout.cells.filter((cell) => (
+      (cell.role === "input" || cell.role === "mark")
+      && !unassignedMeaningIds.has(cell.id)
+      && !currentIncompleteMeaningIds.has(cell.id)
+    )).length,
+  }), [currentIncompleteMeaningIds, layout.cells, unassignedMeaningIds]);
   const unassignedMeaningCount = unassignedMeaningIds.size;
   const dirty = saving || currentSignature !== baselineSignature;
   const dirtyRef = useRef(dirty);
@@ -1170,20 +1218,28 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!draftStorageKey) return;
     try {
       if (dirty) {
+        // Remove obsolete provenance first: partial writes must never make a
+        // draft look as if it were based on a newer server response.
+        if (!draftReviewRequired) window.localStorage.removeItem(`${draftStorageKey}:baseline`);
         window.localStorage.setItem(draftStorageKey, currentSignature);
+        if (!draftReviewRequired) window.localStorage.setItem(`${draftStorageKey}:baseline`, baselineSignature);
       } else {
         window.localStorage.removeItem(draftStorageKey);
+        window.localStorage.removeItem(`${draftStorageKey}:baseline`);
       }
     } catch {
       // The API save below remains authoritative when browser storage is unavailable.
     }
-  }, [currentSignature, dirty, draftStorageKey]);
+  }, [currentSignature, dirty, draftStorageKey, baselineSignature, draftReviewRequired]);
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
   useEffect(() => {
     onSavingChange?.(saving);
   }, [saving, onSavingChange]);
+  useEffect(() => {
+    onMeaningStateChange?.(meaningState);
+  }, [meaningState, onMeaningStateChange]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
@@ -1200,6 +1256,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undoMeaning]);
   useEffect(() => {
+    setRectanglesHidden(false);
     if (!workflowStep) return;
     setMode({
       classify: "select",
@@ -1249,13 +1306,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!focusRequest || handledFocusRequestIdRef.current === focusRequest.requestId) return;
     handledFocusRequestIdRef.current = focusRequest.requestId;
     const target = layout.cells.find((cell) => cell.id === focusRequest.cellId);
-    const canFocus = focusRequest.purpose === "mark-options"
-      && workflowStep === "meaning"
+    const targetRoleMatches = focusRequest.purpose === "meaning-cell"
+      ? target?.role === "input" || target?.role === "mark"
+      : target?.role === "mark";
+    const canFocus = workflowStep === "meaning"
       && !disabled
       && !busy
       && !saving
-      && target?.role === "mark"
-      && Boolean(target.markSets?.some((markSet) => markSet.id === focusRequest.markSetId))
+      && targetRoleMatches
+      && (focusRequest.purpose !== "mark-options"
+        || Boolean(target?.markSets?.some((markSet) => markSet.id === focusRequest.markSetId)))
       && displayCellById.has(focusRequest.cellId);
     if (!canFocus) {
       setWarningFocusRequest(null);
@@ -1286,8 +1346,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const target = displayCellById.get(warningFocusRequest.cellId);
     const canvas = canvasRef.current;
     const canvasWrap = canvasWrapRef.current;
-    const editor = markWarningEditorRef.current;
-    if (!target || !canvas || !canvasWrap || !editor) return;
+    const focusTarget = warningFocusRequest.purpose === "mark-options" ? markWarningEditorRef.current : canvas;
+    if (!target || !canvas || !canvasWrap || !focusTarget) return;
     completedFocusRequestIdRef.current = warningFocusRequest.requestId;
     const behavior: ScrollBehavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
       ? "auto"
@@ -1299,8 +1359,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       top: Math.max(0, (target.y + target.height / 2) * scaleY - canvasWrap.clientHeight / 2),
       behavior,
     });
-    editor.focus({ preventScroll: true });
-    editor.scrollIntoView?.({ behavior, block: "center", inline: "nearest" });
+    focusTarget.focus({ preventScroll: true });
+    (warningFocusRequest.purpose === "mark-options" ? focusTarget : canvasWrap)
+      .scrollIntoView?.({ behavior, block: "center", inline: "nearest" });
     onFocusRequestResult?.({ requestId: warningFocusRequest.requestId, focused: true });
   }, [displayCellById, displayHeight, displayWidth, onFocusRequestResult, selectedId, warningFocusRequest]);
   const selected = layout.cells.find((cell) => cell.id === selectedId) ?? null;
@@ -1721,6 +1782,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   };
 
   const save = useCallback(async (automatic = false): Promise<boolean> => {
+    if (draftReviewRequired) return false;
     if (disabled || operationLockRef.current) return false;
     if (!dirty && !allowUnchangedSave) {
       return !dirty;
@@ -1762,7 +1824,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setBusy(false);
       operationLockRef.current = false;
     }
-  }, [allowUnchangedSave, disabled, dirty, currentSignature, layout, onSave, preserveDetectedRoles, workflowStep]);
+  }, [allowUnchangedSave, disabled, dirty, currentSignature, layout, onSave, preserveDetectedRoles, workflowStep, draftReviewRequired]);
 
   const finishFlush = useCallback((saved: boolean) => {
     flushRef.current?.resolve(saved);
@@ -1770,6 +1832,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setFlushRequested(false);
   }, []);
   const flushLatest = useCallback((): Promise<boolean> => {
+    if (draftReviewRequired) return Promise.resolve(false);
     if (flushRef.current) return flushRef.current.promise;
     if (disabled || (operationLockRef.current && !saving)) return Promise.resolve(false);
     let resolve!: (saved: boolean) => void;
@@ -1778,7 +1841,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     flushNeedsSaveRef.current = !saving && allowUnchangedSave;
     setFlushRequested(true);
     return promise;
-  }, [allowUnchangedSave, disabled, saving]);
+  }, [allowUnchangedSave, disabled, saving, draftReviewRequired]);
   useImperativeHandle(ref, () => ({ saveIfNeeded: flushLatest }), [flushLatest]);
   useEffect(() => {
     if (!flushRequested || saving || busy) return;
@@ -1797,6 +1860,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   useEffect(() => {
     if (
       !dirty
+      || draftReviewRequired
       || disabled
       || busy
       || saving
@@ -1809,7 +1873,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       void save(true);
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [busy, saving, flushRequested, currentSignature, dirty, disabled, save, workflowStep]);
+  }, [busy, saving, flushRequested, currentSignature, dirty, disabled, save, workflowStep, draftReviewRequired]);
 
   const hoveredMeaningCellIdRef = useRef<string | null>(null);
   const hoveredHeadingKeysRef = useRef(new Set<string>());
@@ -1822,6 +1886,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (rectanglesHidden) return;
 
 
     if (mode === "identity") {
@@ -2218,6 +2283,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     selectedId,
     selectedIds,
     mode,
+    rectanglesHidden,
     polygonPoints,
     virtualHeadingEditor?.id,
     draft,
@@ -2531,7 +2597,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       }),
     }));
   };
-  const setRoles = (ids: Iterable<string>, role: LayoutCell["role"]) => {
+  const setRoles = (ids: Iterable<string>, role: LayoutCell["role"], reading?: "symbol" | "selection") => {
     const idSet = new Set(ids);
     if (idSet.size === 0) return;
     if (role !== "parent_label" && layout.cells.some(cell => idSet.has(cell.id) && cell.virtual)) {
@@ -2545,6 +2611,19 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         )
         : new Map<string, number>();
       let relations = current.relations;
+      if (role === "input") {
+        for (const cell of current.cells.filter(cell => idSet.has(cell.id) && cell.role === "mark")) {
+          const symbol = cell.markSets?.length === 1 && cell.markSets[0].recognitionMode === "symbol"
+            ? cell.markSets[0] : null;
+          if (!symbol?.targetPath) continue;
+          const existing = relations.find(relation => relation.inputCellId === cell.id);
+          relations = existing
+            ? relations.map(relation => relation.inputCellId === cell.id
+              ? { ...relation, targetPath: symbol.targetPath } : relation)
+            : [...relations, { id: `relation_${crypto.randomUUID()}`, inputCellId: cell.id,
+              labelCellIds: [], axis: "horizontal", order: 0, targetPath: symbol.targetPath }];
+        }
+      }
       if (role !== "input" && role !== "mark") {
         relations = relations.filter((relation) => !idSet.has(relation.inputCellId));
       }
@@ -2609,6 +2688,29 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               ? null : originalCell.parentLabelCellId,
           };
           if (!idSet.has(cell.id)) return cell;
+          if (reading === "symbol") {
+            const previous = cell.markSets?.[0];
+            const targetPath = (cell.role === "input"
+              ? current.relations.find(relation => relation.inputCellId === cell.id)?.targetPath
+              : previous?.targetPath) || previous?.targetPath || "";
+            return { ...cell, role, source: "manual" as const,
+              markSets: previous?.recognitionMode === "symbol" ? [{ ...previous, targetPath }] : [{
+                id: previous?.id ?? "choice",
+                targetPath,
+                recognitionMode: "symbol" as const,
+                selectionMode: "single" as const,
+                options: ["○", "◎", "×", "△"].map((symbol, index) => ({
+                  id: `symbol_${index + 1}`, label: symbol, value: symbol,
+                  x: 0, y: 0, width: cell.width, height: cell.height,
+                })),
+              }],
+            };
+          }
+          if (reading === "selection" && cell.markSets?.some(set => set.recognitionMode === "symbol")) {
+            return { ...cell, role, source: "manual" as const,
+              markSets: cell.markSets.map(set => ({ ...set, recognitionMode: "manual" as const })),
+            };
+          }
           if (role !== "mark" || (cell.markSets?.length ?? 0) > 0) {
             return { ...cell, role, source: "manual" };
           }
@@ -3578,6 +3680,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
   return (
     <div className="layout-editor" aria-busy={busy}>
+      {draftReviewRequired && <section className="inline-warning" aria-label="復元した下書きの確認">
+        <p>保存版との一致を確認できない下書きを復元しました。自動保存を停止しています。現在の編集内容を確認してください。</p>
+        <details>
+          <summary>保存版と異なる欄の区分</summary>
+          <ul>{layout.cells.flatMap(cell => {
+            const savedCell = initialLayout.cells.find(saved => saved.id === cell.id);
+            return savedCell && savedCell.role !== cell.role
+              ? [<li key={cell.id}>{cell.text || cell.id}: 保存版 {LAYOUT_ROLE_LABEL[savedCell.role]} ／ 下書き {LAYOUT_ROLE_LABEL[cell.role]}</li>]
+              : [];
+          })}</ul>
+          <p>区分以外の未保存編集も保持しています。</p>
+        </details>
+        <button type="button" disabled={busy || disabled || saving} onClick={() => {
+          setDraftReviewRequired(false);
+          lastAutoSaveAttemptSignatureRef.current = null;
+        }}>現在の下書きを採用して保存を再開</button>
+      </section>}
       <fieldset className="layout-editor-fields" disabled={busy || disabled}>
       <div className="layout-commandbar" role="toolbar" aria-label="レイアウト編集">
         {workflowStep && (
@@ -3726,7 +3845,31 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="record-parent" label="見出しへ接続" onChange={setMode} />}
         {workflowStep !== "identity" && workflowStep !== "review" && (
-          <ModeButton current={mode} mode="erase" label="消しゴム" onChange={setMode} />
+          <>
+            <ModeButton current={mode} mode="erase" label="消しゴム" onChange={setMode} />
+            <button
+              type="button"
+              className={rectanglesHidden ? "active" : ""}
+              aria-pressed={rectanglesHidden}
+              aria-controls="layout-mapping-canvas"
+              aria-label={rectanglesHidden ? "すべての矩形を表示" : "すべての矩形を非表示"}
+              onClick={() => {
+                if (!rectanglesHidden) {
+                  dragStart.current = null;
+                  moveDrag.current = null;
+                  eraserPathRef.current = null;
+                  setDraft(null);
+                  setLinkPoint(null);
+                  setEraserTrail([]);
+                  magnifierPointerRef.current = null;
+                  hideMagnifier();
+                }
+                setRectanglesHidden(current => !current);
+              }}
+            >
+              {rectanglesHidden ? "矩形を表示" : "矩形を非表示"}
+            </button>
+          </>
         )}
         {showMeaningStep && (
           <button
@@ -3790,7 +3933,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         <div className="mapping-preview-shell">
           <div
             ref={canvasWrapRef}
-            className={highlightUnassigned
+            className={highlightUnassigned && !rectanglesHidden
               ? "mapping-canvas-wrap unassigned-highlight-active"
               : "mapping-canvas-wrap"}
             aria-busy={detecting}
@@ -3801,17 +3944,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             ref={canvasRef}
             width={displayWidth}
             height={displayHeight}
-            tabIndex={0}
+            tabIndex={rectanglesHidden ? -1 : 0}
             aria-label={showIdentityStep ? "書類を見分ける欄を選択する帳票プレビュー" : "帳票レイアウト編集キャンバス"}
             aria-describedby="layout-keyboard-help"
             className={`layout-mode-${mode}`}
+            style={rectanglesHidden ? { pointerEvents: "none" } : undefined}
             onPointerEnter={(event) => queueMagnifier(event.clientX, event.clientY)}
             onPointerLeave={() => {
               magnifierPointerRef.current = null;
               hideMagnifier();
             }}
             onClick={(event) => {
-              if (busy || disabled || mode !== "identity") return;
+              if (rectanglesHidden || busy || disabled || mode !== "identity") return;
               const hit = cellAt(point(event));
               const candidate = hit ? identityCandidateByCellId.get(hit.id) : null;
               if (!candidate) {
@@ -3822,6 +3966,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               toggleIdentityCandidate(candidate);
             }}
             onKeyDown={(event) => {
+              if (rectanglesHidden) return;
               if (event.key === "Escape") {
                 moveDrag.current = null;
                 setPolygonPoints([]); setVirtualHeadingEditor(null); setMode("select");
@@ -3855,7 +4000,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 : new Set([nextId]));
             }}
             onPointerDown={(event) => {
-              if (busy || disabled) return;
+              if (rectanglesHidden || busy || disabled) return;
               if (virtualHeadingEditor) {
                 event.preventDefault();
                 commitVirtualHeadingEditor();
@@ -3969,6 +4114,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               setDraft({ ...location, width: 0, height: 0 });
             }}
             onPointerMove={(event) => {
+              if (rectanglesHidden) return;
               queueMagnifier(event.clientX, event.clientY);
               const location = point(event);
               if (mode === "move" && moveDrag.current) {
@@ -3999,6 +4145,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               }
             }}
             onPointerUp={(event) => {
+              if (rectanglesHidden) return;
               const location = point(event);
               if (mode === "move") {
                 const moving = moveDrag.current;
@@ -4112,7 +4259,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               setMode("select");
             }}
             onDoubleClick={(event) => {
-              if (busy || disabled || mode !== "record") return;
+              if (rectanglesHidden || busy || disabled || mode !== "record") return;
               const location = point(event);
               const bounds = event.currentTarget.getBoundingClientRect();
               const hitTolerance = Math.max(
@@ -4145,7 +4292,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               setEraserTrail([]);
             }}
               />
-              {warningFocusDisplayCell && (
+              {!rectanglesHidden && warningFocusDisplayCell && (
                 <span
                   className="layout-warning-cell-highlight"
                   data-cell-id={warningFocusDisplayCell.id}
@@ -4336,10 +4483,27 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   <div className="role-buttons">
                     <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "label") ? "active label-role" : ""} onClick={() => setRoles(selectedIds, "label")}>項目名</button>
                     <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "parent_label") ? "active parent-label-role" : ""} onClick={() => setRoles(selectedIds, "parent_label")}>見出し</button>
-                    <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "input") ? "active input-role" : ""} onClick={() => setRoles(selectedIds, "input")}>記入欄</button>
-                    <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "mark") ? "active mark-role" : ""} onClick={() => setRoles(selectedIds, "mark")}>選択欄</button>
+                    <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "input" || cell.role === "mark") ? "active input-role" : ""} onClick={() => setRoles(selectedCells.filter(cell => cell.role !== "input" && cell.role !== "mark").map(cell => cell.id), "input")}>記入欄</button>
                     <button className={selectedCells.length > 0 && selectedCells.every(cell => cell.role === "ignored") ? "active" : ""} onClick={() => setRoles(selectedIds, "ignored")}>読み取らない</button>
                   </div>
+                </fieldset>
+              )}
+              {showClassificationStep && selectedCells.length > 0
+                && selectedCells.every(cell => cell.role === "input" || cell.role === "mark") && (
+                <fieldset>
+                  <legend>読み取り方法</legend>
+                  <div className="role-buttons">
+                    <button aria-pressed={selectedCells.every(cell => cell.role === "input")}
+                      onClick={() => setRoles(selectedIds, "input")}>文字を読む</button>
+                    <button aria-pressed={selectedCells.every(cell => cell.role === "mark" && cell.markSets?.some(set => set.recognitionMode === "symbol"))}
+                      disabled={!!pageView || selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)}
+                      onClick={() => setRoles(selectedIds, "mark", "symbol")}>この欄に書かれた記号を判定する</button>
+                    <button aria-pressed={selectedCells.every(cell => cell.role === "mark" && !cell.markSets?.some(set => set.recognitionMode === "symbol"))}
+                      onClick={() => setRoles(selectedIds, "mark", "selection")}>印刷された選択肢から選ぶ</button>
+                  </div>
+                  {pageView && <small>記号の判定は単一ページのテンプレートで利用できます。</small>}
+                  {selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)
+                    && <small>記号の判定には、複合項目や複数の選択グループを含まない欄を使用してください。</small>}
                 </fieldset>
               )}
               {showLabelStep && !selected.virtual && (selected.role === "label" || selected.role === "parent_label") && (
@@ -4377,7 +4541,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               {showMeaningStep && selected.role === "mark" && (
                 <div
                   ref={markWarningEditorRef}
-                  className={warningFocusRequest?.cellId === selected.id
+                  className={warningFocusRequest?.purpose === "mark-options" && warningFocusRequest.cellId === selected.id
                     ? "mark-warning-focus-target active"
                     : "mark-warning-focus-target"}
                   tabIndex={-1}
@@ -4610,19 +4774,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       </div>
 
       {showMeaningStep && (
-        <section className="meaning-target-manager" aria-label="保存する情報を直接指定">
-          <header>
+        <details className="meaning-target-manager" aria-label="保存する情報を直接指定">
+          <summary>
             <div>
               <span className="panel-kicker">保存する情報</span>
               <h3>登録済みの項目から保存先を選ぶ</h3>
-              <p>
-                登録済みの項目を確認してから、プレビューで選択した記入欄へ割り当てます。
-              </p>
             </div>
             <span className="meaning-target-count">
               登録済み {labelPoolEntries.length}項目
             </span>
-          </header>
+          </summary>
+          <div className="meaning-target-content">
+          <p className="meaning-target-description">
+            登録済みの項目を確認してから、プレビューで選択した記入欄へ割り当てます。
+          </p>
           <div className={`meaning-target-selection ${selected?.role === "input" ? "ready" : "waiting"}`}>
             <strong>{selected?.role === "input" ? "選択中の記入欄" : "記入欄を選択してください"}</strong>
             <span>{selected?.role === "input"
@@ -4703,10 +4868,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               <span>必要な項目を追加すると、このテンプレートだけの候補として表示されます。</span>
             </div>
           )}
-        </section>
+          </div>
+        </details>
       )}
 
-      {showRecordStep && <section className="record-structure-editor">
+      {showRecordStep && <section className="record-structure-editor" hidden>
         <div className="record-structure-head">
           <div>
             <span className="eyebrow">RECORD STRUCTURE</span>
@@ -5054,7 +5220,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           設定不完全: {cell.text || cell.id} ({cell.id}) — 各選択欄に保存先と1件以上の選択肢を設定してください。
         </p>
       ))}
-      {layout.warnings.map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+      {layout.warnings
+        .filter((warning) => !HIDDEN_REVIEW_INFORMATION_MESSAGES.has(warning))
+        .map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
       {!recordStructureReady && (
         <p className="inline-warning">
           途中保存できます。OCRへ進むには、複数の列見出しを横断して各行を自動編成してください。既存の繁殖台帳形式だけは親ラベル接続も必要です。
@@ -5075,15 +5243,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           途中保存できます。OCRへ進むには、「照合と書類名」で照合グループと書類名の作り方を指定してください。
         </p>
       )}
-      <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
+      {(saving || dirty || allowUnchangedSave) && <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
         {saving
           ? busy ? "DBへ保存中です。" : "DBへ保存中です。編集は続けられます。"
           : dirty
           ? "保存していないレイアウト変更があります。"
-          : allowUnchangedSave
-          ? "検出内容を確認し、意味づけをDBへ保存してください。"
-          : "レイアウト変更は保存済みです。"}
-      </p>
+          : "検出内容を確認し、意味づけをDBへ保存してください。"}
+      </p>}
       {message && <p className="layout-status" aria-live="polite">{message}</p>}
       <button
         type="button"
@@ -5340,7 +5506,8 @@ function MarkCellEditor({
     dragRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   };
-  const isCalvingMark = sets.some((markSet) => /^calvings\.\d+\./.test(markSet.targetPath));
+  const isCalvingMark = sets.some((markSet) => /^calvings\.\d+\./.test(markSet.targetPath))
+    && !sets.some(markSet => markSet.recognitionMode === "symbol");
   if (!isCalvingMark) {
     return (
       <GenericChoiceCellEditor
@@ -5604,6 +5771,7 @@ function GenericChoiceCellEditor({
 }) {
   const [newOptionLabel, setNewOptionLabel] = useState("");
   const markSet = sets[0];
+  const isSymbol = markSet?.recognitionMode === "symbol";
   const sections = [...new Set(targets.map((target) => target.section))];
   if (!markSet) {
     return (
@@ -5637,7 +5805,7 @@ function GenericChoiceCellEditor({
   ));
   return (
     <fieldset className="mark-cell-editor generic-choice-editor">
-      <legend>選択欄の設定</legend>
+      <legend>{isSymbol ? "記号の候補と保存先" : "選択欄の設定"}</legend>
       <label>
         保存する情報
         <select
@@ -5654,7 +5822,7 @@ function GenericChoiceCellEditor({
           ))}
         </select>
       </label>
-      <div className="choice-setting-grid">
+      {!isSymbol && <div className="choice-setting-grid">
         <label>
           判定方法
           <select
@@ -5679,13 +5847,14 @@ function GenericChoiceCellEditor({
             <option value="multiple">複数可</option>
           </select>
         </label>
-      </div>
+      </div>}
       <p>
-        {markSet.recognitionMode === "manual"
+        {isSymbol ? "この欄全体の画像から、候補の記号を1つ判定します。空欄は空欄、候補外や判読できない記号は確認対象にします。"
+          : markSet.recognitionMode === "manual"
           ? "この欄はOCRへ送らず、読み取り確認画面で利用者が画像を見て選択します。"
           : "選択肢ごとの範囲を画像差分で判定し、不確実な場合は確認対象にします。"}
       </p>
-      <svg
+      {!isSymbol && <svg
         className="mark-option-canvas"
         viewBox={`0 0 ${cell.width} ${cell.height}`}
         preserveAspectRatio="none"
@@ -5717,26 +5886,29 @@ function GenericChoiceCellEditor({
             </text>
           </g>
         ))}
-      </svg>
+      </svg>}
       <div className="generic-choice-options">
         {markSet.options.map((option) => (
           <div className="generic-choice-option" key={option.id}>
             <label>
-              表示名
+              {isSymbol ? "記号" : "表示名"}
               <input
                 value={option.label}
                 maxLength={100}
-                onChange={(event) => patchOption(option.id, { label: event.target.value })}
+                onChange={(event) => patchOption(option.id, {
+                  label: event.target.value,
+                  ...(isSymbol ? { value: event.target.value } : {}),
+                })}
               />
             </label>
-            <label>
+            {!isSymbol && <label>
               内部識別値
               <input
                 value={option.value}
                 maxLength={100}
                 onChange={(event) => patchOption(option.id, { value: event.target.value })}
               />
-            </label>
+            </label>}
             {markSet.recognitionMode === "automatic" && (["x", "y", "width", "height"] as const).map((key) => (
               <label key={key}>
                 {{ x: "X", y: "Y", width: "幅", height: "高さ" }[key]}
@@ -5770,11 +5942,11 @@ function GenericChoiceCellEditor({
       </div>
       <div className="choice-option-addition">
         <label>
-          新しい選択肢
+          {isSymbol ? "新しい記号" : "新しい選択肢"}
           <input
             value={newOptionLabel}
             maxLength={100}
-            placeholder="例: 有"
+            placeholder={isSymbol ? "例: □" : "例: 有"}
             onChange={(event) => setNewOptionLabel(event.target.value)}
           />
         </label>
@@ -6716,19 +6888,26 @@ function restoreLayoutDraft(
   initialLayout: LayoutDefinition,
   draftStorageKey?: string,
   preserveDetectedRoles = false,
-): LayoutDefinition {
-  if (!draftStorageKey) return normalizeLayout(initialLayout, preserveDetectedRoles);
+): { layout: LayoutDefinition; needsReview: boolean } {
+  const saved = normalizeLayout(initialLayout, preserveDetectedRoles);
+  if (!draftStorageKey) return { layout: saved, needsReview: false };
   try {
     const stored = window.localStorage.getItem(draftStorageKey);
-    if (!stored) return normalizeLayout(initialLayout, preserveDetectedRoles);
-    return normalizeLayout(JSON.parse(stored) as LayoutDefinition, preserveDetectedRoles);
+    if (!stored) return { layout: saved, needsReview: false };
+    const layout = normalizeLayout(JSON.parse(stored) as LayoutDefinition, preserveDetectedRoles);
+    const savedSignature = layoutSignature(saved);
+    return {
+      layout,
+      needsReview: layoutSignature(layout) !== savedSignature
+        && window.localStorage.getItem(`${draftStorageKey}:baseline`) !== savedSignature,
+    };
   } catch {
     try {
       window.localStorage.removeItem(draftStorageKey);
     } catch {
       // Ignore storage failures and continue with the server-backed layout.
     }
-    return normalizeLayout(initialLayout, preserveDetectedRoles);
+    return { layout: saved, needsReview: false };
   }
 }
 

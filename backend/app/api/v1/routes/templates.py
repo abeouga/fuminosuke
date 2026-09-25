@@ -4,7 +4,18 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import Field, model_validator
 
@@ -37,6 +48,7 @@ from app.repositories.template_repository import TemplateRepository
 from app.services.google_oauth_service import AuthenticatedUser
 from app.services.job_service import UploadPayload
 from app.services.layout_service import LayoutService
+from app.services.legacy_template_print_service import LegacyTemplatePrintService
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
 from app.services.template_candidate_service import TemplateCandidateService
 from app.services.template_definition_service import TemplateDefinitionService
@@ -69,6 +81,16 @@ class TemplateView(ApiModel):
 
 class TemplateDeleteResponse(ApiModel):
     outcome: Literal["deleted", "archived"]
+
+
+class TemplateDuplicateRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=200)
+    activate: bool = False
+
+
+class TemplateDuplicateResponse(ApiModel):
+    template_id: str
+    template_version_id: str
 
 
 class TemplateOutputFolderView(ApiModel):
@@ -157,7 +179,7 @@ class FieldMappingView(ApiModel):
     vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
     printed_label_text: str = ""
     mapping_type: str = "text"
-    mark_recognition_mode: Literal["automatic", "manual"] = "automatic"
+    mark_recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
     mark_selection_mode: str = "multiple"
     mark_options: list[MarkOptionView] = Field(default_factory=list)
     composite_subfields: list[CompositeSubfieldView] = Field(default_factory=list)
@@ -405,6 +427,25 @@ def edit_template_version(
     return _version_view(TemplateVersionService(
         request.app.state.database, request.app.state.storage,
     ).edit(version_id, expected_revision=base_revision))
+
+
+@router.post(
+    "/template-versions/{version_id}/duplicate",
+    response_model=TemplateDuplicateResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+def duplicate_template_version(
+    request: Request, version_id: str, payload: TemplateDuplicateRequest,
+) -> TemplateDuplicateResponse:
+    from app.services.template_duplicate_service import TemplateDuplicateService
+
+    template_id, template_version_id = TemplateDuplicateService(
+        request.app.state.database, request.app.state.storage,
+    ).duplicate(version_id, payload.name, activate=payload.activate)
+    return TemplateDuplicateResponse(
+        template_id=template_id, template_version_id=template_version_id,
+    )
 
 
 @router.get("/template-versions/{version_id}/field-identities")
@@ -677,6 +718,28 @@ def print_template_version(
             auto_print=auto_print,
         )
     return HTMLResponse(content)
+
+
+@router.get("/template-versions/{version_id}/blank-files/{format_name}")
+def download_legacy_template_print_file(
+    request: Request, version_id: str, format_name: Literal["xlsx", "pdf"],
+) -> Response:
+    result = LegacyTemplatePrintService(
+        request.app.state.database, request.app.state.storage,
+    ).export(version_id, format_name)
+    return Response(
+        result.content,
+        media_type=(
+            "application/pdf" if format_name == "pdf"
+            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="print-{version_id}.{format_name}"',
+            "ETag": f'"{result.sha256}"',
+            "X-Renderer-Qualified": "false",
+        },
+    )
 
 
 @router.get(

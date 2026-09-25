@@ -256,8 +256,8 @@ class RawSettings(BaseSettings):
     openai_reasoning_effort: Literal["low", "medium", "high"] = Field(
         default="low", validation_alias="OPENAI_REASONING_EFFORT"
     )
-    openai_max_calls_per_job: int = Field(default=8, validation_alias="OPENAI_MAX_CALLS_PER_JOB")
-    openai_max_output_tokens: int = Field(default=4000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS")
+    openai_max_calls_per_job: int = Field(default=16, validation_alias="OPENAI_MAX_CALLS_PER_JOB")
+    openai_max_output_tokens: int = Field(default=12000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS")
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(

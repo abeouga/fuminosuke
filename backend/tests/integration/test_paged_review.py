@@ -47,6 +47,9 @@ def edit_payload(revision, mapping_id, value="任意の補正文字"):
 def test_page_correction_preserves_identity_other_page_and_raw(client, reviewed_case):
     service, job, url, before = reviewed_case
     first, second = before["pages"]
+    assert before["reviewStructure"] == job.config_snapshot_json["jobPages"][
+        "documentSnapshot"
+    ]["reviewStructure"]
     mapping = second["fields"][0]
     payload = edit_payload(before["revision"], mapping["mappingId"])
     with service.database.session() as session:
@@ -65,6 +68,8 @@ def test_page_correction_preserves_identity_other_page_and_raw(client, reviewed_
         assert updated["reading"][key] == mapping["reading"][key]
     assert second["pageId"] in updated["cropUrl"]
     assert client.get(updated["cropUrl"]).status_code == 200
+    assert second["pageId"] in after["pages"][1]["pageImageUrl"]
+    assert client.get(after["pages"][1]["pageImageUrl"]).status_code == 200
     assert client.get(url).json() == after
     with service.database.session() as session:
         stored = session.get(PagedReview, job.id)

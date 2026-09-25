@@ -476,7 +476,7 @@ function reviewResultFixture({
   };
 }
 
-test("imports the edited Google Sheets layout as a versioned output template", async () => {
+test("shows the custom output layout entry as unavailable while it is being implemented", async () => {
   const resultBody = {
     jobId: "job-layout",
     revision: 2,
@@ -510,49 +510,23 @@ test("imports the edited Google Sheets layout as a versioned output template", a
       lastError: null,
     },
   };
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
     if (path.endsWith("/ocr-jobs/job-layout/result")) return jsonResponse(resultBody);
     if (path.endsWith("/jobs/job-layout/artifacts")) return jsonResponse({ items: [] });
     if (path.endsWith("/sire-names")) return jsonResponse({ items: [] });
-    if (path.endsWith("/ocr-jobs/job-layout/output-layout/import")) {
-      expect(init?.method).toBe("POST");
-      return jsonResponse({
-        active: true,
-        templateVersionId: "version-layout",
-        revision: 1,
-        sheetName: "帳票レイアウト",
-        bindingCount: 4,
-        sourceJobId: "job-layout",
-        createdAt: "2026-08-20T00:00:00+00:00",
-      });
-    }
-    if (path.endsWith("/ocr-jobs/job-layout/output-layout")) {
-      return jsonResponse({
-        active: false,
-        templateVersionId: "version-layout",
-        revision: null,
-        sheetName: "帳票レイアウト",
-        bindingCount: 0,
-        sourceJobId: null,
-        createdAt: null,
-      });
-    }
     return jsonResponse({});
   });
   vi.stubGlobal("fetch", fetchMock);
 
   render(<ReviewPage jobId="job-layout" onClose={() => undefined} />);
 
-  expect(await screen.findByText("出力レイアウトは未保存です")).toBeInTheDocument();
+  expect(await screen.findByText("カスタム出力レイアウト · 実装中")).toBeInTheDocument();
+  expect(screen.getByText(/出力先セルを紐付ける設定機能を実装中です/)).toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: "レイアウト用シートを初期出力" }),
-  ).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "シートのレイアウトを取り込む" }));
-  expect(
-    await screen.findByText("出力レイアウト保存済み · REVISION 1"),
-  ).toBeInTheDocument();
-  expect(screen.getByText("帳票レイアウトをREVISION 1として保存しました。")).toBeInTheDocument();
+    screen.getByRole("button", { name: "カスタム出力用シートを取り込む" }),
+  ).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "レイアウト用シートを初期出力" })).not.toBeInTheDocument();
 });
 
 test("confirms OCR-detected identity before showing the full result table", async () => {
@@ -1303,7 +1277,30 @@ test("keeps confirmed OCR evidence while suppressing review warnings and editors
   expect(screen.queryByLabelText("選択セルの判定")).not.toBeInTheDocument();
 });
 
-test("does not render a confirmed choice editor while keeping its crop available", async () => {
+test("corrects a symbol through the existing single-choice review editor", async () => {
+  const result = reviewResultFixture({ jobId: "job-symbol" });
+  result.fieldPreviews[0] = { ...result.fieldPreviews[0], mappingType: "mark",
+    markRecognitionMode: "symbol", markSelectionMode: "single",
+    markOptions: ["○", "◎", "×", "△"].map(label => ({ label, value: label })) };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.endsWith("/ocr-jobs/job-symbol/result")) return jsonResponse(result);
+    return jsonResponse({ items: [] });
+  }));
+  render(<ReviewPage jobId="job-symbol" onClose={() => undefined} />);
+  const cell = await screen.findByRole("button", { name: "value customFields.value を編集" });
+  fireEvent.click(cell);
+  expect(await screen.findByRole("dialog", { name: "valueを選択" })).toHaveClass("generic-choice-modal");
+  expect(screen.getByAltText("valueの選択欄")).toHaveAttribute("src", "/value-cell.jpg");
+  fireEvent.click(screen.getByRole("button", { name: "○" }));
+  fireEvent.click(screen.getByRole("button", { name: "◎" }));
+  expect(screen.getByRole("button", { name: "○" })).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(screen.getByRole("button", { name: "この選択を反映" }));
+  expect(cell).toHaveTextContent("◎");
+  expect(cell).toHaveTextContent("OK");
+});
+
+test.each(["manual", "symbol"] as const)("does not render a confirmed %s choice editor while keeping its crop available", async (recognitionMode) => {
   const confirmedResult = reviewResultFixture({
     jobId: "job-confirmed-choice",
     confirmed: true,
@@ -1311,7 +1308,7 @@ test("does not render a confirmed choice editor while keeping its crop available
   confirmedResult.fieldPreviews[0] = {
     ...confirmedResult.fieldPreviews[0],
     mappingType: "mark",
-    markRecognitionMode: "manual",
+    markRecognitionMode: recognitionMode,
     markSelectionMode: "single",
     markOptions: [{ label: "対象", value: "target" }],
   };

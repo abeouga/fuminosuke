@@ -8,26 +8,72 @@ from sqlalchemy.orm import Session
 from app.db.models import PagedOcrBudget, PagedOcrCall, ProcessingJob
 from app.db.session import Database
 from app.domain.print_layout import print_error
+from app.ocr.openai_provider import OpenAIOcrProvider
 from app.services.print_layout_service import digest
 from app.services.template_mutation import begin_immediate
 
 ADAPTER = "paged-ocr-job-budget-v1"
+PLAN_ADAPTER = "paged-ocr-retry-reserve-v1"
+DOCUMENT_RETRY_RESERVE_COUNT = 1
 
 
 def budget_policy(max_calls: int) -> dict[str, Any]:
     return {"adapter": ADAPTER, "scope": "job", "maxCalls": max_calls}
 
 
+def call_budget_plan(pages: list[dict[str, Any]], max_calls: int) -> dict[str, Any]:
+    """Calculate admission capacity from the accepted page snapshots."""
+    page_calls = []
+    for page in pages:
+        if page.get("ocrProvider") != "openai" or page.get("ocrEnabled", True) is not True:
+            continue
+        minimum = OpenAIOcrProvider.minimum_call_count(
+            len(page.get("fieldMappings", [])),
+            len(page.get("documentContext", {}).get("identityFields", [])),
+        )
+        page_calls.append({"pageId": page["pageId"], "minimumCalls": minimum})
+    minimum_calls = sum(page["minimumCalls"] for page in page_calls)
+    retry_reserve = minimum_calls * DOCUMENT_RETRY_RESERVE_COUNT
+    return {
+        "adapter": PLAN_ADAPTER,
+        "pageMinimumCalls": page_calls,
+        "minimumCalls": minimum_calls,
+        "documentRetryReserveCalls": retry_reserve,
+        "requiredCalls": minimum_calls + retry_reserve,
+        "maxCalls": max_calls,
+    }
+
+
+def require_call_budget_plan(
+    pages: list[dict[str, Any]], max_calls: int,
+) -> dict[str, Any]:
+    plan = call_budget_plan(pages, max_calls)
+    if plan["minimumCalls"] < 1 or max_calls < plan["requiredCalls"]:
+        raise print_error(
+            "このテンプレートにはOCR呼び出しが最低"
+            f"{plan['minimumCalls']}回、文書再試行枠を含めて{plan['requiredCalls']}回必要ですが、"
+            f"現在の上限は{max_calls}回です。サーバー設定を増やしてから新しい読み取りを開始してください。",
+            "OCR_CALL_BUDGET_RETRY_RESERVE_REQUIRED",
+            409,
+        )
+    return plan
+
+
 def _limit(job: ProcessingJob) -> int:
     bundle = job.config_snapshot_json.get("jobPages", {})
     policy = bundle.get("ocrCallBudget")
     maximum = policy.get("maxCalls") if isinstance(policy, dict) else None
+    plan = bundle.get("ocrCallBudgetPlan")
     if (
         type(maximum) is not int
         or maximum < 1
         or policy != budget_policy(maximum)
         or digest(bundle) != job.config_snapshot_json.get("jobPagesSha256")
         or maximum != bundle.get("executionConfig", {}).get("ocr", {}).get("max_calls_per_job")
+        or (
+            plan is not None
+            and plan != call_budget_plan(bundle.get("pages", []), maximum)
+        )
     ):
         raise print_error(
             "受付時のOCR呼び出し予算を検証できません。", "PAGE_OCR_BUDGET_REQUIRED", 409

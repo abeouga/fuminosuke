@@ -762,7 +762,8 @@
           "default": "automatic",
           "enum": [
             "automatic",
-            "manual"
+            "manual",
+            "symbol"
           ],
           "title": "Markrecognitionmode",
           "type": "string"
@@ -1431,7 +1432,8 @@
           "default": "automatic",
           "enum": [
             "automatic",
-            "manual"
+            "manual",
+            "symbol"
           ],
           "title": "Recognitionmode",
           "type": "string"
@@ -2346,7 +2348,8 @@
           "default": "automatic",
           "enum": [
             "automatic",
-            "manual"
+            "manual",
+            "symbol"
           ],
           "title": "Recognitionmode",
           "type": "string"
