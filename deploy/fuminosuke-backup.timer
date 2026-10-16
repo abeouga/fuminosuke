@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Fuminosuke recovery point
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Tokyo
+Persistent=true
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,1595 @@
+{
+  "version": "template-analysis.phase25.result.v1",
+  "completedSchedule": true,
+  "scheduledTrials": 10,
+  "completedTrials": 10,
+  "apiCalls": 10,
+  "actualHttpAttempts": 10,
+  "endpoints": {
+    "/v1/responses": 8,
+    "/v1/decisions": 2
+  },
+  "shapeAndGuardValid": 9,
+  "draftStatusCounts": {
+    "draft": 5,
+    "partial_draft": 2,
+    "held": 2,
+    "rejected": 1
+  },
+  "qualityCorrect": {
+    "roles": 89,
+    "bindings": 54,
+    "rows": 6,
+    "marks": 3
+  },
+  "qualityRequired": {
+    "roles": 146,
+    "bindings": 74,
+    "rows": 14,
+    "marks": 16
+  },
+  "wrongFocusBindings": 4,
+  "missingFocusBindings": 12,
+  "duplicateBindings": 0,
+  "qualityQualified": 4,
+  "within5000": 0,
+  "qualityQualifiedMedianMs": 6139.3249000029755,
+  "allScopeReadyMedianMs": 5938.422499995795,
+  "qualityFailurePenaltyMedianMs": 60000.0,
+  "completeManualProjectionMatched": 4,
+  "manualProjectionPreserved": 9,
+  "existingGraphExactNoop": 9,
+  "physicalAndScopePreserved": 9,
+  "gates": {
+    "completedSchedule": true,
+    "allFocusCorrect": false,
+    "wrongFocusBindingsZero": false,
+    "qualityQualifiedMedianWithin5000": false,
+    "qualityQualifiedWithin5000AtLeast8Of10": false,
+    "everyScopeAtLeast1Of2Within5000": false,
+    "fullProjectionAllTen": false,
+    "focusAndSpeedPassed": false
+  },
+  "passed": false,
+  "perScope": [
+    {
+      "caseId": "T1",
+      "trials": 2,
+      "states": [
+        "valid",
+        "valid"
+      ],
+      "draftStatuses": [
+        "draft",
+        "draft"
+      ],
+      "qualified": 2,
+      "within5000": 0,
+      "fullProjection": 2,
+      "scopeReadyMs": [
+        6341.107400003239,
+        5638.876199998776
+      ],
+      "scopeReadyMedianMs": 5989.9918000010075,
+      "providerHttpMedianMs": 5268.011850006587,
+      "localWireLedgerMedianMs": 721.9799499944202,
+      "quality": [
+        {
+          "correct": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true,
+          "roleErrors": [],
+          "outsideFocusBindings": []
+        },
+        {
+          "correct": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true,
+          "roleErrors": [],
+          "outsideFocusBindings": []
+        }
+      ]
+    },
+    {
+      "caseId": "T2",
+      "trials": 2,
+      "states": [
+        "valid",
+        "valid"
+      ],
+      "draftStatuses": [
+        "draft",
+        "draft"
+      ],
+      "qualified": 2,
+      "within5000": 0,
+      "fullProjection": 2,
+      "scopeReadyMs": [
+        6186.61790000624,
+        6092.031899999711
+      ],
+      "scopeReadyMedianMs": 6139.3249000029755,
+      "providerHttpMedianMs": 5031.785500003025,
+      "localWireLedgerMedianMs": 1107.5393999999505,
+      "quality": [
+        {
+          "correct": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "total": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true,
+          "roleErrors": [],
+          "outsideFocusBindings": [
+            {
+              "valueCellId": "cell_0042",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0043",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0040",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0041",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0039",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0038",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0037",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0050",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0051",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0048",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0049",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0047",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0046",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0044",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0057",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0058",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0055",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0056",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0054",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0053",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0052",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0066",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0067",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0065",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0064",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0063",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0062",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0061",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0075",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0074",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0073",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0071",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0072",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0070",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0068",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0082",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0081",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0080",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0079",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0078",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0077",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0076",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0091",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0090",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0089",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0088",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0087",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0086",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0085",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            }
+          ]
+        },
+        {
+          "correct": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "total": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true,
+          "roleErrors": [],
+          "outsideFocusBindings": [
+            {
+              "valueCellId": "cell_0042",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0043",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0040",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0041",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0039",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0038",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0037",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0050",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0051",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0048",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0049",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0047",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0046",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0044",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0057",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0058",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0055",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0056",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0054",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0053",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0052",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0066",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0067",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0065",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0064",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0063",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0062",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0061",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0075",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0074",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0073",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0071",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0072",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0070",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0068",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0082",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0081",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0080",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0079",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0078",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0077",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0076",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0091",
+              "labelCellIds": [
+                "cell_0008"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0090",
+              "labelCellIds": [
+                "cell_0010"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0089",
+              "labelCellIds": [
+                "cell_0011"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0088",
+              "labelCellIds": [
+                "cell_0009"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0087",
+              "labelCellIds": [
+                "cell_0007"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0086",
+              "labelCellIds": [
+                "cell_0006"
+              ],
+              "parentCellId": "cell_0004"
+            },
+            {
+              "valueCellId": "cell_0085",
+              "labelCellIds": [
+                "cell_0005"
+              ],
+              "parentCellId": "cell_0004"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "caseId": "T3",
+      "trials": 2,
+      "states": [
+        "valid",
+        "valid"
+      ],
+      "draftStatuses": [
+        "partial_draft",
+        "partial_draft"
+      ],
+      "qualified": 0,
+      "within5000": 0,
+      "fullProjection": 0,
+      "scopeReadyMs": [
+        4386.635300004855,
+        2008.5868000023765
+      ],
+      "scopeReadyMedianMs": 3197.6110500036157,
+      "providerHttpMedianMs": 2590.6991500014556,
+      "localWireLedgerMedianMs": 606.9119000021601,
+      "quality": [
+        {
+          "correct": {
+            "roles": 4,
+            "bindings": 2,
+            "rows": 0,
+            "marks": 1
+          },
+          "total": {
+            "roles": 12,
+            "bindings": 5,
+            "rows": 0,
+            "marks": 4
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_B6_e23a9cb6637e4af0aa2a",
+            "xlsx_B8_8c9cf949e4f74d87aefd",
+            "xlsx_B12_901cf93b16f54af8931a"
+          ],
+          "duplicates": [],
+          "qualified": false,
+          "roleErrors": [
+            {
+              "cellId": "xlsx_A1_4b7523504d3342f9bb03",
+              "expected": "parent_label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A2_1f4731c932b04b4aa778",
+              "expected": "ignored",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A6_2274ba2af0a746e781b0",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B6_e23a9cb6637e4af0aa2a",
+              "expected": "mark",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A8_777e51ce5fbe4beb866c",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B8_8c9cf949e4f74d87aefd",
+              "expected": "mark",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A12_f60892e4ca744f04a942",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B12_901cf93b16f54af8931a",
+              "expected": "mark",
+              "actual": "unknown"
+            }
+          ],
+          "outsideFocusBindings": []
+        },
+        {
+          "correct": {
+            "roles": 4,
+            "bindings": 2,
+            "rows": 0,
+            "marks": 2
+          },
+          "total": {
+            "roles": 12,
+            "bindings": 5,
+            "rows": 0,
+            "marks": 4
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_B4_d0c204eba4f24064a6b1",
+            "xlsx_B8_8c9cf949e4f74d87aefd",
+            "xlsx_B12_901cf93b16f54af8931a"
+          ],
+          "duplicates": [],
+          "qualified": false,
+          "roleErrors": [
+            {
+              "cellId": "xlsx_A1_4b7523504d3342f9bb03",
+              "expected": "parent_label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A2_1f4731c932b04b4aa778",
+              "expected": "ignored",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A4_e79957a6ee5249eb9c7e",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B4_d0c204eba4f24064a6b1",
+              "expected": "input",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A8_777e51ce5fbe4beb866c",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B8_8c9cf949e4f74d87aefd",
+              "expected": "mark",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_A12_f60892e4ca744f04a942",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_B12_901cf93b16f54af8931a",
+              "expected": "mark",
+              "actual": "unknown"
+            }
+          ],
+          "outsideFocusBindings": []
+        }
+      ]
+    },
+    {
+      "caseId": "H1",
+      "trials": 2,
+      "states": [
+        "valid",
+        "valid"
+      ],
+      "draftStatuses": [
+        "held",
+        "held"
+      ],
+      "qualified": 0,
+      "within5000": 0,
+      "fullProjection": 0,
+      "scopeReadyMs": [
+        5938.422499995795,
+        5149.824300009641
+      ],
+      "scopeReadyMedianMs": 5544.123400002718,
+      "providerHttpMedianMs": 5004.249450001225,
+      "localWireLedgerMedianMs": 539.8739500014926,
+      "quality": [
+        {
+          "correct": {
+            "roles": 0,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 7,
+            "bindings": 3,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_K10",
+            "xlsx_K11",
+            "xlsx_K12"
+          ],
+          "duplicates": [],
+          "qualified": false,
+          "roleErrors": [
+            {
+              "cellId": "xlsx_B10",
+              "expected": "parent_label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H10",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H11",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H12",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K10",
+              "expected": "input",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K11",
+              "expected": "input",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K12",
+              "expected": "input",
+              "actual": "unknown"
+            }
+          ],
+          "outsideFocusBindings": []
+        },
+        {
+          "correct": {
+            "roles": 0,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 7,
+            "bindings": 3,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_K10",
+            "xlsx_K11",
+            "xlsx_K12"
+          ],
+          "duplicates": [],
+          "qualified": false,
+          "roleErrors": [
+            {
+              "cellId": "xlsx_B10",
+              "expected": "parent_label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H10",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H11",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_H12",
+              "expected": "label",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K10",
+              "expected": "input",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K11",
+              "expected": "input",
+              "actual": "unknown"
+            },
+            {
+              "cellId": "xlsx_K12",
+              "expected": "input",
+              "actual": "unknown"
+            }
+          ],
+          "outsideFocusBindings": []
+        }
+      ]
+    },
+    {
+      "caseId": "H2",
+      "trials": 2,
+      "states": [
+        "valid",
+        "rejected"
+      ],
+      "draftStatuses": [
+        "draft",
+        null
+      ],
+      "qualified": 0,
+      "within5000": 0,
+      "fullProjection": 0,
+      "scopeReadyMs": [
+        6061.692299990682,
+        null
+      ],
+      "scopeReadyMedianMs": 6061.692299990682,
+      "providerHttpMedianMs": 5267.811249999795,
+      "localWireLedgerMedianMs": 629.6599999914179,
+      "quality": [
+        {
+          "correct": {
+            "roles": 3,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 15,
+            "bindings": 4,
+            "rows": 4,
+            "marks": 4
+          },
+          "wrongFocusBindings": [
+            {
+              "expected": {
+                "valueCellId": "xlsx_C6",
+                "labelCellIds": [
+                  "xlsx_B6",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C6",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C7",
+                "labelCellIds": [
+                  "xlsx_B7",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C7",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C8",
+                "labelCellIds": [
+                  "xlsx_B8",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C8",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C9",
+                "labelCellIds": [
+                  "xlsx_B9",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C9",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            }
+          ],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": false,
+          "roleErrors": [
+            {
+              "cellId": "xlsx_B6",
+              "expected": "label",
+              "actual": "record_key_cell"
+            },
+            {
+              "cellId": "xlsx_C6",
+              "expected": "mark",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_D6",
+              "expected": "ignored",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_B7",
+              "expected": "label",
+              "actual": "record_key_cell"
+            },
+            {
+              "cellId": "xlsx_C7",
+              "expected": "mark",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_D7",
+              "expected": "ignored",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_B8",
+              "expected": "label",
+              "actual": "record_key_cell"
+            },
+            {
+              "cellId": "xlsx_C8",
+              "expected": "mark",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_D8",
+              "expected": "ignored",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_B9",
+              "expected": "label",
+              "actual": "record_key_cell"
+            },
+            {
+              "cellId": "xlsx_C9",
+              "expected": "mark",
+              "actual": "input"
+            },
+            {
+              "cellId": "xlsx_D9",
+              "expected": "ignored",
+              "actual": "input"
+            }
+          ],
+          "outsideFocusBindings": [
+            {
+              "valueCellId": "xlsx_D6",
+              "labelCellIds": [
+                "xlsx_D5"
+              ],
+              "parentCellId": null
+            },
+            {
+              "valueCellId": "xlsx_D7",
+              "labelCellIds": [
+                "xlsx_D5"
+              ],
+              "parentCellId": null
+            },
+            {
+              "valueCellId": "xlsx_D8",
+              "labelCellIds": [
+                "xlsx_D5"
+              ],
+              "parentCellId": null
+            },
+            {
+              "valueCellId": "xlsx_D9",
+              "labelCellIds": [
+                "xlsx_D5"
+              ],
+              "parentCellId": null
+            }
+          ]
+        },
+        null
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 61003,
+    "output_tokens": 3062,
+    "total_tokens": 64065,
+    "cached_tokens": 1040,
+    "cache_write_tokens": 46183,
+    "reasoning_tokens": 1473
+  },
+  "budget": {
+    "used": 376,
+    "limit": 496,
+    "remaining": 120
+  },
+  "sourceLockSha256": "071bbabedb5502f8b7fa1d1b6527a2029fed655859ca612e45cc0dc2571f54e9",
+  "runnerRetries": 0,
+  "productActivated": false,
+  "phase26Started": false,
+  "limitations": [
+    "Fixed known scopes; two repetitions per scope",
+    "Historical Phase20 comparison is descriptive only",
+    "No product UI/DB save/undo/microphone acceptance",
+    "Complete names/aliases projection is reported separately from focus score",
+    "Scope-ready includes HTTP initialization, shared ledger and durability evidence writes; excludes imports/scoring"
+  ],
+  "historicalComparison": {
+    "F-low": {
+      "qualityCorrect": {
+        "roles": 46,
+        "bindings": 11,
+        "rows": 0,
+        "marks": 4
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 3,
+      "within5000": 2,
+      "wrongFocusBindings": 8,
+      "providerMedianMs": 6927.07,
+      "firstTextMedianMs": 5657.627
+    },
+    "P-low": {
+      "qualityCorrect": {
+        "roles": 67,
+        "bindings": 15,
+        "rows": 0,
+        "marks": 8
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 3,
+      "within5000": 2,
+      "wrongFocusBindings": 12,
+      "providerMedianMs": 5537.047,
+      "firstTextMedianMs": 4664.092
+    },
+    "P-none": {
+      "qualityCorrect": {
+        "roles": 30,
+        "bindings": 4,
+        "rows": 0,
+        "marks": 0
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 0,
+      "within5000": 0,
+      "wrongFocusBindings": 4,
+      "providerMedianMs": 2929.9,
+      "firstTextMedianMs": 1713.613
+    }
+  },
+  "status": "completed_failed_acceptance",
+  "developmentModel": "GPT-6.1 Sol",
+  "developmentReasoningEffort": "High",
+  "chatModelSettingVerified": false,
+  "runtimeApiModel": "gpt-6-luna",
+  "responsesReasoningEffort": "low",
+  "checkout": "C:/Users/hanam/Desktop/llm-ocr-deploy",
+  "evidenceDirectory": "D:/llm-ocr-archive/template-ai/20261012-phase25",
+  "maxAuthorizedPhaseCalls": 20,
+  "scheduledCalls": 10,
+  "warmupRetryRepairExtraCalls": 0,
+  "independentSavedResponseReplay": {
+    "apiCalls": 0,
+    "trials": 10,
+    "validReproduced": 9,
+    "rejectionReproduced": 1,
+    "independentScoresMatched": 9,
+    "ledgerUnchanged": true,
+    "passed": true,
+    "results": [
+      {
+        "runId": "T1-r1",
+        "status": "draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "T2-r1",
+        "status": "draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "T3-r1",
+        "status": "partial_draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "H1-r1",
+        "status": "held",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "H2-r1",
+        "status": "draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "T1-r2",
+        "status": "draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "T2-r2",
+        "status": "draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "T3-r2",
+        "status": "partial_draft",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "H1-r2",
+        "status": "held",
+        "projectionMatched": true,
+        "physicalPreserved": true,
+        "exactExistingGraphNoop": true,
+        "manualPreserved": true,
+        "independentFocusScoreMatched": true,
+        "offlineSends": 1
+      },
+      {
+        "runId": "H2-r2",
+        "reproducedRejection": "UNISSUED_OR_WRONG_FACTOR_CHOICE",
+        "offlineSends": 1
+      }
+    ]
+  },
+  "missingFocusBindingsPopulation": "Nine guard-valid results only; rejected trial remains in all ten correctness denominators",
+  "nextPhase": {
+    "phase": 26,
+    "model": "Astra",
+    "reasoningEffort": "XHigh",
+    "apiCalls": 0,
+    "status": "not_started"
+  },
+  "verificationEvidence": {
+    "wire": "wire-verification.json",
+    "preservation": "preservation.json",
+    "hashes": "result-hashes.json"
+  }
+}

@@ -1,22 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, googleLoginUrl } from "./api";
-import { AuthGate } from "./components/AuthGate";
-import { PortableBackupDialog } from "./components/PortableBackupDialog";
+import { privateLocalStorage } from "./auth/transport";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api";
 import { ToastViewport } from "./components/Toast";
-import { DevelopmentPage } from "./pages/DevelopmentPage";
 import { HomePage } from "./pages/HomePage";
-import { IndividualRecordsPage } from "./pages/IndividualRecordsPage";
-import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
-import { DriveSettingsPage } from "./pages/DriveSettingsPage";
 import { JobPage } from "./pages/JobPage";
-import { OcrPage, type TemplateWorkspaceRequest } from "./pages/OcrPage";
-import { ReviewPage } from "./pages/ReviewPage";
-import type { AuthSession, Health, Job, OcrLibraryContext, Template, WorkspaceSyncStatus } from "./types";
+import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
+import type { Health, Job, Template } from "./types";
 
-type Page = "home" | "ocr" | "review" | "job" | "records" | "library" | "drive" | "development";
+const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
+const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
+
+type Page = "home" | "ocr" | "review" | "job";
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
-const RECENT_KEY = "ledger-ocr-recent-jobs";
+const RECENT_KEY = "document-ocr-recent-jobs";
 const ATTENTION_STATUSES = new Set([
   "CREATED",
   "QUEUED",
@@ -27,42 +24,39 @@ const ATTENTION_STATUSES = new Set([
 ]);
 
 export default function App() {
-  const initialSearchParams = new URLSearchParams(window.location.search);
+  const [initialSearchParams] = useState(() => new URLSearchParams(window.location.search));
   const initialReviewJobId = initialSearchParams.get("job");
   const initialReviewField = initialSearchParams.get("field");
   const initialReviewEdit = initialSearchParams.get("edit") === "1";
-  const initialOAuthError = oauthErrorMessage(initialSearchParams.get("authError"));
   const [page, setPage] = useState<Page>(initialReviewJobId ? "review" : "home");
   const [health, setHealth] = useState<Health | null>(null);
-  const [auth, setAuth] = useState<AuthSession | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [oauthCallbackError, setOAuthCallbackError] = useState<string | null>(initialOAuthError);
+  const [healthChecked, setHealthChecked] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [reviewJobId, setReviewJobId] = useState<string | null>(initialReviewJobId);
+  const [reviewAutoReopen, setReviewAutoReopen] = useState(initialReviewEdit);
   const [reviewRequiresIdentityConfirmation, setReviewRequiresIdentityConfirmation] = useState(
     !initialReviewEdit,
   );
   const [monitoredJobId, setMonitoredJobId] = useState<string | null>(null);
-  const [ocrLibraryContext, setOcrLibraryContext] = useState<OcrLibraryContext | null>(null);
   const [templateWorkspaceRequest, setTemplateWorkspaceRequest] = useState<TemplateWorkspaceRequest | null>(null);
-  const [templateWorkspaceVisible, setTemplateWorkspaceVisible] = useState(false);
   const [readingRootRequestId, setReadingRootRequestId] = useState(0);
-  const [libraryDocumentId, setLibraryDocumentId] = useState<string | null>(null);
   const [navigationGuard, setNavigationGuard] = useState<NavigationGuard | null>(
     initialReviewJobId ? "review" : null,
   );
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
-  const [disconnectPending, setDisconnectPending] = useState(false);
-  const [portableBackupOpen, setPortableBackupOpen] = useState(false);
-  const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<WorkspaceSyncStatus | null>(null);
-  const portableBackupButtonRef = useRef<HTMLButtonElement>(null);
-  const templateRefreshRef = useRef<Promise<void> | null>(null);
+  const templateRefreshRef = useRef<Promise<Template[]> | null>(null);
   const templateAutoRetryAttemptedRef = useRef(false);
   const templateWorkspaceRequestIdRef = useRef(0);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("edit")) {
+      url.searchParams.delete("edit");
+      window.history.replaceState({}, "", url);
+    }
+  }, []);
   const updateReviewGuard = useCallback((shouldWarn: boolean) => {
     setNavigationGuard((current) => shouldWarn ? "review" : current === "review" ? null : current);
   }, []);
@@ -72,20 +66,6 @@ export default function App() {
   const updateTemplateGuard = useCallback((shouldWarn: boolean) => {
     setNavigationGuard((current) => shouldWarn ? "template" : current === "template" ? null : current);
   }, []);
-  const refreshAuth = useCallback(async () => {
-    setAuthLoading(true);
-    try {
-      const session = await api.authSession();
-      setAuth(session);
-      setAuthError(null);
-    } catch (error) {
-      setAuth(null);
-      setAuthError(error instanceof Error ? error.message : "認証状態を確認できませんでした。");
-    } finally {
-      setAuthLoading(false);
-    }
-  }, []);
-
   const refreshTemplates = useCallback(() => {
     if (templateRefreshRef.current) return templateRefreshRef.current;
     setTemplatesLoading(true);
@@ -94,6 +74,7 @@ export default function App() {
       const details = await Promise.all(summaries.map((item) => api.template(item.id)));
       setTemplates(details);
       setTemplateLoadFailed(false);
+      return details;
     })()
       .catch((error) => {
         setTemplateLoadFailed(true);
@@ -138,7 +119,6 @@ export default function App() {
     editVersionId?: string,
   ) => {
     templateWorkspaceRequestIdRef.current += 1;
-    setOcrLibraryContext(null);
     setTemplateWorkspaceRequest({
       id: templateWorkspaceRequestIdRef.current,
       workspace,
@@ -150,8 +130,10 @@ export default function App() {
     const url = new URL(window.location.href);
     url.searchParams.set("job", id);
     url.searchParams.delete("field");
+    url.searchParams.delete("edit");
     window.history.replaceState({}, "", url);
     setReviewJobId(id);
+    setReviewAutoReopen(false);
     setReviewRequiresIdentityConfirmation(requireIdentityConfirmation);
     setNavigationGuard("review");
     setPage("review");
@@ -174,14 +156,16 @@ export default function App() {
   const applyNavigation = (nextPage: Page) => {
     if (nextPage === page) return;
     if (nextPage !== "review") {
+      setReviewAutoReopen(false);
       const url = new URL(window.location.href);
       url.searchParams.delete("job");
       url.searchParams.delete("field");
+      url.searchParams.delete("edit");
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
+    if (nextPage === "home") void refreshJobs();
     if (nextPage === "ocr") {
-      setOcrLibraryContext(null);
       setTemplateWorkspaceRequest(null);
     }
     setPage(nextPage);
@@ -196,7 +180,7 @@ export default function App() {
     return true;
   };
   const openReadingRoot = () => {
-    if (page === "ocr" && templateWorkspaceVisible) {
+    if (page === "ocr") {
       if (navigationGuard) {
         setPendingNavigation({ page: "ocr", guard: navigationGuard, resetOcrWorkspace: true });
         return false;
@@ -208,54 +192,40 @@ export default function App() {
   };
 
   useEffect(() => {
+    const beforeLogout = (event: Event) => { if (navigationGuard) event.preventDefault(); };
+    window.addEventListener("fuminosuke-before-logout", beforeLogout);
+    return () => window.removeEventListener("fuminosuke-before-logout", beforeLogout);
+  }, [navigationGuard]);
+
+  useEffect(() => {
     let stopped = false;
     const check = async () => {
-      try { const next = await api.health(); if (!stopped) setHealth(next); }
-      catch { if (!stopped) setHealth(null); }
-    };
-    void check();
-    const timer = window.setInterval(check, 5000);
-    return () => { stopped = true; window.clearInterval(timer); };
-  }, []);
-  useEffect(() => {
-    void refreshAuth();
-    const requireAuth = () => { void refreshAuth(); };
-    window.addEventListener("ledger-auth-required", requireAuth);
-    return () => window.removeEventListener("ledger-auth-required", requireAuth);
-  }, [refreshAuth]);
-  useEffect(() => {
-    if (!initialSearchParams.has("authError")) return;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("authError");
-    window.history.replaceState({}, "", url);
-  }, []);
-  const authorizationCurrent = auth?.authorizationCurrent !== false;
-  const authReady = auth !== null && (
-    !auth.required || (auth.authenticated && authorizationCurrent)
-  );
-  useEffect(() => {
-    if (!authReady) return;
-    retryTemplates();
-    void refreshJobs();
-  }, [authReady, refreshJobs, retryTemplates]);
-  useEffect(() => {
-    if (!authReady) return;
-    let stopped = false;
-    const refresh = async () => {
       try {
-        const status = await api.workspaceSyncStatus();
-        if (!stopped) setWorkspaceSyncStatus(status);
-      } catch {
-        if (!stopped) setWorkspaceSyncStatus(null);
+        const next = await api.health();
+        if (!stopped) setHealth((current) => sameHealth(current, next) ? current : next);
       }
+      catch { if (!stopped) setHealth(null); }
+      finally { if (!stopped) setHealthChecked(true); }
     };
-    void refresh();
-    const timer = window.setInterval(refresh, 15000);
+    const poll = () => { if (!document.hidden) void check(); };
+    const onVisibilityChange = () => { if (!document.hidden) void check(); };
+    void check();
+    const timer = window.setInterval(poll, 5000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [authReady]);
+  }, []);
+  const templateNames = useMemo(
+    () => Object.fromEntries(templates.map(template => [template.id, template.name])),
+    [templates],
+  );
+  useEffect(() => {
+    retryTemplates();
+    void refreshJobs();
+  }, [refreshJobs, retryTemplates]);
   const backendHealthy = health !== null;
   useEffect(() => {
     if (!templateLoadFailed) {
@@ -270,101 +240,24 @@ export default function App() {
     templateAutoRetryAttemptedRef.current = true;
     retryTemplates();
   }, [backendHealthy, retryTemplates, templateLoadFailed, templatesLoading]);
-  const displayedAuthError = oauthCallbackError ?? authError;
-  const reconnectRequired = Boolean(
-    auth?.required && auth.authenticated && auth.authorizationCurrent === false,
-  );
-  if (
-    authLoading
-    || displayedAuthError
-    || (auth?.required && (!auth.authenticated || !authorizationCurrent))
-  ) {
-    return (
-      <AuthGate
-        session={auth}
-        loading={authLoading}
-        error={displayedAuthError}
-        reconnectRequired={reconnectRequired}
-        onRetry={() => {
-          setOAuthCallbackError(null);
-          void refreshAuth();
-        }}
-        onReconnect={() => {
-          setAuthLoading(true);
-          window.location.assign(googleLoginUrl(window.location.href));
-        }}
-      />
-    );
-  }
   return (
-    <div className="app-shell">
+    <div className="app-shell ux-shell deploy-shell">
       <aside className="side-nav">
         <button className="brand" onClick={() => navigateTo("home")} aria-label="ホーム">
-          <span>V2</span><div><strong>帳票 OCR V2</strong><small>FORM DEFINITION TOOL</small></div>
+          <span aria-hidden="true"><img src="/favicon.svg" alt="" /></span><div><strong>文之助</strong></div>
         </button>
-        <nav aria-label="メインメニュー">
+        <span className="beta-badge">ベータ</span>
+        <nav id="main-menu" aria-label="メインメニュー">
           <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
-          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="テンプレート" onClick={openReadingRoot} />
-          <NavButton active={page === "library"} icon="library" label="書類ライブラリ" onClick={() => { setLibraryDocumentId(null); navigateTo("library"); }} />
-          <NavButton active={page === "records"} icon="search" label="データ検索" onClick={() => navigateTo("records")} />
-          <NavButton active={page === "drive"} icon="drive" label="保存先設定" onClick={() => navigateTo("drive")} />
-          <NavButton active={page === "development"} icon="development" label="開発情報" onClick={() => navigateTo("development")} />
-          <button
-            ref={portableBackupButtonRef}
-            type="button"
-            className="portable-backup-nav"
-            onClick={() => setPortableBackupOpen(true)}
-          >
-            <span><SidebarIcon name="backup" /></span>
-            持ち出しバックアップ
-          </button>
+          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={openReadingRoot} />
         </nav>
-        <div className="side-footer">
-          {auth?.user?.pictureUrl
-            ? <img className="auth-avatar" src={auth.user.pictureUrl} alt="" referrerPolicy="no-referrer" />
-            : <span className={health ? "status-dot ok" : "status-dot"} />}
-          <div>
-            <strong>{auth?.user?.displayName ?? (health ? "ローカル接続中" : "接続待ち")}</strong>
-            <small>{auth?.user?.email ?? "127.0.0.1"}</small>
-          </div>
-          {auth?.required && (
-            <div className="auth-session-actions">
-              <button
-                type="button"
-                className="auth-logout"
-                onClick={() => {
-                  void api.logout().finally(() => { void refreshAuth(); });
-                }}
-              >
-                ログアウト
-              </button>
-              <button
-                type="button"
-                className="auth-disconnect"
-                onClick={() => setDisconnectPending(true)}
-              >
-                連携解除
-              </button>
-            </div>
-          )}
+        <div className="side-footer" role="status">
+          <span className={health ? "status-dot ok" : "status-dot"} />
+          <span>{health ? "接続中" : "接続待ち"}</span>
         </div>
       </aside>
       <main className="main-content">
-        {workspaceSyncStatus?.readOnly && (
-          <aside className="notice persistent-system-notice workspace-read-only" role="alert">
-            <div>
-              <strong>この端末は読み取り専用です。</strong>
-              <span>{workspaceSyncStatus.message}</span>
-            </div>
-            <button
-              type="button"
-              className="secondary compact"
-              onClick={() => setPortableBackupOpen(true)}
-            >
-              Drive同期を確認
-            </button>
-          </aside>
-        )}
+        <Suspense fallback={<section className="panel" aria-busy="true"><p role="status">画面を準備しています。</p></section>}>
         {templateLoadFailed && (
           <aside className="notice danger persistent-system-notice" role="alert">
             <div>
@@ -381,7 +274,7 @@ export default function App() {
             </button>
           </aside>
         )}
-        {page === "home" && <HomePage health={health} templates={templates} jobs={jobs} onNavigate={(destination) => {
+        {page === "home" && <HomePage health={health} healthChecked={healthChecked} jobs={jobs} onNavigate={(destination) => {
           if (destination === "templates") {
             openTemplateWorkspace("create");
             return;
@@ -390,18 +283,17 @@ export default function App() {
         }} onOpenJob={openJob} />}
         {page === "ocr" && <OcrPage
           templates={templates}
-          libraryContext={ocrLibraryContext}
+          textRecognitionToggleEnabled={health?.ocrTextRecognitionToggleEnabled === true}
           rememberJob={rememberJob}
           openReview={openReview}
           refreshTemplates={refreshTemplates}
           templateWorkspaceRequest={templateWorkspaceRequest}
           onTemplateWorkspaceRequestHandled={() => setTemplateWorkspaceRequest(null)}
           readingRootRequestId={readingRootRequestId}
-          onTemplateWorkspaceVisibilityChange={setTemplateWorkspaceVisible}
           onNavigationGuardChange={updateOcrGuard}
           onTemplateNavigationGuardChange={updateTemplateGuard}
         />}
-        {page === "review" && reviewJobId && <ReviewPage jobId={reviewJobId} initialSelectedPath={initialReviewField} autoReopenConfirmed={initialReviewEdit} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
+        {page === "review" && reviewJobId && <ReviewPage key={reviewJobId} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={initialReviewJobId === reviewJobId ? initialReviewField : null} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
@@ -409,16 +301,7 @@ export default function App() {
           onOpenTemplates={(workspace) => { retryTemplates(); openTemplateWorkspace(workspace); }}
           onStartNewReading={() => navigateTo("ocr")}
         />}
-        {page === "records" && <IndividualRecordsPage
-          onEditResult={(id) => openReview(id, false)}
-          onOpenDocument={(documentId) => {
-            setLibraryDocumentId(documentId);
-            setPage("library");
-          }}
-        />}
-        {page === "library" && <DocumentLibraryPage initialDocumentId={libraryDocumentId} openReview={(id) => openReview(id, false)} startReading={(context) => { setTemplateWorkspaceRequest(null); setOcrLibraryContext(context); setPage("ocr"); }} />}
-        {page === "drive" && <DriveSettingsPage />}
-        {page === "development" && <DevelopmentPage />}
+        </Suspense>
       </main>
       <ToastViewport />
       {pendingNavigation && (
@@ -438,56 +321,6 @@ export default function App() {
           }}
         />
       )}
-      {disconnectPending && (
-        <AuthDisconnectDialog
-          onCancel={() => setDisconnectPending(false)}
-          onConfirm={() => {
-            setDisconnectPending(false);
-            void api.disconnectGoogle().finally(() => { void refreshAuth(); });
-          }}
-        />
-      )}
-      {portableBackupOpen && (
-        <PortableBackupDialog
-          onClose={() => setPortableBackupOpen(false)}
-          returnFocusRef={portableBackupButtonRef}
-          onWorkspaceStatusChange={setWorkspaceSyncStatus}
-        />
-      )}
-    </div>
-  );
-}
-
-function AuthDisconnectDialog({
-  onCancel,
-  onConfirm,
-}: {
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="navigation-confirm-backdrop" role="presentation">
-      <section
-        className="navigation-confirm-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="auth-disconnect-title"
-      >
-        <span className="navigation-confirm-icon" aria-hidden="true">G</span>
-        <div>
-          <p className="eyebrow">GOOGLE CONNECTION</p>
-          <h2 id="auth-disconnect-title">Google連携を解除しますか？</h2>
-          <p>
-            保存済みのGoogle認証トークンを削除し、この端末からログアウトします。
-            保存先設定と同期の対応付けは、安全に再連携できるよう保持します。
-            Google Drive上のファイルとフォルダは削除されません。
-          </p>
-        </div>
-        <div className="navigation-confirm-actions">
-          <button type="button" className="secondary" onClick={onCancel}>キャンセル</button>
-          <button type="button" className="danger-button" onClick={onConfirm}>連携を解除</button>
-        </div>
-      </section>
     </div>
   );
 }
@@ -543,6 +376,12 @@ function NavigationConfirmDialog({
   );
 }
 
+function sameHealth(current: Health | null, next: Health): boolean {
+  if (current === null) return false;
+  const keys = Object.keys(next) as (keyof Health)[];
+  return keys.length === Object.keys(current).length && keys.every((key) => current[key] === next[key]);
+}
+
 function visibleJobs(allJobs: Job[], allAttention?: Job[]): Job[] {
   const recent = allJobs.slice(0, 20);
   const attention = (allAttention ?? allJobs)
@@ -557,13 +396,13 @@ function visibleJobs(allJobs: Job[], allAttention?: Job[]): Job[] {
 
 function readRecentJobIds(): string[] {
   try {
-    const stored: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    const stored: unknown = JSON.parse(privateLocalStorage.getItem(RECENT_KEY) ?? "[]");
     return Array.isArray(stored)
       ? stored.filter((value): value is string => typeof value === "string")
       : [];
   } catch {
     try {
-      localStorage.removeItem(RECENT_KEY);
+      privateLocalStorage.removeItem(RECENT_KEY);
     } catch {
       // Browser storage can be disabled; the backend list still restores jobs.
     }
@@ -573,39 +412,21 @@ function readRecentJobIds(): string[] {
 
 function writeRecentJobIds(ids: string[]) {
   try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(ids));
+    privateLocalStorage.setItem(RECENT_KEY, JSON.stringify(ids));
   } catch {
     // The DB-backed job list remains authoritative if browser storage is unavailable.
   }
 }
 
-function oauthErrorMessage(code: string | null): string | null {
-  if (!code) return null;
-  if (code === "GOOGLE_OAUTH_INVALID_CLIENT") {
-    return "Google OAuthのクライアント設定が一致しません。管理者が設定を確認してください。";
-  }
-  if (code === "GOOGLE_OAUTH_INVALID_GRANT") {
-    return "Google認証コードが期限切れ、再使用済み、またはリダイレクトURIと一致しません。認証を最初からやり直してください。";
-  }
-  if (code === "GOOGLE_OAUTH_CANCELLED") {
-    return "Googleアカウントの認証は完了していません。";
-  }
-  return "Googleアカウントの認証に失敗しました。認証を最初からやり直してください。";
-}
-
-type SidebarIconName = "home" | "ocr" | "library" | "search" | "drive" | "development" | "backup";
+type SidebarIconName = "home" | "ocr";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span><SidebarIcon name={icon} /></span>{label}</button>;
+  return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
 }
 
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
   if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
-  if (name === "library") return <svg {...props}><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v17.5H6.5A2.5 2.5 0 0 0 4 22Z" /><path d="M4 4.5V22m4-15h8m-8 4h8" /></svg>;
-  if (name === "search") return <svg {...props}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>;
-  if (name === "drive") return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M7 15h.01M11 15h6" /></svg>;
-  if (name === "backup") return <svg {...props}><path d="M12 3v11m0 0 4-4m-4 4-4-4" /><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" /></svg>;
-  return <svg {...props}><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16" /></svg>;
+  return null;
 }

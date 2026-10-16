@@ -10,14 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, FieldError
 from app.db.models import (
-    SireName,
     Template,
     TemplateCandidateBinding,
     TemplateCandidateSet,
     TemplateVersion,
 )
+from app.db.mutation import require_revision, touch_template_version
 from app.db.session import Database
-from app.domain.sire_names import SIRE_NAME_ALLOWED_SUFFIXES
 from app.domain.template_candidates import (
     MAX_TEMPLATE_CANDIDATE_BINDING_COUNT,
     MAX_TEMPLATE_CANDIDATE_NAME_LENGTH,
@@ -45,32 +44,28 @@ class TemplateCandidateService:
         self._database = database
         self._storage = storage
 
-    def get_settings(self, template_id: str) -> dict[str, object]:
+    def get_settings(self, template_id: str, template_version_id: str) -> dict[str, object]:
         with self._database.session() as session:
             self._require_template(session, template_id)
-            return self._view(session, template_id)
+            version = self._version(session, template_id, template_version_id)
+            return {**self._view(session, template_id), "resourceRevision": version.revision}
 
     def replace_settings(
         self,
         template_id: str,
         template_version_id: str,
         candidate_sets: Sequence[Mapping[str, object]],
+        *, expected_revision: int,
     ) -> dict[str, object]:
         if len(candidate_sets) > MAX_TEMPLATE_CANDIDATE_SET_COUNT:
             raise self._validation_error(
                 "sets",
                 f"読み取り候補は{MAX_TEMPLATE_CANDIDATE_SET_COUNT}種類まで設定できます。",
             )
-        with self._database.session() as session:
+        with self._database.transaction() as session:
             self._require_template(session, template_id)
-            version = session.get(TemplateVersion, template_version_id)
-            if version is None or version.template_id != template_id:
-                raise AppError(
-                    status=404,
-                    code="TEMPLATE_VERSION_NOT_FOUND",
-                    title="Template version not found",
-                    detail="指定されたテンプレート版が見つかりません。",
-                )
+            version = self._version(session, template_id, template_version_id)
+            require_revision(version, expected_revision)
             config = parse_template_config(
                 self._storage.read_bytes(version.config_relative_path).decode("utf-8")
             )
@@ -110,8 +105,22 @@ class TemplateCandidateService:
                             field_label=available_targets[target_pattern],
                         )
                     )
-            session.commit()
-            return self._view(session, template_id)
+            # Candidate pools belong to the series. Invalidate proposals and saves
+            # opened through any version of that series, including active versions.
+            for affected in session.scalars(select(TemplateVersion).where(
+                TemplateVersion.template_id == template_id,
+            )):
+                touch_template_version(affected)
+            session.flush()
+            return {**self._view(session, template_id), "resourceRevision": version.revision}
+
+    @staticmethod
+    def _version(session: Session, template_id: str, version_id: str) -> TemplateVersion:
+        version = session.get(TemplateVersion, version_id)
+        if version is None or version.template_id != template_id:
+            raise AppError(status=404, code="TEMPLATE_VERSION_NOT_FOUND",
+                           title="Template version not found", detail="指定されたテンプレート版が見つかりません。")
+        return version
 
     @staticmethod
     def snapshot(session: Session, template_id: str) -> dict[str, object]:
@@ -306,10 +315,6 @@ class TemplateCandidateService:
         bindings_by_set: dict[str, list[TemplateCandidateBinding]] = {}
         for binding in bindings:
             bindings_by_set.setdefault(binding.candidate_set_id, []).append(binding)
-        if not sets:
-            legacy = self._legacy_sire_view(session, template_id)
-            if legacy is not None:
-                return {"templateId": template_id, "sets": [legacy]}
         return {
             "templateId": template_id,
             "sets": [
@@ -330,55 +335,6 @@ class TemplateCandidateService:
             ],
         }
 
-    def _legacy_sire_view(
-        self,
-        session: Session,
-        template_id: str,
-    ) -> dict[str, object] | None:
-        version = session.scalar(
-            select(TemplateVersion)
-            .where(TemplateVersion.template_id == template_id)
-            .order_by(TemplateVersion.version_number.desc(), TemplateVersion.created_at.desc())
-            .limit(1)
-        )
-        if version is None:
-            return None
-        try:
-            config = parse_template_config(
-                self._storage.read_bytes(version.config_relative_path).decode("utf-8")
-            )
-        except (OSError, ValueError):
-            return None
-        sire_mapping = next(
-            (
-                mapping
-                for mapping in config.field_mappings
-                if mapping.enabled
-                and mapping.mapping_type == "text"
-                and normalize_candidate_target(mapping.target_path)
-                == "saleCalves[].sireName"
-            ),
-            None,
-        )
-        if sire_mapping is None:
-            return None
-        names = list(
-            session.scalars(select(SireName.name).order_by(SireName.created_at, SireName.id))
-        )
-        if not names:
-            return None
-        return {
-            "id": "legacy-sire-name-pool",
-            "name": "種雄牛名",
-            "values": names,
-            "allowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
-            "bindings": [
-                {
-                    "targetPattern": "saleCalves[].sireName",
-                    "label": sire_mapping.label,
-                }
-            ],
-        }
 
     @staticmethod
     def _require_template(session: Session, template_id: str) -> Template:

@@ -1,4 +1,4 @@
-"""Verify the complete owned artifact graph of a prepared WSL reference.
+"""Verify the complete owned artifact graph of a prepared reference.
 
 Artifact integrity is not an environment, glyph, geometry or crop certificate.
 No Office invocation, PDF parser, database mutation or coordinate repair here.
@@ -18,6 +18,10 @@ from sqlalchemy.orm import Session
 
 from app.db.models import JobArtifact, TemplateVersion
 from app.domain.calc_print_grid import MODEL as CALC_GEOMETRY_MODEL
+from app.rendering.contract import FONT_POLICY, GRAPH_POLICY, POLICY, RENDERER_VERSION
+from app.rendering.contract import validate_evidence as validate_linux_evidence
+from app.rendering.fonts import validate_fonts
+from app.rendering.geometry import MODEL as LINUX_GEOMETRY_MODEL
 from app.services.prepared_print_contract import render_key
 from app.services.print_layout_service import digest
 from app.services.renderer_wsl_worker import validate_bootstrap_python, validate_core_guard
@@ -37,6 +41,10 @@ class PreparedReference:
 
 
 def _replay_identity(report: dict[str, Any]) -> dict[str, Any]:
+    if report.get("policy") == POLICY:
+        if report.get("format") != "reference" or report.get("dpi") != 150:
+            raise ValueError("Invalid Linux reference format")
+        return {"sourceSha256": report["sourceSha256"], **validate_linux_evidence(report)}
     constants = {"policy": "wsl-bwrap-cgroup-v1", "format": "reference", "status": "PASS",
                  "fontSource": "windows", "fontRequestPolicy": "wsl-fontconfig-face-v2",
                  "rasterizer": "poppler-pdftoppm", "dpi": 150}
@@ -109,8 +117,11 @@ def compare_reference_replay(original: dict[str, Any], replay: dict[str, Any],
 def load_prepared_reference(session: Session, storage: StorageService,
                             version: TemplateVersion) -> PreparedReference:
     plan = version.quality_json["printLayout"]
-    if (plan.get("rendererVersion") != "wsl-print-reference-v1"
-            or plan.get("geometryModelVersion") not in {MODEL, CALC_GEOMETRY_MODEL}
+    linux = plan.get("rendererVersion") == RENDERER_VERSION
+    font_source = "linux-image" if linux else "windows"
+    if (plan.get("rendererVersion") not in {"wsl-print-reference-v1", RENDERER_VERSION}
+            or plan.get("geometryModelVersion") not in (
+                {LINUX_GEOMETRY_MODEL} if linux else {MODEL, CALC_GEOMETRY_MODEL})
             or plan.get("layoutSha256") != digest(version.layout_json)
             or plan["printFiles"].get("renderKey") != render_key(plan)):
         raise ValueError("Prepared reference plan changed")
@@ -137,7 +148,7 @@ def load_prepared_reference(session: Session, storage: StorageService,
             or source.sha256 != geometry["sourceSha256"]
             or measured.get("sourceSha256") != source.sha256
             or measured.get("format") != "fods"
-            or measured.get("fontSource") != "windows"):
+            or measured.get("fontSource") != font_source):
         raise ValueError("Prepared source linkage changed")
 
     artifact_ids: set[str] = set()
@@ -161,9 +172,10 @@ def load_prepared_reference(session: Session, storage: StorageService,
     pdf = owned(files["pdf"], "application/pdf", 64 * 1024 * 1024)
     report = json.loads(owned(files["report"], "application/json", 1024 * 1024))
     if (not isinstance(report, dict) or report.get("status") != "PASS"
-            or report.get("format") != "reference" or report.get("fontSource") != "windows"
-            or report.get("policy") != "wsl-bwrap-cgroup-v1"
-            or report.get("fontRequestPolicy") != "wsl-fontconfig-face-v2"
+            or report.get("format") != "reference" or report.get("fontSource") != font_source
+            or report.get("policy") != (POLICY if linux else "wsl-bwrap-cgroup-v1")
+            or report.get("fontRequestPolicy") != (
+                FONT_POLICY if linux else "wsl-fontconfig-face-v2")
             or report.get("sourceSha256") != hashlib.sha256(workbook).hexdigest()
             or report.get("pdfSha256") != files["pdf"]["sha256"]
             or type(report.get("pageCount")) is not int
@@ -172,6 +184,10 @@ def load_prepared_reference(session: Session, storage: StorageService,
             or report.get("imageSizes") != [[p["width"], p["height"]] for p in pages]
             or report.get("resolvedFonts") != measured.get("resolvedFonts")):
         raise ValueError("Prepared renderer linkage changed")
+    if linux and validate_linux_evidence(report) != validate_linux_evidence(measured):
+        raise ValueError("Prepared Linux execution environments differ")
+    if linux and geometry.get("fontDecisions") != validate_fonts(report["resolvedFonts"]):
+        raise ValueError("Prepared Linux font decisions changed")
     for key in ("runtimeImage", "fontDirectoryIdentity", "workerIdentity",
                 "coreDumpGuard", "brokerCoreDumpGuard", "bootstrapPythonIdentity"):
         # Missing old evidence is not upgraded into a certificate. The caller
@@ -199,7 +215,8 @@ def load_prepared_reference(session: Session, storage: StorageService,
             raise ValueError("Prepared reference size limit exceeded")
         images.append(image)
     return PreparedReference(workbook=workbook, pdf=pdf, images=images, report=report, evidence={
-        "policy": "wsl-prepared-artifact-graph-v1", "planSha256": digest(plan),
+        "policy": GRAPH_POLICY if linux else "wsl-prepared-artifact-graph-v1",
+        "planSha256": digest(plan),
         "sourceArtifactId": source.id, "sourceSha256": source.sha256,
         "importReportSha256": digest(measured),
         "printFiles": copy.deepcopy(files),

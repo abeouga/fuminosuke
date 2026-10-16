@@ -2,20 +2,16 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
-from io import BytesIO
 from typing import Annotated, Literal, cast
 
-from fastapi import APIRouter, Body, Depends, File, Request, Response, UploadFile, status
+from fastapi import APIRouter, Body, File, Request, Response, UploadFile, status
 from pydantic import Field
 
-from app.api.auth_dependencies import require_authenticated_user
-from app.core.errors import ApiModel, AppError
-from app.services.google_oauth_service import AuthenticatedUser
+from app.core.errors import ApiModel
 from app.template_packages.activation_service import (
     TemplatePackageActivationResult,
     TemplatePackageActivationService,
 )
-from app.template_packages.drive_sync_service import TemplatePackageDriveSyncService
 from app.template_packages.export_models import TemplateExportInspection, TemplateExportRequest
 from app.template_packages.import_models import (
     TemplateImportInspection,
@@ -60,52 +56,12 @@ class TemplatePackageExportInspectionRequest(ApiModel):
 
 
 class TemplatePackageActivationRequest(ApiModel):
+    expected_revision: int = Field(ge=1, strict=True)
     expected_active_version_id: str | None = Field(
         ...,
         min_length=36,
         max_length=36,
     )
-
-
-class TemplatePackageDrivePublishReleaseRequest(TemplatePackageTokenRequest):
-    pass
-
-
-class TemplatePackageDrivePublishDraftRequest(TemplatePackageTokenRequest):
-    draft_id: str | None = Field(default=None, min_length=36, max_length=36)
-    expected_revision: int | None = Field(default=None, ge=1)
-    base_release_version: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-        pattern=SEMVER_PATTERN,
-    )
-
-
-class TemplatePackageDriveInspectRequest(ApiModel):
-    file_id: str = Field(min_length=1, max_length=255)
-    kind: Literal["RELEASE", "DRAFT"]
-
-
-class TemplatePackageDriveItemView(ApiModel):
-    kind: Literal["RELEASE", "DRAFT"]
-    file_id: str
-    file_name: str
-    publisher_id: str
-    package_id: str
-    release_version: str
-    content_digest: str
-    package_sha256: str
-    draft_id: str | None = None
-    draft_revision: int | None = None
-    base_release_version: str | None = None
-    drive_version: str
-    head_revision_id: str | None = None
-    etag: str | None = None
-    modified_time: datetime | None = None
-    file_bytes: int
-    trust_status: Literal["UNVERIFIED"]
-    sync_status: Literal["REMOTE_ONLY", "SYNCED", "CONFLICT"]
 
 
 class TemplatePackageImportResultView(ApiModel):
@@ -158,24 +114,6 @@ def _service(request: Request) -> TemplatePackageOperationService:
     )
 
 
-def _drive_service(request: Request) -> TemplatePackageDriveSyncService:
-    return cast(
-        TemplatePackageDriveSyncService,
-        request.app.state.template_package_drive_sync,
-    )
-
-
-def _google_subject(user: AuthenticatedUser | None) -> str:
-    if user is None:
-        raise AppError(
-            status=401,
-            code="GOOGLE_ACCOUNT_REQUIRED",
-            title="Google account is required",
-            detail="Googleアカウントを接続してください。",
-        )
-    return user.subject
-
-
 @router.post(
     "/exports/inspect",
     response_model=TemplatePackageOperationView,
@@ -184,7 +122,6 @@ def _google_subject(user: AuthenticatedUser | None) -> str:
 def inspect_template_package_export(
     request: Request,
     payload: TemplatePackageExportInspectionRequest,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
 ) -> TemplatePackageOperationView:
     export_request = TemplateExportRequest(
         template_id=payload.template_id,
@@ -194,11 +131,7 @@ def inspect_template_package_export(
         version=payload.version,
         include_preview=payload.include_preview,
         include_handwriting_candidates=payload.include_handwriting_candidates,
-        output_layout_owner_key=(
-            user.subject if user is not None else "local"
-        )
-        if payload.include_output_layout
-        else None,
+        output_layout_owner_key=("local") if payload.include_output_layout else None,
     )
     return _operation_view(_service(request).inspect_export(export_request))
 
@@ -217,83 +150,6 @@ def confirm_template_package_export(
             "Cache-Control": "no-store",
             "X-Content-Digest": exported.manifest.content_digest,
         },
-    )
-
-
-@router.get(
-    "/drive/items",
-    response_model=list[TemplatePackageDriveItemView],
-    response_model_by_alias=True,
-)
-def template_package_drive_items(
-    request: Request,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> list[TemplatePackageDriveItemView]:
-    items = _drive_service(request).list_items(google_subject=_google_subject(user))
-    return [TemplatePackageDriveItemView(**item) for item in items]
-
-
-@router.post(
-    "/drive/releases/publish",
-    response_model=TemplatePackageDriveItemView,
-    response_model_by_alias=True,
-)
-def publish_template_package_drive_release(
-    request: Request,
-    payload: TemplatePackageDrivePublishReleaseRequest,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> TemplatePackageDriveItemView:
-    exported = _service(request).confirm_export(payload.confirmation_token)
-    item = _drive_service(request).publish_release(
-        exported.content,
-        file_name=exported.file_name,
-        google_subject=_google_subject(user),
-    )
-    return TemplatePackageDriveItemView(**item)
-
-
-@router.post(
-    "/drive/drafts/publish",
-    response_model=TemplatePackageDriveItemView,
-    response_model_by_alias=True,
-)
-def publish_template_package_drive_draft(
-    request: Request,
-    payload: TemplatePackageDrivePublishDraftRequest,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> TemplatePackageDriveItemView:
-    exported = _service(request).confirm_export(payload.confirmation_token)
-    item = _drive_service(request).publish_draft(
-        exported.content,
-        google_subject=_google_subject(user),
-        base_release_version=payload.base_release_version,
-        draft_id=payload.draft_id,
-        expected_revision=payload.expected_revision,
-    )
-    return TemplatePackageDriveItemView(**item)
-
-
-@router.post(
-    "/drive/inspect",
-    response_model=TemplatePackageOperationView,
-    response_model_by_alias=True,
-)
-def inspect_template_package_from_drive(
-    request: Request,
-    payload: TemplatePackageDriveInspectRequest,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> TemplatePackageOperationView:
-    content, file_name = _drive_service(request).package_for_inspection(
-        payload.file_id,
-        kind="release" if payload.kind == "RELEASE" else "draft",
-        google_subject=_google_subject(user),
-    )
-    return _operation_view(
-        _service(request).inspect_import(
-            file_name,
-            BytesIO(content),
-            source_type="DRIVE",
-        )
     )
 
 
@@ -377,12 +233,12 @@ def activate_template_package_installation(
     request: Request,
     installation_id: str,
     payload: Annotated[TemplatePackageActivationRequest, Body()],
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
 ) -> TemplatePackageActivationView:
     result = TemplatePackageActivationService(request.app.state.database).activate(
         installation_id,
         expected_active_version_id=payload.expected_active_version_id,
-        owner_key=user.subject if user is not None else "local",
+        expected_revision=payload.expected_revision,
+        owner_key="local",
     )
     return _activation_view(result)
 

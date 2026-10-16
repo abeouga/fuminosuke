@@ -6,7 +6,6 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.errors import to_camel
-from app.domain.field_targets import CALVING_ROW_COUNT, SALE_CALF_ROW_COUNT
 
 
 class OcrModel(BaseModel):
@@ -69,43 +68,6 @@ class FieldReading(OcrModel):
         return self
 
 
-class DocumentIdentity(OcrModel):
-    unified_ear_tag: FieldReading
-    cattle_name: FieldReading
-    birth_date: FieldReading
-    registration_number: FieldReading
-    coat_color: FieldReading
-    breeder: FieldReading
-    owner: FieldReading
-
-
-class SaleCalf(OcrModel):
-    parity: FieldReading
-    age_days: FieldReading
-    weight_kg: FieldReading
-    price_yen: FieldReading
-    sire_name: FieldReading
-    sale_date: FieldReading
-    notes: FieldReading
-
-
-class Pedigree(OcrModel):
-    father: FieldReading
-    mother: FieldReading
-    paternal_grandfather: FieldReading
-    paternal_grandmother: FieldReading
-    maternal_grandfather: FieldReading
-    maternal_grandmother: FieldReading
-
-
-class Calving(OcrModel):
-    parity: FieldReading
-    calving_date: FieldReading
-    sex: FieldReading
-    outcome: FieldReading
-    notes: FieldReading
-
-
 class ReviewItem(OcrModel):
     code: str = Field(max_length=100)
     path: str = Field(max_length=300)
@@ -151,21 +113,22 @@ class GenericDataDocument(OcrModel):
 
 
 class OcrDocument(OcrModel):
-    schema_version: str = Field(pattern=r"^1\.0$")
+    schema_version: str = Field(pattern=r"^2\.0$")
     template_id: str = Field(max_length=100)
     template_version: str = Field(max_length=50)
-    document: DocumentIdentity
-    sale_calves: list[SaleCalf] = Field(
-        default_factory=list,
-        max_length=SALE_CALF_ROW_COUNT,
-    )
-    pedigree: Pedigree
-    calvings: list[Calving] = Field(
-        default_factory=list,
-        max_length=CALVING_ROW_COUNT,
-    )
-    custom_fields: dict[str, FieldReading] = Field(default_factory=dict, max_length=300)
+    fields: dict[str, FieldReading] = Field(default_factory=dict, max_length=1000)
+    field_labels: dict[str, str] = Field(default_factory=dict, max_length=1000)
     generic_data: GenericDataDocument | None = None
     generic_values: dict[str, object] | None = None
-    review_items: list[ReviewItem] = Field(default_factory=list, max_length=200)
+    review_items: list[ReviewItem] = Field(default_factory=list, max_length=1000)
     processing_metadata: ProcessingMetadata
+
+    @model_validator(mode="after")
+    def validate_field_keys(self) -> Self:
+        from app.domain.field_targets import is_supported_field_path
+
+        if any(not is_supported_field_path(f"fields.{key}") for key in self.fields):
+            raise ValueError("Field keys must be valid generic target keys")
+        if not set(self.field_labels).issubset(self.fields):
+            raise ValueError("Field labels must refer to existing fields")
+        return self

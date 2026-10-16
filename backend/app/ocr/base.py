@@ -31,7 +31,7 @@ class OcrRegionInput:
 class OcrProviderRequest:
     regions: list[OcrRegionInput]
     full_document_png: bytes | None = None
-    template_id: str = "cow-breeding-ledger-v1"
+    template_id: str = "generic-document-v1"
     template_version: str = "1"
     should_cancel: Callable[[], bool] | None = None
     call_budget: OcrCallBudget | None = None

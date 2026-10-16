@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,9 +18,12 @@ class AppSettings(BaseModel):
     host: Literal["127.0.0.1", "localhost", "::1"]
     port: int = Field(ge=1, le=65535)
     frontend_origins: tuple[str, ...]
-    print_pdf_renderer: Literal["appcontainer", "wsl"] = "appcontainer"
+    editing_api_enabled: bool = False
+    template_analysis_enabled: bool = False
+    print_pdf_renderer: Literal["appcontainer", "wsl", "linux"] = "appcontainer"
     print_wsl_distribution: str = Field(
-        default="Ubuntu-22.04", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+        default="Ubuntu-22.04", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    )
     print_wsl_runtime_id: str | None = None
 
     @field_validator("print_wsl_runtime_id")
@@ -30,13 +35,20 @@ class AppSettings(BaseModel):
 
     @field_validator("frontend_origins")
     @classmethod
-    def validate_local_origins(cls, origins: tuple[str, ...]) -> tuple[str, ...]:
+    def validate_local_origins(
+        cls, origins: tuple[str, ...], info: ValidationInfo,
+    ) -> tuple[str, ...]:
         if not origins:
             raise ValueError("FRONTEND_ORIGINS must contain at least one origin")
         for origin in origins:
             if origin == "*":
                 raise ValueError("Wildcard CORS origins are forbidden")
             parsed = urlparse(origin)
+            if info.data.get("environment") == "cloud":
+                if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                        or parsed.password or parsed.path or parsed.query or parsed.fragment):
+                    raise ValueError("Cloud frontend origins must be exact HTTPS origins")
+                continue
             if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
                 "localhost",
                 "127.0.0.1",
@@ -88,6 +100,7 @@ class SegmentationSettings(BaseModel):
 
 class OcrSettings(BaseModel):
     provider: Literal["mock", "openai", "disabled"]
+    text_recognition_toggle_enabled: bool = False
     openai_api_key: SecretStr | None
     primary_model: str | None
     fallback_model: str | None
@@ -98,7 +111,7 @@ class OcrSettings(BaseModel):
     timeout_seconds: int = Field(ge=1)
     max_retries: int = Field(ge=0)
     prompt_version: str
-    schema_version: str
+    schema_version: Literal["2.0"]
     initial_image_detail: Literal["low", "high", "auto"] = "high"
     uncertain_retry_image_detail: Literal["low", "high", "auto"] = "high"
     retry_uncertain_high_detail: bool = False
@@ -111,90 +124,15 @@ class LoggingSettings(BaseModel):
     file: Path
 
 
-class GoogleSheetsSettings(BaseModel):
-    enabled: bool
-    spreadsheet_id: str | None
-    credentials_path: Path | None
-    frontend_base_url: str
-    spreadsheet_title: str = "繁殖台帳 OCR"
-    document_sheet_name: str = "帳票一覧"
-    sale_sheet_name: str = "売却子牛一覧"
-    calving_sheet_name: str = "繁殖履歴"
-    edit_queue_sheet_name: str = "_OCR編集キュー"
-    edit_poll_interval_seconds: int = Field(default=5, ge=1, le=300)
-
-    @field_validator("frontend_base_url")
-    @classmethod
-    def validate_frontend_base_url(cls, value: str) -> str:
-        parsed = urlparse(value)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }:
-            raise ValueError("GOOGLE_SHEETS_FRONTEND_BASE_URL must be a loopback URL")
-        return value.rstrip("/") + "/"
-
-
-class GoogleOAuthSettings(BaseModel):
-    enabled: bool
-    client_id: str | None
-    client_secret: SecretStr | None
-    jwt_secret: SecretStr | None
-    redirect_uri: str
-    frontend_url: str
-    session_cookie_name: str = "ledger_session"
-    state_cookie_name: str = "ledger_google_oauth_state"
-    session_ttl_seconds: int = Field(ge=300, le=2_592_000)
-    state_ttl_seconds: int = Field(ge=60, le=1_800)
-    secure_cookie: bool
-    picker_api_key: str | None = None
-    picker_app_id: str | None = None
-
-    @field_validator("redirect_uri", "frontend_url")
-    @classmethod
-    def validate_oauth_url(cls, value: str) -> str:
-        parsed = urlparse(value)
-        is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and is_loopback):
-            raise ValueError("Google OAuth URLs must use HTTPS except on loopback hosts")
-        return value.rstrip("/") if parsed.path in {"", "/"} else value
-
-    @property
-    def configured(self) -> bool:
-        return bool(
-            self.enabled
-            and self.client_id
-            and self.client_secret is not None
-            and self.jwt_secret is not None
-        )
-
-    @property
-    def picker_configured(self) -> bool:
-        return bool(
-            self.configured
-            and self.picker_api_key
-            and self.picker_app_id
-            and self.picker_project_matches
-        )
-
-    @property
-    def picker_project_matches(self) -> bool:
-        if not self.client_id or not self.picker_app_id:
-            return False
-        project_number = self.client_id.partition("-")[0]
-        return project_number.isdigit() and project_number == self.picker_app_id
-
-    @property
-    def picker_configuration_error(self) -> str | None:
-        if not self.picker_api_key or not self.picker_app_id:
-            return "Google Picker APIキーとApp IDが設定されていません。"
-        if not self.picker_project_matches:
-            return (
-                "PickerのApp IDがOAuthクライアントのGoogle Cloudプロジェクト番号と"
-                "一致していません。同じプロジェクトでAPIキーを作成してください。"
-            )
-        return None
+class VoiceSettings(BaseModel):
+    provider: Literal["openai", "disabled"] = "openai"
+    stt_model: str = "gpt-transcribe"
+    proposal_model: str = "gpt-6.1-sol"
+    tts_model: str = "gpt-4o-mini-tts"
+    tts_voice: str = "marin"
+    max_audio_bytes: int = Field(default=10_485_760, ge=1024, le=10_485_760)
+    max_record_seconds: int = Field(default=60, ge=1, le=60)
+    ffmpeg_path: str | None = None
 
 
 class RawSettings(BaseSettings):
@@ -210,12 +148,17 @@ class RawSettings(BaseSettings):
         default="127.0.0.1", validation_alias="APP_HOST"
     )
     app_port: int = Field(default=8000, validation_alias="APP_PORT")
-    print_pdf_renderer: Literal["appcontainer", "wsl"] = Field(
-        default="appcontainer", validation_alias="PRINT_PDF_RENDERER")
+    editing_api_enabled: bool = Field(default=False, validation_alias="EDITING_API_ENABLED")
+    template_analysis_enabled: bool = Field(
+        default=False, validation_alias="TEMPLATE_ANALYSIS_ENABLED"
+    )
+    print_pdf_renderer: Literal["appcontainer", "wsl", "linux"] = Field(
+        default="appcontainer", validation_alias="PRINT_PDF_RENDERER"
+    )
     print_wsl_distribution: str = Field(
-        default="Ubuntu-22.04", validation_alias="PRINT_WSL_DISTRIBUTION")
-    print_wsl_runtime_id: str | None = Field(
-        default=None, validation_alias="PRINT_WSL_RUNTIME_ID")
+        default="Ubuntu-22.04", validation_alias="PRINT_WSL_DISTRIBUTION"
+    )
+    print_wsl_runtime_id: str | None = Field(default=None, validation_alias="PRINT_WSL_RUNTIME_ID")
     app_log_level: str = Field(default="INFO", validation_alias="APP_LOG_LEVEL")
     frontend_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
@@ -233,7 +176,23 @@ class RawSettings(BaseSettings):
     ocr_provider: Literal["mock", "openai", "disabled"] = Field(
         default="mock", validation_alias="OCR_PROVIDER"
     )
+    ocr_text_recognition_toggle_enabled: bool = Field(
+        default=False, validation_alias="OCR_TEXT_RECOGNITION_TOGGLE_ENABLED"
+    )
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_api_key_file: Path | None = Field(default=None, validation_alias="OPENAI_API_KEY_FILE")
+    voice_provider: Literal["openai", "disabled"] = Field(
+        default="openai", validation_alias="VOICE_PROVIDER"
+    )
+    voice_stt_model: str = Field(default="gpt-transcribe", validation_alias="VOICE_STT_MODEL")
+    voice_proposal_model: str = Field(
+        default="gpt-6.1-sol", validation_alias="VOICE_PROPOSAL_MODEL"
+    )
+    voice_tts_model: str = Field(default="gpt-4o-mini-tts", validation_alias="VOICE_TTS_MODEL")
+    voice_tts_voice: str = Field(default="marin", validation_alias="VOICE_TTS_VOICE")
+    voice_max_audio_bytes: int = Field(default=10_485_760, validation_alias="VOICE_MAX_AUDIO_BYTES")
+    voice_max_record_seconds: int = Field(default=60, validation_alias="VOICE_MAX_RECORD_SECONDS")
+    voice_ffmpeg_path: str | None = Field(default=None, validation_alias="VOICE_FFMPEG_PATH")
     openai_primary_model: str | None = Field(default=None, validation_alias="OPENAI_PRIMARY_MODEL")
     openai_fallback_model: str | None = Field(
         default=None, validation_alias="OPENAI_FALLBACK_MODEL"
@@ -247,9 +206,7 @@ class RawSettings(BaseSettings):
     openai_retry_uncertain_high_detail: bool = Field(
         default=False, validation_alias="OPENAI_RETRY_UNCERTAIN_HIGH_DETAIL"
     )
-    openai_max_concurrency: int = Field(
-        default=2, validation_alias="OPENAI_MAX_CONCURRENCY"
-    )
+    openai_max_concurrency: int = Field(default=2, validation_alias="OPENAI_MAX_CONCURRENCY")
     paddle_presence_audit_enabled: bool = Field(
         default=False, validation_alias="PADDLE_PRESENCE_AUDIT_ENABLED"
     )
@@ -257,13 +214,17 @@ class RawSettings(BaseSettings):
         default="low", validation_alias="OPENAI_REASONING_EFFORT"
     )
     openai_max_calls_per_job: int = Field(default=16, validation_alias="OPENAI_MAX_CALLS_PER_JOB")
-    openai_max_output_tokens: int = Field(default=12000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS")
+    openai_max_output_tokens: int = Field(
+        default=12000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS"
+    )
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
         default="mapped-compact-v1", validation_alias="OPENAI_PROMPT_VERSION"
     )
-    openai_schema_version: str = Field(default="1.0", validation_alias="OPENAI_SCHEMA_VERSION")
+    openai_schema_version: Literal["2.0"] = Field(
+        default="2.0", validation_alias="OPENAI_SCHEMA_VERSION"
+    )
     handwriting_segmenter_mode: Literal["heuristic", "onnx", "combined"] = Field(
         default="heuristic", validation_alias="HANDWRITING_SEGMENTER_MODE"
     )
@@ -286,54 +247,6 @@ class RawSettings(BaseSettings):
     min_ecc_score: float = Field(default=0.75, validation_alias="MIN_ECC_SCORE")
     min_edge_overlap: float = Field(default=0.7, validation_alias="MIN_EDGE_OVERLAP")
     min_template_confidence: float = Field(default=0.75, validation_alias="MIN_TEMPLATE_CONFIDENCE")
-    google_sheets_enabled: bool = Field(default=False, validation_alias="GOOGLE_SHEETS_ENABLED")
-    google_sheets_spreadsheet_id: str | None = Field(
-        default=None, validation_alias="GOOGLE_SHEETS_SPREADSHEET_ID"
-    )
-    google_sheets_credentials_path: Path | None = Field(
-        default=None, validation_alias="GOOGLE_SHEETS_CREDENTIALS_PATH"
-    )
-    google_sheets_frontend_base_url: str = Field(
-        default="http://127.0.0.1:5173/",
-        validation_alias="GOOGLE_SHEETS_FRONTEND_BASE_URL",
-    )
-    google_sheets_spreadsheet_title: str = Field(
-        default="繁殖台帳 OCR",
-        validation_alias="GOOGLE_SHEETS_SPREADSHEET_TITLE",
-    )
-    google_sheets_edit_poll_interval_seconds: int = Field(
-        default=5,
-        validation_alias="GOOGLE_SHEETS_EDIT_POLL_INTERVAL_SECONDS",
-    )
-    google_oauth_enabled: bool = Field(default=False, validation_alias="GOOGLE_OAUTH_ENABLED")
-    google_oauth_client_id: str | None = Field(
-        default=None, validation_alias="GOOGLE_OAUTH_CLIENT_ID"
-    )
-    google_oauth_client_secret: SecretStr | None = Field(
-        default=None, validation_alias="GOOGLE_OAUTH_CLIENT_SECRET"
-    )
-    auth_jwt_secret: SecretStr | None = Field(default=None, validation_alias="AUTH_JWT_SECRET")
-    google_oauth_redirect_uri: str = Field(
-        default="http://127.0.0.1:8000/api/v1/auth/google/callback",
-        validation_alias="GOOGLE_OAUTH_REDIRECT_URI",
-    )
-    google_oauth_frontend_url: str = Field(
-        default="http://127.0.0.1:5173/",
-        validation_alias="GOOGLE_OAUTH_FRONTEND_URL",
-    )
-    google_picker_api_key: str | None = Field(
-        default=None,
-        validation_alias="GOOGLE_PICKER_API_KEY",
-    )
-    google_picker_app_id: str | None = Field(
-        default=None,
-        validation_alias="GOOGLE_PICKER_APP_ID",
-    )
-    auth_session_ttl_seconds: int = Field(
-        default=604_800, validation_alias="AUTH_SESSION_TTL_SECONDS"
-    )
-    auth_state_ttl_seconds: int = Field(default=600, validation_alias="AUTH_STATE_TTL_SECONDS")
-    auth_secure_cookie: bool = Field(default=False, validation_alias="AUTH_SECURE_COOKIE")
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,8 +260,7 @@ class Settings:
     segmentation: SegmentationSettings
     ocr: OcrSettings
     logging: LoggingSettings
-    google_sheets: GoogleSheetsSettings
-    google_oauth: GoogleOAuthSettings
+    voice: VoiceSettings = dataclass_field(default_factory=VoiceSettings)
 
     @classmethod
     def load(cls, env_file: str | Path | None = ".env") -> Settings:
@@ -360,6 +272,16 @@ class Settings:
             if primary.name == ".env":
                 env_sources = (primary, primary.with_name(".env.local"))
             raw = RawSettings(_env_file=env_sources)
+        if raw.openai_api_key_file is not None:
+            path = raw.openai_api_key_file
+            if (raw.app_env != "cloud" or raw.openai_api_key is not None
+                    or not path.is_absolute() or path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 8192):
+                raise ValueError("Use one dedicated cloud API secret file")
+            secret = path.read_text().strip()
+            if not secret or any(c.isspace() for c in secret):
+                raise ValueError("Invalid API secret file")
+            raw.openai_api_key = SecretStr(secret)
         return cls.from_raw(raw)
 
     @classmethod
@@ -372,31 +294,14 @@ class Settings:
         model_path = raw.handwriting_model_path
         if model_path is not None:
             model_path = model_path.expanduser().resolve()
-        credentials_path = raw.google_sheets_credentials_path
-        if credentials_path is not None:
-            credentials_path = credentials_path.expanduser().resolve()
-        if (
-            raw.google_sheets_enabled
-            and not raw.google_oauth_enabled
-            and not raw.google_sheets_spreadsheet_id
-        ):
-            raise ValueError(
-                "GOOGLE_SHEETS_SPREADSHEET_ID is required when Sheets sync uses no OAuth account"
-            )
-        if raw.google_oauth_enabled:
-            if not raw.google_oauth_client_id or raw.google_oauth_client_secret is None:
-                raise ValueError(
-                    "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required"
-                )
-            if raw.auth_jwt_secret is None or len(raw.auth_jwt_secret.get_secret_value()) < 32:
-                raise ValueError("AUTH_JWT_SECRET must contain at least 32 characters")
-
         return cls(
             app=AppSettings(
                 environment=raw.app_env,
                 host=raw.app_host,
                 port=raw.app_port,
                 frontend_origins=origins,
+                editing_api_enabled=raw.editing_api_enabled,
+                template_analysis_enabled=raw.template_analysis_enabled,
                 print_pdf_renderer=raw.print_pdf_renderer,
                 print_wsl_distribution=raw.print_wsl_distribution,
                 print_wsl_runtime_id=raw.print_wsl_runtime_id,
@@ -435,6 +340,7 @@ class Settings:
             ),
             ocr=OcrSettings(
                 provider=raw.ocr_provider,
+                text_recognition_toggle_enabled=raw.ocr_text_recognition_toggle_enabled,
                 openai_api_key=raw.openai_api_key,
                 primary_model=raw.openai_primary_model,
                 fallback_model=raw.openai_fallback_model,
@@ -453,26 +359,12 @@ class Settings:
                 schema_version=raw.openai_schema_version,
             ),
             logging=LoggingSettings(level=raw.app_log_level.upper(), file=log_file),
-            google_sheets=GoogleSheetsSettings(
-                enabled=raw.google_sheets_enabled,
-                spreadsheet_id=raw.google_sheets_spreadsheet_id,
-                credentials_path=credentials_path,
-                frontend_base_url=raw.google_sheets_frontend_base_url,
-                spreadsheet_title=raw.google_sheets_spreadsheet_title,
-                edit_poll_interval_seconds=raw.google_sheets_edit_poll_interval_seconds,
-            ),
-            google_oauth=GoogleOAuthSettings(
-                enabled=raw.google_oauth_enabled,
-                client_id=raw.google_oauth_client_id,
-                client_secret=raw.google_oauth_client_secret,
-                jwt_secret=raw.auth_jwt_secret,
-                redirect_uri=raw.google_oauth_redirect_uri,
-                frontend_url=raw.google_oauth_frontend_url,
-                session_ttl_seconds=raw.auth_session_ttl_seconds,
-                state_ttl_seconds=raw.auth_state_ttl_seconds,
-                secure_cookie=raw.auth_secure_cookie,
-                picker_api_key=raw.google_picker_api_key,
-                picker_app_id=raw.google_picker_app_id,
+            voice=VoiceSettings(
+                provider=raw.voice_provider, stt_model=raw.voice_stt_model,
+                proposal_model=raw.voice_proposal_model, tts_model=raw.voice_tts_model,
+                tts_voice=raw.voice_tts_voice, max_audio_bytes=raw.voice_max_audio_bytes,
+                max_record_seconds=raw.voice_max_record_seconds,
+                ffmpeg_path=raw.voice_ffmpeg_path or shutil.which("ffmpeg"),
             ),
         )
 

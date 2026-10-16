@@ -29,6 +29,7 @@ from app.layout_analysis.models import LayoutDefinition
 from app.repositories.template_repository import TemplateRepository
 from app.services.template_field_identity import bind, identities
 from app.services.template_mutation import begin_immediate, template_mutation_lock
+from app.storage.immutable_artifact import publish_config
 from app.storage.local_storage import LocalStorageService
 
 
@@ -50,6 +51,7 @@ def remap(value: Any, replacements: dict[str, str], reference: bool = False) -> 
                     "value",
                     "literal",
                     "printedLabelText",
+                    "fieldLabel",
                     "targetPath",
                     "collectionPath",
                     "recordKeyValue",
@@ -452,7 +454,7 @@ class TemplateVersionService:
                         )
                     ]
                     mapping_replacements[loc.mapping_key] = new_key
-                    generic_targets[f"customFields.{loc.mapping_key}"] = f"customFields.{new_key}"
+                    generic_targets[f"fields.{loc.mapping_key}"] = f"fields.{new_key}"
                 definition_copies[row.id] = copied
             for m in config.field_mappings:
                 if m.mapping_id not in mapping_replacements:
@@ -595,6 +597,8 @@ class TemplateVersionService:
                     title="Source artifact missing",
                     detail="元画像を複製できません。",
                 )
+            config_text = yaml.safe_dump(config_data, allow_unicode=True)
+            config_path = publish_config(self.storage, config_text)
             version = TemplateVersion(
                 id=new_id,
                 template_id=template.id,
@@ -613,22 +617,6 @@ class TemplateVersionService:
             session.flush()
             session.add(version)
             session.flush()
-            if self.storage.exists(config_path):
-                raise self._conflict(
-                    "TEMPLATE_ARTIFACT_DESTINATION_COLLISION",
-                    "DRAFT configの保存先が既存pathと衝突しました。",
-                )
-            created_paths.append(config_path)
-            config_text = yaml.safe_dump(config_data, allow_unicode=True)
-            stored_config = self.storage.write_text(config_path, config_text)
-            if (
-                Path(stored_config).as_posix() != config_path
-                or self.storage.read_bytes(config_path) != config_text.encode("utf-8")
-            ):
-                raise self._conflict(
-                    "TEMPLATE_ARTIFACT_COPY_CHANGED",
-                    "DRAFT configの保存内容を再検証できません。",
-                )
             source_identities = identities(session, source, config.field_mappings)
             for key, logical_id in source_identities.items():
                 bind(session, source, key, logical_id)

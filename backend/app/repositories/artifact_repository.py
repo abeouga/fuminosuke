@@ -88,7 +88,7 @@ class ArtifactRepository:
         statement = select(JobArtifact).where(JobArtifact.job_id == job_id)
         if attempt_number is not None:
             statement = statement.where(JobArtifact.attempt_number == attempt_number)
-        statement = statement.order_by(JobArtifact.attempt_number, JobArtifact.artifact_name)
+        statement = statement.order_by(JobArtifact.attempt_number, JobArtifact.created_at, JobArtifact.id)
         return list(self._session.scalars(statement))
 
     def delete_for_job(self, job_id: str) -> int:

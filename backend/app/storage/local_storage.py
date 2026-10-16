@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path, PurePath
 
 from app.storage.atomic_writer import atomic_write_bytes, atomic_write_text
@@ -20,8 +21,9 @@ class LocalStorageService:
         "logs",
     )
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, access_check: Callable[[], None] | None = None) -> None:
         self._root = data_dir.expanduser().resolve()
+        self._access_check = access_check
 
     @property
     def root(self) -> Path:
@@ -33,6 +35,8 @@ class LocalStorageService:
             self.resolve(directory).mkdir(parents=True, exist_ok=True)
 
     def resolve(self, relative_path: str | Path) -> Path:
+        if self._access_check is not None:
+            self._access_check()
         supplied = Path(relative_path)
         if supplied.is_absolute():
             raise StoragePathError("Absolute paths are not accepted")

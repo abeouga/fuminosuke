@@ -1,0 +1,14 @@
+{
+  "version": "template-analysis.compact.v4",
+  "marks": [{"id": "m1", "kind": "symbol", "options": ["○", "◎", "×", "△"], "evidence": ["c20"]}],
+  "units": [
+    {"kind": "records", "grid": "g2", "rows": {"first": "r2", "last": "r5"}, "parent": null, "name": "設備点検", "columns": [
+      {"column": "k1", "use": "row_label", "headers": ["c5"]},
+      {"column": "k2", "use": "value", "labels": ["c6"], "name": null, "reading": "m1"},
+      {"column": "k3", "use": "context", "headers": ["c7"]}
+    ], "rowKeyStrategy": "position", "includeEmptyRows": true}
+  ],
+  "roles": [],
+  "headings": [],
+  "hierarchy": []
+}

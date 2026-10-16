@@ -22,6 +22,7 @@ class JobError(ApiModel):
 
 
 class JobDetail(ApiModel):
+    resource_revision: int | None = None
     id: str
     job_type: str
     status: str
@@ -52,6 +53,7 @@ def job_detail(job: ProcessingJob, *, stack_trace: str | None = None) -> JobDeta
             stack_trace=stack_trace,
         )
     return JobDetail(
+        resource_revision=getattr(job, "resource_revision", None),
         id=job.id,
         job_type=job.job_type,
         status=job.status,

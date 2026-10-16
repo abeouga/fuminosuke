@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.pool import StaticPool
 
+from app.ai.budget_contract import ReservationBudget
 from app.core.config import DatabaseSettings
+from app.db.mutation import revision_conflict
 
 
 def create_sqlite_engine(settings: DatabaseSettings) -> Engine:
@@ -37,8 +40,17 @@ def create_sqlite_engine(settings: DatabaseSettings) -> Engine:
 
 
 class Database:
-    def __init__(self, settings: DatabaseSettings) -> None:
+    def __init__(
+        self, settings: DatabaseSettings, *, access_check: Callable[[], None] | None = None,
+        api_budget: ReservationBudget | None = None,
+        before_delete: Callable[[str, str], None] | None = None,
+    ) -> None:
+        self.api_budget, self.before_delete = api_budget, before_delete
         self.engine = create_sqlite_engine(settings)
+        if access_check is not None:
+            # Covers ORM, Core and raw SQL, including background work and commit-time flushes.
+            event.listen(self.engine, "before_cursor_execute", lambda *_: access_check())
+            event.listen(self.engine, "commit", lambda *_: access_check())
         self.session_factory = sessionmaker(
             bind=self.engine,
             class_=Session,
@@ -51,8 +63,31 @@ class Database:
         session = self.session_factory()
         try:
             yield session
+        except StaleDataError as exc:
+            session.rollback()
+            raise revision_conflict() from exc
+        except BaseException:
+            session.rollback()
+            raise
         finally:
             session.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[Session]:
+        """Own the commit; domain operations only flush this supplied session."""
+        with self.session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
+            session.info["mutation_transaction_owned"] = True
+            try:
+                yield session
+                session.info["mutation_owner_committing"] = True
+                session.commit()
+            except BaseException:
+                session.rollback()
+                raise
+            finally:
+                session.info.pop("mutation_transaction_owned", None)
+                session.info.pop("mutation_owner_committing", None)
 
     def check_connection(self) -> None:
         with self.engine.connect() as connection:

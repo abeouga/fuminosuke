@@ -1,0 +1,510 @@
+{
+  "version": "template-analysis.phase30d.result.v1",
+  "completedSchedule": true,
+  "scheduledTrials": 42,
+  "completedTrials": 42,
+  "apiCalls": 41,
+  "actualHttpAttempts": 41,
+  "endpoints": {
+    "/v1/responses": 31,
+    "/v1/decisions": 10
+  },
+  "arms": {
+    "A": {
+      "trials": 10,
+      "qualityCorrect": {
+        "roles": 97,
+        "bindings": 54,
+        "rows": 10,
+        "marks": 6
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 4,
+      "within5000": 1,
+      "qualityQualifiedMedianMs": 6228.872450010385,
+      "allReadyMedianMs": 6006.494600005681,
+      "penaltyMedianMs": 60000.0,
+      "wrongFocusBindings": 4,
+      "missingFocusBindings": 12,
+      "fullManualProjectionMatchesGold": 4,
+      "states": {
+        "valid": 9,
+        "rejected": 1
+      },
+      "draftStatuses": {
+        "draft": 5,
+        "partial_draft": 2,
+        "held": 2,
+        "rejected": 1
+      },
+      "perScope": [
+        {
+          "caseId": "T1",
+          "trials": 2,
+          "qualified": 2,
+          "within5000": 1,
+          "fullProjection": 2,
+          "scopeReadyMs": [
+            5756.021500012139,
+            4476.02130001178
+          ],
+          "medianMs": 5116.0214000119595,
+          "httpMedianMs": 4421.419649996096,
+          "localMedianMs": 694.6017500158632
+        },
+        {
+          "caseId": "T2",
+          "trials": 2,
+          "qualified": 2,
+          "within5000": 0,
+          "fullProjection": 2,
+          "scopeReadyMs": [
+            6701.723400008632,
+            6923.36260000593
+          ],
+          "medianMs": 6812.543000007281,
+          "httpMedianMs": 5708.716850000201,
+          "localMedianMs": 1103.8261500070803
+        },
+        {
+          "caseId": "T3",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            1217.5076999992598,
+            1786.983700003475
+          ],
+          "medianMs": 1502.2457000013674,
+          "httpMedianMs": 917.8111999935936,
+          "localMedianMs": 584.4345000077737
+        },
+        {
+          "caseId": "H1",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            6006.494600005681,
+            6973.675199988065
+          ],
+          "medianMs": 6490.084899996873,
+          "httpMedianMs": 5937.498949992005,
+          "localMedianMs": 552.5859500048682
+        },
+        {
+          "caseId": "H2",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            8762.151000002632,
+            null
+          ],
+          "medianMs": 8762.151000002632,
+          "httpMedianMs": 8399.119850000716,
+          "localMedianMs": 585.7966000039596
+        }
+      ],
+      "gates": {
+        "completed": true,
+        "allFocusCorrect": false,
+        "wrongBindingsZero": false,
+        "qualifiedMedianWithin5000": false,
+        "qualityWithin5000AtLeast8Of10": false,
+        "everyScopeAtLeast1Of2Within5000": false
+      },
+      "passed": false
+    },
+    "B": {
+      "trials": 10,
+      "qualityCorrect": {
+        "roles": 8,
+        "bindings": 4,
+        "rows": 0,
+        "marks": 4
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 0,
+      "within5000": 0,
+      "qualityQualifiedMedianMs": null,
+      "allReadyMedianMs": 4170.45925000275,
+      "penaltyMedianMs": 60000.0,
+      "wrongFocusBindings": 0,
+      "missingFocusBindings": 70,
+      "fullManualProjectionMatchesGold": 0,
+      "states": {
+        "valid": 10
+      },
+      "draftStatuses": {
+        "held": 8,
+        "partial_draft": 2
+      },
+      "perScope": [
+        {
+          "caseId": "T1",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            4793.3794999844395,
+            3316.577999998117
+          ],
+          "medianMs": 4054.978749991278,
+          "httpMedianMs": 2961.4869999932125,
+          "localMedianMs": 1093.4917499980656
+        },
+        {
+          "caseId": "T2",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            7708.610200003022,
+            7501.956899999641
+          ],
+          "medianMs": 7605.283550001332,
+          "httpMedianMs": 6169.474750000518,
+          "localMedianMs": 1435.8088000008138
+        },
+        {
+          "caseId": "T3",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            1528.7078999972437,
+            1584.9108999827877
+          ],
+          "medianMs": 1556.8093999900157,
+          "httpMedianMs": 464.71884999482427,
+          "localMedianMs": 1092.0905499951914
+        },
+        {
+          "caseId": "H1",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            3962.7924999804236,
+            3280.57259999332
+          ],
+          "medianMs": 3621.682549986872,
+          "httpMedianMs": 2612.5935500022024,
+          "localMedianMs": 1009.0889999846695
+        },
+        {
+          "caseId": "H2",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            5995.911399979377,
+            4378.126000025077
+          ],
+          "medianMs": 5187.018700002227,
+          "httpMedianMs": 4179.884099998162,
+          "localMedianMs": 1007.1346000040649
+        }
+      ],
+      "gates": {
+        "completed": true,
+        "allFocusCorrect": false,
+        "wrongBindingsZero": true,
+        "qualifiedMedianWithin5000": false,
+        "qualityWithin5000AtLeast8Of10": false,
+        "everyScopeAtLeast1Of2Within5000": false
+      },
+      "passed": false
+    },
+    "C": {
+      "trials": 10,
+      "qualityCorrect": {
+        "roles": 8,
+        "bindings": 4,
+        "rows": 0,
+        "marks": 4
+      },
+      "qualityRequired": {
+        "roles": 146,
+        "bindings": 74,
+        "rows": 14,
+        "marks": 16
+      },
+      "qualityQualified": 0,
+      "within5000": 0,
+      "qualityQualifiedMedianMs": null,
+      "allReadyMedianMs": 4934.429349988932,
+      "penaltyMedianMs": 60000.0,
+      "wrongFocusBindings": 0,
+      "missingFocusBindings": 70,
+      "fullManualProjectionMatchesGold": 0,
+      "states": {
+        "valid": 10
+      },
+      "draftStatuses": {
+        "held": 8,
+        "partial_draft": 2
+      },
+      "perScope": [
+        {
+          "caseId": "T1",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            4418.122200004291,
+            3995.0401000096463
+          ],
+          "medianMs": 4206.5811500069685,
+          "httpMedianMs": 3094.9556499981554,
+          "localMedianMs": 1111.625500008813
+        },
+        {
+          "caseId": "T2",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            6381.9354999868665,
+            4658.198899996933
+          ],
+          "medianMs": 5520.0671999918995,
+          "httpMedianMs": 4189.684649987612,
+          "localMedianMs": 1330.3825500042876
+        },
+        {
+          "caseId": "T3",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            5730.391799996141,
+            1585.1572999963537
+          ],
+          "medianMs": 3657.7745499962475,
+          "httpMedianMs": 2557.7605000144104,
+          "localMedianMs": 1100.0140499818372
+        },
+        {
+          "caseId": "H1",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            4712.78479998,
+            5156.073899997864
+          ],
+          "medianMs": 4934.429349988932,
+          "httpMedianMs": 3906.9350000063423,
+          "localMedianMs": 1027.4943499825895
+        },
+        {
+          "caseId": "H2",
+          "trials": 2,
+          "qualified": 0,
+          "within5000": 0,
+          "fullProjection": 0,
+          "scopeReadyMs": [
+            7302.092900004936,
+            7305.117200012319
+          ],
+          "medianMs": 7303.605050008628,
+          "httpMedianMs": 6280.274600008852,
+          "localMedianMs": 1023.3304499997757
+        }
+      ],
+      "gates": {
+        "completed": true,
+        "allFocusCorrect": false,
+        "wrongBindingsZero": true,
+        "qualifiedMedianWithin5000": false,
+        "qualityWithin5000AtLeast8Of10": false,
+        "everyScopeAtLeast1Of2Within5000": false
+      },
+      "passed": false
+    }
+  },
+  "evaluation": {
+    "trials": 12,
+    "exact": 1,
+    "exactRequired": 10,
+    "correctHeld": 2,
+    "heldRequired": 2,
+    "wrongDrafts": 0,
+    "localZeroSend": [
+      "E11-C"
+    ],
+    "firstScopeReadyMs": 1283.0663999775425,
+    "subsequentReadyMedianMs": 3403.948749997653,
+    "connectionReuseObservedRuns": [
+      "E02-C",
+      "E03-C",
+      "E04-C",
+      "E05-C",
+      "E06-C",
+      "E07-C",
+      "E08-C",
+      "E09-C",
+      "E10-C",
+      "E12-C"
+    ],
+    "gates": {
+      "completed": true,
+      "exact10of10": false,
+      "held2of2": true,
+      "wrongDraftsZero": true
+    },
+    "passed": false,
+    "synthetic": true,
+    "realUnseenAccuracyClaim": false
+  },
+  "passed": false,
+  "usage": {
+    "input_tokens": 220533,
+    "output_tokens": 8164,
+    "total_tokens": 228697,
+    "cached_tokens": 63087,
+    "cache_write_tokens": 111008,
+    "reasoning_tokens": 5664
+  },
+  "api": {
+    "used": 417,
+    "limit": 496,
+    "remaining": 79
+  },
+  "sourceLockSha256": "f8160825ab66227b36a4c687d1dfadfed39b2ac89bf1bc59ba20dc01d45cc923",
+  "retrySends": 0,
+  "warmupSends": 0,
+  "repairSends": 0,
+  "productActivated": false,
+  "normalDataMigrated": false,
+  "phase31Started": false,
+  "stop": null,
+  "limitations": [
+    "Known five scopes; two repetitions per arm",
+    "Synthetic held-out families are not real unseen sheets",
+    "No product UI/business save/undo/microphone acceptance",
+    "Observed time includes experiment durability and budget reservation",
+    "Cold gate excludes Python imports and ORM startup",
+    "Condition order is cyclic; server prompt caching cannot be forcibly disabled"
+  ],
+  "verification": {
+    "preflightTemplates": 27,
+    "executionPinnedFiles": 953,
+    "sourceFiles": 401,
+    "wireRequestsVerified": 41,
+    "replayedTrials": 42,
+    "replayAccepted": 41,
+    "replaySameRejected": 1,
+    "replayApiCalls": 0
+  },
+  "diagnostics": {
+    "A-main": {
+      "trials": 10,
+      "statuses": {
+        "draft": 5,
+        "partial_draft": 2,
+        "held": 2,
+        "rejected": 1
+      },
+      "responseComponentStructures": {},
+      "positiveIncorrectNonemptyDrafts": 3,
+      "heldNegativeNonemptyDrafts": 0,
+      "coverageReasons": {
+        "None": 9,
+        "needs_context": 10,
+        "UNRESOLVED_FACTOR_OR_NAME": 2
+      }
+    },
+    "B-main": {
+      "trials": 10,
+      "statuses": {
+        "held": 8,
+        "partial_draft": 2
+      },
+      "responseComponentStructures": {
+        "needs_context": 3,
+        "none_of_these": 5
+      },
+      "positiveIncorrectNonemptyDrafts": 2,
+      "heldNegativeNonemptyDrafts": 0,
+      "coverageReasons": {
+        "needs_context": 13,
+        "none_of_these": 5,
+        "None": 4
+      }
+    },
+    "C-main": {
+      "trials": 10,
+      "statuses": {
+        "held": 8,
+        "partial_draft": 2
+      },
+      "responseComponentStructures": {
+        "none_of_these": 6,
+        "needs_context": 2
+      },
+      "positiveIncorrectNonemptyDrafts": 2,
+      "heldNegativeNonemptyDrafts": 0,
+      "coverageReasons": {
+        "none_of_these": 6,
+        "None": 4,
+        "needs_context": 12
+      }
+    },
+    "C-evaluation": {
+      "trials": 12,
+      "statuses": {
+        "held": 11,
+        "draft": 1
+      },
+      "responseComponentStructures": {
+        "c1s1": 1,
+        "none_of_these": 6
+      },
+      "positiveIncorrectNonemptyDrafts": 0,
+      "heldNegativeNonemptyDrafts": 0,
+      "coverageReasons": {
+        "needs_context": 8,
+        "None": 1,
+        "none_of_these": 6,
+        "NO_FINITE_CANDIDATE": 1
+      }
+    }
+  },
+  "evidenceDirectory": "D:/llm-ocr-archive/template-ai/20261012-phase30d",
+  "executionManifest": "D:/llm-ocr-archive/template-ai/20261012-phase30d/execution-manifest.json",
+  "resultSeal": "D:/llm-ocr-archive/template-ai/20261012-phase30d/result-hashes.json",
+  "preservationAudit": "D:/llm-ocr-archive/template-ai/20261012-phase30d/preservation.json",
+  "phase31": {
+    "started": false,
+    "recommendedModel": "Astra",
+    "reasoningEffort": "XHigh",
+    "apiCallsPlanned": 0
+  },
+  "adoptionStatus": "NOT_ACCEPTED",
+  "positiveEvaluationIncorrectDrafts": 0
+}

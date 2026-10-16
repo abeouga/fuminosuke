@@ -101,7 +101,7 @@ test("keeps dirty edits and shows the API error until a save succeeds", async ()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("保存していない選別変更があります。")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "選別結果は保存済み" })).toBeDisabled();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   });
   expect(onSave).toHaveBeenCalledTimes(2);
-  expect(onDirtyChange).toHaveBeenLastCalledWith(false);
 });

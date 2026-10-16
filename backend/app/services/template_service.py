@@ -12,13 +12,16 @@ from sqlalchemy import select
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.models import JobArtifact, Template, TemplateVersion
+from app.db.mutation import require_revision, revision_conflict
 from app.db.session import Database
-from app.domain.enums import TemplateMode, TemplateVersionStatus
+from app.domain.enums import JobStatus, TemplateMode, TemplateVersionStatus
 from app.domain.template_config import (
     FieldMappingConfig,
     RegionConfig,
     TemplateConfig,
+    build_blank_template_config,
     load_template_config,
+    parse_template_config,
 )
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.image_loader import ImageLoader
@@ -30,6 +33,8 @@ from app.segmentation.candidate_regions import (
     handwriting_candidate_regions,
     handwriting_candidates_payload,
 )
+from app.services.template_mutation import require_draft
+from app.storage.immutable_artifact import publish_config
 from app.storage.local_storage import LocalStorageService
 from app.template_recovery.pipelines import PreparedTemplate, TemplateRecoveryPipelines
 
@@ -92,7 +97,6 @@ class TemplatePreparationService:
                 return ""
             return version_id
         except Exception:
-            self._discard_job_version(job_id)
             self._remove_empty_template(name)
             raise
 
@@ -114,6 +118,12 @@ class TemplatePreparationService:
             previous = (
                 repository.get_version(reprocess_version_id) if reprocess_version_id else None
             )
+            expected_revision = job.config_snapshot_json.get("reprocessTemplateRevision") if job else None
+            if reprocess_version_id:
+                if previous is None or not isinstance(expected_revision, int):
+                    raise revision_conflict()
+                require_revision(previous, expected_revision)
+                require_draft(previous)
             if previous is None:
                 existing_version_id = session.scalar(
                     select(TemplateVersion.id)
@@ -124,7 +134,7 @@ class TemplatePreparationService:
                 if existing_version_id is not None:
                     return existing_version_id
                 template = repository.create_template(
-                    name=name, document_type="cow-breeding-ledger"
+                    name=name, document_type="generic-document"
                 )
                 template_id = template.id
                 version_number = 1
@@ -252,30 +262,49 @@ class TemplatePreparationService:
                 f"{base_path}/handwriting_mask.png",
                 encode_png(prepared.handwriting_mask, rgb=False),
             )
-        version_config = self._config_for_dimensions(
-            prepared.canonical_width,
-            prepared.canonical_height,
-        ).model_copy(
-            update={
-                "template_id": template_id,
-                "template_version": version_number,
-                "name": name,
-            },
-            deep=True,
-        )
+        if previous is None:
+            version_config = build_blank_template_config(
+                template_id=template_id, template_version=version_number, name=name,
+                canonical_width=prepared.canonical_width,
+                canonical_height=prepared.canonical_height,
+            )
+        else:
+            with self._database.session() as session:
+                owner = session.get(Template, template_id)
+                generic = owner is not None and owner.document_type == "generic-document"
+            previous_config = (
+                parse_template_config(
+                    self._storage.read_bytes(previous.config_relative_path).decode("utf-8")
+                ) if generic else None
+            )
+            version_config = self._config_for_dimensions(
+                prepared.canonical_width, prepared.canonical_height, base=previous_config,
+            ).model_copy(
+                update={
+                    "template_id": template_id, "template_version": version_number, "name": name,
+                },
+                deep=True,
+            )
         config_text = yaml.safe_dump(
             version_config.model_dump(mode="json", by_alias=True),
             allow_unicode=True,
             sort_keys=False,
         )
-        config_relative_path = self._storage.write_text(
-            f"{base_path}/template.yaml", config_text
-        )
+        config_relative_path = publish_config(self._storage, config_text)
         self._storage.write_text(
             f"{base_path}/quality.json",
             json.dumps(prepared.quality, ensure_ascii=False, indent=2),
         )
-        with self._database.session() as session:
+        with self._database.transaction() as session:
+            job = JobRepository(session).get(job_id)
+            if job is None or job.status != JobStatus.PROCESSING.value or job.attempt_number != attempt or job.cancel_requested:
+                raise revision_conflict()
+            previous = session.get(TemplateVersion, reprocess_version_id) if reprocess_version_id else None
+            if reprocess_version_id:
+                if previous is None:
+                    raise revision_conflict()
+                require_revision(previous, expected_revision)
+                require_draft(previous)
             version = TemplateRepository(session).create_version(
                 template_id=template_id,
                 mode=mode,
@@ -286,24 +315,20 @@ class TemplatePreparationService:
                 mask_artifact_id=mask_artifact_id,
                 config_relative_path=config_relative_path,
                 quality=prepared.quality,
+                layout=initial_layout.model_dump(mode="json", by_alias=True),
             )
             if version.version_number != version_number:
-                raise RuntimeError("Template version number changed during persistence")
-            version.layout_json = initial_layout.model_dump(mode="json", by_alias=True)
-            session.commit()
-            if reprocess_version_id:
-                previous = TemplateRepository(session).get_version(reprocess_version_id)
-                if previous is not None and previous.status == "DRAFT":
-                    previous.status = "ARCHIVED"
-                    session.commit()
+                raise revision_conflict()
+            if previous is None and self._settings.app.template_analysis_enabled:
+                from app.editing.authoring_provenance import seed_detection
+
+                seed_detection(session, version)
+            if previous is not None:
+                previous.status = TemplateVersionStatus.ARCHIVED.value
             version_id = version.id
-            job_repository = JobRepository(session)
-            job = job_repository.get(job_id)
-            if job is not None:
-                snapshot = dict(job.config_snapshot_json)
-                snapshot["templateId"] = template_id
-                snapshot["templateVersionId"] = version_id
-                job_repository.update(job_id, config_snapshot_json=snapshot)
+            job.config_snapshot_json = {
+                **job.config_snapshot_json, "templateId": template_id, "templateVersionId": version_id,
+            }
         result = self._result_json(
             job_id=job_id,
             attempt=attempt,
@@ -324,14 +349,17 @@ class TemplatePreparationService:
         )
         return version_id
 
-    def _config_for_dimensions(self, width: int, height: int) -> TemplateConfig:
+    def _config_for_dimensions(
+        self, width: int, height: int, *, base: TemplateConfig | None = None,
+    ) -> TemplateConfig:
+        config = base or self._config
         if (
-            width == self._config.canonical_width
-            and height == self._config.canonical_height
+            width == config.canonical_width
+            and height == config.canonical_height
         ):
-            return self._config.model_copy(deep=True)
-        scale_x = width / self._config.canonical_width
-        scale_y = height / self._config.canonical_height
+            return config.model_copy(deep=True)
+        scale_x = width / config.canonical_width
+        scale_y = height / config.canonical_height
 
         def scaled_box(item: BoxConfig) -> BoxConfig:
             x = min(width - 1, max(0, round(item.x * scale_x)))
@@ -343,13 +371,13 @@ class TemplatePreparationService:
                 deep=True,
             )
 
-        return self._config.model_copy(
+        return config.model_copy(
             update={
                 "canonical_width": width,
                 "canonical_height": height,
-                "regions": [scaled_box(item) for item in self._config.regions],
+                "regions": [scaled_box(item) for item in config.regions],
                 "field_mappings": [
-                    scaled_box(item) for item in self._config.field_mappings
+                    scaled_box(item) for item in config.field_mappings
                 ],
             },
             deep=True,

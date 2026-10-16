@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from typing import Annotated, Literal
@@ -17,19 +18,19 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
-from app.api.auth_dependencies import require_authenticated_user
 from app.api.dependencies import get_job_service
+from app.api.editing_cutover import legacy_edit_guard
+from app.api.template_revision import template_revision_guard
 from app.api.v1.routes.shared import JobAccepted, JobDetail, job_accepted, job_detail
 from app.api.v1.routes.uploads import read_upload
 from app.core.errors import ApiModel, AppError, FieldError
 from app.db.models import TemplateVersion
 from app.domain.enums import JobStatus, JobType, TemplateMode
 from app.domain.field_targets import (
-    FIELD_TARGET_BY_PATH,
     FieldTarget,
-    custom_field_key,
+    field_key,
     is_supported_field_path,
 )
 from app.domain.polygon import PolygonPoint
@@ -45,11 +46,11 @@ from app.domain.template_definition import (
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
-from app.services.google_oauth_service import AuthenticatedUser
 from app.services.job_service import UploadPayload
 from app.services.layout_service import LayoutService
 from app.services.legacy_template_print_service import LegacyTemplatePrintService
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
+from app.services.template_authoring_service import TemplateAuthoringService
 from app.services.template_candidate_service import TemplateCandidateService
 from app.services.template_definition_service import TemplateDefinitionService
 from app.services.template_management_service import TemplateManagementService
@@ -61,6 +62,7 @@ router = APIRouter(tags=["templates"])
 class TemplateVersionView(ApiModel):
     id: str
     version_number: int
+    revision: int
     mode: str
     status: str
     canonical_width: int
@@ -91,6 +93,15 @@ class TemplateDuplicateRequest(ApiModel):
 class TemplateDuplicateResponse(ApiModel):
     template_id: str
     template_version_id: str
+
+
+class TemplateNameUpdateRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class TemplateNameUpdateView(ApiModel):
+    id: str
+    name: str
 
 
 class TemplateOutputFolderView(ApiModel):
@@ -128,6 +139,7 @@ class TemplateCandidateSetView(ApiModel):
 
 
 class TemplateCandidateSettingsView(ApiModel):
+    resource_revision: int
     template_id: str
     sets: list[TemplateCandidateSetView]
 
@@ -140,6 +152,7 @@ class TemplateCandidateSetUpdate(ApiModel):
 
 
 class TemplateCandidateSettingsUpdate(ApiModel):
+    expected_revision: int = Field(ge=1, strict=True)
     template_version_id: str = Field(min_length=1, max_length=36)
     sets: list[TemplateCandidateSetUpdate] = Field(default_factory=list, max_length=30)
 
@@ -166,6 +179,8 @@ class CompositeSubfieldView(ApiModel):
 
 
 class FieldMappingView(ApiModel):
+    reading_mode: Literal["number"] | None = None
+    sequence_number: int | None = Field(default=None, ge=1, strict=True)
     mapping_id: str
     target_path: str
     label: str
@@ -179,7 +194,7 @@ class FieldMappingView(ApiModel):
     vertices: list[PolygonPoint] = Field(default_factory=list, max_length=100)
     printed_label_text: str = ""
     mapping_type: str = "text"
-    mark_recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
+    mark_recognition_mode: Literal["automatic", "manual", "symbol", "checklist"] = "automatic"
     mark_selection_mode: str = "multiple"
     mark_options: list[MarkOptionView] = Field(default_factory=list)
     composite_subfields: list[CompositeSubfieldView] = Field(default_factory=list)
@@ -215,7 +230,6 @@ class FieldMappingsResponse(ApiModel):
     canonical_width: int
     canonical_height: int
     mappings: list[FieldMappingView]
-    document_identity: DocumentIdentityView | None
     document_identity_fields: list[DocumentIdentityView] = Field(default_factory=list)
     document_name: DocumentNameView | None = None
     targets: list[FieldMappingTargetView]
@@ -225,8 +239,8 @@ class FieldMappingsResponse(ApiModel):
 
 
 class FieldMappingsUpdate(ApiModel):
+    model_config = ConfigDict(extra="forbid")
     mappings: list[FieldMappingView] = Field(max_length=300)
-    document_identity: DocumentIdentityView | None = None
     document_identity_fields: list[DocumentIdentityView] = Field(
         default_factory=list,
         max_length=20,
@@ -235,9 +249,7 @@ class FieldMappingsUpdate(ApiModel):
 
     @model_validator(mode="after")
     def validate_identity_roles(self) -> FieldMappingsUpdate:
-        fields = self.document_identity_fields or (
-            [self.document_identity] if self.document_identity is not None else []
-        )
+        fields = self.document_identity_fields
         if not fields:
             return self
         if len({field.target_path for field in fields}) != len(fields):
@@ -245,7 +257,7 @@ class FieldMappingsUpdate(ApiModel):
         grouped_fields = [field for field in fields if field.match_group_id]
         if grouped_fields:
             if len(grouped_fields) != len(fields):
-                raise ValueError("従来の照合条件と照合グループは混在できません。")
+                raise ValueError("単独の識別項目と識別グループは混在できません。")
             if any(not field.match_group_label for field in grouped_fields):
                 raise ValueError("照合グループ名を入力してください。")
             return self
@@ -272,24 +284,18 @@ def _mapping_targets(
     ]
     known_paths = {target.path for target in targets}
     used_paths = [relation.target_path for relation in layout.relations]
-    used_paths.extend(
-        mark_set.target_path
-        for cell in layout.cells
-        for mark_set in cell.mark_sets
-    )
+    used_paths.extend(mark_set.target_path for cell in layout.cells for mark_set in cell.mark_sets)
     mapping_by_path = {mapping.target_path: mapping for mapping in mappings}
     for target_path in [*used_paths, *mapping_by_path]:
         if target_path in known_paths:
             continue
         mapping = mapping_by_path.get(target_path)
-        known = FIELD_TARGET_BY_PATH.get(target_path)
-        key = custom_field_key(target_path)
+        key = field_key(target_path)
         targets.append(
             FieldTarget(
                 path=target_path,
-                label=(mapping.label if mapping else "")
-                or (known.label if known else key or target_path),
-                section=known.section if known else "追加項目",
+                label=(mapping.label if mapping else "") or key or target_path,
+                section="追加項目",
             )
         )
         known_paths.add(target_path)
@@ -303,9 +309,7 @@ def _unassigned_layout_warnings(layout: LayoutDefinition) -> list[str]:
     if not has_layout_assignments:
         return []
     assigned = {relation.input_cell_id for relation in layout.relations}
-    assigned.update(
-        cell.id for cell in layout.cells if cell.role == "mark" and cell.mark_sets
-    )
+    assigned.update(cell.id for cell in layout.cells if cell.role == "mark" and cell.mark_sets)
     missing = [
         cell.id
         for cell in layout.cells
@@ -321,7 +325,6 @@ def _unassigned_layout_warnings(layout: LayoutDefinition) -> list[str]:
 
 def _mapping_validation(
     mappings: list[FieldMappingConfig],
-    document_identity: DocumentIdentityConfig | None = None,
     document_identity_fields: list[DocumentIdentityConfig] | None = None,
     document_name: DocumentNameConfig | None = None,
     *,
@@ -331,16 +334,14 @@ def _mapping_validation(
     invalid = [mapping for mapping in enabled if not is_supported_field_path(mapping.target_path)]
     warnings = [
         (
-            f"{mapping.label}: {mapping.target_path} は帳票の行数上限を超えています。"
+            f"{mapping.label}: {mapping.target_path} は未対応の保存先です。"
             "意味づけを修正して再検出してください。"
         )
         for mapping in invalid
     ]
     if not enabled:
         warnings.append("読み取りに使用できる意味づけ済みセルがありません。")
-    identity_fields = document_identity_fields or (
-        [document_identity] if document_identity is not None else []
-    )
+    identity_fields = document_identity_fields or []
     if not identity_fields:
         warnings.append("書類を見分ける項目が未設定です。")
     else:
@@ -358,7 +359,7 @@ def _mapping_validation(
         grouped_fields = [field for field in identity_fields if field.match_group_id]
         if grouped_fields:
             if len(grouped_fields) != len(identity_fields):
-                warnings.append("従来の照合条件と照合グループは混在できません。")
+                warnings.append("単独の識別項目と識別グループは混在できません。")
             if any(not field.match_group_label for field in grouped_fields):
                 warnings.append("照合グループ名を入力してください。")
         else:
@@ -391,10 +392,7 @@ def _mapping_validation(
         bool(enabled)
         and not invalid
         and (
-            (
-                identity_valid
-                and (document_name is not None or not uses_grouped_matching)
-            )
+            (identity_valid and (document_name is not None or not uses_grouped_matching))
             or not require_identity
         ),
         warnings,
@@ -405,6 +403,7 @@ def _version_view(version: TemplateVersion) -> TemplateVersionView:
     return TemplateVersionView(
         id=version.id,
         version_number=version.version_number,
+        revision=version.revision,
         mode=version.mode,
         status=version.status,
         canonical_width=version.canonical_width,
@@ -415,8 +414,11 @@ def _version_view(version: TemplateVersion) -> TemplateVersionView:
     )
 
 
-@router.post("/template-versions/{version_id}/edit", response_model=TemplateVersionView,
-             response_model_by_alias=True)
+@router.post(
+    "/template-versions/{version_id}/edit",
+    response_model=TemplateVersionView,
+    response_model_by_alias=True,
+dependencies=[Depends(template_revision_guard)])
 def edit_template_version(
     request: Request,
     version_id: str,
@@ -424,9 +426,12 @@ def edit_template_version(
 ) -> TemplateVersionView:
     from app.services.template_version_service import TemplateVersionService
 
-    return _version_view(TemplateVersionService(
-        request.app.state.database, request.app.state.storage,
-    ).edit(version_id, expected_revision=base_revision))
+    return _version_view(
+        TemplateVersionService(
+            request.app.state.database,
+            request.app.state.storage,
+        ).edit(version_id, expected_revision=base_revision)
+    )
 
 
 @router.post(
@@ -434,17 +439,21 @@ def edit_template_version(
     response_model=TemplateDuplicateResponse,
     response_model_by_alias=True,
     status_code=status.HTTP_201_CREATED,
-)
+dependencies=[Depends(template_revision_guard)])
 def duplicate_template_version(
-    request: Request, version_id: str, payload: TemplateDuplicateRequest,
+    request: Request,
+    version_id: str,
+    payload: TemplateDuplicateRequest,
 ) -> TemplateDuplicateResponse:
     from app.services.template_duplicate_service import TemplateDuplicateService
 
     template_id, template_version_id = TemplateDuplicateService(
-        request.app.state.database, request.app.state.storage,
+        request.app.state.database,
+        request.app.state.storage,
     ).duplicate(version_id, payload.name, activate=payload.activate)
     return TemplateDuplicateResponse(
-        template_id=template_id, template_version_id=template_version_id,
+        template_id=template_id,
+        template_version_id=template_version_id,
     )
 
 
@@ -453,13 +462,18 @@ def get_template_field_identities(request: Request, version_id: str) -> dict[str
     from app.services.template_field_identity import identities
 
     mappings = TemplateManagementService(
-        request.app.state.database, request.app.state.storage,
+        request.app.state.database,
+        request.app.state.storage,
     ).get_field_mappings(version_id)[2]
     with request.app.state.database.session() as session:
         version = TemplateRepository(session).get_version(version_id)
         if version is None:
-            raise AppError(status=404, code="TEMPLATE_NOT_FOUND", title="Template not found",
-                           detail="テンプレート版がありません。")
+            raise AppError(
+                status=404,
+                code="TEMPLATE_NOT_FOUND",
+                title="Template not found",
+                detail="テンプレート版がありません。",
+            )
         return identities(session, version, mappings)
 
 
@@ -478,6 +492,23 @@ def list_templates(request: Request) -> list[TemplateView]:
             )
             for template in repository.list_templates()
         ]
+
+
+@router.patch(
+    "/templates/{template_id}/name",
+    response_model=TemplateNameUpdateView,
+    response_model_by_alias=True,
+)
+def rename_template(
+    request: Request,
+    template_id: str,
+    payload: TemplateNameUpdateRequest,
+) -> TemplateNameUpdateView:
+    renamed_id, name = TemplateManagementService(
+        request.app.state.database,
+        request.app.state.storage,
+    ).rename_template(template_id, payload.name)
+    return TemplateNameUpdateView(id=renamed_id, name=name)
 
 
 @router.get("/templates/{template_id}", response_model=TemplateView, response_model_by_alias=True)
@@ -503,44 +534,6 @@ def get_template(request: Request, template_id: str) -> TemplateView:
 
 
 @router.get(
-    "/templates/{template_id}/output-folder",
-    response_model=TemplateOutputFolderView,
-    response_model_by_alias=True,
-)
-def get_template_output_folder(
-    request: Request,
-    template_id: str,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> TemplateOutputFolderView:
-    return TemplateOutputFolderView.model_validate(
-        request.app.state.google_drive.template_output_folder(
-            template_id,
-            user.subject if user else None,
-        )
-    )
-
-
-@router.put(
-    "/templates/{template_id}/output-folder",
-    response_model=TemplateOutputFolderView,
-    response_model_by_alias=True,
-)
-def select_template_output_folder(
-    request: Request,
-    template_id: str,
-    payload: TemplateOutputFolderSelection,
-    user: Annotated[AuthenticatedUser | None, Depends(require_authenticated_user)],
-) -> TemplateOutputFolderView:
-    return TemplateOutputFolderView.model_validate(
-        request.app.state.google_drive.select_template_output_folder(
-            template_id,
-            payload.folder_id,
-            user.subject if user else None,
-        )
-    )
-
-
-@router.get(
     "/templates/{template_id}/candidate-settings",
     response_model=TemplateCandidateSettingsView,
     response_model_by_alias=True,
@@ -548,11 +541,12 @@ def select_template_output_folder(
 def get_template_candidate_settings(
     request: Request,
     template_id: str,
+    template_version_id: str = Query(alias="templateVersionId"),
 ) -> TemplateCandidateSettingsView:
     result = TemplateCandidateService(
         request.app.state.database,
         request.app.state.storage,
-    ).get_settings(template_id)
+    ).get_settings(template_id, template_version_id)
     return TemplateCandidateSettingsView.model_validate(result)
 
 
@@ -573,6 +567,7 @@ def replace_template_candidate_settings(
         template_id,
         payload.template_version_id,
         [item.model_dump(mode="json", by_alias=True) for item in payload.sets],
+        expected_revision=payload.expected_revision,
     )
     return TemplateCandidateSettingsView.model_validate(result)
 
@@ -674,10 +669,12 @@ async def create_spreadsheet_template_job(
             title="Upload is too large",
             detail="XLSXファイルが許容サイズを超えています。",
         )
-    job = SpreadsheetTemplateImportService(
-        request.app.state.database,
-        request.app.state.storage,
-    ).import_xlsx(
+    # The import loads the workbook and renders it; keep that off the event loop.
+    job = await asyncio.to_thread(
+        SpreadsheetTemplateImportService(
+            request.app.state.database,
+            request.app.state.storage,
+        ).import_xlsx,
         name=name,
         source_name=file.filename or "source.xlsx",
         content=content,
@@ -722,15 +719,19 @@ def print_template_version(
 
 @router.get("/template-versions/{version_id}/blank-files/{format_name}")
 def download_legacy_template_print_file(
-    request: Request, version_id: str, format_name: Literal["xlsx", "pdf"],
+    request: Request,
+    version_id: str,
+    format_name: Literal["xlsx", "pdf"],
 ) -> Response:
     result = LegacyTemplatePrintService(
-        request.app.state.database, request.app.state.storage,
+        request.app.state.database,
+        request.app.state.storage,
     ).export(version_id, format_name)
     return Response(
         result.content,
         media_type=(
-            "application/pdf" if format_name == "pdf"
+            "application/pdf"
+            if format_name == "pdf"
             else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
         headers={
@@ -757,9 +758,12 @@ def get_template_version_print_pdf(request: Request, version_id: str) -> FileRes
                 detail="指定されたテンプレート版が見つかりません。",
             )
         if version.quality_json.get("printLayout") is not None:
-            raise AppError(status=409, code="PRINT_LAYOUT_PDF_UNAVAILABLE",
-                           title="Paged PDF is not available",
-                           detail="印刷ページ設定はページ画像で確認してください。旧方式のPDFは使用できません。")
+            raise AppError(
+                status=409,
+                code="PRINT_LAYOUT_PDF_UNAVAILABLE",
+                title="Paged PDF is not available",
+                detail="印刷ページ設定はページ画像で確認してください。旧方式のPDFは使用できません。",
+            )
         relative_path = version.quality_json.get("spreadsheetPrintablePdfPath")
     if not isinstance(relative_path, str) or not relative_path:
         raise AppError(
@@ -842,7 +846,7 @@ async def update_template_boundary(
     "/template-versions/{version_id}/approve",
     response_model=TemplateVersionView,
     response_model_by_alias=True,
-)
+dependencies=[Depends(template_revision_guard)])
 def approve_template_version(
     request: Request,
     version_id: str,
@@ -862,13 +866,15 @@ def _approve_template_version(
     with request.app.state.database.session() as session:
         candidate = TemplateRepository(session).get_version(version_id)
         paged = bool(
-            candidate is not None
-            and candidate.quality_json.get("printLayout") is not None
+            candidate is not None and candidate.quality_json.get("printLayout") is not None
         )
-        if TemplatePackageActivationService.imported_installation_for_version(
-            session,
-            version_id,
-        ) is not None:
+        if (
+            TemplatePackageActivationService.imported_installation_for_version(
+                session,
+                version_id,
+            )
+            is not None
+        ):
             raise AppError(
                 status=409,
                 code="TEMPLATE_PACKAGE_ACTIVATION_REQUIRED",
@@ -883,7 +889,6 @@ def _approve_template_version(
             _,
             _,
             mappings,
-            document_identity,
             document_identity_fields,
             document_name,
         ) = TemplateManagementService(
@@ -892,7 +897,6 @@ def _approve_template_version(
         ).get_mapping_configuration(version_id)
         valid_for_ocr, warnings = _mapping_validation(
             mappings,
-            document_identity,
             document_identity_fields,
             document_name,
             require_identity=True,
@@ -907,27 +911,29 @@ def _approve_template_version(
     from app.services.reference_qualification_service import ReferenceQualificationService
 
     with request.app.state.database.session() as session:
-        return _version_view(TemplateRepository(session).approve(
-            version_id,
-            expected_revision=base_revision,
-            qualification_service=ReferenceQualificationService(
-                request.app.state.database,
-                request.app.state.storage,
-            ),
-        ))
+        return _version_view(
+            TemplateRepository(session).approve(
+                version_id,
+                expected_revision=base_revision,
+                qualification_service=ReferenceQualificationService(
+                    request.app.state.database,
+                    request.app.state.storage,
+                ),
+            )
+        )
 
 
 @router.post(
     "/template-versions/{version_id}/reject",
     response_model=TemplateVersionView,
     response_model_by_alias=True,
-)
+dependencies=[Depends(template_revision_guard)])
 def reject_template_version(request: Request, version_id: str) -> TemplateVersionView:
     with request.app.state.database.session() as session:
         return _version_view(TemplateRepository(session).reject(version_id))
 
 
-@router.put("/template-versions/{version_id}/handwriting-mask")
+@router.put("/template-versions/{version_id}/handwriting-mask", dependencies=[Depends(template_revision_guard)])
 async def update_handwriting_mask(
     request: Request,
     version_id: str,
@@ -949,19 +955,16 @@ async def update_handwriting_mask(
     response_model_by_alias=True,
 )
 def get_field_mappings(request: Request, version_id: str) -> FieldMappingsResponse:
-    width, height, mappings, document_identity, document_identity_fields, document_name = (
-        TemplateManagementService(
-            request.app.state.database,
-            request.app.state.storage,
-        ).get_mapping_configuration(version_id)
-    )
-    layout = LayoutService(
-        request.app.state.database,
-        request.app.state.storage,
-    ).get(version_id)
+    snapshot = TemplateAuthoringService(request.app.state.database, request.app.state.storage).get(version_id)
+    return _mapping_response(snapshot["layout"], snapshot["config"])
+
+
+def _mapping_response(layout: LayoutDefinition, config) -> FieldMappingsResponse:
+    width, height = config.canonical_width, config.canonical_height
+    mappings = config.field_mappings
+    document_identity_fields, document_name = config.document_identity_fields, config.document_name
     valid_for_ocr, warnings = _mapping_validation(
         mappings,
-        document_identity,
         document_identity_fields,
         document_name,
     )
@@ -976,11 +979,6 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
         canonical_width=width,
         canonical_height=height,
         mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
-        document_identity=(
-            DocumentIdentityView.model_validate(document_identity.model_dump())
-            if document_identity is not None
-            else None
-        ),
         document_identity_fields=[
             DocumentIdentityView.model_validate(item.model_dump())
             for item in document_identity_fields
@@ -997,89 +995,13 @@ def get_field_mappings(request: Request, version_id: str) -> FieldMappingsRespon
         valid_for_ocr=valid_for_ocr,
         field_errors=(
             layout_error.field_errors or [FieldError(field="layout", message=layout_error.detail)]
-        ) if layout_error else [],
+        )
+        if layout_error
+        else [],
         warnings=warnings,
     )
 
 
-@router.put(
-    "/template-versions/{version_id}/field-mappings",
-    response_model=FieldMappingsResponse,
-    response_model_by_alias=True,
-)
-def update_field_mappings(
-    request: Request, version_id: str, body: FieldMappingsUpdate
-) -> FieldMappingsResponse:
-    service = TemplateManagementService(request.app.state.database, request.app.state.storage)
-    incoming_identity_fields = body.document_identity_fields or (
-        [body.document_identity] if body.document_identity is not None else []
-    )
-    mappings = service.save_field_mappings(
-        version_id,
-        [FieldMappingConfig.model_validate(item.model_dump()) for item in body.mappings],
-        document_identity=(
-            DocumentIdentityConfig.model_validate(body.document_identity.model_dump())
-            if body.document_identity is not None
-            else None
-        ),
-        document_identity_fields=[
-            DocumentIdentityConfig.model_validate(item.model_dump())
-            for item in incoming_identity_fields
-        ],
-        document_name=(
-            DocumentNameConfig.model_validate(body.document_name.model_dump())
-            if body.document_name is not None
-            else None
-        ),
-    )
-    width, height, _, document_identity, document_identity_fields, document_name = (
-        service.get_mapping_configuration(version_id)
-    )
-    layout = LayoutService(
-        request.app.state.database,
-        request.app.state.storage,
-    ).get(version_id)
-    valid_for_ocr, warnings = _mapping_validation(
-        mappings,
-        document_identity,
-        document_identity_fields,
-        document_name,
-    )
-    layout_warnings = _unassigned_layout_warnings(layout)
-    layout_error = LayoutService.mapping_validation_error(layout)
-    if layout_error:
-        layout_warnings.insert(0, f"[{layout_error.code}] {layout_error.detail}")
-    if layout_warnings:
-        valid_for_ocr = False
-        warnings = [*warnings, *layout_warnings]
-    return FieldMappingsResponse(
-        canonical_width=width,
-        canonical_height=height,
-        mappings=[FieldMappingView.model_validate(item.model_dump()) for item in mappings],
-        document_identity=(
-            DocumentIdentityView.model_validate(document_identity.model_dump())
-            if document_identity is not None
-            else None
-        ),
-        document_identity_fields=[
-            DocumentIdentityView.model_validate(item.model_dump())
-            for item in document_identity_fields
-        ],
-        document_name=(
-            DocumentNameView.model_validate(document_name.model_dump())
-            if document_name is not None
-            else None
-        ),
-        targets=[
-            FieldMappingTargetView(path=item.path, label=item.label, section=item.section)
-            for item in _mapping_targets(mappings, layout)
-        ],
-        valid_for_ocr=valid_for_ocr,
-        field_errors=(
-            layout_error.field_errors or [FieldError(field="layout", message=layout_error.detail)]
-        ) if layout_error else [],
-        warnings=warnings,
-    )
 
 
 @router.get(
@@ -1095,7 +1017,7 @@ def get_template_layout(request: Request, version_id: str) -> LayoutDefinition:
     "/template-versions/{version_id}/layout/detect",
     response_model=LayoutDefinition,
     response_model_by_alias=True,
-)
+dependencies=[Depends(template_revision_guard)])
 def detect_template_layout(request: Request, version_id: str) -> LayoutDefinition:
     return LayoutService(
         request.app.state.database,
@@ -1108,7 +1030,7 @@ def detect_template_layout(request: Request, version_id: str) -> LayoutDefinitio
     "/template-versions/{version_id}/layout/recognize-labels",
     response_model=LayoutDefinition,
     response_model_by_alias=True,
-)
+dependencies=[Depends(template_revision_guard)])
 def recognize_template_labels(
     request: Request,
     version_id: str,
@@ -1121,26 +1043,13 @@ def recognize_template_labels(
     ).recognize_labels(version_id, body)
 
 
-@router.put(
-    "/template-versions/{version_id}/layout",
-    response_model=LayoutDefinition,
-    response_model_by_alias=True,
-)
-def save_template_layout(
-    request: Request, version_id: str, body: LayoutDefinition
-) -> LayoutDefinition:
-    return LayoutService(
-        request.app.state.database,
-        request.app.state.storage,
-        handwriting_threshold=request.app.state.settings.segmentation.threshold,
-    ).save(version_id, body)
 
 
 @router.post(
     "/template-versions/{version_id}/layout/verify",
     response_model=LayoutDefinition,
     response_model_by_alias=True,
-)
+dependencies=[Depends(template_revision_guard)])
 def verify_template_layout(request: Request, version_id: str) -> LayoutDefinition:
     return LayoutService(
         request.app.state.database,
@@ -1175,7 +1084,7 @@ def get_template_definition_history(
     "/template-versions/{version_id}/template-definition/generate",
     response_model=TemplateDefinitionRevisionView,
     response_model_by_alias=True,
-)
+dependencies=[Depends(legacy_edit_guard), Depends(template_revision_guard)])
 async def generate_template_definition(
     request: Request, version_id: str
 ) -> TemplateDefinitionRevisionView:
@@ -1189,7 +1098,7 @@ async def generate_template_definition(
     "/template-versions/{version_id}/template-definition",
     response_model=TemplateDefinitionRevisionView,
     response_model_by_alias=True,
-)
+dependencies=[Depends(legacy_edit_guard), Depends(template_revision_guard)])
 def save_template_definition(
     request: Request, version_id: str, body: TemplateDefinition
 ) -> TemplateDefinitionRevisionView:
@@ -1202,7 +1111,7 @@ def save_template_definition(
     "/template-versions/{version_id}/template-definition/approve",
     response_model=TemplateDefinitionRevisionView,
     response_model_by_alias=True,
-)
+dependencies=[Depends(legacy_edit_guard), Depends(template_revision_guard)])
 def approve_template_definition(
     request: Request,
     version_id: str,
@@ -1217,8 +1126,9 @@ def approve_template_definition(
 @router.post(
     "/template-versions/{version_id}/reprocess",
     status_code=status.HTTP_202_ACCEPTED,
-)
-async def reprocess_template_version(request: Request, version_id: str) -> JobAccepted:
+dependencies=[Depends(template_revision_guard)])
+async def reprocess_template_version(request: Request, version_id: str,
+                                     expected_revision: int = Query(alias="expectedRevision", ge=1)) -> JobAccepted:
     with request.app.state.database.session() as session:
         version = TemplateRepository(session).get_version(version_id)
         if version is None or not version.source_job_id:
@@ -1236,9 +1146,12 @@ async def reprocess_template_version(request: Request, version_id: str) -> JobAc
                 detail="DRAFTテンプレート版だけを再処理できます。",
             )
         if version.quality_json.get("forkParentVersionId"):
-            raise AppError(status=409, code="TEMPLATE_DRAFT_REPROCESS_UNSUPPORTED",
-                           title="Verify the editing draft instead",
-                           detail="編集用下書きは記入欄の再検出で確定してください。")
+            raise AppError(
+                status=409,
+                code="TEMPLATE_DRAFT_REPROCESS_UNSUPPORTED",
+                title="Verify the editing draft instead",
+                detail="編集用下書きは記入欄の再検出で確定してください。",
+            )
         source_job_id = version.source_job_id
         job_repository = JobRepository(session)
         source_job = job_repository.get(source_job_id)
@@ -1249,7 +1162,47 @@ async def reprocess_template_version(request: Request, version_id: str) -> JobAc
                 title="Source job not found",
                 detail="元ジョブが見つかりません。",
             )
-        snapshot = dict(source_job.config_snapshot_json)
-        snapshot["reprocessTemplateVersionId"] = version_id
-        job_repository.update(source_job_id, config_snapshot_json=snapshot)
-    return job_accepted(await get_job_service(request).retry(source_job_id))
+    return job_accepted(await get_job_service(request).retry(
+        source_job_id, expected_revision=expected_revision, reprocess_version_id=version_id,
+    ))
+
+
+class TemplateAuthoringUpdate(ApiModel):
+    model_config = ConfigDict(extra="forbid")
+    layout: LayoutDefinition
+    document_identity_fields: list[DocumentIdentityConfig] = Field(max_length=20)
+    document_name: DocumentNameConfig | None
+
+
+class TemplateAuthoringView(ApiModel):
+    version_id: str
+    revision: int
+    status: str
+    layout: LayoutDefinition
+    mapping: FieldMappingsResponse
+    quality: dict[str, object]
+
+
+def _authoring_view(snapshot) -> TemplateAuthoringView:
+    return TemplateAuthoringView(
+        version_id=snapshot["versionId"], revision=snapshot["revision"], status=snapshot["status"],
+        layout=snapshot["layout"], mapping=_mapping_response(snapshot["layout"], snapshot["config"]),
+        quality=snapshot["quality"],
+    )
+
+
+@router.get("/template-versions/{version_id}/authoring", response_model=TemplateAuthoringView)
+def get_template_authoring(request: Request, response: Response, version_id: str) -> TemplateAuthoringView:
+    snapshot = TemplateAuthoringService(request.app.state.database, request.app.state.storage).get(version_id)
+    response.headers["X-Template-Revision"] = str(snapshot["revision"])
+    return _authoring_view(snapshot)
+
+
+@router.put("/template-versions/{version_id}/authoring", response_model=TemplateAuthoringView,
+            dependencies=[Depends(legacy_edit_guard), Depends(template_revision_guard)])
+def save_template_authoring(request: Request, version_id: str, body: TemplateAuthoringUpdate,
+                            expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)]) -> TemplateAuthoringView:
+    return _authoring_view(TemplateAuthoringService(request.app.state.database, request.app.state.storage).save(
+        version_id, expected_revision, body.layout, document_identity_fields=body.document_identity_fields,
+        document_name=body.document_name,
+    ))

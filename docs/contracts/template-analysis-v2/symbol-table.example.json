@@ -1,0 +1,62 @@
+{
+  "version": "template-analysis.units.v2",
+  "headings": [],
+  "fields": [],
+  "standalone": [
+    {
+      "cell": "c8",
+      "role": "ignored",
+      "reason": "instruction_or_decoration"
+    }
+  ],
+  "tables": [
+    {
+      "name": "設備点検",
+      "parent": null,
+      "columns": [
+        {
+          "name": "判定",
+          "labels": [
+            "c1"
+          ],
+          "reading": {
+            "kind": "symbol",
+            "options": [
+              "○",
+              "◎",
+              "×",
+              "△"
+            ],
+            "evidenceCells": [
+              "c8"
+            ]
+          }
+        }
+      ],
+      "rows": [
+        {
+          "cells": [
+            "c3"
+          ],
+          "labels": [
+            "c2"
+          ],
+          "keyCell": null,
+          "keyValue": null
+        },
+        {
+          "cells": [
+            "c5"
+          ],
+          "labels": [
+            "c4"
+          ],
+          "keyCell": null,
+          "keyValue": null
+        }
+      ],
+      "rowKeyStrategy": "position",
+      "includeEmptyRows": true
+    }
+  ]
+}

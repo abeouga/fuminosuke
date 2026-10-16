@@ -1,0 +1,58 @@
+name: fuminosuke-beta
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    image: fuminosuke-backend:beta
+    cgroup_parent: llmocr-beta.slice
+    init: true
+    restart: unless-stopped
+    environment:
+      APP_ENV: container
+      FRONTEND_ORIGINS: http://127.0.0.1:${BETA_HTTP_PORT:-5288},http://localhost:${BETA_HTTP_PORT:-5288}
+      DATA_DIR: /data
+      DATABASE_URL: sqlite:////data/app.db
+      LOG_FILE: /data/logs/app.log
+      OCR_PROVIDER: disabled
+      EDITING_API_ENABLED: "false"
+      TEMPLATE_ANALYSIS_ENABLED: "false"
+      JOB_THREAD_WORKERS: "1"
+      JOB_MAX_CONCURRENCY: "1"
+      PRINT_PDF_RENDERER: linux
+      RENDERER_SOCKET: /run/llmocr-renderer/renderer.sock
+      RENDERER_IMAGE_ID: ${RENDERER_IMAGE_ID:?Set the verified renderer image ID}
+    volumes:
+      - ${BETA_DATA_DIR:?Set a new dedicated data directory}:/data
+      - ${RENDERER_SOCKET_DIR:?Set the supervisor socket directory}:/run/llmocr-renderer:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=134217728,uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+    image: fuminosuke-frontend:beta
+    cgroup_parent: llmocr-beta.slice
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BETA_HTTP_PORT:-5288}:8080"
+    depends_on: [backend]
+    read_only: true
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=16777216,uid=10001,gid=10001,mode=0700
+      - /config:rw,noexec,nosuid,size=16777216,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+

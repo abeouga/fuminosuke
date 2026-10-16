@@ -31,8 +31,9 @@ def get_job(request: Request, job_id: str) -> JobDetail:
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobDetail, response_model_by_alias=True)
-async def retry_job(request: Request, job_id: str) -> JobDetail:
-    return job_detail(await get_job_service(request).retry(job_id))
+async def retry_job(request: Request, job_id: str,
+                    expected_revision: int | None = Query(default=None, alias="expectedRevision", ge=1)) -> JobDetail:
+    return job_detail(await get_job_service(request).retry(job_id, expected_revision=expected_revision))
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobDetail, response_model_by_alias=True)

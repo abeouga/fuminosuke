@@ -86,10 +86,10 @@ class RelationshipDraft:
 def infer_relationships(
     cells: list[TemplateCell],
     geometry: list[CellGeometry],
-    legacy_layout: LayoutDefinition | None = None,
+    source_layout: LayoutDefinition | None = None,
 ) -> RelationshipDraft:
-    if legacy_layout is not None and legacy_layout.relations:
-        return _from_legacy_layout(cells, legacy_layout)
+    if source_layout is not None and source_layout.relations:
+        return _from_source_layout(cells, source_layout)
     return _from_geometry(cells, geometry)
 
 
@@ -97,9 +97,9 @@ async def infer_relationships_with_openai(
     cells: list[TemplateCell],
     geometry: list[CellGeometry],
     settings: OcrSettings,
-    legacy_layout: LayoutDefinition | None = None,
+    source_layout: LayoutDefinition | None = None,
 ) -> RelationshipDraft:
-    fallback = infer_relationships(cells, geometry, legacy_layout)
+    fallback = infer_relationships(cells, geometry, source_layout)
     if settings.provider != "openai" or settings.openai_api_key is None:
         return fallback
     model = (settings.primary_model or "").strip()
@@ -462,7 +462,7 @@ def _from_geometry(cells: list[TemplateCell], geometry: list[CellGeometry]) -> R
     )
 
 
-def _from_legacy_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> RelationshipDraft:
+def _from_source_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> RelationshipDraft:
     cell_by_id = {cell.id: cell for cell in cells}
     layout_cell_by_id = {cell.id: cell for cell in layout.cells}
     grouped_relations: dict[tuple[str, str], list[LayoutRelation]] = defaultdict(list)
@@ -501,7 +501,7 @@ def _from_legacy_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> 
                 value_type="boolean" if layout_cell and layout_cell.role == "mark" else "text",
                 confidence=0.99,
                 reason_codes=["LEGACY_RELATION_ADAPTER"],
-                legacy_target_path=target_path,
+                source_target_path=target_path,
             )
         )
     relations_by_input: dict[str, list[LayoutRelation]] = defaultdict(list)
@@ -532,7 +532,7 @@ def _from_legacy_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> 
                     value_type="enum",
                     confidence=0.99,
                     reason_codes=["LEGACY_MARK_SET_ADAPTER"],
-                    legacy_target_path=target_path,
+                    source_target_path=target_path,
                     mark_set_id=mark_set.id,
                 )
             )
@@ -622,7 +622,7 @@ def _from_legacy_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> 
 
 def _safe_key(target_path: str, index: int) -> str:
     tail = target_path.rsplit(".", 1)[-1]
-    logical_tail = re.sub(r"_\d+$", "", tail) if target_path.startswith("customFields.") else tail
+    logical_tail = re.sub(r"_\d+$", "", tail) if target_path.startswith("fields.") else tail
     key = re.sub(r"[^A-Za-z0-9_]", "_", logical_tail)
     if not key or not key[0].isalpha():
         digest = hashlib.sha256(logical_tail.encode("utf-8")).hexdigest()[:12]

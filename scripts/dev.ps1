@@ -1,5 +1,9 @@
-param(
-    [switch]$NoBrowser
+﻿param(
+    [switch]$NoBrowser,
+    [ValidateRange(0, 65535)]
+    [int]$BackendPort = 0,
+    [ValidateRange(0, 65535)]
+    [int]$FrontendPort = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,16 +139,13 @@ finally {
     Pop-Location
 }
 
-$oauthEnabled = Get-Content -LiteralPath $envFile |
-    Where-Object { $_ -match '^GOOGLE_OAUTH_ENABLED=' } |
-    Select-Object -Last 1 |
-    ForEach-Object { ($_ -split '=', 2)[1].Trim().ToLowerInvariant() }
-if ($oauthEnabled -in @('true', '1', 'yes', 'on')) {
-    if ((Test-LocalPortInUse 8000) -or (Test-LocalPortInUse 5173)) {
-        throw 'Google OAuth requires the registered local ports 8000 and 5173. Stop the process using those ports, then restart.'
+if ($BackendPort -gt 0 -or $FrontendPort -gt 0) {
+    if ($BackendPort -eq 0 -or $FrontendPort -eq 0 -or $BackendPort -eq $FrontendPort) {
+        throw 'Specify distinct BackendPort and FrontendPort together.'
     }
-    $backendPort = 8000
-    $frontendPort = 5173
+    if ((Test-LocalPortInUse $BackendPort) -or (Test-LocalPortInUse $FrontendPort)) {
+        throw "Configured ports $BackendPort and $FrontendPort must be free. No unrelated process will be stopped."
+    }
 }
 else {
     $backendPort = Find-FreeLocalPort 8000
@@ -154,10 +155,10 @@ $backendUrl = "http://127.0.0.1:$backendPort"
 $frontendUrl = "http://127.0.0.1:$frontendPort"
 
 if ($backendPort -ne 8000) {
-    Write-Warning "Port 8000 is already in use. This run will use backend port $backendPort."
+    Write-Host "This run uses backend port $backendPort."
 }
 if ($frontendPort -ne 5173) {
-    Write-Warning "Port 5173 is already in use. This run will use frontend port $frontendPort."
+    Write-Host "This run uses frontend port $frontendPort."
 }
 
 $backend = $null

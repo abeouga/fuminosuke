@@ -18,6 +18,8 @@ node_modules/
 *.tfstate.*
 terraform.tfvars
 *.auto.tfvars
+*.tfvars.json
+*.tfplan
 crash.log
 /llm-ocr-sheets-*.json
 

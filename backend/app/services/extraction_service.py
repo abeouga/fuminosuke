@@ -86,12 +86,12 @@ class ImageExtractionService:
                 raise ValueError("EXTRACT_DOCUMENT requires exactly one input")
             attempt = job.attempt_number
             job_snapshot = dict(job.config_snapshot_json)
-            from app.domain.print_layout import require_legacy_ocr
+            from app.domain.print_layout import require_image_ocr
 
             if page_id is None:
                 if "jobPages" in job_snapshot:
                     raise self._invalid_template_snapshot()
-                require_legacy_ocr(job_snapshot)
+                require_image_ocr(job_snapshot)
                 source_input = inputs[0]
             else:
                 from app.services.job_page_service import JobPageService

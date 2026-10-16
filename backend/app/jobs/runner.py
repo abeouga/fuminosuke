@@ -34,6 +34,7 @@ class JobRunner:
         handler: JobHandler,
         worker_count: int,
         queue_size: int = 100,
+        execution_gate: asyncio.Semaphore | None = None,
     ) -> None:
         self._database = database
         self._settings = settings
@@ -42,6 +43,7 @@ class JobRunner:
         self._worker_count = worker_count
         self._queue = JobQueue(max_size=queue_size)
         self._tasks: list[asyncio.Task[None]] = []
+        self._execution_gate = execution_gate
 
     async def start(self) -> int:
         with self._database.session() as session:
@@ -78,7 +80,11 @@ class JobRunner:
         while True:
             job_id = await self._queue.get()
             try:
-                await self._execute(job_id)
+                if self._execution_gate is None:
+                    await self._execute(job_id)
+                else:
+                    async with self._execution_gate:
+                        await self._execute(job_id)
             except asyncio.CancelledError:
                 raise
             except Exception:

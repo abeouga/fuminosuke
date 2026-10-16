@@ -1,0 +1,296 @@
+{
+  "version": "template-analysis.phase34c-acceptance.v1",
+  "phase": "34-C",
+  "status": "rejected",
+  "apiCalls": 0,
+  "apiReservations": 0,
+  "apiBudget": {
+    "used": 417,
+    "limit": 496,
+    "remaining": 79
+  },
+  "cohortManifestSha256": "1262a20a1858b4be924a8aa3a25e6f0f31720fbfd13495ba4e585861f249f8ec",
+  "implementationLockSha256": "d30dceaacaac5ebb64a2d409640135e489976d7005e194bd4b0c729087914c35",
+  "scoringManifestSha256": "59406264a60eff0d1c3f6ed71679f3bb9864c0a44abb0dcdfcd0d72c05b7fa87",
+  "reviewSealRelativePath": "20261012-phase34c/result-hashes.json",
+  "reviewedSource": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b",
+  "executionCopy": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34c-copy",
+  "implementationFileCount": 409,
+  "findings": [
+    {
+      "id": "R1",
+      "priority": 1,
+      "title": "API0入口が実HTTPクライアントを受け入れる",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b\\experiment_session.py",
+      "start": 9,
+      "end": 15,
+      "evidence": "independent-faults.json:offlineWrappingSharedHTTP",
+      "observed": {
+        "httpClientSends": 1,
+        "mockReservations": 1,
+        "publications": 1,
+        "experimentProofPresent": false,
+        "realNetworkCalls": 0
+      },
+      "required": "OfflineTransportと実送信能力を分離し、実HTTP dispatch自体に審査済みExperimentSession/TrialBindingを必須化する。"
+    },
+    {
+      "id": "R2",
+      "priority": 1,
+      "title": "journal_root変更で同じ試行を再送できる",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b\\experiment_session.py",
+      "start": 64,
+      "end": 66,
+      "evidence": "independent-faults.json:sameTrialDifferentRoot",
+      "observed": {
+        "identicalTrialBinding": true,
+        "sameRootRestartRejected": true,
+        "differentRootReservations": 2,
+        "differentRootDispatches": 2
+      },
+      "required": "experimentに一意の永続記録領域を固定し、起動時の作業ディレクトリ変更や任意root指定で再予約できないようにする。"
+    },
+    {
+      "id": "R3",
+      "priority": 1,
+      "title": "校正資料の名称・位置だけを変えた3件を独立評価familyと数えている",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b\\build_repaired_datasets.py",
+      "start": 103,
+      "end": 113,
+      "evidence": "dataset-inspection.json:derivativePairs",
+      "pairs": [
+        [
+          "K2-09",
+          "V2-12"
+        ],
+        [
+          "K2-08",
+          "V2-16"
+        ],
+        [
+          "K2-12",
+          "V2-15"
+        ]
+      ],
+      "required": "派生関係を正しく登録し、当該資料を開発・校正側へ移す。構造と利用上の意味が異なる独立資料で評価版を再固定する。"
+    },
+    {
+      "id": "R4",
+      "priority": 2,
+      "title": "意味付け可能な欄を文脈不足の全体保留として採点している",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b\\build_repaired_datasets.py",
+      "start": 62,
+      "end": 77,
+      "evidence": "semantic-counterexamples.json",
+      "cases": [
+        "K2-11",
+        "V2-14"
+      ],
+      "required": "値を決める知識と欄を定義する根拠を区別する。正解を通すために現行goldを書き換えず、必要な親・項目・読取方法を区別できない具体的資料で負例の新版を設計する。"
+    }
+  ],
+  "acceptanceCriteria": {
+    "A1": {
+      "status": "passed",
+      "evidence": "旧30件の固定gold一致30/30。V08/V09/V10の6記号pairを含む"
+    },
+    "A2": {
+      "status": "passed",
+      "evidence": "純粋pair23件および既存境界を再実行"
+    },
+    "A3": {
+      "status": "passed",
+      "evidence": "親0/1/2/3以上・共有/競合・scope外を再実行"
+    },
+    "A4": {
+      "status": "rejected",
+      "findings": [
+        "R4"
+      ],
+      "evidence": "12件全Decisions・正6/負6の形式は通過。K2-11の負例根拠を不受入"
+    },
+    "A5": {
+      "status": "passed",
+      "evidence": "33原画像と全内容切出しを目視。画素一致・ink所属・越境/切捨て/重なり0。原版不変"
+    },
+    "A6": {
+      "status": "rejected",
+      "findings": [
+        "R1"
+      ],
+      "evidence": "正規admitの重複/欠落等は拒否するがmock入口から未審査送信へ到達"
+    },
+    "A7": {
+      "status": "rejected",
+      "findings": [
+        "R2"
+      ],
+      "evidence": "同じroot内の再起動拒否は成立。root変更による同一試行2dispatchを再現"
+    },
+    "A8": {
+      "status": "passed",
+      "evidence": "欠落/重複/別cohort/選定なし/不適格policyの拒否と固定18/24/28割付を再実行"
+    },
+    "A9": {
+      "status": "rejected",
+      "findings": [
+        "R3",
+        "R4"
+      ],
+      "evidence": "正例manual10/10、負例送信適格6/Decisions6/local held2は通過。出典分離3件とV2-14の正解を不受入"
+    },
+    "A10": {
+      "status": "passed",
+      "evidence": "旧406ファイルで30+10+42応答と24 DTOを歴史的再生。新実装の物理対応/manual/no-opを別検証"
+    },
+    "A11": {
+      "status": "passed_with_scope_limit",
+      "evidence": "既存335項目と旧独立5シナリオ通過。新しく再現したR1/R2を含む全面的な境界合格を意味しない"
+    },
+    "A12": {
+      "status": "passed",
+      "evidence": "3新規process、全5中央値500ms以下。60要求の上限内。実API時間は未測定"
+    }
+  },
+  "localPerformance": {
+    "apiCalls": 0,
+    "configuration": {
+      "arm": "Z",
+      "context": true,
+      "policy": "P3"
+    },
+    "freshProcesses": 3,
+    "gateMs": 500,
+    "passed": true,
+    "cases": [
+      {
+        "case": "T1",
+        "samplesMs": [
+          378.3110000076704,
+          323.73630002257414,
+          327.12140001240186
+        ],
+        "medianMs": 327.12140001240186,
+        "passed": true
+      },
+      {
+        "case": "T2",
+        "samplesMs": [
+          526.4331999933347,
+          477.257999998983,
+          474.00469999411143
+        ],
+        "medianMs": 477.257999998983,
+        "passed": true
+      },
+      {
+        "case": "T3",
+        "samplesMs": [
+          270.1875999919139,
+          239.2180000024382,
+          234.98120001750067
+        ],
+        "medianMs": 239.2180000024382,
+        "passed": true
+      },
+      {
+        "case": "H1",
+        "samplesMs": [
+          299.8387000116054,
+          242.69809998804703,
+          249.18059998890385
+        ],
+        "medianMs": 249.18059998890385,
+        "passed": true
+      },
+      {
+        "case": "H2",
+        "samplesMs": [
+          295.35800000303425,
+          256.8759999994654,
+          260.5117000057362
+        ],
+        "medianMs": 260.5117000057362,
+        "passed": true
+      }
+    ],
+    "includes": [
+      "input materialization",
+      "frozen candidate plan",
+      "view/schema/image pack",
+      "wire encoding",
+      "oracle overhead",
+      "validation/compile/manual",
+      "trial-bound immutable input checks",
+      "durable attempt reservation and publication checks"
+    ],
+    "excludes": [
+      "Python imports",
+      "gold loading",
+      "real ledger",
+      "HTTP/model",
+      "evidence persistence",
+      "complete Run orchestration"
+    ],
+    "providerLatencyMeasured": false,
+    "sourceFilesVerified": 409
+  },
+  "admissionMs": [
+    136.89190000877716,
+    118.64180001430213,
+    119.69920000410639
+  ],
+  "productAdoption": false,
+  "liveExperimentEligible": false,
+  "productSourceChanged": false,
+  "realQualifiedFamilies": 0,
+  "validation": {
+    "existingBoundary": 335,
+    "pair": 23,
+    "experimentContract": 41,
+    "priorIndependentScenarios": 5,
+    "acceptanceReader": 6,
+    "originalDatasets": 30,
+    "newOrRepairedDatasets": 33,
+    "imagesIndependentlyViewed": 33,
+    "preflightRequests": 60,
+    "historicalRawResponses": 82,
+    "historicalDtos": 24
+  },
+  "limits": [
+    "API0 cannot establish model accuracy or end-to-end latency",
+    "Timing excludes full Run orchestration and real ledger/HTTP/persistence",
+    "No product UI/microphone or full product regression in this isolated review",
+    "R1 HTTP dispatch was intercepted by httpx.MockTransport; R2 executed mock trials using the shared journal code"
+  ],
+  "next": {
+    "phase": "34-D",
+    "work": "修正設計",
+    "recommendedModel": "Astra",
+    "reasoningEffort": "XHigh",
+    "apiCap": 0,
+    "started": false
+  },
+  "followingPhases": [
+    {
+      "phase": "34-E",
+      "work": "修正実装",
+      "recommendedModel": "GPT-6.1 Sol",
+      "reasoningEffort": "High",
+      "apiCap": 0
+    },
+    {
+      "phase": "34-F",
+      "work": "独立再審査",
+      "recommendedModel": "Astra",
+      "reasoningEffort": "XHigh",
+      "apiCap": 0
+    }
+  ],
+  "futureApiCaps": {
+    "35": 18,
+    "36": 24,
+    "37": 28,
+    "unallocated": 9
+  }
+}

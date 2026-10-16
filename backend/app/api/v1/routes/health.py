@@ -19,6 +19,7 @@ class HealthResponse(BaseModel):
     database: Literal["ok"]
     job_worker: Literal["running", "not_started"]
     ocr_provider: Literal["openai", "mock", "disabled"]
+    ocr_text_recognition_toggle_enabled: bool
 
 
 @router.get("/health", response_model=HealthResponse, response_model_by_alias=True)
@@ -29,4 +30,7 @@ def health(request: Request) -> HealthResponse:
         database="ok",
         job_worker=request.app.state.job_worker_status,
         ocr_provider=request.app.state.settings.ocr.provider,
+        ocr_text_recognition_toggle_enabled=(
+            request.app.state.settings.ocr.text_recognition_toggle_enabled
+        ),
     )

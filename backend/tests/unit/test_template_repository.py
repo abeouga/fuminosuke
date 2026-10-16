@@ -27,7 +27,7 @@ def test_full_image_boundary_fallback_cannot_be_approved(
             )
             template = Template(
                 name="boundary-fallback-template",
-                document_type="cow-breeding-ledger",
+                document_type="generic-document",
             )
             session.add_all([job, template])
             session.flush()

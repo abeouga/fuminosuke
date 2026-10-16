@@ -1,0 +1,29 @@
+# Cloud boundary. Paid AI requires the separate, explicit compose.ai.yaml overlay.
+# Use with compose.yaml; BETA_DATA_DIR must be NEW, without a local app.db.
+services:
+  backend:
+    environment:
+      APP_ENV: cloud
+      EDITING_API_ENABLED: "true"
+      BETA_ROOT: /data
+      BETA_PUBLIC_ORIGIN: ${BETA_PUBLIC_ORIGIN:?Set the exact HTTPS origin}
+      FRONTEND_ORIGINS: ${BETA_PUBLIC_ORIGIN:?Set the exact HTTPS origin}
+      BETA_COGNITO_POOL_ID: ${BETA_COGNITO_POOL_ID:?Set the Tokyo user pool ID}
+      BETA_COGNITO_CLIENT_ID: ${BETA_COGNITO_CLIENT_ID:?Set the public PKCE client ID}
+      BETA_COGNITO_DOMAIN: ${BETA_COGNITO_DOMAIN:?Set the managed Cognito domain}
+      BETA_JOURNAL_BUCKET: ${BETA_JOURNAL_BUCKET:?Set the private receipt bucket}
+      BETA_BACKUP_BUCKET: ${BETA_BACKUP_BUCKET:?Set the private backup bucket}
+      BETA_INSTALLATION_ID: ${BETA_INSTALLATION_ID:?Set the fixed installation UUID}
+      BETA_AI_ENABLED: "false"
+      VOICE_PROVIDER: disabled
+  frontend:
+    environment:
+      BETA_SITE: ${BETA_SITE:?Set the public HTTPS hostname}
+    volumes:
+      - ./Caddyfile.cloud:/etc/caddy/Caddyfile:ro
+      - ${BETA_CADDY_DIR:?Set the dedicated persistent certificate directory}:/data
+    tmpfs: !override
+      - /config:rw,noexec,nosuid,size=16777216,uid=10001,gid=10001,mode=0700
+    ports: !override
+      - "80:8080"
+      - "443:8443"

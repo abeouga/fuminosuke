@@ -54,14 +54,14 @@ def test_repairs_paddle_layout_and_mapping_text_at_their_boundaries() -> None:
         text=corrupted_label,
     )
     section = LayoutRecordSection(
-        id="section_calvings",
+        id="section_history",
         title="繁殖履歴".encode().decode("latin-1"),
-        collectionPath="calvings",
-        recordType="calving",
+        collectionPath="genericRecords.history",
+        recordType="generic",
     )
     mapping = FieldMappingConfig(
         mappingId="cell_0001",
-        targetPath="calvings.0.calvingDate",
+        targetPath="fields.eventDate",
         label=corrupted_label,
         x=0,
         y=0,

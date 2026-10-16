@@ -1,0 +1,10 @@
+[Unit]
+Description=Fuminosuke offline daily backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/llmocr/deploy/ops.sh backup
+TimeoutStartSec=30min
+UMask=0077

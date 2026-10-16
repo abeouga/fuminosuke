@@ -1,7 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { FiArrowRight } from "react-icons/fi";
 import type { FieldReading, OcrFieldPreview, ReviewStructure } from "../types";
 
 export type ReadingEntry = { path: string; label: string; value: FieldReading };
+
+const InlineEditActivity = createContext<(path: string, dirty: boolean) => void>(() => undefined);
+export function ReviewDraftBoundary({ children, onDirtyChange }: {
+  children: ReactNode; onDirtyChange: (dirty: boolean) => void;
+}) {
+  const editingPaths = useRef(new Set<string>());
+  const report = useCallback((path: string, dirty: boolean) => {
+    if (dirty) editingPaths.current.add(path); else editingPaths.current.delete(path);
+    onDirtyChange(editingPaths.current.size > 0);
+  }, [onDirtyChange]);
+  return <InlineEditActivity.Provider value={report}>{children}</InlineEditActivity.Provider>;
+}
 
 export type ReviewDisplayRecordSection = {
   id: string;
@@ -22,6 +35,18 @@ export type ReviewDisplayModel = {
 };
 
 export type ReviewInteractionMode = "edit" | "reorder";
+
+export function reviewEntryContext(model: ReviewDisplayModel, entry: ReadingEntry | null | undefined): string {
+  if (!entry) return "帳票全体";
+  for (const section of model.recordSections) {
+    for (const [index, row] of section.rows.entries()) {
+      const cell = row.cells.find((item) => item.entry?.path === entry.path);
+      if (cell) return `${section.title} · ${index + 1}行目 · ${section.columns.find(column => column.id === cell.columnId)?.label ?? entry.label}`;
+    }
+  }
+  const parent = model.parentSections.find(section => section.entries.some(item => item.path === entry.path));
+  return parent ? `${parent.title} · ${entry.label}` : entry.label;
+}
 type RectBounds = { left: number; top: number; right: number; bottom: number };
 type PopoverSize = { width: number; height: number };
 export type ReviewPopoverPosition = {
@@ -92,11 +117,11 @@ export function ReviewResultsToolbar({
   return (
     <div className="field-toolbar">
       <div className="ocr-cell-legend">
-        <span><i className="legend-ok" />問題なし</span>
-        <span><i className="legend-warning" />要確認</span>
+        <span><i className="legend-ok" />{confirmed ? "確定済み" : "読み取り候補"}</span>
+        {!confirmed && <span><i className="legend-warning" />要確認</span>}
       </div>
       <div className="field-toolbar-actions">
-        <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
+        {!confirmed && <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
           <button
             type="button"
             className={interactionMode === "edit" ? "active" : ""}
@@ -121,7 +146,7 @@ export function ReviewResultsToolbar({
             <PointerModeIcon />
             <span>移動</span>
           </button>
-        </div>
+        </div>}
         {!confirmed && (
           <button
             type="button"
@@ -129,11 +154,11 @@ export function ReviewResultsToolbar({
             disabled={warningCount === 0}
             onClick={onNextWarning}
           >
-            次の要確認（{warningCount}件）
+            <FiArrowRight aria-hidden="true" />次の要確認（{warningCount}件）
           </button>
         )}
         <span>{confirmed
-          ? "確定済み"
+          ? "セルを選ぶと画像を確認できます"
           : interactionMode === "reorder"
             ? "行移動モード"
             : `${cellCount}セルを編集中`}</span>
@@ -279,16 +304,36 @@ export function CellStatusPopover({
 }
 
 export function ReviewTableSection({
+  tableId,
   title,
   children,
 }: {
+  tableId?: string;
   title: string;
   children: ReactNode;
 }) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [overflow, setOverflow] = useState(false);
+  useLayoutEffect(() => {
+    const element = sectionRef.current?.querySelector<HTMLElement>(".ocr-edit-table-wrap");
+    if (!element) return;
+    const update = () => setOverflow(element.scrollWidth > element.clientWidth + 2);
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, [children]);
+  const scrollColumns = (direction: number) => {
+    const element = sectionRef.current?.querySelector<HTMLElement>(".ocr-edit-table-wrap");
+    element?.scrollBy({ left: direction * element.clientWidth * 0.7, behavior: "smooth" });
+  };
   if (!children) return null;
   return (
-    <section className="ocr-edit-section" aria-label={title}>
-      <header><h3>{title}</h3></header>
+    <section ref={sectionRef} data-ai-table-id={tableId} className="ocr-edit-section" aria-label={title}>
+      <header><h3>{title}</h3>{overflow && <div className="review-column-navigation"><span>横に続きます</span>
+        <button type="button" aria-label={`${title}の左の列を表示`} onClick={() => scrollColumns(-1)}>←</button>
+        <button type="button" aria-label={`${title}の右の列を表示`} onClick={() => scrollColumns(1)}>→</button>
+      </div>}</header>
       {children}
     </section>
   );
@@ -342,7 +387,7 @@ export function GenericRecordReviewTable({
   ) => void;
 }) {
   return (
-    <ReviewTableSection title={section.title}>
+    <ReviewTableSection tableId={section.id} title={section.title}>
       <div className="ocr-edit-table-wrap">
         <table
           className="ocr-edit-table ocr-collection-table ocr-generic-record-table"
@@ -443,7 +488,7 @@ export function KeyValueReviewTable({
   const rows = chunk(entries, 2);
   return (
     <div className="ocr-edit-table-wrap">
-      <table className="ocr-edit-table ocr-key-value-table">
+      <table className={`ocr-edit-table ocr-key-value-table${entries.length === 1 ? " ocr-single-field-table" : ""}`}>
         <tbody>
           {rows.map((row, index) => (
             <tr key={index}>
@@ -459,7 +504,7 @@ export function KeyValueReviewTable({
                   onEdit={onEdit}
                 />
               ))}
-              {row.length === 1 && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
+              {row.length === 1 && entries.length > 1 && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
             </tr>
           ))}
         </tbody>
@@ -567,11 +612,16 @@ export function ReviewValueCell({
   const value = entry.value.normalized ?? entry.value.raw;
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
+  const reportInlineEdit = useContext(InlineEditActivity);
+  useEffect(() => {
+    reportInlineEdit(entry.path, editing && editValue !== (value ?? ""));
+    return () => reportInlineEdit(entry.path, false);
+  }, [entry.path, editing, editValue, value, reportInlineEdit]);
   useEffect(() => {
     if (!editing) setEditValue(value ?? "");
   }, [editing, value]);
   const commit = () => {
-    if (!editing) return;
+    if (!editing || confirmed) return;
     setEditing(false);
     onEdit(entry, editValue);
   };
@@ -581,24 +631,26 @@ export function ReviewValueCell({
       data-review-path={entry.path}
     >
       {editing ? (
-        <input
+        <textarea
           className="ocr-inline-cell-input"
+          rows={Math.min(6, Math.max(1, editValue.split("\n").length))}
           autoFocus
-          aria-label={`${entry.label} ${entry.path} を直接編集`}
+          aria-label={`${entry.label}を直接編集`}
           value={editValue}
           onChange={(event) => setEditValue(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               commit();
             }
+            if (event.key === "Escape") { event.preventDefault(); setEditing(false); }
           }}
         />
       ) : (
         <button
           type="button"
-          aria-label={`${entry.label} ${entry.path} を編集`}
+          aria-label={`${entry.label}：${value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}。${confirmed ? "画像を確認" : "選択して確認・編集"}`}
           title={confirmed || choice ? undefined : "ダブルクリックで直接編集"}
           onClick={() => onSelect(entry)}
           onDoubleClick={(event) => {
@@ -610,7 +662,7 @@ export function ReviewValueCell({
             setEditing(true);
           }}
         >
-          <span>{value || (entry.value.status === "blank" ? "空欄" : "未入力")}</span>
+          <span>{value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}</span>
           <small>{warning ? "要確認" : "OK"}</small>
         </button>
       )}

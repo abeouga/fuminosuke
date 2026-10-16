@@ -22,6 +22,7 @@ from openai.types.responses import ResponseInputParam
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import ValidationError
 
+from app.ai.api_budget import ApiBudget, preserve_reservation_error
 from app.core.config import OcrSettings
 from app.core.errors import AppError
 from app.domain.ocr_models import ReadingStatus
@@ -63,7 +64,7 @@ class OpenAIOcrProvider:
             1, (regular_count + _MAX_REGIONS_PER_CALL - 1) // _MAX_REGIONS_PER_CALL + identity_count
         )
 
-    def __init__(self, settings: OcrSettings) -> None:
+    def __init__(self, settings: OcrSettings, budget: ApiBudget) -> None:
         self._settings = settings
         key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
         if not key.strip() or not (settings.primary_model or "").strip():
@@ -79,6 +80,7 @@ class OpenAIOcrProvider:
             # Retry attempts are counted and bounded below. SDK-internal
             # retries would be invisible to apiCallCount and cancellation.
             max_retries=0,
+            http_client=budget.client("ocr"),
         )
 
     async def extract(self, request: OcrProviderRequest) -> OcrProviderResponse:
@@ -154,8 +156,7 @@ class OpenAIOcrProvider:
                             # Paged jobs have a persisted, non-refundable ledger and
                             # admission reserve. The malformed response is discarded;
                             # the immutable batch keeps its mapping and association.
-                            exc.code == "OCR_SCHEMA_INVALID"
-                            and request.call_budget is not None
+                            exc.code == "OCR_SCHEMA_INVALID" and request.call_budget is not None
                         )
                         if not retryable:
                             raise
@@ -172,9 +173,7 @@ class OpenAIOcrProvider:
 
         if self._settings.retry_uncertain_high_detail:
             uncertain_ids = {
-                item.mapping_id
-                for item in combined_items
-                if item.status is ReadingStatus.UNCERTAIN
+                item.mapping_id for item in combined_items if item.status is ReadingStatus.UNCERTAIN
             }
             retry_regions = [
                 region for region in request.regions if region.region_id in uncertain_ids
@@ -203,9 +202,7 @@ class OpenAIOcrProvider:
                     replacements.get(item.mapping_id, item) for item in combined_items
                 ]
 
-        combined_batch = TranscriptionBatch(
-            items=_deduplicate_requested_items(combined_items)
-        )
+        combined_batch = TranscriptionBatch(items=_deduplicate_requested_items(combined_items))
         try:
             document = build_mapped_document(request, combined_batch)
         except (ValidationError, ValueError) as exc:
@@ -229,14 +226,10 @@ class OpenAIOcrProvider:
             prompt_version=self._settings.prompt_version,
             api_call_count=call_count,
             input_tokens=(
-                sum(item.input_tokens or 0 for item in responses)
-                if input_tokens_known
-                else None
+                sum(item.input_tokens or 0 for item in responses) if input_tokens_known else None
             ),
             output_tokens=(
-                sum(item.output_tokens or 0 for item in responses)
-                if output_tokens_known
-                else None
+                sum(item.output_tokens or 0 for item in responses) if output_tokens_known else None
             ),
             estimated_cost=(
                 sum((item.estimated_cost or Decimal("0") for item in responses), Decimal("0"))
@@ -251,12 +244,8 @@ class OpenAIOcrProvider:
     def _batched_requests(self, request: OcrProviderRequest) -> list[OcrProviderRequest]:
         if not request.regions:
             return [request]
-        regular_regions = [
-            region for region in request.regions if not region.is_document_identity
-        ]
-        identity_regions = [
-            region for region in request.regions if region.is_document_identity
-        ]
+        regular_regions = [region for region in request.regions if not region.is_document_identity]
+        identity_regions = [region for region in request.regions if region.is_document_identity]
         regular_requests = [
             self._request_with_regions(
                 request,
@@ -330,20 +319,43 @@ class OpenAIOcrProvider:
         )
         started = time.perf_counter()
         response_input = cast(ResponseInputParam, [{"role": "user", "content": content}])
-        try:
-            response = await self._client.responses.parse(
-                model=model,
-                instructions=(
-                    request.transcription_prompt
-                    if request.transcription_prompt is not None
-                    else load_transcription_prompt()
-                ),
-                input=response_input,
-                text_format=CompactTranscriptionBatch,
-                max_output_tokens=self._settings.max_output_tokens,
-                reasoning={"effort": self._settings.reasoning_effort},
-                store=False,
+        instructions = (
+            request.transcription_prompt
+            if request.transcription_prompt is not None
+            else load_transcription_prompt()
+        )
+        if any(region.candidate_type == "checklist" for region in request.regions):
+            instructions += (
+                "\ncandidateType:checklist の画像では、手書き・印刷のどちらのチェック印も読みます。"
+                "チェックされた候補ラベルを候補順に「・」で連結して必ず v に返し、c は null にします。"
+                "これは通常の文字転記とは異なる選択状態の読み取りです。"
+                "全て未選択なら s=b、v=null。曖昧なら s=u。v=null のまま s=r を返してはいけません。"
+                "候補が1つで四角だけの画像は、その四角のチェック状態を判定します。"
+                "他の画像への転記指示やASSOC検証は変更しません。"
             )
+        if any(
+            region.transcription_format == "printed_or_handwritten_number"
+            for region in request.regions
+        ):
+            instructions += (
+                "\ntranscriptionFormat:printed_or_handwritten_number が指定された画像だけは、"
+                "手書きだけでなく印刷された番号も転記してください。"
+                "①などの囲み数字や先頭の0を見えた形のまま保持し、採番・数値変換・"
+                "隣の欄や他画像からの補完をしないでください。"
+                "空欄はblank、不明瞭ならuncertainとし、ASSOCは番号の値に含めません。"
+                "他の画像には従来の指示を適用してください。"
+            )
+        try:
+            with preserve_reservation_error():
+                response = await self._client.responses.parse(
+                    model=model,
+                    instructions=instructions,
+                    input=response_input,
+                    text_format=CompactTranscriptionBatch,
+                    max_output_tokens=self._settings.max_output_tokens,
+                    reasoning={"effort": self._settings.reasoning_effort},
+                    store=False,
+                )
         except RateLimitError as exc:
             raise self._provider_error(
                 429, "OCR_RATE_LIMITED", "OCR APIのレート上限に達しました。"
@@ -404,20 +416,16 @@ class OpenAIOcrProvider:
             )
         requested_ids = set(original_id_by_compact_id)
         compact_id_by_original_id = {
-            original_id: compact_id
-            for compact_id, original_id in original_id_by_compact_id.items()
+            original_id: compact_id for compact_id, original_id in original_id_by_compact_id.items()
         }
         repaired_items = _repair_single_compact_id(parsed.items, requested_ids)
         association_mismatch_compact_ids = {
             item.i
             for item in repaired_items
-            if item.i in requested_ids
-            and item.a != association_token_by_compact_id[item.i]
+            if item.i in requested_ids and item.a != association_token_by_compact_id[item.i]
         }
         compact_items = [
-            item
-            for item in repaired_items
-            if item.i not in association_mismatch_compact_ids
+            item for item in repaired_items if item.i not in association_mismatch_compact_ids
         ]
         returned_ids = [item.i for item in compact_items]
         requested_items = [
@@ -427,12 +435,9 @@ class OpenAIOcrProvider:
         ]
         requested_returned_ids = [item.mapping_id for item in requested_items]
         missing_ids = {
-            original_id_by_compact_id[item]
-            for item in requested_ids - set(returned_ids)
+            original_id_by_compact_id[item] for item in requested_ids - set(returned_ids)
         }
-        duplicate_requested_ids = len(requested_returned_ids) != len(
-            set(requested_returned_ids)
-        )
+        duplicate_requested_ids = len(requested_returned_ids) != len(set(requested_returned_ids))
         if missing_ids:
             logger.warning(
                 "OpenAI OCR returned an incomplete requested mapping set",
@@ -471,12 +476,8 @@ class OpenAIOcrProvider:
             build_mapped_document(request, filtered_batch)
         except (ValidationError, ValueError) as exc:
             failed_usage = response.usage
-            failed_input_tokens = (
-                failed_usage.input_tokens if failed_usage else None
-            )
-            failed_output_tokens = (
-                failed_usage.output_tokens if failed_usage else None
-            )
+            failed_input_tokens = failed_usage.input_tokens if failed_usage else None
+            failed_output_tokens = failed_usage.output_tokens if failed_usage else None
             logger.warning(
                 "OpenAI mapped OCR result could not be assembled: %s: %s",
                 type(exc).__name__,
@@ -673,12 +674,7 @@ def build_mapped_input_content(
             continue
         pool_id = f"p{len(pool_id_by_key)}"
         pool_id_by_key[key] = pool_id
-        if region.candidate_type == "sale_calf_note_prefix":
-            pool_text = (
-                f"{pool_id} candidateType:sale_calf_note_prefix "
-                f"allowedFirstSymbols:{json.dumps(region.candidates, ensure_ascii=False)}"
-            )
-        elif region.candidate_type == "symbol_choice":
+        if region.candidate_type == "symbol_choice":
             pool_text = (
                 f"{pool_id} candidateType:symbol_choice "
                 f"allowedMarks:{json.dumps(region.candidates, ensure_ascii=False)} "
@@ -687,6 +683,18 @@ def build_mapped_input_content(
                 "Return the exact allowed symbol only when clearly visible. "
                 "If empty return blank; if ambiguous, outside the candidates, or multiple "
                 "symbols are present return uncertain. do_not_force_a_choice."
+            )
+        elif region.candidate_type == "checklist":
+            pool_text = (
+                f"{pool_id} candidateType:checklist "
+                f"allowedLabels:{json.dumps(region.candidates, ensure_ascii=False)} "
+                "Inspect each checkbox together with its adjacent printed label. "
+                "Select only visibly checked or filled boxes; an empty outline is NOT selected. "
+                "Multiple selections are allowed. Return exact selected labels in candidate order, "
+                "joined with ・. If all boxes are clearly unchecked return blank. "
+                "For one candidate and one unlabeled checkbox, that candidate names its checked state. "
+                "If a mark is ambiguous, erased, or its label association is unclear return uncertain. "
+                "Never infer a selection from printed label text alone. do_not_force_a_choice."
             )
         elif region.candidate_type == "mark_choice":
             pool_text = (
@@ -701,7 +709,7 @@ def build_mapped_input_content(
             )
         else:
             pool_text = (
-                f"{pool_id} candidateSireNames:{json.dumps(region.candidates, ensure_ascii=False)} "
+                f"{pool_id} allowedValues:{json.dumps(region.candidates, ensure_ascii=False)} "
                 f"allowedSuffixes:{json.dumps(region.allowed_suffixes, ensure_ascii=False)}"
             )
         content.append({"type": "input_text", "text": pool_text})
@@ -716,10 +724,8 @@ def build_mapped_input_content(
         if region.candidates:
             key = (region.candidate_type, region.candidates, region.allowed_suffixes)
             cell_metadata.append(f"pool:{pool_id_by_key[key]}")
-        if region.transcription_format == "japanese_era_date_numbers":
-            cell_metadata.append(
-                "transcriptionFormat:japanese_era_date_numbers ERA_YEAR MONTH DAY"
-            )
+        if region.transcription_format == "printed_or_handwritten_number":
+            cell_metadata.append("transcriptionFormat:printed_or_handwritten_number")
         if region.is_document_identity:
             identity_format = region.identity_value_type or "text"
             cell_metadata.append(f"documentIdentity:true valueType:{identity_format}")
@@ -780,9 +786,7 @@ def _build_request_manifest(
                 "compactId": compact_region.region_id,
                 "originalMappingId": original_region.region_id,
                 "targetPath": original_region.target_path,
-                "sourceRegionId": (
-                    original_region.source_region_id or original_region.region_id
-                ),
+                "sourceRegionId": (original_region.source_region_id or original_region.region_id),
                 "associationToken": association_token_by_compact_id[compact_region.region_id],
                 "sourceImageSha256": source_sha256,
                 "preparedImageSha256": prepared_sha256,

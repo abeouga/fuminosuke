@@ -1,59 +1,65 @@
-import type { Health, Job, Template } from "../types";
+import type { Health, Job } from "../types";
+import { FiArrowRight, FiCheckSquare, FiDownload, FiFileText, FiGrid } from "react-icons/fi";
 
 export function HomePage({
   health,
-  templates,
+  healthChecked = true,
   jobs,
   onNavigate,
   onOpenJob,
 }: {
   health: Health | null;
-  templates: Template[];
+  healthChecked?: boolean;
   jobs: Job[];
-  onNavigate: (page: "templates" | "ocr" | "records") => void;
+  onNavigate: (page: "templates" | "ocr") => void;
   onOpenJob: (job: Job) => void;
 }) {
-  const active = templates.flatMap((template) => template.versions).filter((version) => version.status === "ACTIVE");
   const attention = jobs.filter((job) => NEEDS_ATTENTION.has(job.status));
-  const recent = jobs.filter((job) => !NEEDS_ATTENTION.has(job.status));
+  const lastOutput = jobs.find((job) => job.jobType === "EXTRACT_DOCUMENT" && job.status === "CONFIRMED");
   return (
-    <div className="page-stack">
-      <section className="hero">
+    <div className="page-stack home-workspace">
+      <section className="hero home-hero">
         <div>
-          <p className="eyebrow">LOCAL LEDGER WORKBENCH</p>
-          <h1>紙の台帳を、<br /><em>確認できるデータ</em>へ。</h1>
-          <p className="hero-copy">帳票の位置合わせ、手書き分離、文字読み取り、目視確認までをこの端末内で管理します。</p>
+          <span className="eyebrow">帳票の読み取り</span>
+          <h1>紙の書類を、<em>確認できるデータ</em>へ。</h1>
+          <p className="hero-copy">帳票を読み取り、内容を確認・修正して、記入済みのXLSXを取得します。</p>
+          <ol className="home-workflow" aria-label="読み取りの流れ">
+            <li><FiFileText aria-hidden="true" /><span>1. 帳票を選ぶ</span></li>
+            <li><FiCheckSquare aria-hidden="true" /><span>2. 結果を確認・修正</span></li>
+            <li><FiDownload aria-hidden="true" /><span>3. 確定してXLSX取得</span></li>
+          </ol>
           <div className="hero-actions">
-            <button className="primary" onClick={() => onNavigate("ocr")}>新しいOCRを開始</button>
-            <button className="secondary" onClick={() => onNavigate("records")}>登録データを検索</button>
-            <button className="secondary" onClick={() => onNavigate("templates")}>テンプレートを準備</button>
+            <button className="primary" onClick={() => onNavigate("ocr")}><FiArrowRight aria-hidden="true" />新しいOCRを開始</button>
           </div>
         </div>
-        <div className="health-panel">
-          <span className="panel-kicker">稼働状況</span>
-          <StatusRow label="バックエンド" ok={Boolean(health)} value={health ? "接続中" : "未接続"} />
-          <StatusRow label="処理ワーカー" ok={health?.jobWorker === "running"} value={health?.jobWorker === "running" ? "稼働中" : "停止中"} />
-          <StatusRow label="OCR" ok={health?.ocrProvider !== "disabled"} value={providerLabel(health?.ocrProvider)} />
-          <StatusRow label="有効テンプレート" ok={active.length > 0} value={`${active.length} 件`} />
-          <p className="local-note">データの保存先はこのローカル端末です。</p>
+      </section>
+
+      <section className="home-shortcuts" aria-label="テンプレートの準備">
+        <div>
+          <FiFileText aria-hidden="true" />
+          <div><h2>初めて使う帳票</h2><p>空の帳票から、読み取る欄を設定します。</p></div>
+          <button className="secondary" onClick={() => onNavigate("templates")}><FiGrid aria-hidden="true" />テンプレートを準備</button>
         </div>
       </section>
 
       {health?.ocrProvider === "mock" && (
         <aside className="notice"><strong>試運転モード</strong><span>OCRは固定のサンプル結果を返します。APIキーは不要です。</span></aside>
       )}
-      {health?.ocrProvider === "openai" && (
-        <aside className="notice external"><strong>外部OCRを使用</strong><span>読み取り対象の領域画像がOpenAI APIへ送信されます。</span></aside>
+      {!health && healthChecked && (
+        <aside className="notice danger"><strong>接続を確認できません</strong><span>接続は自動で再確認します。復帰後に保存済みの処理状況を取得します。</span></aside>
       )}
-      {!health && (
-        <aside className="notice danger"><strong>バックエンド未起動</strong><span>backendで開発サーバーを起動してください。自動的に再確認します。</span></aside>
-      )}
+
+      {lastOutput && <section className="home-last-output" aria-label="直前の確定結果">
+        <FiDownload aria-hidden="true" />
+        <div><h2>直前の確定結果</h2><p>{new Date(lastOutput.completedAt ?? lastOutput.createdAt).toLocaleString("ja-JP")} · 結果を開いてXLSXを取得できます。</p></div>
+        <button className="secondary" onClick={() => onOpenJob(lastOutput)}><FiDownload aria-hidden="true" />結果・XLSXを開く</button>
+      </section>}
 
       {attention.length > 0 && (
         <section>
-          <div className="section-title"><div><span className="eyebrow">ACTION REQUIRED</span><h2>対応が必要な処理</h2></div></div>
+          <div className="section-title"><h2>対応が必要な処理</h2></div>
           <p className="section-lead">確認待ち・中断・失敗した処理は、ここから内容確認や再試行へ進めます。</p>
-          <div className="job-list">
+          <div className="job-list home-attention-list" role="region" aria-label="対応が必要な処理一覧" tabIndex={0}>
             {attention.map((job) => (
               <JobRow job={job} key={job.id} onOpenJob={onOpenJob} />
             ))}
@@ -61,18 +67,6 @@ export function HomePage({
         </section>
       )}
 
-      <section>
-        <div className="section-title"><div><span className="eyebrow">RECENT</span><h2>最近の処理</h2></div></div>
-        {recent.length === 0 ? (
-          <div className="empty-state">まだ処理履歴はありません。</div>
-        ) : (
-          <div className="job-list">
-            {recent.map((job) => (
-              <JobRow job={job} key={job.id} onOpenJob={onOpenJob} />
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -101,20 +95,9 @@ function JobRow({
         <small>{new Date(job.createdAt).toLocaleString("ja-JP")}</small>
       </span>
       <span className={`status-pill status-${job.status.toLowerCase()}`}>{statusLabel(job.status)}</span>
-      <span className="row-arrow">→</span>
+      <FiArrowRight className="row-arrow" aria-hidden="true" />
     </button>
   );
-}
-
-function StatusRow({ label, ok, value }: { label: string; ok: boolean; value: string }) {
-  return <div className="status-row"><span className={ok ? "status-dot ok" : "status-dot"} /><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function providerLabel(provider?: Health["ocrProvider"]) {
-  if (provider === "mock") return "試運転（mock）";
-  if (provider === "openai") return "外部OCR";
-  if (provider === "disabled") return "画像処理のみ";
-  return "確認中";
 }
 
 function statusLabel(status: string) {

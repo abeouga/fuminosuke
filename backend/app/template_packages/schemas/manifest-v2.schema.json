@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "PackageFile": {
+      "additionalProperties": false,
+      "properties": {
+        "mediaType": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Mediatype",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "template",
+            "quality",
+            "clean-template",
+            "handwriting-mask",
+            "handwriting-mask-edited",
+            "preview",
+            "handwriting-candidates",
+            "output-layout",
+            "spreadsheet-source"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "role",
+        "mediaType",
+        "size",
+        "sha256"
+      ],
+      "title": "PackageFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contentDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Contentdigest",
+      "type": "string"
+    },
+    "exportedAt": {
+      "format": "date-time",
+      "title": "Exportedat",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/PackageFile"
+      },
+      "maxItems": 20,
+      "minItems": 3,
+      "title": "Files",
+      "type": "array"
+    },
+    "format": {
+      "const": "llm-ocr-template",
+      "default": "llm-ocr-template",
+      "title": "Format",
+      "type": "string"
+    },
+    "formatVersion": {
+      "const": 2,
+      "default": 2,
+      "title": "Formatversion",
+      "type": "integer"
+    },
+    "minimumAppVersion": {
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "title": "Minimumappversion",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "optionalFeatures": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 50,
+      "title": "Optionalfeatures",
+      "type": "array"
+    },
+    "packageId": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$",
+      "title": "Packageid",
+      "type": "string"
+    },
+    "publisherId": {
+      "maxLength": 253,
+      "minLength": 3,
+      "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+      "title": "Publisherid",
+      "type": "string"
+    },
+    "requiredFeatures": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "title": "Requiredfeatures",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 2,
+      "default": 2,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "version": {
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "publisherId",
+    "packageId",
+    "name",
+    "version",
+    "minimumAppVersion",
+    "requiredFeatures",
+    "exportedAt",
+    "contentDigest",
+    "files"
+  ],
+  "title": "TemplatePackageManifest",
+  "type": "object"
+}

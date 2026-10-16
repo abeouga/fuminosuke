@@ -1,0 +1,226 @@
+{
+  "version": "template-analysis.phase34.review.v1",
+  "date": "2026-10-12",
+  "phase": 34,
+  "assignment": {
+    "model": "Astra",
+    "reasoningEffort": "xhigh",
+    "currentChatModelVerified": false
+  },
+  "checkout": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy",
+  "reviewedSource": "D:\\llm-ocr-archive\\template-ai\\20261012-phase33",
+  "reviewCopy": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34-copy",
+  "evidenceRoot": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34",
+  "verdict": "changes_requested",
+  "phase34ReviewCompleted": true,
+  "phase33AcceptedForLiveComparison": false,
+  "productAdopted": false,
+  "productConnected": false,
+  "productSourceChanged": false,
+  "runtimeFixesApplied": false,
+  "api": {
+    "calls": 0,
+    "reservations": 0,
+    "used": 417,
+    "limit": 496,
+    "remaining": 79,
+    "plannedFutureCap": 70,
+    "unallocated": 9
+  },
+  "findings": [
+    {
+      "id": "R1",
+      "priority": 1,
+      "kind": "preexisting_candidate_gap",
+      "blocksLiveComparison": true,
+      "path": "D:\\llm-ocr-archive\\template-ai\\20261012-phase33\\factor_plan.py",
+      "lineStart": 128,
+      "lineEnd": 142,
+      "title": "Standalone symbol label/value pairs have no issued candidate",
+      "scopes": [
+        "V08",
+        "V09",
+        "V10"
+      ],
+      "missingPairs": 6,
+      "evidence": [
+        "effects-review.json",
+        "dataset-replay.json"
+      ]
+    },
+    {
+      "id": "R2",
+      "priority": 1,
+      "kind": "new_calibration_image_defect",
+      "blocksLiveComparison": true,
+      "path": "D:\\llm-ocr-archive\\template-ai\\20261012-phase33\\build_datasets.py",
+      "lineStart": 46,
+      "lineEnd": 47,
+      "title": "Positive calibration text crosses physical cell borders",
+      "scopes": [
+        "K02",
+        "K04",
+        "K06"
+      ],
+      "cells": 6,
+      "rightOverflowPx": 26,
+      "evidence": [
+        "dataset-source-diagnostics.json",
+        "dataset-sheet-1.png",
+        "gold-review.json"
+      ]
+    },
+    {
+      "id": "R3",
+      "priority": 2,
+      "kind": "new_schedule_validation_gap",
+      "blocksLiveComparison": true,
+      "path": "D:\\llm-ocr-archive\\template-ai\\20261012-phase33\\experiment_runner.py",
+      "lineStart": 13,
+      "lineEnd": 24,
+      "title": "Trial count alone accepts duplicate or unfrozen cohorts",
+      "savedSchedulesCorrect": true,
+      "actualDuplicateSends": 0,
+      "evidence": [
+        "reviewer-checks.json",
+        "cohort-review.json"
+      ]
+    },
+    {
+      "id": "R4",
+      "priority": 2,
+      "kind": "calibration_coverage_gap",
+      "blocksLiveComparison": true,
+      "path": "D:\\llm-ocr-archive\\template-ai\\20261012-phase33\\build_datasets.py",
+      "lineStart": 106,
+      "lineEnd": 113,
+      "title": "Calibration misses specified semantic and negative categories",
+      "missing": [
+        "standalone symbol pairs",
+        "parent binding",
+        "conflicting parents",
+        "scope-edge context loss",
+        "image/text conflict"
+      ],
+      "evidence": [
+        "gold-review.json",
+        "dataset-source-diagnostics.json"
+      ]
+    }
+  ],
+  "verification": {
+    "initialSealedArtifacts": 734,
+    "sourceHashCount": 406,
+    "existingBoundaryChecks": 335,
+    "newIndependentGuardScenarios": 5,
+    "replay42": {
+      "accepted": 41,
+      "rejected": 1
+    },
+    "expectedDtoManualReproduced": 30,
+    "finiteCandidateProjection": 27,
+    "finiteCandidateFailures": 3,
+    "effectProjectionScopes": 35,
+    "targetReferencesIncludingDuplicates": 608,
+    "independentGoldReviewPerformed": true,
+    "authoredIntentMatchesGold": 30,
+    "originalImagesInspected": 30,
+    "datasetAccepted": false,
+    "localTimingGateMs": 500,
+    "localTiming": [
+      {
+        "case": "T1",
+        "samplesMs": [
+          262.42300000740215,
+          267.3261000018101,
+          263.93499999539927
+        ],
+        "medianMs": 263.93499999539927,
+        "passed": true
+      },
+      {
+        "case": "T2",
+        "samplesMs": [
+          406.6453000123147,
+          391.5149999957066,
+          400.3787999972701
+        ],
+        "medianMs": 400.3787999972701,
+        "passed": true
+      },
+      {
+        "case": "T3",
+        "samplesMs": [
+          198.18500001565553,
+          194.77410000399686,
+          194.9603999964893
+        ],
+        "medianMs": 194.9603999964893,
+        "passed": true
+      },
+      {
+        "case": "H1",
+        "samplesMs": [
+          196.2191999773495,
+          202.297699986957,
+          199.00090000010096
+        ],
+        "medianMs": 199.00090000010096,
+        "passed": true
+      },
+      {
+        "case": "H2",
+        "samplesMs": [
+          186.29670000518672,
+          190.39479998173192,
+          185.29810002655722
+        ],
+        "medianMs": 186.29670000518672,
+        "passed": true
+      }
+    ],
+    "realLatencyMeasured": false,
+    "actualModelAccuracyMeasured": false
+  },
+  "dataset": {
+    "calibrationScopes": 12,
+    "calibrationSourceFamilies": 6,
+    "evaluationScopes": 18,
+    "evaluationSourceFamilies": 18,
+    "allSynthetic": true,
+    "qualifiedNewRealFamilies": 0,
+    "requiredForProductAdoption": 4
+  },
+  "nextPhases": [
+    {
+      "phase": "34-A",
+      "task": "correction_design",
+      "model": "Astra",
+      "reasoningEffort": "xhigh",
+      "apiCap": 0
+    },
+    {
+      "phase": "34-B",
+      "task": "isolated_implementation",
+      "model": "GPT-6.1 Sol",
+      "reasoningEffort": "high",
+      "apiCap": 0
+    },
+    {
+      "phase": "34-C",
+      "task": "independent_rereview",
+      "model": "Astra",
+      "reasoningEffort": "xhigh",
+      "apiCap": 0
+    }
+  ],
+  "laterPhasesHeld": [
+    35,
+    36,
+    37,
+    38
+  ],
+  "nextPhaseStarted": false,
+  "preservationEvidence": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34\\preservation.json",
+  "artifactSeal": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34\\result-hashes.json"
+}

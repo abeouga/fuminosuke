@@ -40,7 +40,7 @@ export function JobPage({
     setBusy(true);
     setMessage(null);
     try {
-      await api.retry(jobId);
+      await api.retry(jobId, job?.resourceRevision);
       setRefreshToken((value) => value + 1);
       setMessage("処理を再開しました。完了までこの画面で確認できます。");
     } catch (reason) {
@@ -84,7 +84,7 @@ export function JobPage({
       {connectionLost && !job && (
         <aside className="notice danger">
           <strong>バックエンドへ接続できません</strong>
-          <span>接続が戻ると自動的に確認を再開します。ジョブはDBに保存されています。</span>
+          <span>接続が戻ると自動的に確認を再開します。処理状況はサーバーに保存されています。</span>
         </aside>
       )}
       {message && <p className={job?.status === "FAILED" ? "error-box" : "success-box"}>{message}</p>}

@@ -12,4 +12,3 @@ class DisabledOcrProvider:
             prompt_version=None,
             api_call_count=0,
         )
-

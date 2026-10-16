@@ -16,7 +16,7 @@ from app.core.errors import AppError
 from app.domain.print_layout import (
     PrintLayoutRequest,
     page_plan,
-    require_legacy_ocr,
+    require_image_ocr,
     transform_rect,
 )
 from app.services.print_layout_renderer import render_page
@@ -278,8 +278,8 @@ def test_reference_image_and_rectangle_have_identical_grid_edges():
 
 def test_legacy_guard_does_not_change_old_quality():
     old = {"layoutVerified": True}
-    require_legacy_ocr(old)
+    require_image_ocr(old)
     assert old == {"layoutVerified": True}
     with pytest.raises(AppError) as exc:
-        require_legacy_ocr({"printLayout": {"pages": [{}, {}]}})
+        require_image_ocr({"printLayout": {"pages": [{}, {}]}})
     assert exc.value.code == "PRINT_LAYOUT_OCR_NOT_AVAILABLE"

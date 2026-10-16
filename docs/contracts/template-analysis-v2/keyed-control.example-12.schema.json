@@ -1,0 +1,444 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": [
+        "template-analysis.keyed-units.v2"
+      ]
+    },
+    "headings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Heading"
+      },
+      "minItems": 0,
+      "maxItems": 1000
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Table"
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Field"
+      },
+      "minItems": 0,
+      "maxItems": 500
+    },
+    "standalone": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Standalone"
+      },
+      "minItems": 0,
+      "maxItems": 1000
+    },
+    "roleByCell": {
+      "type": "object",
+      "properties": {
+        "c1": {
+          "$ref": "#/$defs/Role"
+        },
+        "c2": {
+          "$ref": "#/$defs/Role"
+        },
+        "c3": {
+          "$ref": "#/$defs/Role"
+        },
+        "c4": {
+          "$ref": "#/$defs/Role"
+        },
+        "c5": {
+          "$ref": "#/$defs/Role"
+        },
+        "c6": {
+          "$ref": "#/$defs/Role"
+        },
+        "c7": {
+          "$ref": "#/$defs/Role"
+        },
+        "c8": {
+          "$ref": "#/$defs/Role"
+        },
+        "c9": {
+          "$ref": "#/$defs/Role"
+        },
+        "c10": {
+          "$ref": "#/$defs/Role"
+        },
+        "c11": {
+          "$ref": "#/$defs/Role"
+        },
+        "c12": {
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "c1",
+        "c2",
+        "c3",
+        "c4",
+        "c5",
+        "c6",
+        "c7",
+        "c8",
+        "c9",
+        "c10",
+        "c11",
+        "c12"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "version",
+    "headings",
+    "tables",
+    "fields",
+    "standalone",
+    "roleByCell"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "CellRef": {
+      "type": "string",
+      "pattern": "^c[1-9][0-9]{0,3}$"
+    },
+    "Name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "Parent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CellRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "Labels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CellRef"
+      },
+      "minItems": 0,
+      "maxItems": 30
+    },
+    "TextReading": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "text"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "SymbolReading": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "symbol"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Name"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "evidenceCells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellRef"
+          },
+          "minItems": 1,
+          "maxItems": 30
+        }
+      },
+      "required": [
+        "kind",
+        "options",
+        "evidenceCells"
+      ],
+      "additionalProperties": false
+    },
+    "ChecklistReading": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "checklist"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Name"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "selectionMode": {
+          "type": "string",
+          "enum": [
+            "single",
+            "multiple"
+          ]
+        },
+        "evidenceCells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellRef"
+          },
+          "minItems": 1,
+          "maxItems": 30
+        }
+      },
+      "required": [
+        "kind",
+        "options",
+        "selectionMode",
+        "evidenceCells"
+      ],
+      "additionalProperties": false
+    },
+    "Reading": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TextReading"
+        },
+        {
+          "$ref": "#/$defs/SymbolReading"
+        },
+        {
+          "$ref": "#/$defs/ChecklistReading"
+        }
+      ]
+    },
+    "Heading": {
+      "type": "object",
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/CellRef"
+        },
+        "parent": {
+          "$ref": "#/$defs/Parent"
+        }
+      },
+      "required": [
+        "cell",
+        "parent"
+      ],
+      "additionalProperties": false
+    },
+    "Field": {
+      "type": "object",
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/CellRef"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "labels": {
+          "$ref": "#/$defs/Labels"
+        },
+        "axis": {
+          "type": "string",
+          "enum": [
+            "horizontal",
+            "vertical",
+            "direct"
+          ]
+        },
+        "parent": {
+          "$ref": "#/$defs/Parent"
+        },
+        "reading": {
+          "$ref": "#/$defs/Reading"
+        }
+      },
+      "required": [
+        "cell",
+        "name",
+        "labels",
+        "axis",
+        "parent",
+        "reading"
+      ],
+      "additionalProperties": false
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "labels": {
+          "$ref": "#/$defs/Labels"
+        },
+        "reading": {
+          "$ref": "#/$defs/Reading"
+        }
+      },
+      "required": [
+        "name",
+        "labels",
+        "reading"
+      ],
+      "additionalProperties": false
+    },
+    "Row": {
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellRef"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "labels": {
+          "$ref": "#/$defs/Labels"
+        },
+        "keyCell": {
+          "$ref": "#/$defs/Parent"
+        },
+        "keyValue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Name"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cells",
+        "labels",
+        "keyCell",
+        "keyValue"
+      ],
+      "additionalProperties": false
+    },
+    "Table": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "parent": {
+          "$ref": "#/$defs/Parent"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Row"
+          },
+          "minItems": 1,
+          "maxItems": 300
+        },
+        "rowKeyStrategy": {
+          "type": "string",
+          "enum": [
+            "printed",
+            "position"
+          ]
+        },
+        "includeEmptyRows": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "parent",
+        "columns",
+        "rows",
+        "rowKeyStrategy",
+        "includeEmptyRows"
+      ],
+      "additionalProperties": false
+    },
+    "Standalone": {
+      "type": "object",
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/CellRef"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "label",
+            "input",
+            "mark",
+            "record_key_cell",
+            "column_key_cell",
+            "ignored",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "unbound_label",
+            "missing_binding",
+            "unsupported_mark_definition",
+            "printed_index",
+            "instruction_or_decoration",
+            "uncertain"
+          ]
+        }
+      },
+      "required": [
+        "cell",
+        "role",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "label",
+        "parent_label",
+        "input",
+        "mark",
+        "record_key_cell",
+        "column_key_cell",
+        "ignored",
+        "unknown"
+      ]
+    }
+  }
+}

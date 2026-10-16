@@ -146,7 +146,7 @@ def test_inconsistent_calc_plan_is_rejected_before_measurement(client, calc_refe
         elif change == "range":
             field["sourceRange"] = "D32"
         elif change == "binding":
-            field["bindings"][0]["targetPath"] = "document.birthDate"
+            field["bindings"][0]["targetPath"] = "fields.unowned_binding"
         elif change == "missing_field":
             page["fields"].remove(field)
         elif change == "transform":
@@ -194,7 +194,7 @@ def test_get_rechecks_source_plan_instead_of_trusting_saved_summary(
     def changed_source(self, session, version, proposed=None):
         source = copy.deepcopy(original_source(self, session, version, proposed))
         owner = next(f for f in source["fields"] if f["bindings"])
-        owner["bindings"][0]["targetPath"] = "document.birthDate"
+        owner["bindings"][0]["targetPath"] = "fields.unowned_binding"
         return source
 
     monkeypatch.setattr(qualification.ReferenceQualificationService, "_source", changed_source)

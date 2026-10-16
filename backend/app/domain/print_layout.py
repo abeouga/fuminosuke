@@ -54,11 +54,11 @@ def print_error(detail: str, code: str = "PRINT_LAYOUT_INVALID", status: int = 4
     return AppError(status=status, code=code, title="Print layout cannot be used", detail=detail)
 
 
-def require_legacy_ocr(quality: dict[str, Any]) -> None:
+def require_image_ocr(quality: dict[str, Any]) -> None:
     if quality.get("printLayout") is not None:
         raise print_error(
-            "印刷ページ設定は下書き保存までの対応です。ページ別の実OCR・補正・確定は未対応のため、"
-            "有効化・OCR実行はできません。旧方式を使う場合は印刷ページ設定を解除してください。",
+            "この操作は単一画像の読み取り用です。印刷ページ設定がある場合は、"
+            "ページ設定を検証し、ページを指定して読み取ってください。",
             "PRINT_LAYOUT_OCR_NOT_AVAILABLE",
             409,
         )

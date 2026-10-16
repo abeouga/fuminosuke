@@ -1,0 +1,6 @@
+[Unit]
+Description=Fuminosuke application memory budget
+
+[Slice]
+MemoryMax=4G
+MemorySwapMax=0

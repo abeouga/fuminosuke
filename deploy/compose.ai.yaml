@@ -1,0 +1,13 @@
+# Explicit opt-in only after remote journal initialization and phase 6/7 acceptance.
+services:
+  backend:
+    environment:
+      BETA_AI_ENABLED: "true"
+      OCR_PROVIDER: openai
+      VOICE_PROVIDER: openai
+      TEMPLATE_ANALYSIS_ENABLED: "true"
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+    secrets: [openai_api_key]
+secrets:
+  openai_api_key:
+    file: ${BETA_API_KEY_FILE:?Set the host-only secret file}

@@ -26,7 +26,8 @@ function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boo
 }
 
 export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyChange, onSavedChange,
-  onStateChange, onLayoutSaved, externalState, initialSaved = false }: {
+  onStateChange, onLayoutSaved, externalState, resourceRevision, onMutationRevision, initialSaved = false }: {
+  resourceRevision: number; onMutationRevision: (revision: number) => void;
   versionId: string; disabled: boolean;
   onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
   onSavedChange: (saved: boolean) => void;
@@ -117,8 +118,9 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     if (!request || !state || lock.current) return;
     lock.current = true; setBusy(true); setError(""); ++sequence.current;
     try {
-      const next = await (clear ? api.clearPrintLayout(versionId, state.revision)
-        : api.savePrintLayout(versionId, request));
+      const next = await (clear ? api.clearPrintLayout(versionId, resourceRevision, state.revision)
+        : api.savePrintLayout(versionId, resourceRevision, request));
+      onMutationRevision(next.resourceRevision);
       if (next.layout) onLayoutSaved?.(next.layout);
       apply(next);
     }
@@ -131,12 +133,13 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     const editingToken = sequence.current;
     setPreparing(true); setPrepareMessage(""); setError("");
     try {
-      const next = await api.preparePrintFiles(versionId, state.revision);
+      const next = await api.preparePrintFiles(versionId, resourceRevision, state.revision);
       if (prepareSequence.current !== token) return;
       if (sequence.current !== editingToken) {
         setPrepareMessage("印刷用ファイルを生成しました。新しい編集内容は保持しています。保存後に設定を再取得してください。");
         return;
       }
+      onMutationRevision(next.resourceRevision);
       apply(next);
       setPrepareMessage(`印刷用ファイルを確定しました（${next.saved?.pages.length}ページ・${((next.saved?.commonScale ?? 0) * 100).toFixed(0)}%）。`);
     } catch (e) {

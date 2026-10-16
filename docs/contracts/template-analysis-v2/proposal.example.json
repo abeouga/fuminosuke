@@ -1,0 +1,83 @@
+{
+  "version": "template-analysis.units.v2",
+  "headings": [
+    {
+      "cell": "c1",
+      "parent": null
+    }
+  ],
+  "tables": [
+    {
+      "name": "売却記録",
+      "parent": "c1",
+      "columns": [
+        {
+          "name": "体重",
+          "labels": [
+            "c2"
+          ],
+          "reading": {
+            "kind": "text"
+          }
+        },
+        {
+          "name": "価格",
+          "labels": [
+            "c3"
+          ],
+          "reading": {
+            "kind": "text"
+          }
+        }
+      ],
+      "rows": [
+        {
+          "cells": [
+            "c4",
+            "c5"
+          ],
+          "labels": [],
+          "keyCell": null,
+          "keyValue": null
+        },
+        {
+          "cells": [
+            "c6",
+            "c7"
+          ],
+          "labels": [],
+          "keyCell": null,
+          "keyValue": null
+        }
+      ],
+      "rowKeyStrategy": "position",
+      "includeEmptyRows": true
+    }
+  ],
+  "fields": [
+    {
+      "cell": "c9",
+      "name": "受付番号",
+      "labels": [
+        "c8"
+      ],
+      "axis": "horizontal",
+      "parent": null,
+      "reading": {
+        "kind": "text"
+      }
+    }
+  ],
+  "standalone": [
+    {
+      "cell": "c10",
+      "role": "ignored",
+      "reason": "instruction_or_decoration"
+    },
+    {
+      "cell": "c11",
+      "role": "mark",
+      "reason": "unsupported_mark_definition"
+    }
+  ]
+}

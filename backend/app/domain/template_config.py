@@ -18,12 +18,20 @@ from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
 from app.core.errors import to_camel
+from app.domain.field_targets import field_key
 from app.domain.polygon import PolygonPoint, validate_polygon
 from app.domain.text_encoding import repair_utf8_mojibake
 
 
 class TemplateConfigModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    @field_validator("target_path", check_fields=False)
+    @classmethod
+    def validate_target_path(cls, value: str) -> str:
+        if field_key(value) is None:
+            raise ValueError("Only fields.<key> targets are supported")
+        return value
 
 
 class RegistrationConfig(TemplateConfigModel):
@@ -40,7 +48,9 @@ class PolygonConfigModel(TemplateConfigModel):
     # retains the exact pre-polygon representation for ordinary rectangles.
     @classmethod
     def __get_pydantic_json_schema__(
-        cls, schema: core_schema.CoreSchema, handler: GetJsonSchemaHandler,
+        cls,
+        schema: core_schema.CoreSchema,
+        handler: GetJsonSchemaHandler,
     ) -> JsonSchemaValue:
         # A wrap serializer's dict return annotation otherwise erases the field
         # schema. The wire object still has exactly the declared model fields.
@@ -58,10 +68,18 @@ class PolygonConfigModel(TemplateConfigModel):
         data: dict[str, Any] = handler(self)
         if not data.get("vertices"):
             data.pop("vertices", None)
+        if not data.get("readingMode", data.get("reading_mode")):
+            data.pop("readingMode", None)
+            data.pop("reading_mode", None)
+        if data.get("sequenceNumber", data.get("sequence_number")) is None:
+            data.pop("sequenceNumber", None)
+            data.pop("sequence_number", None)
         return data
 
 
 class RegionConfig(PolygonConfigModel):
+    reading_mode: Literal["number"] | None = None
+    sequence_number: int | None = Field(default=None, ge=1, strict=True)
     region_id: str
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -116,6 +134,8 @@ class CompositeSubfieldConfig(TemplateConfigModel):
 
 
 class FieldMappingConfig(PolygonConfigModel):
+    reading_mode: Literal["number"] | None = None
+    sequence_number: int | None = Field(default=None, ge=1, strict=True)
     mapping_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
     target_path: str = Field(min_length=1, max_length=200)
     label: str = Field(min_length=1, max_length=100)
@@ -132,9 +152,10 @@ class FieldMappingConfig(PolygonConfigModel):
     def validate_polygon_geometry(self) -> FieldMappingConfig:
         validate_polygon(self.vertices, self.x, self.y, self.width, self.height)
         return self
+
     printed_label_text: str = Field(default="", max_length=300)
     mapping_type: Literal["text", "mark"] = "text"
-    mark_recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
+    mark_recognition_mode: Literal["automatic", "manual", "symbol", "checklist"] = "automatic"
     mark_selection_mode: Literal["single", "multiple"] = "multiple"
     mark_options: list[MarkOptionConfig] = Field(default_factory=list, max_length=50)
     composite_subfields: list[CompositeSubfieldConfig] = Field(
@@ -144,6 +165,22 @@ class FieldMappingConfig(PolygonConfigModel):
 
     @model_validator(mode="after")
     def validate_symbol_mode(self) -> FieldMappingConfig:
+        if self.sequence_number is not None and (
+            self.reading_mode != "number" or self.composite_subfields
+        ):
+            raise ValueError("Sequence numbers require a simple number field")
+        if self.reading_mode is not None and self.mapping_type != "text":
+            raise ValueError("Number reading requires a text mapping")
+        if self.mark_recognition_mode == "checklist":
+            if self.mark_selection_mode != "multiple":
+                raise ValueError("Checklist recognition requires multiple selection")
+            labels = [option.label for option in self.mark_options]
+            if any(not label.strip() or label != label.strip() or any(
+                separator in label for separator in "・、,;\n\r"
+            ) for label in labels):
+                raise ValueError("Checklist labels must not contain selection separators")
+            if self.mapping_type != "mark":
+                raise ValueError("Checklist recognition requires a mark mapping")
         if self.mark_recognition_mode == "symbol" and (
             self.mapping_type != "mark" or self.mark_selection_mode != "single"
         ):
@@ -157,6 +194,8 @@ class FieldMappingConfig(PolygonConfigModel):
 
     def as_region(self) -> RegionConfig:
         return RegionConfig(
+            reading_mode=self.reading_mode,
+            sequence_number=self.sequence_number,
             region_id=self.mapping_id,
             x=self.x,
             y=self.y,
@@ -170,8 +209,7 @@ class FieldMappingConfig(PolygonConfigModel):
             enabled=self.enabled,
             fallback_enabled=False,
             mark_detection_enabled=(
-                self.mapping_type == "mark"
-                and self.mark_recognition_mode == "automatic"
+                self.mapping_type == "mark" and self.mark_recognition_mode == "automatic"
             ),
             printed_label_text=self.printed_label_text,
             vertices=self.vertices,
@@ -216,8 +254,8 @@ class DocumentNameConfig(TemplateConfigModel):
     @model_validator(mode="after")
     def validate_fields(self) -> DocumentNameConfig:
         cleaned = [path.strip() for path in self.field_paths]
-        if any(not path for path in cleaned):
-            raise ValueError("documentName fieldPaths cannot contain blank values")
+        if any(field_key(path) is None for path in cleaned):
+            raise ValueError("documentName requires fields.<key> targets")
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("documentName fieldPaths must be unique")
         self.field_paths = cleaned
@@ -236,10 +274,6 @@ class MarkConfig(TemplateConfigModel):
     method: str
 
 
-class ExportConfig(TemplateConfigModel):
-    csv_columns: list[str]
-
-
 class TemplateConfig(TemplateConfigModel):
     template_id: str
     template_version: int
@@ -249,14 +283,12 @@ class TemplateConfig(TemplateConfigModel):
     registration: RegistrationConfig
     regions: list[RegionConfig]
     field_mappings: list[FieldMappingConfig] = Field(default_factory=list)
-    document_identity: DocumentIdentityConfig | None = None
     document_identity_fields: list[DocumentIdentityConfig] = Field(
         default_factory=list,
         max_length=20,
     )
     document_name: DocumentNameConfig | None = None
     marks: list[MarkConfig]
-    export: ExportConfig
 
     @model_validator(mode="after")
     def validate_geometry(self) -> TemplateConfig:
@@ -304,7 +336,7 @@ class TemplateConfig(TemplateConfigModel):
             if grouped_fields:
                 if len(grouped_fields) != len(identity_fields):
                     raise ValueError(
-                        "documentIdentityFields cannot mix grouped and legacy matching"
+                        "documentIdentityFields cannot mix grouped and individual matching"
                     )
                 for field in grouped_fields:
                     if not field.match_group_label:
@@ -318,9 +350,7 @@ class TemplateConfig(TemplateConfigModel):
                         "at least two confirmation fields"
                     )
                 if sum(field.display_role == "title" for field in identity_fields) != 1:
-                    raise ValueError(
-                        "documentIdentityFields must contain exactly one title field"
-                    )
+                    raise ValueError("documentIdentityFields must contain exactly one title field")
                 if sum(field.display_role == "subtitle" for field in identity_fields) > 1:
                     raise ValueError(
                         "documentIdentityFields can contain at most one subtitle field"
@@ -342,19 +372,6 @@ class TemplateConfig(TemplateConfigModel):
                     raise ValueError("documentIdentityFields targetPath does not match its mapping")
                 if identity_mapping.mapping_type != "text":
                     raise ValueError("documentIdentityFields must reference text mappings")
-            primary = next(
-                (field for field in identity_fields if field.match_role == "primary"),
-                None,
-            )
-            if self.document_identity is not None and (
-                not grouped_fields
-                and (
-                    primary is None
-                    or self.document_identity.mapping_id != primary.mapping_id
-                    or self.document_identity.target_path != primary.target_path
-                )
-            ):
-                raise ValueError("documentIdentity must match the primary documentIdentityField")
         if self.document_name is not None:
             configured_paths = {
                 mapping.target_path for mapping in self.field_mappings if mapping.enabled
@@ -371,14 +388,10 @@ class TemplateConfig(TemplateConfigModel):
         return self
 
     def effective_document_identity_fields(self) -> list[DocumentIdentityConfig]:
-        if self.document_identity_fields:
-            return list(self.document_identity_fields)
-        return [self.document_identity] if self.document_identity is not None else []
+        return list(self.document_identity_fields)
 
     def ocr_regions(self) -> list[RegionConfig]:
-        if self.field_mappings:
-            return self.mapped_ocr_regions()
-        return [region for region in self.regions if region.enabled]
+        return self.mapped_ocr_regions()
 
     def mapped_ocr_regions(self) -> list[RegionConfig]:
         return [mapping.as_region() for mapping in self.field_mappings if mapping.enabled]
@@ -389,7 +402,7 @@ def default_template_config_path() -> Path:
         Path(__file__).resolve().parents[2]
         / "resources"
         / "templates"
-        / "cow-breeding-ledger-v1"
+        / "generic-document-v1"
         / "template.yaml"
     )
 
@@ -408,7 +421,13 @@ def build_blank_template_config(
     canonical_width: int,
     canonical_height: int,
 ) -> TemplateConfig:
-    base = load_template_config()
+    base = load_template_config(
+        Path(__file__).resolve().parents[2]
+        / "resources"
+        / "templates"
+        / "generic-document-v1"
+        / "template.yaml"
+    )
     config = base.model_copy(
         update={
             "template_id": template_id,
@@ -418,16 +437,12 @@ def build_blank_template_config(
             "canonical_height": canonical_height,
             "regions": [],
             "field_mappings": [],
-            "document_identity": None,
             "document_identity_fields": [],
             "marks": [],
-            "export": base.export.model_copy(update={"csv_columns": []}, deep=True),
         },
         deep=True,
     )
-    return TemplateConfig.model_validate(
-        config.model_dump(mode="json", by_alias=True)
-    )
+    return TemplateConfig.model_validate(config.model_dump(mode="json", by_alias=True))
 
 
 def parse_template_config(content: str) -> TemplateConfig:

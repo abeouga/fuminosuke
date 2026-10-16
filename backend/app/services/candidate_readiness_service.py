@@ -50,6 +50,8 @@ from app.services.template_mutation import begin_immediate, require_draft, templ
 LEGACY_POLICY = "paged-candidate-readiness-v1"
 POLICY = "paged-candidate-readiness-v2"
 REVIEW_POLICY = "paged-candidate-readiness-v3"
+LINUX_REVIEW_POLICY = "paged-candidate-readiness-v4-linux"
+REVIEW_POLICIES = {REVIEW_POLICY, LINUX_REVIEW_POLICY}
 RECORD_KEY = "candidateReadiness"
 LIFETIME_SECONDS = 24 * 60 * 60
 LEGACY_IMPLEMENTATION_SHA256 = "2ecb79db9e61f0d1145bf566cd5846a82e24b7771079af3b65f4321e122304f3"
@@ -146,14 +148,18 @@ class CandidateReadinessService(ReferenceQualificationService):
     def _candidate_fingerprint(
         self, version: TemplateVersion, policy: str = POLICY
     ) -> str:
-        if policy == REVIEW_POLICY:
+        if policy in REVIEW_POLICIES:
+            from app.rendering.contract import implementation_fingerprint
+
             return digest({
-                "policy": REVIEW_POLICY,
+                "policy": policy,
                 "revision": self.revision(version),
                 "configSha256": hashlib.sha256(
                     self.storage.read_bytes(version.config_relative_path)
                 ).hexdigest(),
-                "implementation": "prepared-pages-human-review-v1",
+                "implementation": (
+                    implementation_fingerprint() if policy == LINUX_REVIEW_POLICY
+                    else "prepared-pages-human-review-v1"),
             })
         if policy not in {POLICY, LEGACY_POLICY}:
             raise ValueError("Unsupported candidate policy")
@@ -288,7 +294,7 @@ class CandidateReadinessService(ReferenceQualificationService):
         """Validate current immutable bindings without native/helper re-execution."""
         source_policy = report.get("policy")
         if (
-            source_policy not in {POLICY, LEGACY_POLICY, REVIEW_POLICY}
+            source_policy not in {POLICY, LEGACY_POLICY, *REVIEW_POLICIES}
             or report.get("templateVersionId") != version.id
             or report.get("templateVersionRevision") != self.revision(version)
             or report.get("fingerprint")
@@ -299,22 +305,30 @@ class CandidateReadinessService(ReferenceQualificationService):
         observed_until = report.get("expiresAt")
         if (
             type(issued) is not int
-            or (source_policy != REVIEW_POLICY and (
+            or (source_policy not in REVIEW_POLICIES and (
                 type(observed_until) is not int
                 or observed_until != issued + LIFETIME_SECONDS
             ))
             or time.time() < issued
         ):
             raise ValueError("Invalid candidate preparation time")
-        if source_policy != REVIEW_POLICY:
+        if source_policy not in REVIEW_POLICIES:
             wsl_host_identity.validate(report.get("hostIdentity"))
 
         plan = version.quality_json.get("printLayout")
         prepared = report.get("preparedEvidence")
         if not isinstance(plan, dict) or not isinstance(prepared, dict):
             raise ValueError("Candidate print plan is missing")
+        from app.rendering.contract import GRAPH_POLICY, RENDERER_VERSION
+        from app.rendering.geometry import MODEL as LINUX_MODEL
+
+        linux = source_policy == LINUX_REVIEW_POLICY
+        if linux != (plan.get("rendererVersion") == RENDERER_VERSION):
+            raise ValueError("Candidate renderer policy changed")
+        if linux and plan.get("geometryModelVersion") != LINUX_MODEL:
+            raise ValueError("Candidate Linux geometry changed")
         expected_prepared = {
-            "policy": "wsl-prepared-artifact-graph-v1",
+            "policy": GRAPH_POLICY if linux else "wsl-prepared-artifact-graph-v1",
             "planSha256": digest(plan),
             "sourceArtifactId": prepared.get("sourceArtifactId"),
             "sourceSha256": plan.get("sourceSha256"),
@@ -386,7 +400,7 @@ class CandidateReadinessService(ReferenceQualificationService):
                 label="reference image",
             )
 
-        if source_policy == REVIEW_POLICY:
+        if source_policy in REVIEW_POLICIES:
             if original_report != report.get("preparedExecutionEvidence"):
                 raise ValueError("Candidate prepared execution changed")
             _replay_identity(original_report)
@@ -444,7 +458,8 @@ class CandidateReadinessService(ReferenceQualificationService):
             "qualified": False,
             "qualificationIssued": False,
             "reviewRequired": True,
-            "qualificationPolicy": REVIEW_POLICY if report["policy"] == REVIEW_POLICY else POLICY,
+            "qualificationPolicy": (report["policy"]
+                                    if report["policy"] in REVIEW_POLICIES else POLICY),
             "sourceQualificationPolicy": report["policy"],
             "validUntilChange": True,
             "qualificationBinding": {
@@ -457,7 +472,7 @@ class CandidateReadinessService(ReferenceQualificationService):
             "issuedAt": report["issuedAt"],
             "expiresAt": None,
             "preparationEvidenceExpiresAt": report["expiresAt"],
-            "geometryQualified": report["policy"] != REVIEW_POLICY,
+            "geometryQualified": report["policy"] not in REVIEW_POLICIES,
             "pageBindingsVerified": True,
             "environmentDifference": difference or report.get("environmentDifference"),
             "codes": [],
@@ -504,7 +519,15 @@ class CandidateReadinessService(ReferenceQualificationService):
             version = self._version(db, version_id)
             require_draft(version)
             self._check_revision(version, expected_revision)
-            if version.quality_json.get("printLayout", {}).get("geometryModelVersion") != MODEL:
+            from app.rendering.contract import RENDERER_VERSION
+            from app.rendering.geometry import MODEL as LINUX_MODEL
+
+            linux = (version.quality_json.get("printLayout", {}).get("rendererVersion")
+                     == RENDERER_VERSION)
+            policy = LINUX_REVIEW_POLICY if linux else REVIEW_POLICY
+            if version.quality_json.get("printLayout", {}).get("geometryModelVersion") != (
+                LINUX_MODEL if linux else MODEL
+            ):
                 raise print_error("印刷見本を作成してから続けてください。",
                                   "CANDIDATE_PREPARATION_REQUIRED", 409)
             try:
@@ -531,10 +554,10 @@ class CandidateReadinessService(ReferenceQualificationService):
                     "CANDIDATE_EVIDENCE_CHANGED", 409,
                 ) from exc
             report = {
-                "policy": REVIEW_POLICY,
+                "policy": policy,
                 "templateVersionId": version.id,
                 "templateVersionRevision": expected_revision,
-                "fingerprint": self._candidate_fingerprint(version, REVIEW_POLICY),
+                "fingerprint": self._candidate_fingerprint(version, policy),
                 "preparedEvidence": prepared.evidence,
                 "preparedExecutionEvidence": prepared.report,
                 "issuedAt": int(time.time()),

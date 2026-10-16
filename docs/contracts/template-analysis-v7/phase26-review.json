@@ -1,0 +1,1203 @@
+{
+  "version": "template-analysis.phase26.review.v1",
+  "status": "review_completed_product_rejected",
+  "reviewCompleted": true,
+  "measurementAccepted": true,
+  "productApproved": false,
+  "productActivated": false,
+  "developmentModel": "Astra",
+  "reasoningEffort": "XHigh",
+  "chatModelSettingVerified": false,
+  "runtimeApiModel": "gpt-6-luna",
+  "apiCalls": 0,
+  "budget": {
+    "used": 376,
+    "limit": 496,
+    "remaining": 120
+  },
+  "checkout": "C:/Users/hanam/Desktop/llm-ocr-deploy",
+  "evidenceDirectory": "D:/llm-ocr-archive/template-ai/20261012-phase26",
+  "phase25Retained": true,
+  "replay": {
+    "apiCalls": 0,
+    "networkAttempts": 0,
+    "passed": true,
+    "validReproduced": 9,
+    "rejectedReproduced": 1,
+    "allFocusScoresMatched": true,
+    "qualityCorrect": {
+      "roles": 89,
+      "bindings": 54,
+      "rows": 6,
+      "marks": 3
+    },
+    "qualityRequired": {
+      "roles": 146,
+      "bindings": 74,
+      "rows": 14,
+      "marks": 16
+    },
+    "qualityQualified": 4,
+    "within5000": 0,
+    "wrongFocusBindings": 4,
+    "qualifiedMedianMs": 6139.3249000029755,
+    "results": [
+      {
+        "runId": "T1-r1",
+        "state": "valid",
+        "status": "draft",
+        "quality": {
+          "correct": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true
+        },
+        "fullProjection": true,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_63ef7225ba70348d2767",
+            "refs": [
+              "c16",
+              "c17",
+              "c18",
+              "c19",
+              "c20",
+              "c21",
+              "c22",
+              "c23",
+              "c24",
+              "c25"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_c6093b4fa5c776ee869a"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "T2-r1",
+        "state": "valid",
+        "status": "draft",
+        "quality": {
+          "correct": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "total": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true
+        },
+        "fullProjection": true,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_8a0aaa3b751cefe3d95a",
+            "refs": [
+              "c10",
+              "c11",
+              "c12",
+              "c13",
+              "c14",
+              "c15",
+              "c16",
+              "c17",
+              "c18",
+              "c20",
+              "c21",
+              "c22",
+              "c24",
+              "c25",
+              "c26",
+              "c27",
+              "c28",
+              "c29",
+              "c30",
+              "c31",
+              "c32",
+              "c33",
+              "c34",
+              "c37",
+              "c38",
+              "c39",
+              "c4",
+              "c40",
+              "c41",
+              "c42",
+              "c43",
+              "c44",
+              "c46",
+              "c47",
+              "c48",
+              "c49",
+              "c5",
+              "c50",
+              "c51",
+              "c52",
+              "c53",
+              "c54",
+              "c55",
+              "c56",
+              "c57",
+              "c58",
+              "c6",
+              "c61",
+              "c62",
+              "c63",
+              "c64",
+              "c65",
+              "c66",
+              "c67",
+              "c68",
+              "c7",
+              "c70",
+              "c71",
+              "c72",
+              "c73",
+              "c74",
+              "c75",
+              "c76",
+              "c77",
+              "c78",
+              "c79",
+              "c8",
+              "c80",
+              "c81",
+              "c82",
+              "c85",
+              "c86",
+              "c87",
+              "c88",
+              "c89",
+              "c9",
+              "c90",
+              "c91"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_e3342a26dc144b22aa08"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "T3-r1",
+        "state": "valid",
+        "status": "partial_draft",
+        "quality": {
+          "correct": {
+            "roles": 4,
+            "bindings": 2,
+            "rows": 0,
+            "marks": 1
+          },
+          "total": {
+            "roles": 12,
+            "bindings": 5,
+            "rows": 0,
+            "marks": 4
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_B6_e23a9cb6637e4af0aa2a",
+            "xlsx_B8_8c9cf949e4f74d87aefd",
+            "xlsx_B12_901cf93b16f54af8931a"
+          ],
+          "duplicates": [],
+          "qualified": false
+        },
+        "fullProjection": false,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_87565ba7d040215604de",
+            "refs": [
+              "c11",
+              "c12"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_8633d851101e75b291f9",
+            "refs": [
+              "c3",
+              "c4"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_3f2ba940f3df1eb1bceb"
+          },
+          {
+            "component": "c_910f0eb8a0339047bc5f",
+            "refs": [
+              "c5",
+              "c6"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_110159fd61a4a0ff00b6",
+            "refs": [
+              "c7",
+              "c8"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_13745926893e885123b4",
+            "refs": [
+              "c10",
+              "c9"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_7a5dfbf68b70ff585031"
+          },
+          {
+            "component": "c_bc56b594c5cc4e2dac04",
+            "refs": [
+              "c1"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_91f3a258123d318d367d",
+            "refs": [
+              "c2"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "H1-r1",
+        "state": "valid",
+        "status": "held",
+        "quality": {
+          "correct": {
+            "roles": 0,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 7,
+            "bindings": 3,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_K10",
+            "xlsx_K11",
+            "xlsx_K12"
+          ],
+          "duplicates": [],
+          "qualified": false
+        },
+        "fullProjection": false,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_7e7c21a8f6cc536def26",
+            "refs": [
+              "c10",
+              "c11",
+              "c12",
+              "c13",
+              "c14",
+              "c8",
+              "c9"
+            ],
+            "state": "held",
+            "reason": "UNRESOLVED_FACTOR_OR_NAME"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "H2-r1",
+        "state": "valid",
+        "status": "draft",
+        "quality": {
+          "correct": {
+            "roles": 3,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 15,
+            "bindings": 4,
+            "rows": 4,
+            "marks": 4
+          },
+          "wrongFocusBindings": [
+            {
+              "expected": {
+                "valueCellId": "xlsx_C6",
+                "labelCellIds": [
+                  "xlsx_B6",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C6",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C7",
+                "labelCellIds": [
+                  "xlsx_B7",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C7",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C8",
+                "labelCellIds": [
+                  "xlsx_B8",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C8",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            },
+            {
+              "expected": {
+                "valueCellId": "xlsx_C9",
+                "labelCellIds": [
+                  "xlsx_B9",
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              },
+              "actual": [
+                {
+                  "valueCellId": "xlsx_C9",
+                  "labelCellIds": [
+                    "xlsx_C5"
+                  ],
+                  "parentCellId": null
+                }
+              ]
+            }
+          ],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": false
+        },
+        "fullProjection": false,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_17abb7ef4dbb643591d0",
+            "refs": [
+              "c10",
+              "c11",
+              "c12",
+              "c13",
+              "c14",
+              "c15",
+              "c16",
+              "c17",
+              "c18",
+              "c19",
+              "c5",
+              "c6",
+              "c7",
+              "c8",
+              "c9"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_106a82be2bfe118bc2da"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "T1-r2",
+        "state": "valid",
+        "status": "draft",
+        "quality": {
+          "correct": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 10,
+            "bindings": 4,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true
+        },
+        "fullProjection": true,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_63ef7225ba70348d2767",
+            "refs": [
+              "c16",
+              "c17",
+              "c18",
+              "c19",
+              "c20",
+              "c21",
+              "c22",
+              "c23",
+              "c24",
+              "c25"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_c6093b4fa5c776ee869a"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "T2-r2",
+        "state": "valid",
+        "status": "draft",
+        "quality": {
+          "correct": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "total": {
+            "roles": 29,
+            "bindings": 21,
+            "rows": 3,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [],
+          "duplicates": [],
+          "qualified": true
+        },
+        "fullProjection": true,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_8a0aaa3b751cefe3d95a",
+            "refs": [
+              "c10",
+              "c11",
+              "c12",
+              "c13",
+              "c14",
+              "c15",
+              "c16",
+              "c17",
+              "c18",
+              "c20",
+              "c21",
+              "c22",
+              "c24",
+              "c25",
+              "c26",
+              "c27",
+              "c28",
+              "c29",
+              "c30",
+              "c31",
+              "c32",
+              "c33",
+              "c34",
+              "c37",
+              "c38",
+              "c39",
+              "c4",
+              "c40",
+              "c41",
+              "c42",
+              "c43",
+              "c44",
+              "c46",
+              "c47",
+              "c48",
+              "c49",
+              "c5",
+              "c50",
+              "c51",
+              "c52",
+              "c53",
+              "c54",
+              "c55",
+              "c56",
+              "c57",
+              "c58",
+              "c6",
+              "c61",
+              "c62",
+              "c63",
+              "c64",
+              "c65",
+              "c66",
+              "c67",
+              "c68",
+              "c7",
+              "c70",
+              "c71",
+              "c72",
+              "c73",
+              "c74",
+              "c75",
+              "c76",
+              "c77",
+              "c78",
+              "c79",
+              "c8",
+              "c80",
+              "c81",
+              "c82",
+              "c85",
+              "c86",
+              "c87",
+              "c88",
+              "c89",
+              "c9",
+              "c90",
+              "c91"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_e3342a26dc144b22aa08"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "T3-r2",
+        "state": "valid",
+        "status": "partial_draft",
+        "quality": {
+          "correct": {
+            "roles": 4,
+            "bindings": 2,
+            "rows": 0,
+            "marks": 2
+          },
+          "total": {
+            "roles": 12,
+            "bindings": 5,
+            "rows": 0,
+            "marks": 4
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_B4_d0c204eba4f24064a6b1",
+            "xlsx_B8_8c9cf949e4f74d87aefd",
+            "xlsx_B12_901cf93b16f54af8931a"
+          ],
+          "duplicates": [],
+          "qualified": false
+        },
+        "fullProjection": false,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_87565ba7d040215604de",
+            "refs": [
+              "c11",
+              "c12"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_8633d851101e75b291f9",
+            "refs": [
+              "c3",
+              "c4"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_910f0eb8a0339047bc5f",
+            "refs": [
+              "c5",
+              "c6"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_cec4e24908a3e24d330e"
+          },
+          {
+            "component": "c_110159fd61a4a0ff00b6",
+            "refs": [
+              "c7",
+              "c8"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_13745926893e885123b4",
+            "refs": [
+              "c10",
+              "c9"
+            ],
+            "state": "resolved",
+            "reason": null,
+            "structure": "s_7a5dfbf68b70ff585031"
+          },
+          {
+            "component": "c_bc56b594c5cc4e2dac04",
+            "refs": [
+              "c1"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          },
+          {
+            "component": "c_91f3a258123d318d367d",
+            "refs": [
+              "c2"
+            ],
+            "state": "held",
+            "reason": "needs_context"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "H1-r2",
+        "state": "valid",
+        "status": "held",
+        "quality": {
+          "correct": {
+            "roles": 0,
+            "bindings": 0,
+            "rows": 0,
+            "marks": 0
+          },
+          "total": {
+            "roles": 7,
+            "bindings": 3,
+            "rows": 0,
+            "marks": 0
+          },
+          "wrongFocusBindings": [],
+          "missingFocusBindings": [
+            "xlsx_K10",
+            "xlsx_K11",
+            "xlsx_K12"
+          ],
+          "duplicates": [],
+          "qualified": false
+        },
+        "fullProjection": false,
+        "physicalPreserved": true,
+        "manualPreserved": true,
+        "exactExistingGraphNoop": true,
+        "coverage": [
+          {
+            "component": "c_7e7c21a8f6cc536def26",
+            "refs": [
+              "c10",
+              "c11",
+              "c12",
+              "c13",
+              "c14",
+              "c8",
+              "c9"
+            ],
+            "state": "held",
+            "reason": "UNRESOLVED_FACTOR_OR_NAME"
+          }
+        ],
+        "mockSends": 1
+      },
+      {
+        "runId": "H2-r2",
+        "state": "rejected",
+        "error": "ValueError:UNISSUED_OR_WRONG_FACTOR_CHOICE",
+        "mockSends": 1
+      }
+    ]
+  },
+  "measurement": {
+    "apiCalls": 0,
+    "t2Medians": {
+      "scopeReadyMs": 6139.3249000029755,
+      "providerHttpMs": 5031.785500003025,
+      "transportInitMs": 223.8338000024669,
+      "materialMs": 239.86560000048485,
+      "planMs": 20.693650003522635,
+      "remainingLocalMs": 623.1463499934762
+    },
+    "t2ImageBase64Bytes": 4416508,
+    "t2WireBytes": 4447867,
+    "t2ImageBase64Percent": 99.29496542949688,
+    "t2ObservedHttpSharePercent": 81.95991549495265,
+    "t3": {
+      "questions": 14,
+      "accepted": 4,
+      "acceptedCorrect": 4,
+      "held": 10,
+      "heldCorrect": 9,
+      "heldWrong": 1
+    },
+    "routes": [
+      {
+        "caseId": "T1",
+        "route": "responses",
+        "reason": "generated_name_in_any_alternative",
+        "oracleGeneratedNames": 0
+      },
+      {
+        "caseId": "T2",
+        "route": "responses",
+        "reason": "generated_name_in_any_alternative",
+        "oracleGeneratedNames": 0
+      },
+      {
+        "caseId": "T3",
+        "route": "decisions1",
+        "reason": "independent_fixed_choices",
+        "oracleGeneratedNames": 0
+      },
+      {
+        "caseId": "H1",
+        "route": "responses",
+        "reason": "generated_name_in_any_alternative",
+        "oracleGeneratedNames": 0
+      },
+      {
+        "caseId": "H2",
+        "route": "responses",
+        "reason": "generated_name_in_any_alternative",
+        "oracleGeneratedNames": 1
+      }
+    ],
+    "notAnOptimizationBenchmark": true
+  },
+  "counterfactuals": [
+    {
+      "runId": "H1-r1",
+      "state": "valid",
+      "status": "partial_draft",
+      "quality": {
+        "correct": {
+          "roles": 6,
+          "bindings": 0,
+          "rows": 0,
+          "marks": 0
+        },
+        "total": {
+          "roles": 7,
+          "bindings": 3,
+          "rows": 0,
+          "marks": 0
+        },
+        "wrongFocusBindings": [
+          {
+            "expected": {
+              "valueCellId": "xlsx_K10",
+              "labelCellIds": [
+                "xlsx_H10"
+              ],
+              "parentCellId": "xlsx_B10"
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_K10",
+                "labelCellIds": [
+                  "xlsx_H10"
+                ],
+                "parentCellId": null
+              }
+            ]
+          },
+          {
+            "expected": {
+              "valueCellId": "xlsx_K11",
+              "labelCellIds": [
+                "xlsx_H11"
+              ],
+              "parentCellId": "xlsx_B10"
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_K11",
+                "labelCellIds": [
+                  "xlsx_H11"
+                ],
+                "parentCellId": null
+              }
+            ]
+          },
+          {
+            "expected": {
+              "valueCellId": "xlsx_K12",
+              "labelCellIds": [
+                "xlsx_H12"
+              ],
+              "parentCellId": "xlsx_B10"
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_K12",
+                "labelCellIds": [
+                  "xlsx_H12"
+                ],
+                "parentCellId": null
+              }
+            ]
+          }
+        ],
+        "missingFocusBindings": [],
+        "duplicates": [],
+        "qualified": false
+      },
+      "fullProjection": false,
+      "physicalPreserved": true,
+      "manualPreserved": true,
+      "exactExistingGraphNoop": false,
+      "coverage": [
+        {
+          "component": "c_7e7c21a8f6cc536def26",
+          "refs": [
+            "c10",
+            "c11",
+            "c12",
+            "c13",
+            "c14",
+            "c8",
+            "c9"
+          ],
+          "state": "resolved",
+          "reason": null,
+          "structure": "s_45d241c29cdd12d7d1c1"
+        }
+      ],
+      "mockSends": 1,
+      "diagnostic": "name_only",
+      "notModelPerformance": true
+    },
+    {
+      "runId": "H2-r2",
+      "state": "valid",
+      "status": "held",
+      "quality": {
+        "correct": {
+          "roles": 0,
+          "bindings": 0,
+          "rows": 0,
+          "marks": 0
+        },
+        "total": {
+          "roles": 15,
+          "bindings": 4,
+          "rows": 4,
+          "marks": 4
+        },
+        "wrongFocusBindings": [],
+        "missingFocusBindings": [
+          "xlsx_C6",
+          "xlsx_C7",
+          "xlsx_C8",
+          "xlsx_C9"
+        ],
+        "duplicates": [],
+        "qualified": false
+      },
+      "fullProjection": false,
+      "physicalPreserved": true,
+      "manualPreserved": true,
+      "exactExistingGraphNoop": false,
+      "coverage": [
+        {
+          "component": "c_17abb7ef4dbb643591d0",
+          "refs": [
+            "c10",
+            "c11",
+            "c12",
+            "c13",
+            "c14",
+            "c15",
+            "c16",
+            "c17",
+            "c18",
+            "c19",
+            "c5",
+            "c6",
+            "c7",
+            "c8",
+            "c9"
+          ],
+          "state": "held",
+          "reason": "UNRESOLVED_FACTOR_OR_NAME"
+        }
+      ],
+      "mockSends": 1,
+      "diagnostic": "conditional_choice_only",
+      "notModelPerformance": true
+    },
+    {
+      "runId": "H2-r2",
+      "state": "valid",
+      "status": "draft",
+      "quality": {
+        "correct": {
+          "roles": 7,
+          "bindings": 0,
+          "rows": 0,
+          "marks": 4
+        },
+        "total": {
+          "roles": 15,
+          "bindings": 4,
+          "rows": 4,
+          "marks": 4
+        },
+        "wrongFocusBindings": [
+          {
+            "expected": {
+              "valueCellId": "xlsx_C6",
+              "labelCellIds": [
+                "xlsx_B6",
+                "xlsx_C5"
+              ],
+              "parentCellId": null
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_C6",
+                "labelCellIds": [
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              }
+            ]
+          },
+          {
+            "expected": {
+              "valueCellId": "xlsx_C7",
+              "labelCellIds": [
+                "xlsx_B7",
+                "xlsx_C5"
+              ],
+              "parentCellId": null
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_C7",
+                "labelCellIds": [
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              }
+            ]
+          },
+          {
+            "expected": {
+              "valueCellId": "xlsx_C8",
+              "labelCellIds": [
+                "xlsx_B8",
+                "xlsx_C5"
+              ],
+              "parentCellId": null
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_C8",
+                "labelCellIds": [
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              }
+            ]
+          },
+          {
+            "expected": {
+              "valueCellId": "xlsx_C9",
+              "labelCellIds": [
+                "xlsx_B9",
+                "xlsx_C5"
+              ],
+              "parentCellId": null
+            },
+            "actual": [
+              {
+                "valueCellId": "xlsx_C9",
+                "labelCellIds": [
+                  "xlsx_C5"
+                ],
+                "parentCellId": null
+              }
+            ]
+          }
+        ],
+        "missingFocusBindings": [],
+        "duplicates": [],
+        "qualified": false
+      },
+      "fullProjection": false,
+      "physicalPreserved": true,
+      "manualPreserved": true,
+      "exactExistingGraphNoop": false,
+      "coverage": [
+        {
+          "component": "c_17abb7ef4dbb643591d0",
+          "refs": [
+            "c10",
+            "c11",
+            "c12",
+            "c13",
+            "c14",
+            "c15",
+            "c16",
+            "c17",
+            "c18",
+            "c19",
+            "c5",
+            "c6",
+            "c7",
+            "c8",
+            "c9"
+          ],
+          "state": "resolved",
+          "reason": null,
+          "structure": "s_106a82be2bfe118bc2da"
+        }
+      ],
+      "mockSends": 1,
+      "diagnostic": "conditional_choice_and_name",
+      "notModelPerformance": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "R1",
+      "priority": 1,
+      "topic": "semantic_structure",
+      "observed": "H1 selected records instead of parented form; name-only diagnostic leaves three wrong parent bindings. H2 printed-key and context-column meaning are wrong.",
+      "next": "Design readable, conditional semantic choices; no automatic name/ID repair as a substitute"
+    },
+    {
+      "id": "R2",
+      "priority": 1,
+      "topic": "latency",
+      "observed": "T2 median 6139.32ms; HTTP 5031.79ms; 4.45MB wire, 99.295 percent image base64.",
+      "next": "Version input pack and measure network/provider/local boundaries; do not claim client reuse alone reaches target"
+    },
+    {
+      "id": "R3",
+      "priority": 2,
+      "topic": "conditional_wire",
+      "observed": "Global enum permits a cross-structure choice; server correctly rejects it.",
+      "next": "Represent structure/factor/choice dependency in generated answer format while retaining server checks"
+    },
+    {
+      "id": "R4",
+      "priority": 2,
+      "topic": "confidence_calibration",
+      "observed": "T3 held ten of fourteen judgments; nine held first choices match oracle and one does not.",
+      "next": "Separate calibration from evaluation; keep Phase25 thresholds and scores"
+    },
+    {
+      "id": "R5",
+      "priority": 2,
+      "topic": "name_routing",
+      "observed": "T1/T2/H1 oracle choices require no generated name, but generated-name alternatives route every trial to Responses.",
+      "next": "Compare one-request conditional output against bounded staged choice without promising speedup"
+    }
+  ],
+  "nextPhase": {
+    "phase": 27,
+    "model": "Astra",
+    "reasoningEffort": "XHigh",
+    "apiCalls": 0,
+    "scope": "Repair design only: model-facing semantic contract, name policy and versioned input pack; preserve shared compiler/manual and safety boundaries",
+    "status": "proposed_not_started"
+  },
+  "limitations": [
+    "No new model accuracy or latency measurements",
+    "Known five scopes, two repetitions per scope",
+    "No full unit/build/UI/save/voice verification",
+    "Counterfactuals are human-supplied diagnostics, not model successes"
+  ]
+}

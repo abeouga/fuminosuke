@@ -136,7 +136,6 @@ class CanonicalTemplateMapper:
                 document_identity_fields=config.effective_document_identity_fields(),
                 document_name=config.document_name,
                 marks=config.marks,
-                export=config.export,
             ),
             spreadsheet=spreadsheet,
             layout=layout,

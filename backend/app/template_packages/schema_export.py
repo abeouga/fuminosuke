@@ -15,8 +15,8 @@ from app.template_packages.manifest_models import TemplatePackageManifest
 
 SCHEMA_DIRECTORY = Path(__file__).with_name("schemas")
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
-    "manifest-v1.schema.json": TemplatePackageManifest,
-    "template-v1.schema.json": CanonicalTemplate,
+    "manifest-v2.schema.json": TemplatePackageManifest,
+    "template-v2.schema.json": CanonicalTemplate,
     "quality-v1.schema.json": CanonicalTemplateQuality,
     "output-layout-v1.schema.json": CanonicalOutputLayout,
 }

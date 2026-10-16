@@ -79,7 +79,7 @@ class TemplateAssetCollector:
         )
         edited_mask = (
             selected_mask
-            if selected_mask and selected_mask.artifact_name == "handwritingMaskEdited"
+            if selected_mask and selected_mask.artifact_name.split("~", 1)[0] == "handwritingMaskEdited"
             else None
         )
         if original_mask is not None:

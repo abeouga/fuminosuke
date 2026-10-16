@@ -1,6 +1,748 @@
 # OCR Safety Contract
 
+2026-10-16 Fargate移行：[移行設計](web-beta-fargate-plan-2026-10-16.md)へ公開方式を変更し、Terraformと夜間停止の定義を準備した。今回の変更はinfra・運用文書に限定し、業務backend/frontendと通常データ、provider/model/prompt、mapping/crop、revision、確定・出力契約は変更していない。既存OCR contractを維持した。PostgreSQL/S3の保存境界とFargate描画隔離は後続の明示工程で検証し、EC2での成功をFargate受入へ流用しない。23:00〜7:00停止でも未保存値・受付snapshot・予約消費・削除記録を保護する。以下は従前記録。
+
+2026-10-16：[Webベータ修正6-Bの独立再審査](web-beta-phase6b-review-2026-10-16.md)でR1〜R3の解消を確認した。回収の再中断・対象外資源保持・親リンク拒否、復元失敗時の全利用者停止と未完成root起動拒否、管理CLIによる明示再承認・旧cookie拒否を実検証。修正37・独立15・Linux11条件、frontend176/buildが成功。製品コード/テストと通常データは変更せず、確定XLSX SHA・既存OCR contractを維持。次はフェーズ7の実環境受入で、公開判定は未完了。以下は従前記録。
+
+2026-10-16：[Webベータ修正6-A](web-beta-phase6a-repair-2026-10-16.md)で、削除記録のDB行がなくても所有資源だけの残存ファイルを回収する。復元時は全利用者のactiveを0にし、旧sessionを破棄して、管理者が現在の利用許可を確認したsubだけを明示enableする。以前の復元後即時再ログインを廃止し、registry v2/台帳形式/通常DBは維持する。修正前後37条件、認証127・運用41・Linux6・frontend176/buildと確定XLSX SHAを確認。OCR生成・mapping/crop・補正/確定/出力経路は変更せず既存OCR contractを維持。6-B再審査待ちで公開未受入。
+
+2026-10-16：Webベータの[フェーズ6独立審査](web-beta-phase6-review-2026-10-16.md)は修正要求。削除のDB commit後に残るファイルが再適用で回収されないこと、backup後のアカウント停止が復元で失われることを専用データで再現した。製品コード/通常DBは変更せず、既存OCR contractを維持。認証127・保存17・運用39・renderer8条件と確定XLSX SHAは一致。frontend全176件は173成功/3失敗、build成功。限定mypy19成功は依存検査85指摘の解消を意味しない。フェーズ6の公開阻害事項0は未達、フェーズ7は未開始。修正6-Aと再審査6-Bを次工程とする。
+
+2026-10-16 Webベータ：[フェーズ5](web-beta-phase5-2026-10-16.md)で共通送信予約・外部追記・削除再適用・offline backup/restoreを追加。通常DBのschema/924回枠は不変。音声metadataの既存ledger FKは参照mirrorで維持し、共有側だけが送信上限を判定する。rollback・不明・復元で外部予約を払い戻さない。使用済みテンプレートを削除してjobの版IDをNULLにしない。archiveで版ID・保存内容を保持し、未使用だけ版→親の順で削除する。専用同一2ページ入力で旧競合→新archive、job/input/artifact/review/confirmation全表と確定XLSX SHA不変を確認。provider/model/prompt/schema/geometry/association/mapping/crop/補正/確定/出力生成の契約は変更しない。復元は全SHAとSQLite integrity・外部台帳・削除記録を検証してから公開し、未完成rootと旧binaryへのrollbackを拒否。既存OCR contractを維持した。実AWS・実マイク・実負荷は後続受入である。
+
+2026-10-15 Webベータ：[フェーズ4](web-beta-phase4-2026-10-15.md)でpaged専用レビューへの既存guardの判定順を修正。job受付snapshotのjobPagesを、存在しない単一OcrResultの検索より先に判定し、MULTI_PAGE_REVIEW_REQUIREDを返す。単一補正・確定APIへの流入も同guardで拒否する。専用コピーの変更前後でページ/input/reference SHA、確定revision、業務全テーブル、記入済みXLSX SHAを照合し不変を確認。provider/prompt/schema/geometry/association/mapping/crop/補正/確定/出力生成は変更しない。AI案の明示反映・保存、手修正保護と未知timeout時の回復確認を維持する。既存OCR contractを維持した。実マイク・公開受入は後続工程。
+
+2026-10-15 Webベータ：[フェーズ3](web-beta-phase3-2026-10-15.md)の認証境界を追加。cloudはCognito subを共通registryで照合し、固定した利用者別DB/storage/runtime内で既存のTemplate/Job・子資源を処理する。通常DBを移行せず、provider/prompt/schema/physical identity/mapping/crop/revision/確定/出力契約を変更しない。各要求・SQL/commit・storage解決で失効を検査し、SSE/音声にも同じ境界を適用する。停止済み利用者のlifespan cleanupだけに実行fence保存の限定権限を持たせる。127条件の制御OIDC＋実ASGI、18条件の実HTTPSと既存2ページXLSXの内容/SHA一致を確認。実AWS/Cognito受入は後続工程で、有料AIは共通quota接続まで閉じる。以下は従前時点の記録。
+
+2026-10-15 Webベータ：[フェーズ2](web-beta-phase2-2026-10-15.md)でLinux隔離rendererを追加。新規Linux preview=`spreadsheet-preview-linux-v1`、寸法=`linux-fods-physical-length-v1`、renderer=`linux-print-reference-v1`、実行=`linux-container-renderer-v1`、graph=`linux-prepared-artifact-graph-v1`、候補=`paged-candidate-readiness-v4-linux`。旧版/過去job/旧資格の暗黙変換は行わない。v4は人間レビュー前提の未認定候補で、実行証拠・版・原本・全ページ画像・mapping・実装SHAを検証する。限定5組のfont代替を新規Linux準備だけに明示保存し、未知の代替は停止。provider/prompt/schema/association/補正/確定/出力adapterは変更せず、専用実APIで2ページの対応・保存・出力を確認した。Linux workerは固定image・network none・非root・資源制限・接続lease・core guardの中でOffice/PDF/rasterを実行。APIにDocker socketを渡さず、所有marker以外を回収しない。従来の正式資格のPASS化やscope拡張ではない。API0・通常データ保持、Cognito/公開/実マイクは後続工程。
+
+2026-10-15 Webベータ方針：[フェーズ1仕様](web-beta-phase1-2026-10-15.md)を現在地とする。ユーザー指示により精度・5秒応答の改善を保留し、既存品質での製品化へ移る。V5は停止継続、V6修正設計はベータ範囲外。新規ゴールは作成しない。AWSは `abe-deploy-user` / 東京、新規クラウドDB、利用者非公開、現行XLSX・複数ページ対応を維持する。APIベータ追加1,000回は既存440/924・残484の開発台帳と別枠。フェーズ1は文書と保持基準のみで、実装・資格・認証・公開条件の解除ではない。既存のphysical identity・mapping・crop・revision・明示確定を維持し、Linux rendererは新環境の証拠を検証する。以下の過去の「次工程」「ゴールactive」は当時の記録であり、現行工程の指示には使わない。
+
+2026-10-15：V5の6-Dは固定G1-01で停止。[実測記録](template-ai-region-v5-live-2026-10-15.md)。全10input/label一致・範囲外変更0だが相反する保留32、未接続symbol、案0、ASGI11208.887ms。予約1/実API1、440/924・残484、後続未送信。専用revision1、通常業務データ/既存台帳439行/旧checkout/前封印を保持。開始時に既存移行5空テーブルとsession1件追加を確認し現baselineとして記録。通常OCRと製品コードは変更0。[6-A修正設計](template-ai-region-decision-repair-design-2026-10-15.md)でモデル向け判断配列とinline readingを提案。旧RegionAnswer直接生成を伝送専用型＋決定的adapterへ変更する意図を明記し、canonical/geometry/保存/physical identity/mapping/crop/revisionを維持する。未実装、実精度/5秒は未証明。次はGPT-6.1 Sol/Highの6-B、Astra/XHighの6-C。V5再送禁止、V6は実装後審査前の提案。起動許可解決済み、改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：所有範囲付き生成schemaの6-C独立工程審査はAstra/XHighで合格。[審査記録](template-ai-region-scope-review-2026-10-14.md)。全24要求/231参照条件、専用ASGI17＋4条件、保存後の54セル/22意味/22保存先/22cropを確認。旧v8取得/反映/保存拒否、手動同値編集/geometry競合保護を維持。製品変更/API/通常予約0、制御予約7、439/924・残485。通常OCR/データ/旧checkout/前封印/最終4帳票保持。V5は審査済み88送信配分・上限96・未割当8転用不可、実binding未発行。次は6-D=Astra/Highへ切替後の新試行固定。実Luna精度・実画面5秒・改善ゴールは未完了。起動許可は解決済み。以下は従前時点の記録。
+
+2026-10-14：所有範囲付き回答の6-BをGPT-6.1 Sol/Highで実装。[実装記録](template-ai-region-scope-fix-2026-10-14.md)を現在地とする。region-schema.v1/pack.v3/runner.v9、生成時の変更先制限・応答再検証・scope/schema digestを接続。全24要求、実ASGI17＋追加4条件、54セル/22入力/22crop、検出0追加の保存再読込、旧v8案失効を確認。対象3ファイルruff/mypy通過。実API/通常予約0、439/924・残485、専用制御予約12（失敗分含む）。通常データ/旧checkout/前証拠/最終4帳票を保持。V4停止継続、V5の88送信提案は6-C審査待ち・実binding未発行。次は6-C=Astra/XHigh。実Luna精度/実画面5秒/改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：現行製品V4をAstra/Highで実測し停止。[実測記録](template-ai-region-v4-live-2026-10-14.md)を現在地とする。V4-G1-01はreadOnly34セルへのannotations、所有10入力すべて保留。案0、ASGI8399.642ms、専用revision1を保持。後続未送信、実API/通常予約1、439/924・残485。範囲外出力を除いても案0を再現、製品変更0。次の[所有範囲付き回答設計](template-ai-region-scope-repair-design-2026-10-14.md)は生成schemaで変更先を限定し、作業指示を整理する。設計試作のみ、精度/速度未証明。次は6-B=GPT-6.1 Sol/High、6-C=Astra/XHigh、承認後6-D=Astra/High。V4の同一条件再送は禁止、V5条件は実装後審査待ち。通常データ/旧checkout/前証拠/最終4帳票を保持。実画面5秒/改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：現行製品先行のV4測定手順をAstra/XHighで承認。[測定手順審査](template-ai-region-v4-protocol-review-2026-10-14.md)を現在地とする。製品/契約/原画像/gold不変、21新trial、4＋24＋60＝88送信、上限96・未割当8転用不可。現factoryの要求が未送信D referenceと一致、最初の10入力＋見出しと全ページ/R04分母を保持。v3は停止を維持、V4実binding未発行。正本は20261014-region-v4-protocol-review/experiment-allocation-approved.json。製品変更/API/予約0、438/924・残486。次は6-D=Astra/Highへ切替後、新実試行を固定してG1-01から測定。実精度/画面5秒/ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：6-Dのregion-v3診断AをAstra/Highで実測し停止。[実測記録](template-ai-region-v3-live-2026-10-14.md)を現在地とする。旧指示/旧metadataでreadOnly15セルへのannotations、所有10入力全件保留。VISUAL_ANSWER_REFERENCEで拒否、案0、ASGI5831.501ms、専用revision1を保持。保護違反の固定停止条件に従いB/C/DとG1以降は未送信。現行Dの品質/速度は不明。実API/通常予約1、438/924・残486、製品変更0。次の[測定再設計](template-ai-region-production-evaluation-plan-2026-10-14.md)は現行製品を先頭とするV4/88送信案、上限96・未割当8。6-C=Astra/XHighの測定手順審査待ちで、未送信枠の再開/転用はしない。実画面5秒/ゴール未完了、起動許可は解決済み。以下は従前時点の記録。
+
+2026-10-14：要求簡素化の6-CをAstra/XHighで審査し合格。[独立審査記録](template-ai-region-request-review-2026-10-14.md)を現在地とする。24領域の情報/画像/schema保持、92 binding条件、実ASGI17条件、54セル/22入力/22cropの保存再読込を確認。比較案B/Cの形式説明不整合を製品外の新manifestで修正し、A/Dは不変。次工程の正本は20261014-region-request-review/experiment-allocation-approved.json。92送信配分、上限96、未割当4転用不可、実binding未発行。製品変更/実API0、専用制御予約4、437/924・残487。通常データ/旧checkout/過去封印/最終4帳票を保持。次は6-D=Astra/Highへ切替後に実試行を固定。実Luna精度/画面5秒/ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：要求簡素化の6-BをGPT-6.1 Sol/Highで実装。[実装・検証記録](template-ai-region-request-fix-2026-10-14.md)を現在地とする。白紙テンプレート向け指示、region-pack.v2の可逆表現、準備時間の内訳を接続。G1 metadata約57%減、24領域合計約49%減、画像/schema/候補保持。専用ASGI14条件、54セル/22入力/22cropの保存再読込、対象3ファイルruff/mypy通過。実API0、437/924・残487、専用予約8（失敗4を含む）。旧案は失効、通常データ/OCR契約/既存差分/過去証拠を保持。新92送信配分は6-C審査前提案、実binding未発行。次はAstra/XHighの6-C。実Luna精度/画面5秒/ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：6-DのG1-01を実Lunaで測定し不合格。対象10入力すべて保留、案0、ASGI終了5752.1ms。後続G1/G2/G3は未送信で停止。保存応答再現と正解対照10入力の表現可能性を確認したが実精度/画面5秒は未達。製品変更0、API1、437/924・残487。次は要求の明示化・可逆圧縮の6-B=GPT-6.1 Sol/High、6-C=Astra/XHigh、合格後に新実験。起動許可は解決済み。改善ゴールactive。 [実測・停止記録](template-ai-region-live-2026-10-14.md) / [修正設計](template-ai-region-request-repair-design-2026-10-14.md)。以下は従前時点の記録。
+
+2026-10-14：R4の[表示・計時修正の独立再審査](template-ai-region-visibility-review-2026-10-14.md)はAstra/XHighで合格。後着の優先領域の先頭表示、可視性/要約/hit-test、選択前計時とscroll再判定を確認。新しい実ASGI14条件、Chrome明示保存/reloadで54セル/22入力/22保存先、対象31テスト、生成契約と24要求hashを照合。製品変更/API0、共有436/924・残488、制御予約8。実非表示タブ復帰は未検証、guard模擬と区別。次は6-D=Astra/Highへ切替後、実trialを送信前固定して初回4試行。実Luna品質/5秒/改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：R4の[表示・計時修正](template-ai-region-visibility-fix-2026-10-14.md)をGPT-6.1 Sol/Highで実装。計画順のdisplayOrder、変更要約と展開詳細、選択/反映control・要約の可視性/hit-test、scroll等での再判定、手動操作を妨げない表示調整を接続。最終Chromeの後着優先領域は制御応答4807.7ms、54セル/22入力/22保存先の明示保存再読込、入力中focus・位置保持、通常先着と小画面を確認。frontend161/build、backend対象2静的検査、隔離保存14条件通過。実API0、436/924・残488、制御予約24。専用8084/5284・8086/5286稼働。次はAstra/XHighの6-C再審査、合格まで6-Dは未開始。実Luna品質/5秒と改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：6-Cの[独立再審査](template-ai-region-rereview-2026-10-14.md)はR4/P2の修正要求。R1の依存分割・R2の失敗位置・R3の選択待ち混入は解消を確認。先頭対象領域が後着すると画面外でも4851.3msのactionableが付くことを実Chromeで再現し、6-Dは未開始。製品変更/API0、436/924・残488。395ファイル封印と現ソース、24 reference要求と88送信配分を照合。専用8080/5280・8082/5282は起動済み。次はGPT-6.1 Sol/Highの表示・計時修正、続いてAstra/XHighの再審査。改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：6-Bの[修正実装](template-ai-region-repair-2026-10-14.md)をGPT-6.1 Sol/XHighで完了。初期領域の依存・geometry検査、未検出領域の失敗bounds、選択前の操作開始可能計時を修正。隔離ASGI・Chrome保存再読込・frontend159/build・backend対象4ファイル静的検査を通過。実API0、436/924・残488。新測定配分は4+24+60=88送信（上限96、余り8は未配分）。専用8078/5278は稼働中。次はAstra/XHighの6-C独立再審査であり、6-Dへ先行しない。実Luna品質/5秒/改善ゴールは未完了。以下は従前時点の記録。
+
+2026-10-14：開発R01/R02 p1/R03 p1の[採点基準審査](template-ai-region-gold-review-2026-10-14.md)を完了。629自動機能・21手動対象・705必須位置を原画像で固定し、3ページの評価枠をChromeで照合。R03記入例を評価根拠に閲覧したがモデル入力には含めず、最終未使用4帳票は保持。製品6-CはR1〜R3の修正要求を維持し、6-Dへ進めない。API0、436/924・残488。次は指定済みGPT-6.1 Sol/Highへの切替後に6-B修正。起動許可は解決済み。以下は従前時点の記録。
+
+2026-10-14：修正6-Cの[独立審査](template-ai-region-review-2026-10-14.md)は修正要求。初期領域分割の可変親子依存切断、検出0セル領域の失敗位置欠落、actionable計時への選択待ち混入を確認。G3の12送信計画と通常GUIの要求数にも不整合があり、送信前に再固定する。住所/チェックの分離と共通保存は正解fixtureで確認したが、Luna品質・実画面5秒は未検証。製品コード変更0、実API0、共有436/924・残488。専用8076/5276の起動許可は解決済みで稼働を確認。次は6-B修正=GPT-6.1 Sol/High、続いて6-C再審査=Astra/XHigh。6-Dへ先行しない。改善ゴールはactive、過去の封印と通常データを保持。以下は従前時点の記録。
+
+2026-10-14：修正6-Bの制御応答によるChrome受入を完了。[実装・画面検証記録](template-ai-region-implementation-2026-10-14.md)を現在地とする。ユーザーがstart-runtime.ps1の実行を明示許可した後、専用8076/5276を起動しPID/HTTP/コードhashを確認。解析中2/4要求で2案を反映、後続案の追加、手動記号保持、末尾取り消し/再反映、明示保存revision1→2、再読込を確認。22入力先/保存先と54セルID/位置が一致。外部通信を遮断した制御応答で実API0、Luna品質/実画面5秒は未達成の扱い。actionable markの選択待ち混入を6-Cで点検する。completion-1へ新規封印、checkpoint-1と通常データ/旧checkout/前証拠を保持。6-B完了、改善ゴールactive。次は6-C=Astra/XHighへのモデル切替。新規別エージェント未許可、6-D実APIへ先行しない。以下は従前時点の記録。
+
+2026-10-14：修正6-BをGPT-6.1 Sol/Highで実装し隔離検証。[実装・検証記録](template-ai-region-implementation-2026-10-14.md)を現在地とする。製品APIはtemplate-analysis.v3、入力先明示・所有領域・途中反映・receipt履歴・取り消し・明示保存を接続。計画取得は予約0、限定領域は1送信。点検表22入力/54セル、2領域の物理編集/手修正保持、検出0セルのbboxを実ASGIで確認。frontend158/buildと関係17ファイルのmypy/ruff通過。数値表記だけの違いで失効する反例を修正し、client自前hashを不要にした。実API0、Chromeは専用8076/5276の手動起動待ち。6-B/ゴール未完了。Luna品質/5秒/独立審査/最終4帳票は未検証。次工程6-C=Astra/XHighへは画面確認後に進む。新規別エージェント未許可、旧未送信23試行は使用しない。以下は従前時点の記録。
+
+2026-10-14：修正6-Aの[評価準備・設計補足](template-ai-region-evaluation-inputs-2026-10-14.md)を追加。grid圧縮でも表外の年度/名称/月/実施者を処理範囲に残すこと、R03の6旅行記録×各5区間を混同しないことを6-Bへ追加した。R01は192、R02 p1は221の物理位置候補、R03は構造・曖昧箇所を記録。機能goldは未承認で6-Cの送信前審査対象。R04固定goldと最終未使用4帳票は変更なし。製品変更/API0。実行モデルAstra/Highのため6-B=GPT-6.1 Sol/Highへの切替待ち。以下は従前時点の記録。
+
+2026-10-14：修正6-Aの詳細設計をAstra/Highで完了。[入力先・領域単位の設計](template-ai-input-region-design-2026-10-14.md)を次の実装の正本とする。製品コード/API変更は未実装。入力先の明示、原位置画像、所有/依存付き領域計画、途中案の公開と累積反映を設計した。保存応答の逆転・混入、全体完了まで反映できない現行制約を確認。5ページの分割probeとR04の145 core境界横断0件を確認したが、意味精度/5秒は未検証。新実験は最大96送信、先行4件の不合格で停止。旧未送信23試行は再開しない。API0、共有台帳436/924・残488。次は6-B=GPT-6.1 Sol/High、6-C=Astra/XHigh、6-D=Astra/High。別エージェントの新規起動は未許可。この改善ゴールは品質/実画面5秒/保存保持の達成までactiveとする。以下は従前時点の記録。
+
+2026-10-14：修正6の実API初回4試行をAstra/Highで評価し不合格。[実測・停止判定](template-ai-structure-live-2026-10-14.md)を現在地とする。Luna none/lowの全ページ構造要求は通信成功したが、点検表の逆転14件、複雑フォームの見出しへの誤入力先等を専用DB保存・再読込でも確認。R04は固定143機能の合格0、145位置の合格2は既存手動領域の保持のみ。最初の検証済み案はASGI下限9.441〜15.199秒、none点検表は案なし。初回受入で残23試行を未送信とし差戻し、27試行比較・最終評価は未完了。製品コード変更なし、25crop対応・保存応答の手動保護を確認。通常データ/旧checkout/前証拠/最終4原本を保持、実API/通常予約4、436/924・残488。今回の評価ゴールは停止理由・採点・保存対応・修正案・証拠を記録して終了し、製品全体は未完成。次は修正6-Aの入力明示契約と領域分割の詳細設計。以下は従前時点の記録。
+
+2026-10-13：修正5-BをAstra/XHighで独立再審査し合格。[再審査結果](template-ai-row-key-review-2026-10-13.md)を現在地とする。製品5ファイルを読取審査、旧R1と同じ変更内容を実ASGIで拒否。新しい専用先で13シナリオ、追加16境界、既存50/34条件を通過。正常左右番号は3行6mappingで保存。R04の145位置/143機能/手動2領域の固定基準を白紙帳票評価に承認し、元goldを変更せずhash指定のgold-approval.jsonへ記録。前回証拠詳細1件の既知欠損は継承、旧ASGI保存根拠を保持。製品コード変更なし、通常データ/旧checkout/最終4原本を保持、API/通常予約0、432/924・残492。新しい別エージェント起動なし。次は修正6=GPT-6.1 Sol/High、Luna最大27回に初回4回を含める。実Luna品質/5秒/最終評価は未完了、ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：修正5-AをGPT-6.1 Sol/Highで実装。[行番号対応・R04基準の記録](template-ai-row-key-repair-2026-10-13.md)を現在地とする。共通record_geometryで行番号と物理行の一意対応・所有・入力との重なりを検査し、analysis/共通records/TemplateAuthoringService.prepareへ接続。前回の中間行偽装・直接保存・意味変更なし保存を拒否、正常な左右番号は3行6mappingで保存再読込。resolution policy v2で旧案のGET/承認後保存を拒否。新13シナリオ、既存50/34/86/45/112、対象5ファイルruff/mypy通過。依存先mypy61件は変更前と同一。R04は145位置/143機能/手動2領域の許容範囲・同等表現・評価行を固定、独立審査待ち。前回compiler詳細1ファイルを操作ミスで上書きし復元不能、元ASGI保存証拠・要約・manifestは保持し例外を記録。通常データ/旧checkout/最終4原本は保持、API/通常予約0、432/924・残492。次は修正5-B=Astra/XHigh独立再審査、合格まで修正6を開始しない。製品Chrome/実Luna/最終評価未完了、ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：修正5のAstra/XHigh独立審査を実施し、実API比較は差戻し。[審査結果](template-ai-structure-review-2026-10-13.md)を現在地とする。表の中間行を行番号として申告すると欠落検査を迂回し、実ASGIの案反映・共通保存・別接続再読込で6欄が4mappingになるR1/P1を再現。既存50＋34境界は通過。R04の122観察・5曖昧群を審査したが許容領域/採点規則未固定でgold未承認。今回、新しい別エージェント起動なし、製品コード変更なし、実API/通常予約0、432/924・残492。通常データ・旧checkout・前証拠・最終4原本を保持。次は修正5-A=GPT-6.1 Sol/HighでR1修正とgold整備、修正5-B=Astra/XHighで再審査。合格後に修正6/7へ戻る。審査作業終了・合格条件未達、ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：修正4の画面接続・専用Chrome受入を完了。[画面接続記録](template-ai-structure-ui-2026-10-13.md)を現在地とする。新設/変更前後/除去の同時表示、枠の途中描画、入力中スクロール保留、表名追従、手描き後の旧案失効を確認。再解析時の旧touch混入・手描き初期値の比較・取り消し通知を修正。frontend全154件/build、実Chrome10シナリオ、原本投入/下書き/取り消し/手修正/明示保存/再読込、R04の無関係77セル保持を確認。有料providerだけ制御し実API/通常予約0、432/924・残492。backend製品・通常データ・旧checkout・前証拠・最終4原本を保持。次は修正5=Astra/XHigh独立審査、修正6=実Luna比較、修正7=最終評価。実Luna品質/5秒・OSファイル選択・実マイクは未検証、ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：修正4の画面接続を実装、Chrome受入は手動起動待ち。[画面接続記録](template-ai-structure-ui-2026-10-13.md)を現在地とする。新設/変更前後/除去枠の表示、個別位置表示、入力中スクロール保留、枠手修正後の旧案失効を接続。frontend全151件/build通過。実画面・原本投入から保存/再読込は未確認。専用8074/5274の起動が自動承認レビューでblocked by policyとなり、手動起動を依頼済み。実API/通常予約0、432/924・残492。backend製品・通常データ・旧checkout・前証拠・最終4原本を保持。修正4・ゴールとも未完了。以下は従前時点の記録。
+
+2026-10-13：共通物理編集の修正3を実装。[矩形編集・共通保存の記録](template-ai-structure-v1-2026-10-13.md)を現在地とする。GeometryCompilerで手描き/AIの物理検査・順序を共通化し、structure.v1の矩形＋意味を一要求/依存単位へ接続。公開API v2・runner v5、geometryの同値手修正/削除/取り消し保護、検出0枠からの開始を実装。新34境界・構造実ASGI112・既存50/86/45・frontend19/build・対象24ファイルのruff/mypy通過。未保存手描き82セルと無関係77セル保持、開発5ページ各1要求の準備を確認。通常データ/設定/台帳/旧checkout/前回証拠/最終4原本を保持、実API/通常予約0、432/924・残492。R04全入力一覧は122観察・5曖昧群の審査待ちで、正解採点には未使用。修正4=GPT-6.1 Sol/Highの画面接続、修正5=Astra/XHighの独立審査、修正6=実Luna比較、修正7=最終評価が残る。Chrome・実Luna品質/5秒・全体回帰は未完了。ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：接続検査の修正2を実装。[実装・保存検証](template-ai-form-binding-v2-2026-10-13.md)を現在地とする。form.v2と通常欄/表列の共通BindingResolver、行列/途中セル検査、全行の根拠/readSet、旧定義の反映/保存拒否を共通経路へ接続。変更前R1の4反例と旧定義の反映/保存を再現し、新50境界・実ASGI表86・通常欄/規則表45、対象9ファイルのruff/mypy通過。1行表・不規則3行表・見出しなし列・記号列の保存/再読込を確認。通常データ/台帳/旧checkout/前回証拠/最終4原本を保持、API/通常予約0、432/924・残492。新schemaの実Luna受入/品質/5秒・独立再審査・Chrome・矩形AI・最終評価は未完了。次は修正3=GPT-6.1 Sol/Highの共通物理編集、続いて修正4の画面接続。ゴール未完了。以下は従前時点の記録。
+
+2026-10-13：接続検査と矩形AI編集の統合設計（修正1）を作成。[統合設計](template-ai-structure-repair-design-2026-10-13.md)を次の実装の正本とする。通常欄/表列の共通binding、共通GeometryCompiler、矩形差分と意味付けの一要求化、geometry保護、明示反映/共通保存を定義。R1の製品外契約試作12条件、全5ページの候補容量を確認。新規手描き5枠の順序差で解析が拒否されるR3も再現。[別担当の独立審査](template-ai-form-links-independent-review-2026-10-13.md)で既存8モジュールのR1/R2を再確認し、実API比較は差戻し。新設計の製品実装/独立審査・Luna品質・5秒・Chrome・未使用4帳票評価は未完了。製品コード/通常データ/既存証拠を保持、API/通常予約0、432/924・残492。次は修正2=GPT-6.1 Sol/Highの接続検査実装。ゴールactive。以下は従前時点の記録。
+
+2026-10-13：複雑フォームの追加審査で制約迂回を再現。[追加審査](template-ai-form-links-review-2026-10-13.md)を現在地とする。普通の欄を1行1列表として返すと、見出しなし根拠の欠落／未発行の離れた見出しへの接続が、実ASGIの案表示・反映・明示保存を通過。R1/P1として表回答の契約修正が必要。R04も矩形欠落3・複合6・重複1があり、既存79矩形だけで原本全体の完成を評価しない。実API比較22/66回は未実行。現在と実装後半の実行モデルがともにAstra/XHighのため同一担当の追加審査とし、別担当の独立審査完了は主張しない。製品ソース変更なし、API/通常予約0、432/924・残492。通常データ・旧checkout・実装証拠・最終4原本を保持。ゴールactive。以下は従前時点の記録。
+
+2026-10-13：複雑フォームの接続修正を実装。[実装・保存検証](template-ai-form-links-2026-10-13.md)を現在地とする。form.v1の候補明示選択・共通親/記号設定・根拠付き見出しなし指定を共通compilerへ接続。正解選択による20接続/22欄/19記号と、規則表190欄の共通保存・再読込を確認。新境界39＋12、実ASGI保存45、既存47、対象ruff/mypy通過。5ページ全17単位を準備可能。実Luna精度・5秒・独立審査・Chrome・矩形AI補助・最終4原本は未検証。API/通常予約0、432/924・残492。初回比較12回は計算誤りで、全ページ3反復66回（1反復22回後に判定）へ訂正。次はフェーズ3=Astra/XHighの独立審査。ゴールactive。以下は従前時点の記録。
+
+2026-10-13：複雑フォームの接続修正を設計。[修正設計](template-ai-form-link-design-2026-10-13.md)を次工程の正本とする。保存応答low22/none23宣言がすべてdirectで、原画像の横18＋縦2接続が0/20と確認。意味推測なしの接触候補204件に20/20が到達したが、追加metadata4,929文字で速度効果は未検証。候補選択・根拠付き見出しなし指定・保留、共通親/記号設定のform.v1、共通compiler/保存、15受入条件と最大12回の初回比較を定義。製品コード/実API/新schema受入/独立審査は未実施。今回API/予約0、432/924・残492。矩形AI補助・原本投入・未使用4帳票・手作業比較も未完了。次はフェーズ2=GPT-6.1 Sol/Highの実装、フェーズ3=Astra/XHighの独立審査。ゴールactive。以下は従前時点の記録。
+
+2026-10-13：規則的な表の専用回答形式を追加。[Luna推論量・表の短縮実測](template-ai-grid-profile-2026-10-13.md)を現在地とする。初回4回は同じ画像/要求でlow/noneを比較し、点検表の接続漏れと汎用role宣言の矛盾を確認。全体none化は不採用。発行済み完全グリッドだけ短いschema/noneへ接続し、追加2回は4.339/4.249秒、19行×10列・190保存先・共通保存再読込を確認。新境界27/既存実ASGI47/対象ruff・mypy通過。複雑フォームは元のlow要求を保持。実API/通常予約6、432/924・残492。通常データ・既存426台帳行・旧checkout・前回証拠・最終4原本を保持。全帳票5秒/独立審査/原本投入からの最終評価は未達、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：実回答の役割矛盾を依存関係ごとに保留する修正を実装。[矛盾分離・保存検証](template-ai-conflict-isolation-2026-10-13.md)を現在地とする。点検表の全体拒否を再現し、同じ回答から20欄・11単位を提示、c48/c49/c50は無変更・未解決。不明参照/読取専用/固定役割の拒否を維持。新境界69・実ASGI共通保存37・旧47/102・契約変更を明記した行列回帰44・対象ruff/mypy通過。実API/通常予約0、426/924・残498。通常データ・既存台帳・旧checkout・前回証拠・最終4原本を保持。5秒/モデル品質/独立審査/原本投入からの最終評価は未達、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：追加500回の許可を使用済み424回から反映し、上限924。[予算・遅延計測](template-ai-latency-2026-10-13.md)を現在地とする。初期イベント/本文開始/終端を分離し、制御HTTP5条件・既存実ASGI47条件・対象ruff/mypy通過。同条件実Luna2送信で点検表は本文9.896秒、c48/c49/c50の役割矛盾により17.015秒・拒否。記録簿は5.491秒でready。速度改善は未実装、部分保留は診断のみ。現在426/924・残498。通常業務データ・既存424台帳行・旧checkout・前回証拠・最終4原本を保持。5秒/安定品質/独立審査/最終評価は未達、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：修正済みschemaで実Luna案の提示とChrome訂正・保存を確認。[実測・画面検証](template-ai-schema-live-2026-10-13.md)を現在地とする。農薬記録簿190欄はASGI 7.408秒、点検表54セルは19.497秒でready。点検表は18接続と1名称などを明示訂正して22保存先を共通保存。Chrome追加1送信で案表示10.243秒、明示反映・保存・表示名訂正・再読込を確認。5秒と点検表品質は未達、未知4資料・独立審査は未実施。製品実装/設定変更なし。今回実API/通常予約3、424/496・残72。通常データ・既存421台帳行・旧checkout・前回証拠・最終4資料を保持。専用試験サーバー停止、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：画像提案の短縮方式を実Lunaで2送信し、回答schemaの不足を修正。[実測・修正報告](template-ai-compact-live-2026-10-13.md)を現在地とする。農薬記録簿は10列名が一致、終了5.854秒だが表名nullで拒否。定期点検は19記号欄に意味が付いたが接続方向の矛盾で18.347秒・拒否。双方の利用可能な案はなし。新schema12条件、既存35/47/102、制御HTTPの実ASGI訂正・保存35、対象ruff/mypy通過。実API/通常予約2、421/496・残75。通常業務データ・既存419台帳行・旧checkout・前回証拠・最終4資料を保持。修正後schemaの実OpenAI受入・Luna品質・5秒・Chrome・独立審査・最終評価は未完了、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：セル番号付き切り抜きと物理行列の共通展開を実装。[修正報告](template-ai-visual-compact-2026-10-13.md)を現在地とする。visual.v3で意味と記号設定を一体化し、省略欄は未解決のまま独立案を提示。R01 metadata 49,568→985文字、R02 13,719→3,589文字。製品解析へ接続、35新条件・実帳票コピーの実ASGI27条件・旧47/102/74/36/46/13条件・対象ruff/mypy通過。公開API6schemaは不変。実API/通常予約0、419/496・残77。通常データ/旧checkout/実応答/最終4資料を保持。Luna品質/5秒/Chrome/独立審査/最終4資料の評価は未完了、次は条件を固定した開発資料の再実測。ゴールactive。以下は従前時点の記録。
+
+2026-10-13：実Luna画像提案の開発評価2送信を実施。[実測報告](template-ai-visual-live-2026-10-13.md)を現在地とする。自主点検54セルは記号欄の意味欠落で拒否。農薬記録簿200セルは19行×10列を認識したが2〜10列の意味がずれ、品質未達。最初の利用可能な案15.098秒で5秒未達。専用コピーの171欄を訂正し、共通保存・再読込を確認。製品ソース/設定は変更なし、通常業務データ/旧checkout/既存証拠/最終4資料を保持。実API/共有予約各2、累計419/496・残77、従来比較70回は未使用・未割当7。次は参照付き画像入力、検証済み行列の共通展開、記号意味の一体化、独立単位の提示をAPI0で修正する。実Chrome/独立審査/最終評価は未完了、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：未保存の意味付けを保持したAI解析・案反映を実装。[下書き意味付けの修正報告](template-ai-draft-semantics-2026-10-13.md)を現在地とする。共通compilerのID対応をプレビューだけに戻し、通常欄/記号/checklist/表を事前保存せず解析できる。複数回反映と途中の手修正、最後の一度の共通保存を専用DBで確認。記号を含むAI/手動由来照合も修正。新16/12/102条件、既存74/36/46/13/47条件、frontend17件、ruff/mypy通過。実API0・通常予約0、417/496・残79。通常OCR/データ/旧checkout/既存成果物/最終4資料を保持。実Luna/5秒/Chrome/独立審査/最終評価は未完了、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：画像提案を解析サービスへ接続。[接続・検証報告](template-ai-visual-runner-2026-10-13.md)を現在地とする。全体画像＋範囲画像、visual.v2、共有API予約、順次公開、ページ内部分成功、二重実行防止、予約直後の版/画像検査、明示反映・共通保存を実装。専用DB/制御HTTPの実ASGI48条件、既存74/36/46/13条件、frontend17件、対象ruff/mypy/build通過。実API0・通常予約0、417/496・残79。Luna品質/5秒/Chrome/独立審査/最終4資料の採点は未完了。未保存の新規意味IDは予約前に保存を要求。通常データ/旧checkout/封印を保持、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：記号・チェックリスト・見出し名の画像提案契約と共通保存を修正。[意味付け・保存の修正報告](docs/template-ai-visual-semantics-2026-10-13.md)を現在地とする。visual.v2とmarkの行別保存先、whole-cell設定時の分類拒否と3接続消失を修復。36条件、実ASGI/専用DB保存46条件、共通13条件、既存入力74条件、対象ruff/mypy通過。共通manual/commandsの2ファイルは通常編集にも影響する。新しいrunner/provider/画面接続、独立審査、Luna品質、実画面、5秒条件は未完了。公開原本4種類を最終評価用に選定・固定したが未採点、開発転用禁止。API0・予約0、417/496・残79。通常DB/既存成果物を保持、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：画像を根拠とする入力準備と共通編集への変換を追加。[画像入力の実装](template-ai-visual-input-2026-10-13.md)を現在地とする。製品ソースvisual_input/visual_compileの2モジュールを追加したがrunner/provider/画面は未接続。実帳票5ページ841セルで文字情報なしの入力準備、74条件と対象ruff/mypy通過。実API・モデル品質・画面保存の合格ではない。記号欄・未設定見出し依存・API予算/公開制御の統合・独立審査・未知4系統・実画面保存を継続する。API0、417/496・残79。通常OCRと通常データ不変、ゴールactive。以下は従前時点の記録。
+
+2026-10-13：継続ゴールの実帳票入力検証で追加制約を再現。[実帳票入力報告](template-ai-real-input-findings-2026-10-13.md)を現在地とする。4公開原本・5対象ページを取得/確認。deployの印字OCR依存欠落で全件送信前保留、隔離した既存OCRを加えても見出し越境・結合構造の候補不足・全ページ上限を確認。今回4系統は修正設計に用いる開発資料、未知評価の合格には数えない。製品・prototype3・通常データ不変、API0・417/496。次は画像を根拠に提案できる入力と表単位の処理へ修正し、共通保存・独立審査・実API・未知4系統・実画面検証を継続する。ゴールactive、製品採用未認定。以下は従前時点の記録。
+
+2026-10-13：継続ゴール「GPT-6 LunaによるAIテンプレート作成の実用化」に基づく修正を実施。現在地は[実用化修正報告](template-ai-readiness-2026-10-13.md)。製品外のprototype3で記号フォームの候補到達29/30→30/30、T2中央値510.06→482.88ms。限定回帰通過、実API/共有予約0・417/496。旧保護回帰の移植・独立審査・実API・実帳票4系統・実画面保存は未完了。ゴールactive、製品採用は未認定。以下は各工程時点の履歴。
+
+2026-10-13：**Phase34-Eは未完了。資料の候補到達性とT2時間基準が未達のため修正設計へ戻す**。[34-E報告](template-ai-phase34e-2026-10-13.md)と[結果JSON](contracts/template-analysis-v8/phase34e-result.json)を現在地とする。
+製品外コピーで再生/実送信の分離、HTTP入口の一回許可、固定experiment/追記専用記録、共有予約ID、明示goldラベルを実装。新境界18+21+8+10、pair23+上限6、旧30gold、正例回帰2、旧82応答/24 DTOの歴史再生を確認。ただし全面的な旧335項目の新入口移植、出典/負例意味/画像の独立審査は未完了。
+新資料はoracle29/30。V3-09の3行記号フォームが候補不足で、候補生成を変えない34-D境界に達した。T2ローカル中央値は583.22→515.46ms、500ms未達。実応答時間・モデル精度は未検証。候補/正解/分母は合格させるために変更しない。
+実API/共有予約0、累計417/496・残79。製品未接続、34-C差戻しを維持。次はAstra/XHigh・API0の修正設計、その後34-E完了と34-F独立審査。35〜38は保留。以下は従来時点の記録。
+
+2026-10-12：**Phase34-D修正設計完了。実装・実APIは未開始、34-Cの差戻しを維持**。[34-D設計](template-ai-phase34d-design-2026-10-12.md)と[計画JSON](contracts/template-analysis-v8/phase34d-plan.json)を現在地とする。
+R1は再生/実送信の分離とHTTP境界の一回許可、R2は固定experiment ID/記録先/共有予約IDの対応、R3は全資料の出典・派生審査、R4は値の知識不足と意味設定不能の区別で修正する。cohort v3、校正12/評価18、D1〜D12受入条件を定義。候補prototype2/回答v8/GPT-6 Luna/閾値/共通manualは維持。新資料・新動作は未検証。
+今回使用/予約0、累計417/496・残79。製品/旧checkout/両DB/通常データ/台帳/原版/旧本文を保持、既存OCR contractを維持。次は34-E=GPT-6.1 Sol/High・API0実装、34-F=Astra/XHigh・API0再審査。指示まで未開始。34-F合格まで35〜38は保留、上限18/24/28の70回・未割当9回を未予約で保持。以下は従来時点の記録。
+
+2026-10-12：**Phase34-C独立審査は差戻し。実比較・製品採用は未承認**。[34-C審査](template-ai-phase34c-review-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase34c-result.json)を現在地とする。
+API0入口の実HTTP通過、journal root変更による同一trial再実行、校正由来3評価資料、文脈不足gold2件をR1〜R4として指摘。既存335+新pair23+実験41+旧審査5+reader6は再実行通過。33画像の越境0、旧30gold一致、旧30/10/42応答と24 DTO歴史再生、5対象のローカル中央値500ms以下（T2 477.3ms）。これらは新指摘の免責や実応答速度の保証ではない。
+今回使用/予約0、累計417/496・残79。製品/旧checkout/両DB/通常データ/台帳/元成果物/旧本文を保持し、既存OCR contractを維持。次工程案34-D=Astra/XHigh・API0修正設計、34-E=GPT-6.1 Sol/High・API0実装、34-F=Astra/XHigh・API0再審査。指示まで未開始。35〜38は保留、上限18/24/28の70回・未割当9回は未予約。以下は従来時点の記録。
+
+2026-10-12：**Phase34-B製品外修正実装・API0検証完了。独立審査待ち、実比較/製品採用は未承認**。[34-B報告](template-ai-phase34b-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase34b-result.json)を現在地とする。
+R1の記号欄6組を補完して旧30件27/30→30/30。単独欄の固定親候補、文字所属を検査した新30枚＋修正回帰3枚、校正6family×正負2件（全12件Decisions）と評価18件を固定。凍結cohort/選定/trial/runを結合し、入力生成前から永続attemptを消費、重複・再起動・応答混入・予約後/公開前改変を拒否する。
+既存境界335、新pair23、新実験境界41、追加5シナリオ、旧rawの旧実装コピー再生が通過。trial照合を含む5対象ローカル中央値は全て500ms以内。実モデル精度・実応答5秒は未検証。独立gold/画像/source family審査と実帳票4family条件は未達、合成結果だけでは採用しない。
+今回API/予約0、累計417/496・残79。製品ソース・両DB/通常データ・台帳・原版/過去証拠・旧本文を保持、既存OCR contractを維持。次は34-C=Astra/XHigh・API0。合格まで35〜38は保留、上限18/24/28の70回・未割当9回は未予約。モデル切替後の指示まで次工程を開始しない。以下は従来時点の記録。
+
+2026-10-12：**Phase34-A修正設計完了。実装・実APIは未開始、Phase34の差戻しを維持**。[34-A設計](template-ai-phase34a-design-2026-10-12.md)と[計画JSON](contracts/template-analysis-v8/phase34a-plan.json)を現在地とする。
+R1〜R4を、欄内記号凡例の有限候補、単独1項目/1階層の固定親候補、文字越境の検査、凍結cohortとtrial/runの結合で修正する設計。候補policyをprototype2へ改訂し、旧receiptを転用しない。回答v8・全claims・物理/現在性/同値手動編集・共通manualは維持する。
+校正v2は6元family×正負2件の12件、全件Decisions適格を受入条件とする。旧30件は原版を保持して開発/回帰へ移し、最終評価18件は別の元資料で準備。新規実帳票4family条件は未達、合成比較の成功だけでは製品採用しない。
+比較割付は正確なID/split/family/hash/順序に固定し、予約前後・公開前までtrialを照合する。35/36の結果と選定成果物なしに後続計画を発行しない。一trial一attempt、retry/返金0、ローカル5scope中央値500ms以下と実応答5秒の条件を維持。
+今回API0、累計417/496・残79。製品コード・実装原版・両DB/台帳・通常データ・過去証拠・旧本文を保持、既存OCR contractを維持。次は34-B=GPT-6.1 Sol/High・API0の製品外修正実装、続いて34-C=Astra/XHigh・API0の独立再審査。合格まで35〜38は保留、上限18/24/28の70回・未割当9回は未予約。モデル切替後の指示まで次工程を開始しない。以下は従来時点の記録。
+
+2026-10-12：**Phase34独立審査完了。Phase33は差戻し、実API比較へ進めない**。[Phase34審査](template-ai-phase34-review-2026-10-12.md)と[審査JSON](contracts/template-analysis-v8/phase34-review.json)を現在地とする。
+R1：V08/V09/V10の6記号pairが候補不足。R2：K02/K04/K06の6ラベルが値欄へ26px越境。R3：比較割付が同一scopeの重複を拒否しない。R4：校正に記号・親子対応・親競合・範囲端文脈欠落・画像/文字矛盾の被覆が不足。原版・goldは保持。
+既存境界335項目＋独立5シナリオ通過、保存42試行=41受理/1同一拒否。独立gold内部照合30/30、期待DTOのmanual再生30/30、有限候補からの到達27/30。原画像30枚を確認したがデータ受入は不合格。T2ローカル中央値400.38ms、全5scopeで500ms以下。実通信5秒・モデル精度の改善証拠ではない。
+製品ソース・審査対象runtime・両DB全表/台帳・通常データ・過去証拠・旧本文を保持、既存OCR contractを維持。今回API0、累計417/496・残79。製品不採用・未接続を維持。
+次工程案は34-A=Astra/XHighの修正設計、34-B=GPT-6.1 Sol/Highの製品外修正、34-C=Astra/XHighの独立再審査（すべてAPI0）。合格まで35〜38は保留、計画上限70回・未割当9回は未予約。次工程はモデル切替後の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：**Phase33の製品外実装・境界検証を実施。データ受入未達のため実API比較は停止**。[Phase33報告](template-ai-phase33-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase33-result.json)を現在地とする。
+候補の設定結果を示す説明、固定されたDecisions採用policy、設定/receiptの所有検査、比較割付を実装。候補集合・v8回答schema・全claims・共通manual・物理/現在性/同値手動編集を維持。製品コードと通常UIへの接続はない。
+境界335項目通過、旧42試行=41受理/1同一拒否を再現。全5scopeのローカル中央値500ms以下、T2=403.17ms。HTTP/実台帳/証拠保存を含まず、実応答5秒やモデル精度の改善証拠ではない。
+新規合成30範囲の期待投影は27/30。V08/V09/V10の単独記号pairを既存有限候補で表現できず、期待値は保持。校正の単独記号被覆と新規実帳票4familyも未達。独立gold審査前、製品不採用を維持。
+API今回0、累計417/496・残79。製品ソース・両DB全表/台帳・通常データ・過去証拠・旧本文を保持し、既存OCR contractを維持。次は34=Astra/XHigh・API0で実装/期待値/候補被覆不足の審査。データ受入未達を解消せず35〜37の実送信へ進めない。次工程はモデル切替後の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：**Phase32修正設計完了。Phase31の製品不採用を維持し、runtime修正・製品接続は未開始**。[Phase32設計](template-ai-phase32-design-2026-10-12.md)と[計画JSON](contracts/template-analysis-v8/phase32-plan.json)を現在地とする。
+候補を選んだ設定結果とname所属を示す入力表現を設計。回答v8/schema・候補集合・全claims・共通compiler/manual・物理/現在性/同値手動編集を維持する。指示だけ→候補説明だけを変える18回の比較後、独立したcontext質問とchoiceの24回校正を行う計画。一律閾値解除・保留の強制補修はしない。
+既知5scopeとE12の6説明例をAPI0で照合。製品精度・応答速度の改善証拠ではない。新規校正12/評価18はfamilyで分離し、既知E01〜E12・旧校正を最終評価へ流用しない。次は33=GPT-6.1 Sol/High・API0の製品外実装、34=Astra/XHighの審査、35=Sol/High最大18、36=Astra/XHigh最大24、37=Sol/High最大28、38=Astra/XHigh採否。各段階の不合格で後続送信を止める。
+今回API0、累計417/496・残79。将来比較の計画上限70・未割当9、今は未予約。製品ソース・DB・通常データ・過去証拠を保持し、既存OCR contractを維持。次工程はモデル切替後の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：**Phase31採否審査完了。30-Dの測定記録と不合格判定を受入、v8の製品不採用を確定**。[Phase31審査](template-ai-phase31-review-2026-10-12.md)と[審査JSON](contracts/template-analysis-v8/phase31-review.json)を現在地とする。
+791封印成果物・953実行固定hash、41要求/原応答/台帳、82画像を照合。保存42試行=41受理/1同一拒否、別採点と全計測を再現。A品質4/10・5秒以内1/10、B/C品質0/10、評価完全一致1/10・正しい保留2/2を維持。
+v8 Responses23件中22件は生の構造回答で保留。B/C T3は第一候補28/28正解でも採用8/28。閾値を外すAPI0診断で5件は正答へ復元するが、保留対象E12にも誤った見出し案が生じる。E09正答.04/.02に対しE12誤答.12/.03（confidence/確率差）で、一律の閾値引下げは採用しない。30-DのT3説明はrow不足ではなくrole/binding/mark不足と訂正、旧証拠は保持。
+API今回0、累計417/496・残79。製品ソース・両DB全表/台帳・通常データ・過去証拠を保持し、既存OCR contractを維持。製品接続なし。次はPhase32=Astra/XHigh・API0で判断用入力表現、保留と校正、比較の切り分け、独立評価集合の修正設計を推奨。次の指示まで未開始。以下は従来時点の記録。
+
+2026-10-12：**30-D固定実API比較を完了、修正版v8は採用基準不合格**。現在地は[30-D報告](template-ai-phase30d-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase30d-result.json)。既知5scope×2×A/B/C＋評価12の42試行を完了、実送信41（Responses31/Decisions10）、E11は送信前保留0、retry/warmup/補修0。
+Aは品質合格4/10・5秒以内1/10・合格例中央値6228.87ms。B/Cは品質合格0/10、各held8/partial2で完全manual投影0/10。CのT2 ready中央値5520.07msも正答時間ではない。評価は完全一致1/10・正しい保留2/2、残る正答対象9件は保留。元画像Bも失敗しており圧縮単独の原因とは断定しない。
+953実行固定hash、41要求/原応答/台帳の一致、保存再生42件=41受理/1同一拒否を確認。API今回41、累計417/496・残79。製品ソース・業務データ・過去証拠を保持、通常DBの変更はAPI台帳のみ。既存OCR contractを維持。製品接続なし。
+次はPhase31=Astra/XHigh・API0の採否審査。現在のチャットモデル自体は未確認。次の指示まで開始せず、固定結果を追加送信で補修しない。以下は従来時点の記録。
+
+2026-10-12：**30-C独立再審査を通過**。現在地は[30-C審査](template-ai-phase30c-review-2026-10-12.md)と[審査JSON](contracts/template-analysis-v8/phase30c-review.json)。製品外30-B実装を固定比較へ進める版として受入。差戻し指摘なし。製品採用・実モデル精度・実通信5秒の合格ではない。
+開始時927成果物・401実装を照合。コピーで既存201＋修正51境界、保存40応答の35受理/5同一拒否、合成24scopeと既知5scopeのmanual投影を再現。審査側9条件で最終検査後の中止/同値編集を送信0、8件再入を1予約/1送信へ限定。予約応答喪失、要求bytes変更、書込失敗、proof改変も拒否。
+各3反復のT2再測定=395.21ms、全5scope中央値500ms以下。保存された変更前後計測を再計算し一致。5scopeの元crop・転送画像・完全要求本文も変更前後一致。oracle/mockであり実通信時間の証拠ではない。
+今回API0、376/496・残120。製品ソース・通常データ・原本を保持し、既存OCR contractを維持。次は30-D=GPT-6.1 Sol/High、GPT-6 Luna最大42送信・Responses low、retry/warmup/補修0。次の指示まで実API比較を開始しない。以下は従来時点の記録。
+
+2026-10-12：**30-B修正実装のローカル受入を通過、独立再審査待ち**。現在地は[30-B報告](template-ai-phase30b-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase30b-result.json)。実装は製品外`D:/llm-ocr-archive/template-ai/20261012-phase30b`、製品接続・通常移行なし。
+R1〜R3を一run一所有thread、原子的な開始/dispatch権、待機/予約後の内容・現在性検査で修正。中止待機者はownerのguardと接続枠を解放しない。対象の共有StateSourceは同値編集でもepochを更新し、後続指示で旧応答を拒否する。画像の同期区間内証拠と元PNG decode共有を追加し、次区間は内容を再検証。
+変更前/後各3反復でT2=639.69→389.46ms、全5scope中央値500ms以下。既存201＋追加51境界、保存40応答の35受理/5同一拒否と旧採点、合成24scope期待投影を確認。全claims/schema/実装内容/共通compiler/manualと元cropを維持。401実装を固定。oracle・mockであり実モデル/通信の成功ではない。
+今回API0、376/496・残120。既存OCR contractを維持。次は30-C=Astra/XHigh・API0の独立再審査。30-Dの有料比較は再審査受入と次の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：Phase30の開始準備として**30-A修正設計を完了**。現在地は[30-A設計](template-ai-phase30-readiness-design-2026-10-12.md)と[計画JSON](contracts/template-analysis-v8/phase30-readiness-plan.json)。Phase29の差戻しと実API比較の停止は維持。修正実装は未開始。
+R1〜R3は一run一実行所有者、原子的な開始権・一回dispatch権、初期化/予約後の再検査で修正する設計。T2は同期区間内の不変bytes証拠と元画像の一回decodeにより重複計算を減らす。現在性・全実装内容・schema・全claims・共通compiler/manualの検査と500ms条件を維持する。
+工程30-A=Astra/XHighの設計、30-B=GPT-6.1 Sol/Highの製品外実装、30-C=Astra/XHighの独立再審査、30-D=当初のSol/High・GPT-6 Luna最大42送信の比較、31=採否審査。各区切りで次の指示を待つ。現在のチャットモデルは未確認。
+今回API0、376/496・残120。Phase29の封印476成果物を開始時照合し、未修正Phase28 T2の一回profileで完全manual投影を確認。profile時間は性能受入値ではない。製品ソース・通常データ・旧証拠を保持し、既存OCR contractを維持。以下は従来時点の記録。
+
+2026-10-12：Phase29独立審査は**差戻し**。現在地は[Phase29審査](template-ai-phase29-review-2026-10-12.md)と[審査JSON](contracts/template-analysis-v8/phase29-review.json)。Phase30の実API比較へ進めない。
+新規3件をネットワーク禁止で再現：R1/P1 同一runの同時実行で2予約・2送信、R2/P2 client初期化中のキャンセル後に未送信要求が送信される、R3/P2 台帳予約中のepoch変更後も古い要求を送信する。R3は応答後の現在性検査でdraft返却を拒否。通常DBの誤適用を再現したものではない。T2は保存中央値625.34msを確認、審査再測定634.55msで500ms未達を継続。
+Phase28の634成果物・実装399ファイルを照合。コピー上で既存201境界、保存40応答の旧採点、合成24scopeの期待DTO投影を再現。修正実装・製品接続なし、既存OCR contractを維持。API0、376/496・残120。次は3件＋T2の修正設計・実装・独立再審査。次の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：Phase28の製品外修正実装とオフライン検証を実施。**受入不合格：T2ローカル中央値625.34msが500ms上限を超過。Phase30の実API比較へ進めない。** 現在地は[Phase28報告](template-ai-phase28-2026-10-12.md)と[結果JSON](contracts/template-analysis-v8/phase28-result.json)。
+意味提示/構造別branch schema/所有alias展開/元crop保持の転送pack/最大一送信の共有HTTP・期限・現在性検査を実装。旧runtime400ファイルと候補/全claims/共通compile/manualを保持。既存83＋48件、新v8 70件、旧保存40応答の採点再現、既知5scopeのoracle完全manual投影を確認。校正12＋評価12の合成familyと期待値を固定。実モデル品質・endpoint受理・実通信時間は未確認。
+API0、376/496・残120。製品接続・通常データ移行なし。既存OCR contractを維持。次はPhase29=Astra / XHigh・API0の独立審査。次工程の指示まで開始しない。以下は従来時点の記録。
+
+2026-10-12：AIテンプレート作成Phase27の修正設計を完了。現在地は[Phase27設計](template-ai-phase27-design-2026-10-12.md)と[v8契約](contracts/template-analysis-v8/README.md)。製品外の設計であり、runtime実装・実API・製品接続は未実施。
+独立した有限判断はDecisions一回、構造・親・列用途・名称が連動する判断は条件付きResponses一回へ固定。意味説明と内部所有IDを分離し、構造ごとのfactor/name所属を生成schemaへ反映。既存候補・全claims・共通compiler/manual・現在性・同値手動編集の保護を維持。必須名称のplaceholder補完、ID推測修復、confidence閾値の引下げは行わない。
+詳細cropの元PNGを保持し、全体画像だけJPEG quality85へ変換して小さい場合に採用する転送packを設計。コピー上のT2要求は画像変更だけで4.45MB→1.23MB（72.43%減）。これは通信速度・意味精度の改善証拠ではない。5scopeのbranch schema例と別構造choice拒否をオフライン確認。実endpoint受理とruntime検証は未了。
+次はPhase28=GPT-6.1 Sol / High・API0の製品外実装、29=Astra / XHigh・API0の審査、30=Sol / High・Luna最大42送信の固定比較、31=Astra / XHighの採否。各工程はモデル切替後の指示まで開始しない。既存5秒/品質条件とPhase25不合格は保持。
+今回API0、376/496・残120。製品コード・両DB各37表/台帳376行・schema・設定・旧checkout・業務863ファイル/781 artifact・旧証拠を保持。既存OCR contractを維持、通常未移行/無効を継続。以下は従来時点の記録。
+
+2026-10-12：AIテンプレート作成Phase26の独立審査を完了。Phase25の測定記録と不合格判定を受入、製品採用は不合格のまま。
+[Phase26審査](template-ai-phase26-review-2026-10-12.md)と[審査JSON](contracts/template-analysis-v7/phase26-review.json)を現在地とする。Phase25の116成果物を開始時照合し、保存10応答をネットワーク禁止で再生。9受理/1同一拒否、別採点で品質成立4/10・5秒以内0/10・重点誤結合4、完全manual投影・物理/scope・既存全ID no-opを再確認。H1は必須名称nullだけでなくrecords誤選択があり、名称だけ補った診断でも誤結合3。H2も条件付きIDと名称を補ってなお誤結合4。補修での救済を採用しない。T3の保留10判断は生第一候補9正解/1誤りで、閾値校正は未了。
+T2中央値6139.32msのうちHTTP5031.79ms、初期化223.83ms。要求4.45MBの99.295%は画像base64で、転送とprovider処理の時間は未分離。ローカル小修正だけで5秒達成としない。次はPhase27=Astra / XHigh・API0の修正設計を提案。モデル向け意味判断・条件付き回答・名称方針・入力packを設計し、共通compiler/manualと所有検査を保持する。設計/実装/追加比較/製品接続は次工程の指示まで未開始。
+今回API0、376/496・残120。製品コード・両DB全37表/台帳376行・schema・設定・旧checkout・通常863ファイル/781 artifact・旧証拠を保持。既存OCR contractを維持、通常未移行/無効を継続。以下は従来時点の記録。
+
+2026-10-12：AIテンプレート作成Phase25の固定実API比較を完了。品質・5秒条件は不合格、製品へ導入しない。
+[Phase25報告](template-ai-phase25-2026-10-12.md)と[結果JSON](contracts/template-analysis-v7/phase25-result.json)を現在地とする。審査済みPhase24修正revision2を凍結し、GPT-6 Lunaで固定5範囲×2反復、T3=Decisions・他4範囲=Responses lowの10送信を実施。warmup/retry/repair/追加診断API0。全重点正解・完全manual意味投影は各4/10、品質付き5秒以内0/10、品質成立中央値6139.32ms。重点分類89/146・結合54/74・行6/14・記号3/16、重点誤結合4。T3は部分保留、H1は必須名称nullで保留、H2は誤選択1件と条件外choice拒否1件。HTTP200/構造検査の通過を意味の正解と扱わない。
+原応答再生9受理/1同一拒否、別採点9/9、物理/共通manual/既存全ID no-op、実行hashと台帳を確認。製品ソース・業務データ・両schema・設定・旧checkout・旧証拠を保持し、通常DBの変更はdeployの今回ledger10行だけ。既存366行を保持、既存OCR contractを維持、通常未移行/無効を継続。今回API10、376/496・残120。次はPhase26=Astra / XHigh・API0の独立審査。次工程の指示まで審査・再設計・追加比較・製品接続を開始しない。以下は従来時点の記録。
+
+## 2026-10-12：T2修正revision2の独立審査（製品外・受入）
+
+[審査報告](template-ai-t2-repair-review-2026-10-12.md)と[審査結果](contracts/template-analysis-v7/t2-repair-review.json)を現在地とする。修正実装の500成果物hashと保存30計測、393ファイル同内容の隔離再生を照合。83＋48境界、旧30応答26受理/4拒否・全採点/時間/usage・26全ID no-op、oracle5/5の完全manual意味/physicalを再現した。待機中の同値手動facet変更とmodule reloadでも応答を拒否。実装proof失敗後の永久失効と予約前/受信後/段間の検査を確認した。
+T2中央値472.96ms、全5範囲の500ms条件を通過し、修正審査は受入。各3標本であり実モデル・実DB保存・UI・音声の受入ではない。Phase25最大20送信は次工程の指示まで未開始/未予約。通常未移行/無効、製品採用未認定を継続する。
+今回API0、366/496・残130。製品OCR/provider/prompt/model/schema、mapping/association/crop、受付snapshot、補正revision、確定/出力・両DB/schema・設定・通常データ・全旧証拠は不変。既存OCR contractを維持する。以下は過去時点の記録。
+
+## 2026-10-12：T2修正のローカル受入（製品外・修正審査待ち）
+
+[修正結果](template-ai-t2-repair-2026-10-12.md)を現在地とする。factory-owned検証済み入力を共通resolverへ渡し、geometry生成を新規1回/復元時1回へ集約した。復元ではExpected・画像・policy・digest・候補完全比較を要し、公開hashだけの受入やtrusted flag/monkeypatchはない。全claims・保留依存・範囲外不変・現在の内容検査・同値手動facet・共通compiler/manualを維持する。
+実装manifest393ファイルを同期区間の開始/終了で内容/集合照合する。連続Responses1回は2区間、Decisions二段は3区間。first/secondを個別に返す場合も区間を閉じ、追加の再検査を行う。予約前・受信後・段間の変更で結果/追加送信を拒否する。例外・取消も閉じ、未実行区間を開始しない。
+固定比較T2中央値751.75→472.96ms、全5範囲500ms以下、完全意味投影5/5、旧83＋新48境界、変更後runtimeで旧30応答26受理/4拒否・全採点/時間/usage・全ID no-opを確認。oracle/ローカルのみ。元Phase24の716.81ms不合格を上書きせず、実API/DB保存/UI/音声の受入へ拡張しない。次はAstra / XHigh・API0の修正審査。Phase25有料比較は未開始。
+今回API0、366/496・残130。製品OCR/provider/prompt/model/schema、mapping/association/crop、受付snapshot、補正revision、確定/出力、両通常DB/schema・設定・通常データ・旧証拠を保持し、既存OCR contractを維持する。以下は過去時点の記録。
+
+## 2026-10-11：T2ローカル処理の修正設計（追加審査・未実装）
+
+[T2修正設計](template-ai-t2-revision-design-2026-10-11.md)を次の外部試作の基準とする。Phase24はT2=716.81msで不合格のまま。最終ソースの変更なし診断も706.24msで未達。geometry12回・依存391ファイル照合6回を確認した。
+設計ではfactory所有の不変VerifiedRunInputに物理/候補/scope/packを固定する。新規候補は1回生成、復元候補はExpected・digest・geometry完全比較後だけ再利用する。公開hash・trusted flag・monkeypatchで検証を省略しない。全claims/依存保留/範囲外不変/同値手動facet/共通compiler/manual投影を維持する。
+実装内容照合を同期区間の開始/終了へ集約するが、現在の所有/revision/scope/画像/pack/catalog/facet/epoch検査は維持する。実装manifestの範囲を縮めず、外部待機前後で区間を分け、終了照合前に結果を公開しない。製品DB transactionの競合検査は未接続。schema初期化費用の計時外移動で500msを達成したと扱わない。
+次の24修正実装・審査はAPI0。全5scope中央値500ms以下・完全意味投影・83境界と新失効条件・変更後runtimeで旧30応答保持を要する。Phase25有料比較はまだ開始不可。モデル/prompt/画像/候補上限・OCR対応契約は変更しない。今回API0、366/496・残130。製品・両DB/schema・通常データ・Phase11〜24証拠を保持する。以下は過去時点の記録。
+
+## 2026-10-11：条件付きfactor planの製品外試作（フェーズ24・時間未達）
+
+[Phase24結果](template-ai-phase24-2026-10-11.md)を現在地とする。製品外にv7生成器・不変evidence factory・選択後compiler adapter・mock wire runnerを実装。旧完成案の分解や全直積列挙ではなく、geometry/evidenceから構造と条件付きfactorを直接発行する。生成器のgold/帳票ID/旧応答への依存はない。
+完全manual意味投影5/5、physical identity、既存graphの全ID/path込みno-op、83境界と旧30応答26受理/4拒否・旧採点/全計測を確認。必要な選択/名称は評価側のoracle供給で、新モデル精度を示さない。旧Phase22の4/5不合格を保持する。
+所有/revision/scope/画像内容/catalog/同値手動facet/epoch/依存実装hashを照合し、選択後にpackを再cropしない。旧pack guardやcompilerは変更しない。保留claimsと宣言元を競合closureへ残し、侵入案と依存部分を保留する。未知をignoredで加点せず、未解決名称の依存表を完成扱いしない。
+全範囲のローカル中央値500ms以下が事前条件。最終T2は716.81msで未達のため総合不合格、Phase25有料比較は開始しない。Decisions/Responses経路・二段receipt・最大2送信・予約・中断・timeoutはmockのみで、製品のHTTP/DB transaction/画面/音声は未接続。
+今回API0、366/496・残130。製品OCR/provider/prompt/model/schema、mapping/association/crop、受付snapshot、補正revision、確定/出力を変更せず既存OCR contractを維持。両DB全37表/schema・設定・旧checkout・通常データ・過去証拠を保持する。次はAstra / XHigh・API0のT2費用審査を提案し、新指示まで追加設計/実API/製品接続を開始しない。
+
+## 2026-10-11：条件付き判断・自由名称の設計審査（フェーズ23・設計のみ）
+
+[Phase23審査](template-ai-phase23-review-2026-10-11.md)と[v7設計契約](contracts/template-analysis-v7/README.md)を次試作の基準とする。完成案の全直積を構造と条件付きfactorへ分離し、選択された案だけを共通resolver/compiler/manualへ渡す。新runtime・API接続・製品保存は未実装。
+先行回答に依存する質問は別request、有限判断は最大2段。自由名称が必要な候補を含む場合は、送信前にgpt-6-lunaのResponses一回へ振り分ける。Decisionsも同モデル。未発行ID・古い段間binding・保護facet・全claims競合を拒否し、確率から別案を採用しない。
+名称はserver所有slotの表示意味であり、physical identity・mapping/path・scopeの再割当てを許可しない。未解決名は依存単位を保留し、unknownをignoredへ変換しない。実保存は既存の「案を反映」→「確認して保存」、manual-authoring/MutationCore/TemplateAuthoringService・revision/receiptへ接続する設計を維持。
+Phase22の4/5不合格は不変。52案の7択＋最大6択への分解と名称供給診断はoracle/表現確認に限る。新モデル性能・v7生成器・製品採用の成功ではない。packの重複再構築を除く設計でも、内容hashと現在の所有/revision/同値手動意図の検査を省略しない。
+次は24=製品外実装/受入API0、25=合格後の最大20送信測定、26=審査という提案。各区切りで指示を待つ。今回API0、366/496・残130。製品OCR/補正/出力・両通常DB/schema・設定・既存証拠を保持し、通常未移行/無効を継続する。
+
+## 2026-10-11：有限候補選択の成立性試作（フェーズ22・不合格）
+
+[フェーズ22記録](template-ai-phase22-2026-10-11.md)と[v6試作契約](contracts/template-analysis-v6/README.md)を現在地とする。製品外でgold非参照の候補生成と有限選択境界を実装。候補発行前と選択合成後に共通guard/compilerを通し、全claims・親/role/値所有・mark依存・scope/手動facetを保護する。unknownはcoverageに保持し、保存用ignored初期値へ加点しない。
+正解参照によるoracle選択ではT1/T2/T3/H1の意味投影が一致したが、H2は共通compile前の構造仮説52＋保留2が固定上限32を超過。15refsを全体保留し、候補の打切りやposition/列用途の自動採用は行わない。自由な表名のliteral導出も未解決。4/5を採用成功へ読み替えず、有料比較・製品接続を停止する。
+39境界条件と旧30応答再生26受理/4拒否・採点/全計測/usage/manual投影・既存全ID no-opを確認した。閾値は未校正。要求仕様はoffline projectionであり実endpoint/モデル/画面/保存/音声は未受入。次の提案は23=Astra / XHigh、API0の依存粒度・候補数・名称方針の審査。各フェーズで指示を待つ。
+製品OCR/provider/prompt/model/schema、mapping/association/crop/physical identity、受付snapshot、補正revision、確定/出力は不変。両DB全37表/schema・設定・旧checkout・通常ファイル/artifact・Phase11〜21証拠を保持し、既存OCR contractを維持。API0回、366/496、残130。以下は当時の記録。
+
+## 2026-10-11：focused v5採否と候補選択の設計審査（フェーズ21）
+
+[フェーズ21審査](template-ai-phase21-review-2026-10-11.md)を現在地とする。Phase20の30保存応答・採点・計測を再検証し、全方式の製品不採用を維持。26案の共通/manual意味投影・既存全ID no-opを再現し、4件も同じmark定義理由で拒否された。unknownの保存用ignored初期値へ加点しない最終採点を確認した。
+T2の4応答コピーでprinted行識別と先頭列用途だけを変えた診断は3件で重点表条件を満たし、残1件はunknown列で保留。診断は元のAI応答や品質・速度の上書きではない。現snapshotで成立しないprinted案を事前除外する余地を示すが、positionへの自動補正・採用は許可しない。
+次の設計仮説は、整合した意味案をサーバーが有限列挙しGPT-6 Luna / Decisionsが選ぶ方式。親・列・行・markの依存を同じ候補へ束ね、未発行選択・競合・stale snapshot・手動facet変更を拒否。全claims、unknown、全ページcoverage、共通compiler/manual保存境界を保持する。候補の事前成立は意味正解や保存権限を保証しない。自由な意味は別Responses/手動経路とし、常時二重APIや幾何規則だけの採用はしない。
+次は22=Sol / High、API0、製品外の契約具体化・成立性試作。保留込み32候補/依存単位は設計上限でありAPI仕様ではない。gold非参照の候補coverage未達・候補爆発なら送信せず停止。新方式の製品接続・OCR/provider/schema変更・自動移行は未実施。両DB全37表/schema、製品コード、通常ファイル/artifact、旧checkout、Phase11〜20証拠は不変。既存OCR contractを維持。API0回、366/496、残130。各フェーズで停止して指示を待つ。以下は当時の記録。
+
+## 2026-10-11：focused v5の固定30試行（フェーズ20）
+
+[フェーズ20記録](template-ai-phase20-2026-10-11.md)を現在地とする。製品外Phase19 runtime/生成契約を保持し、固定30 requestをGPT-6 Lunaへ送信。HTTP200/completed/strict shape30/30、guard受理26/30。F-low/P-low/P-noneは分類46/67/30（各146）、結合11/15/4（各74）、行全方式0/14、記号4/8/0（各16）、重点誤結合8/12/4、品質付き5秒以内2/2/0（各10）。全方式不合格。形状受理・早いdelta・短い出力を意味正解としない。
+初期runnerの分類採点がunknownを保存用ignored初期値と混同して3試行を過大評価したため、canonical proposalから別実装で分類だけ再採点した。初期値50/71/34を46/67/30へ訂正し、元応答・gold・分母・全計測時刻・品質付き時刻/採否を保持。実bindingのみの採点、scope外cell全体・物理identity、manual意味投影、既存graph全ID/path no-opを保存26案で確認した。schema時間はresolver合算で、UI/保存受入とは扱わない。
+通常DBの変更は送信前予約されたAPI台帳30行のみ。既存336行・他36表、両schema、旧checkout全体、設定/通常ファイル/artifact/Phase11〜19証拠を保持。製品OCR/provider/prompt、mapping/crop/physical identity、受付snapshot、補正revision、確定/出力実装を変更せず、既存OCR contractを維持。製品未移行/無効・採用不合格を継続。API30回、366/496、残130。次は21=Astra / XHigh、原則API0の審査。追加比較・製品接続・自動再設計を開始しない。以下は当時の記録。
+
+## 2026-10-11：focused v5と入力パックの製品外実装（フェーズ19）
+
+[フェーズ19記録](template-ai-phase19-2026-10-11.md)を現在地とする。新しい外部runtimeへv5変換とevidence packを追加した。既存397ファイル・Phase18 schema/prompt/scope/gold/protocolは不変。共通normalizer/compiler/manual経路、全体物理snapshot、global refs、元座標、scope/手動facet/read-set、保留formのparent claimsを維持する。入力packは編集権限を増やさない。
+新入口49条件と、既存12条件のv4/v5両入口を通過。旧24応答のrequest/source/scope hash・採点・受理/保留・名前/共有/mark/親/表/行・manual投影・既存graph全ID/pathを保持。scope外cell全体とcrop画素の一致、既存read-only label/parent参照、同値手動意図の保護を確認した。手作成の正解案であり新AI精度/速度ではない。
+独立台帳と模擬transportで予約commitが送信より先、通信断でも予約保持、上限/別host拒否を確認。通常台帳・両DB/schema・設定・863通常ファイル・781 artifact・旧証拠は保持。製品OCR/provider・mapping/crop/physical identity・受付snapshot・補正revision・確定/出力実装は不変で、既存OCR contractを維持する。
+API0回、336/496、残160。30回の次回request/source/scope/pack digestを固定したが未送信。製品採用不合格・通常未移行/無効を継続。次は20=Sol / Highで固定30回測定、21=Astra / XHighで採否。実schema受理、汎用planner、scope公開HTTP/DB/receipt、保存/取消、UI/マイク、製品回帰は未受入。各区切りで指示を待つ。以下は当時の記録。
+
+## 2026-10-11：局所案先行公開とfocused v5（フェーズ18・設計のみ）
+
+[フェーズ18設計](template-ai-phase18-design-2026-10-11.md)と[focused v5契約](contracts/template-analysis-v5/README.md)を現在地とする。全体snapshot/物理identityとscope権限、provider向けevidence packを分離する。任意表選択は優先順位であり、全ページ依頼のcoverageを勝手に削らない。案の公開単位と全体完了を分ける将来HTTP v2を設計したが、製品v1のguardやDBを変更していない。
+label付き/direct、record列の名前・title導出をschemaで分離。形状だけで意味正解を保証せず、Phase17の保留form親宣言を含む全claims、scope/手動facet/read-set保護、共通compiler/manual投影を必須にする。案は下書きへ明示反映し、既存保存経路で確認して保存する。部分JSONの適用、範囲外親の補充、先勝ち採用はしない。
+次回比較はGPT-6 Luna low/noneの固定局所5scope×2反復×3方式、最大30回の設計。元goldを改変せず派生重点分類146/結合74/行14/記号16を別分母で採点し、全ページの旧基準を置き換えない。scope-readyの品質と5秒条件を満たしても全ページ/未知帳票/実保存の採用とはしない。
+schema15条件、元入力15hash、固定scope/計測条件を確認。製品ソース・通常DB/schema・設定・863通常ファイル・781 artifact・旧証拠は保持し、既存OCR contractを維持。API0回、336/496、残160。製品採用不合格・通常未移行/無効を継続。
+次は19=Sol / High、製品外adapter/packの受入、API0。20=固定30回、21=Astra / XHigh審査。製品接続・自動planner・HTTP所有/保存/取消・UI/マイク・全件回帰は未受入。各区切りで指示を待つ。以下は当時の記録。
+
+## 2026-10-11：保留formの親競合検査（フェーズ17・製品外修復）
+
+[フェーズ17記録](template-ai-phase17-2026-10-11.md)を現在地とする。外部コピーのcompact.pyでfield/formのrole・値所有・parent収集を共有し、不正formを保留しても収集可能な親宣言を保持する。異なる親の競合は関係単位を保留し、同じ親の独立fieldは維持する。保留formのparent facet保護も共通normalizerへ渡す。先勝ち・宣言削除・親の推測補充は追加しない。
+固定12条件は修復前6失敗、修復後12/12通過。保存24応答の採点・受理/保留・意味投影とmanual変換・物理参照・既存graph完全no-opは保持。既知の保護欠落の修復であり、新API品質/速度・全不正入力・実保存の証明ではない。
+schema/prompt/model/候補/snapshot/scope/入力/gold、Phase15/16証拠は保持。製品OCR/provider・mapping/crop/physical identity・受付snapshot・補正revision・確定/出力実装を変更せず既存OCR contractを維持。両通常DB全37表/schema・設定・863通常ファイル・781 artifact SHAを保持。API0回、336/496、残160。通常未移行・無効、製品採用不合格を継続する。
+次の提案は18=Astra / XHighで性能方式と生成契約を設計審査、API0。実装・追加比較・製品接続へ自動進行しない。未知帳票、実HTTP所有/保存/取消、画面/マイク、製品回帰は未受入。各フェーズ区切りで停止する。以下は当時の記録。
+
+## 2026-10-11：AIテンプレート採用審査（フェーズ16・不採用を維持）
+
+[フェーズ16審査](template-ai-phase16-review-2026-10-11.md)を現在地とする。E4全ページ・任意表選択は速度/品質条件未達、D13も重点誤結合のため採用しない。保存24応答の固定request/source/scope hash、別実装による実binding採点、共通/manual意味投影・既存graph完全no-opを再確認した。重点採点の一致は全欄・未知帳票の正しさを保証しない。
+新しい製品外診断で、不正form保留時にparent claimを落とす経路を確認。H1のラベルc9に対し保留formがc8、別fieldがc2を親と宣言すると、後者を受理する。通常の競合formなら両側保留される。Phase15 compact.pyのrejected_formでparents収集が欠ける。未修正であり、過去の「不正単位の全parent claim保持」をこの経路について訂正する。旧24試行の結果は変更せず、通常製品への影響は発生させていない。
+次の提案は17=GPT-6.1 Sol / Highでこのguardを製品外修復し、API0で保存24案と関係する境界を確認すること。新schema/promptや比較の自動開始、保留宣言の削除・先勝ち・推測補完による救済は行わない。修復しても採用条件を満たした扱いにしない。
+製品OCR/provider/prompt・mapping/crop/physical identity・受付snapshot・補正revision・確定/出力コードを変更しておらず既存OCR contractを維持。両通常DB全37表/schema・設定・863通常ファイル・781 artifact SHA・Phase11〜15証拠を保持。API0回、336/496、残160。通常未移行・無効。新規帳票、実保存/取消、画面/マイク、全体回帰は未受入。フェーズ区切りで停止する。以下は当時の記録。
+
+## 2026-10-11：AIテンプレートcompact v4の固定比較（フェーズ15・採用不合格）
+
+[フェーズ15記録](template-ai-phase15-2026-10-11.md)を現在地とする。製品外v4のform→独立field/records→繰り返し表、名前参照/mark共有、scope付き不変snapshotを実装。保留単位の所有claimも維持し、重複両側保留・同値手動facet・範囲外write拒否・実在する親だけのread-only参照を検証した。製品保存経路の代替ではない。
+Phase13保存再生20件・境界63、新v4/scope83、追加28を通過。固定24送信（全ページ20＋選択4）のE4は中央値8.178秒対D13 10.905秒でも分類126/176・結合62/78・行10/14・記号8/16で採用未達。案なし1件のreadyはnull、比較ペナルティ60秒。重点誤結合0/欠落16、5秒以内0/10。選択E4も9.167/5.493秒で未達。速さだけで採用しない。
+24案の共通/manual意味投影と既存graph完全no-op保持。新規割当UUID/pathの差と、既存ID/pathの保持を区別する。取得textに根拠のないmark選択肢は保留する保守的な試作制約で、画像内容の自動証明を実装済みとは扱わない。
+通常製品OCR/provider/prompt・mapping/crop/physical identity・受付snapshot・補正revision・確定/出力コードは未変更で、既存OCR contractを維持した。両通常業務DB/schema・863通常ファイル・781 artifact SHA・Phase11〜14証拠・設定を保持。通常未移行・無効。API24回、336/496、残160。未知帳票、実HTTP所有/保存/取消、画面/マイク、製品回帰は未受入。
+次は16=Astra / XHigh、原則API0で採用範囲審査。追加再設計/比較・製品統合へ自動進行しない。以下は当時の記録。
+
+## 2026-10-11：AIテンプレートの高速出力契約（フェーズ14・設計のみ）
+
+[フェーズ14設計](template-ai-phase14-design-2026-10-11.md)と[compact v4契約](contracts/template-analysis-v4/README.md)を現在地とする。provider wire形式を圧縮し、通常formを独立fieldへ、recordsを繰り返し表へ展開する設計。画像/座標・物理ID・保存先をAIに生成させない。
+scope/write/contextOnlyを所有snapshotに固定し、古い候補や現在の選択による再解釈を拒否する。全値所有・役割・親の競合を展開後に検査し、不正単位のclaimを捨てて競合を隠さない。contextは所有表に依存してignoredへ分類し、文字/物理参照を案metadataへ保持する。
+名前の参照解決は明示labelsの取得時textだけ。欠落や長さ超過を推測補充しない。親と直接ラベル、mark定義と各値所有を分離し、既存facet・同値手動意図・physicalDigest・revision・receipt・undo・明示保存を維持する。v3失敗からv4/旧方式へ自動fallbackしない。
+保存10応答の意味宣言を保持した再符号化でJSON bytes40.28%減。これは速度/モデル精度の新実測ではない。v4 runtime・実API受理・保存は未検証、製品採用は未確定。製品OCR・mapping/crop・受付snapshot・補正/確定/出力コードは未変更で、既存OCR contractを維持した。
+次は15=GPT-6.1 Sol / High、GPT-6 Luna / lowの同時対照、全ページ20＋任意選択4、最大24回。事前境界検証・hash固定必須。16=Astra / XHighで採用判定。今回API0回、312/496、残184。通常DB/schema・データ・設定・旧証拠を保持し、通常未移行・無効。以下は当時の記録。
+
+## 2026-10-11：AIテンプレート候補方式の修正試作（フェーズ13・製品外）
+
+[フェーズ13記録](template-ai-phase13-2026-10-11.md)を現在地とする。単体markの一意結合をmanual変換で保持し、不一致・複数markSetを拒否する。候補と入力をresource/version/page/revision/画像/generation/policy/digestへ束縛し、旧候補別渡し入口を廃止した。取得後のdict変更・古い候補・compile時の参照改変を拒否する。
+context bodyはignoredとし、物理ID/表示文字列と案metadataを保持。所有表が保留ならcontext分類も保留する。手動meaning/parent/role意図と実在する見出しのread-only参照を検証した。製品のsnapshot/physicalDigest/facet/receipt/undo・明示保存を代替しない。
+保存20応答のmanual意味投影保持と境界63項目（既存graph no-op20件を含む）が通過。Dの分類150/176は保存応答の再生値で、旧実API主結果142/176と区別する。H1/T1の競合・親判定と速度は未解決、採用不合格を維持。
+所有bindingはfixture値。実DB保存・HTTP・全facet/lifecycle・画面・マイク・未知帳票・重い回帰は未受入。通常製品コード、OCR/mapping/crop/physical identity/受付snapshot/補正revision/確定・出力契約は未変更で、既存OCR contractを維持した。
+両通常DB/schema・台帳・データ・旧証拠・設定を保持。API0回、312/496、残184。通常未移行・無効。次は14=Astra / XHigh、API0回で高速出力契約とprompt整合を確定する。製品接続は採用判定後。以下は当時の記録。
+
+## 2026-10-11：AIテンプレート候補方式の再審査（フェーズ12・不採用）
+
+[フェーズ12審査](template-ai-phase12-review-2026-10-11.md)を現在地とする。20保存応答の主採点は一致。Dの現実装は速度/意味/接続条件未達のため採用せず、製品接続へ進めない。
+製品外manual変換で9試行57relationが欠落した。input限定の関係再構成が単体markを落とす。別コピーの一条件修正で20案の意味投影が復元したが、製品・既存状態・保存lifecycleの修正完了ではない。
+試作resolverは候補snapshotDigestを検証しない。古い候補とセル追加後のpayloadでH2の値4セルが隣のラベルへ誤対応することを再現。主比較は同一payloadから候補を生成したため影響なし。候補/c参照をresource/version/page/revision/画像/geometryと束縛し、既存physicalDigest・facet・receipt等のguardを維持してから接続する。
+context説明bodyのlabel化をignoredへ変えた感度分析は分類150/176。固定主結果142/176を改変せず、モデル精度・速度の新しい測定と区別する。値所有競合・直接親不一致の保留を弱めない。
+製品OCR・mapping/crop・identity・受付snapshot・revision/出力契約は未変更、既存OCR contractを維持した。API0回、312/496、残184。両通常DB/schema・台帳・業務データ・設定を保持し、通常未移行・無効。
+次はフェーズ13の製品外修正試作（GPT-6.1 Sol / High、API0）。製品接続は採用後へ延期。以下は当時の記録。
+
+## 2026-10-11：AIテンプレート解析の候補方式比較（フェーズ11・採用不合格）
+
+[フェーズ11記録](template-ai-phase11-2026-10-11.md)を現在地とする。既存物理セルだけから行列候補を生成し、Lunaの列用途・行範囲・局所表題を元のIDへ展開する製品外試作を比較した。新規矩形生成や製品保存を実装した工程ではない。
+未知refは要求拒否、値所有競合は関係単位すべて保留。不正表のclaimを除いて競合を隠さず、行や親を推測補充しない。局所表題と上位階層を分離し、未解決を正しい結合として数えない。
+実20送信でDは結合63/78・重点行14/14・記号16/16、T2/H2重点条件通過。しかし分類142/176・中央値11.356秒で採用不合格。context説明列のlabel化とgoldのignoredの差も未解決として保持する。B′も不合格。
+短い境界27＋33と空状態manual compilerを検証。実保存・全facet/lifecycle・画面・未知帳票・全体回帰を代替しない。製品OCR・mapping/crop・physical identity・受付snapshot・revision/出力契約は未変更で、既存OCR contractを維持した。
+通常業務DB/schema・両ソース・設定を保持、台帳だけ20予約追加。312/496、残184。通常未移行・無効を継続する。
+次はフェーズ12、Astra / XHighで再審査、原則API0回。採用前の製品接続や追加再設計は開始しない。以下は当時の記録。
+
+## 2026-10-11：AIテンプレート解析の採用審査・再設計（フェーズ10・製品未実装）
+
+[フェーズ10記録](template-ai-phase10-review-2026-10-11.md)を現在地とする。A/B/Cの採用基準未達を維持し、製品実装へ直行しない。検証修正後の保存応答再生でもBは分類119/176・結合39/78・行3/14、Cは88/14/4で不合格。
+次のD試作では既存セルの行列候補をsnapshotへ束縛し、Lunaの指定を元の物理IDへ展開する。候補は正解ではなく、座標/ID再生成・近接による値再割当・行の推測補充を行わない。新規矩形生成はこの比較の対象外。
+局所表題を含む表本体と上位見出し接続を別の提案として生成する。必須表題の不正をnullで救済せず、未解決階層を完全な結合として採点しない。既存parentの暗黙削除はしない。
+checklistはmultiple必須をschemaとvalidatorで一致させる。辞書だけの分類はセル保留、未知ref/所有不一致は要求拒否、重複値は関係単位すべて保留。保護済み見出しはread-only参照で依存を満たす。
+共通APIの一意mark結合・行別cellLabelCellsとmanual adapterを維持し、既存のfacet・同値手動意図・revision・receipt・undo・明示保存を迂回しない。geometry probeや空状態compilerの成功を製品の保存・OCR対応保証にしない。
+製品ソース・両通常DB・schema・設定は未変更、API0回、292/496、残204。既存OCR contractを維持し、通常未移行・無効を継続する。
+次はフェーズ11の製品外比較（GPT-6.1 Sol / High、API初回24以内）、12の採用再審査（Astra / XHigh）。旧計画の11製品実装は13へ移し、採用を前提に開始しない。以下の履歴は当時の到達点として保持する。
+
+## 2026-10-11：AIテンプレート解析の比較試作（フェーズ9・採用不合格）
+
+[フェーズ9記録](template-ai-phase9-2026-10-11.md)を現在地とする。製品外コピーの共通compilerと実30送信を比較した。製品の保存契約や通常機能を変更していない。
+Cは記号選択肢16/16でも分類77/176・結合11/78・行4/14・意味案6/10で採用基準未達。Bも不合格。全試行中央値A/B/C=11.219/18.449/15.555秒。
+checklistは現行multiple必須。フェーズ8schemaのsingle許可は不足として記録し、製品の制約を緩めない。Bの辞書のみ分類の拒否範囲とmanual compilerのmark/行別ラベル接続も次審査で扱う。
+固定した主比較と、別コピーの局所guard/manual変換replayを分離する。保存成功、人の修正時間、実マイク、未知帳票の精度を未検証のまま成功扱いしない。
+API台帳だけ30予約追加、292/496、残204。通常業務DB/schema・製品ソースを保持し、通常未移行・無効。既存OCR contractを維持する。
+次はフェーズ10、Astra / XHighの採用審査。現時点の採用方式はなく、フェーズ11の製品実装へ直行しない。
+
+## 2026-10-11：AIテンプレート解析の修正設計（フェーズ8・未実装）
+
+[フェーズ8設計](template-ai-phase8-design-2026-10-11.md)を現在地とする。意味構造から分類を導くv2、未出力unknown、依存関係に基づく単位保留を設計した。
+共通meaning.bindの一意なmark対応と、RecordRow.cellLabelCellsによる行・列見出し保持を計画する。物理ID/geometry/targetPath/関連ID、手動意図、revision、既存保存経路を保持する。
+未知/ページ外参照や所有snapshot不一致はページ全拒否、壊れた表は表全体保留。分類だけ・全除外を意味付け完了や保存承認へ読み替えない。
+設計JSONのオフライン31確認のみ。製品provider/compiler/UIは未変更で、実API適合・精度/速度・部分成功の受入は未実施。
+今回API0回、262/496、残234。通常DB未移行・機能無効。次は製品外の比較試作（フェーズ9、GPT-6.1 Sol / High、初回36回以内）、その後Astra / XHighで採用審査する。
+フェーズ7の全ignoredを2件、診断の分類全数検査での初回拒否を4/6へ訂正し、診断1件の表3件出力も記録した。主比較集計と不合格は維持する。
+過去の全件回帰結果を今回の成功証拠へ読み替えない。通常導入と大きな契約変更の実装はこの設計工程では行わない。
+
+## 2026-10-10：AIテンプレート解析の実測・受入不合格（フェーズ7・通常無効）
+
+[フェーズ7記録](template-ai-phase7-2026-10-10.md)を現在地とする。固定5帳票を旧全体/新全体/種類限定で各2反復し、実30送信を比較した。
+新全体案は10件中6件拒否、通過4件中2件が全セルignored（2026-10-11訂正）。中央値7.827秒でも重点分類26/176・結合1/78で、品質条件を満たさない。
+初期roleを送らない限定診断も6件全拒否。実画面1件は分類だけの案を表示し、反映・保存は行っていない。手直し/保存時間・実マイクは未受入。
+製品コード・OCR処理・物理identity・mapping/crop・受付snapshot・revision/出力bindingを変更していない。通常業務DB/schemaと通常863ファイル・781 artifact SHAを保持。
+共有台帳のみ37予約追加、262/496、残234。通常DB未移行・通常editing/解析無効。検証を弱めたり通常導入へ進めず、次はAstra / XHighで修正設計する。
+全数分類/関連/部分成功の契約変更はこの工程で実装しない。速度の改善だけで受入完了とは扱わない。
+
+## 2026-10-10：AIテンプレート解析の監査・回帰（フェーズ6・通常無効）
+
+[フェーズ6記録](template-ai-phase6-2026-10-10.md)を現在地とする。反映と取り消しは値の一致に加え手動操作通番を照合する。
+遅着反映は現ownerとrevision/context/interaction/catalog/scopeへ再照合。サーバー統合runはresource確認後analysisIdで追跡する。
+復旧記録を保存できない間は自動保存・AI反映を保留し、受領済み業務receiptを失敗扱いへ戻さない。保留下書きの別画面復元は明示確認を必要とする。
+frontend143件・build、実HTTP39、境界24、保存OCR72項目/290画像、XLSX95セルと2ページ編集を検証。backend全件の既存23失敗/34収集エラーは残り、全体成功・完全なOCR安全性検証とは扱わない。
+OCR処理・保存済み値・物理identity・mapping/crop・受付snapshot・出力bindingを変更していない。通常DB全表・データSHA保持。
+実API0回、225/496、残271。通常未移行・無効。実AI品質/速度と実マイク受入はフェーズ7。
+
+## 2026-10-10：AIテンプレート解析の画面接続（フェーズ5・通常無効）
+
+[フェーズ5記録](template-ai-phase5-2026-10-10.md)を現在地とする。解析・選択反映は下書きに限定し、確認後の共通manual-authoringで保存する。
+解析中は自動保存と音声編集を保留し、手動facet・同値の再指定・後続入力を保護する。既知の解析復旧はGET、応答不明の書込は元要求を使用する。
+分類だけの変更でLayoutCell.sourceを変更しない。意味の由来はfacet記録へ分離し、既存物理セル・crop・mapping/path・受付snapshot・出力bindingを維持する。
+対象34テスト・build・実HTTP27条件と専用コピーの実Chrome保存を確認。全体回帰・複数ページ出力・AI品質/速度受入は未完了。
+実API0回、225/496、残271。通常DB未移行・通常editing/解析無効、両通常DB全表・通常データSHAを維持する。
+
+## 2026-10-10：AIテンプレート解析バックエンド（フェーズ4・通常無効）
+
+[フェーズ4記録](template-ai-phase4-2026-10-10.md)を現在地とする。全体Responses・種類限定Decisionsはgpt-6-luna。
+解析案は既存物理セルへ束縛し、分類全数・表の一意所属・行幅・親循環を検証してから下書きへ反映する。
+反映APIから業務layoutを保存せず、共通manual-authoring・revision・receipt・undoを使う。
+手動facet・由来不明設定を保護し、新規検出だけ既知の未確認分類を記録する。LayoutCell.sourceを意味の由来へ転用しない。
+検証済み下書きの内部上限は5000操作・参照20000・相異なる物理セル1000。公開50操作・参照1000と保存layout上限は維持する。
+解析中の範囲/世代/画像変更、cancel、期限、再起動の遅着結果を採用せず、APIを自動再送しない。
+OCR provider・crop・受付snapshot・既存mapping/path・出力bindingを変更しない。移行は専用コピーだけ。
+実HTTP・限定保存/取り消し・静的検査は確認したが、複数ページ/出力の全体回帰とAI品質・速度の受入は後続工程。
+実API3回、225/496、残271。全体AI案2件は検証拒否。通常DB未移行・通常editing/解析無効を維持する。
+
+## 2026-10-09：AIテンプレート作成の方式・API設計（フェーズ3・未実装）
+
+[AIテンプレート作成フェーズ3](template-ai-phase3-2026-10-09.md)を次工程の設計とする。
+全体Responsesと種類限定Decisionsから意味案を生成し、表の行列と単体欄の結合を二重の正本にしない。
+AI案は検証して下書きへ反映し、既存manual-authoring・revision・receiptの保存を使う。
+手動facet保護、由来不明の既存設定の保護、全体下書き向け内部compile上限の分離は実装予定であり、現行仕様へ読み替えない。
+OCR provider、物理セル・crop・受付snapshot、通常環境の無効状態は変更しない。今回の実API使用は0回。
+
+## 2026-10-09：音声受入と対象省略訂正（再設計フェーズ7・通常無効）
+
+[フェーズ7記録](voice-editing-redesign-phase7-2026-10-09.md)を現在地とする。通常切替は保留。
+無音の実経過時間をブラウザ側で再確認し、サーバーの1200ms境界を下げない。
+対象省略の単一値編集は、最新receiptと同scope・contextRevision・interactionEpochの唯一の所有セルへ限定する。
+未完了の別の欄の指示を以前の保存先へ移さず、元指示の明示列と行回答の対応を検証する。
+共有command・revision・receipt・undoを使用し、OCR provider／mapping／crop／出力bindingを変更しない。
+コピー保存と保存response再生・画像SHA・XLSX対応を確認。最新修正の実マイクと通常環境の移行は未実施。
+
+## 2026-10-09：表示の待機・競合調整（再設計フェーズ6・通常無効）
+
+[フェーズ6記録](voice-editing-redesign-phase6-2026-10-09.md)を現在地とする。
+認証済みSSEの完了eventを保持し、欠落時は元request IDを照会する。編集を自動再送しない。
+context／previewは並行取得するが、receipt・所有context・revisionの検査後だけ表示する。
+表示更新は順序付け、先行取得失敗の復旧待ちを後続成功で消さない。手動draftとreceiptを保持する。
+backend・補正payload・revision保存・mapping・association・crop・出力対応は変更していない。
+対象33件／buildと固定resolverによる専用Chrome実保存を確認。制御測定は実音声の速度保証ではない。
+通常editing無効・通常DB未移行・TTS無効。実マイク・全体回帰・通常切替はフェーズ7へ残す。
+
+## 2026-10-09：画面・手動保存接続（再設計フェーズ5・限定実画面確認済み）
+
+[フェーズ5記録](voice-editing-redesign-phase5-2026-10-09.md)を参照する。
+v2手動OCR保存は全FieldReadingとreviewItemsを既存補正transactionへ渡し、欄集合・sourceRegionId・boundingBoxを固定する。
+新規テンプレートセルのsubstitutionsは既存compilerの結果をreceiptへ返す。既存ID・対応を再生成しない。
+AI枠は所有anchorを現在の表示座標へ投影し、resource／page／revision／interactionEpochを照合する。
+手動選択・DOM focus・warning・scopeを枠のために変えない。保存済み・表示未取得はreceiptを保持し再保存しない。
+限定コピーAPI・部品テスト・固定resolverと実保存のChrome操作を確認済み。通常editing無効・DB未移行・TTS無効を維持。
+元見出しの可視判定、未保存が確定した範囲拒否後の再入力、同一IDの保存後選択保持を修正した。
+通常移行・実マイク・全体回帰の完了を意味しない。
+
+## 2026-10-09：音声取得・保留回答（再設計フェーズ4・通常無効）
+
+[フェーズ4記録](voice-editing-redesign-phase4-2026-10-09.md)の通り、segmentは保存に使わず、全manifest／item／digestと所有bindingを検証する。
+質問では全文・既知の対象と値・300秒質問期限／900秒指示期限を保持し、無意味な承認を値にしない。
+未保存planは発声でholdし、訂正・scope変更・取消でfenceする。明示scope回答だけ同じ指示を再束縛する。
+単一対象の差替えは直近receiptを検証し、旧対象の復元と新対象の同値保存を一transaction・一revisionで行う。
+補正・revision・receiptは既存保存を使用。OCR読取・mapping・association・crop・受付snapshot・出力bindingを変更しない。
+音声の原文とPCMは上限付きRAMだけ。失敗・未完了・切断で部分保存や自動録音再開を行わない。
+通常DBはAPI台帳6件だけ更新、156/196、残40。通常無効／未移行、旧試験DBと855業務ファイルを保持。
+59音声／保留境界と54共通API条件の限定検証は、全領域OCR安全性や実マイク受入の保証ではない。
+画面はフェーズ5、統合は6、重い回帰・保存response／crop／paged／XLSX・実マイク・通常切替は7。
+
+## 2026-10-09：Decisions／Responsesの接続（再設計フェーズ3・通常無効）
+
+[フェーズ3記録](voice-editing-redesign-phase3-2026-10-09.md)の有限候補・原文Evidence・値の節を検証してから共通commandへ渡す。
+候補全体・所有catalog・scope・行列の制約を維持し、最高scoreやモデルのtable refで重複表を一意扱いしない。
+不正応答、timeout、候補不明、一部未解決なら群全体を未保存にする。障害による別モデル再試行を追加しない。
+policy v2は明示完全一致だけ確率0.85／confidence 0.80、近似0.98／0.90、次点差0.20。小標本の暫定校正である。
+意味付けはResponses low、値編集はnone。モデル用22操作を共有DTOから生成し、未検証の自由なpathを受け付けない。
+引用した6万は文字列、六万は60000、先頭ゼロを保持。単位の一部の引用や別操作の値を拒否する。
+OCR読取・mapping・association・crop・受付snapshot・出力bindingに変更はない。
+通常DBはAPI予約13件だけを追加、150/196、残46。通常機能無効、DB未移行、実マイク・全体安全性の最終検証は未実施。
+
+## 2026-10-08：再設計の共通command・v2 API（フェーズ2・通常無効）
+
+[フェーズ2記録](voice-editing-redesign-phase2-2026-10-08.md)の通り、22操作と既存の補正／authoring実保存を共有部へ分離。
+一指示の値・revision・履歴・receipt・command APPLIEDを同transactionで確定する。
+同一session＋requestIdの再送は保存済み結果を先に取得し、異なるpayloadは拒否する。
+scope／epoch／外部revision／取消は永続fenceで保存直前に検査。afterCommandIdは同sessionの説明可能な増分だけを認める。
+raw指示と準備planはRAMだけ。再起動時は未保存指示と保留質問を中断し、保存receiptは復旧可能。
+AI focusは安定したentity IDとrevisionの表示情報。手動選択・OCR判定・mappingを変更しない。
+元の通常／試験DBは未移行、通常無効を継続。短いコピーAPI、代表的保存response・物理対応確認は全体安全性の完全検証ではない。
+重い回帰、全22操作・paged・XLSX・実音声／実AIの最終検証はフェーズ7へ残す。
+
+## 2026-10-08：音声・Decisions再設計の契約（実装前）
+
+[再設計フェーズ1](voice-editing-redesign-phase1-2026-10-08.md)はediting.v2の実装基準であり稼働挙動の変更ではない。
+有限候補はDecisions、複雑文・意味付けはResponses。手動／音声は共通の検証・保存へ接続する。
+任意表選択、完全な候補集合、一指示の原子的保存、revision・所有・receipt復旧を必須とする。
+AI枠／移動／scrollは一時UI状態であり、OCR判定・mapping・手動選択・scopeを変更しない。
+数値表現、snapshot・crop・出力bindingを継承。通常DB移行／有効化は未実施。
+物理identityの保持とDRAFTの明示意味編集を両立する。
+以下の旧会話loop／60秒保留等は現行履歴であり、v2の目標値として使用しない。
+
+## 2026-10-08：行・列指定の最終検証と追加API許可
+
+[フェーズ3検証](voice-record-cell-phase3-2026-10-08.md)は行列/連続訂正の実マイクを通過し、数量表記の再試験待ち。
+実OpenAI文字指示の行・列/欠けた列回答、保存responseとcrop、確定後XLSXセル対応を確認した。
+全件backendは既知23失敗/34収集エラーを残し、全体成功とは扱わない。
+利用者の追加100回許可を既存96回に加え、共有送信上限を196回とする。
+旧台帳CHECKの100回上限は予約行・参照を保持して置換し、正の一意ordinalとtransaction予約を維持する。
+197回目は送信前拒否、失敗/再起動で払い戻さない。通常の新編集schema/有効化とは分離する。
+下記の100回予算記述は旧許可の履歴であり、現在の許可上限は本段落を優先する。
+
+実マイクで60000が6万として保存されたため、音声 `ocr.set_value` に限定して純粋な整数の
+数量表記をASCIIへ変換する。6万/六万/６万は60000、引用された「6万」や6万円は保持する。
+各対象handleの元の指定値を変換根拠とし、複数セルの値を混同しない。明示ゼロ付き数字列の
+先頭ゼロ保持も継続する。名称・手動値・既存OCR値・mapping・保存/receipt/revision契約は変えない。
+
+## 2026-10-08：行・列指定の独立レビュー（フェーズ2）
+
+各座標と発話の値を結び付け、モデルが別座標の値を返しても保存しない。
+既知の値の解析不一致は既存の最大4要求内で修復し、上限で未保存終了する。
+質問の種類と回答を60秒メモリに保持し、値質問が先の表・行・列回答を消さない。
+欄名の助詞を削らず、列だけの指示や複合回答の明示表を保持する。
+同名列の候補と保存通知には列番号を付ける。DB、OCR対応、補正・receipt経路は維持する。
+[再現・修正・検証とフェーズ3の残条件](voice-record-cell-phase2-2026-10-08.md)を参照する。
+
+## 2026-10-08：汎用の行・列音声指定（フェーズ1）
+
+単一画像レビューの繰り返し表を、受付 `reviewStructure` の表示順による行番号＋列名/列番号で指定する。
+番号は1始まりで空行・未割当列を含み、見出し行・行番号欄を除く。保存identity・mapping・cropは再生成しない。
+表省略時は同じ連続音声sessionで実保存した直前表を優先し、欄がない場合は別表へ移らず質問する。
+元の未保存値を保持し、表・行・列の不足分だけの返答で続行する。発話と異なる可視handleも保存を拒否する。
+表文脈は同transactionで保存し、undo・複数表保存・選択/context更新・手動/外部revision・session終了で解除する。
+通常DB移行・通常有効化・paged音声対応は含まない。
+[実装、コピー検証、独立レビューと実マイクの残条件](voice-record-cell-phase1-2026-10-08.md)を参照する。
+
+## 2026-10-08：音声で明示した数字列の表記（追加フェーズ3・進行中）
+
+利用者が `ゼロゼロ七八九` の保存値を `00789` とするよう要求したため、音声の
+`ocr.set_value` 解釈に限定した表記変換を追加する。command digest固定前に、発話と値に
+明示ゼロがあり値全体が数字トークンの場合だけASCII文字列へ変換し、先頭ゼロを保持する。
+近似候補による値の置換、名称/意味名/手動値の変換、OCR providerや既存保存値の再計算は行わない。
+これは自動採番とは別の音声値解釈であり、既存の所有・receipt・revision・mapping対応を維持する。
+完全一致の別名を部分一致より優先し、新しい値の検索だけでは対象変更を許可しない。
+不足項目を同session・同binding・60秒のメモリへ保持する。対象質問への欄名だけの回答は
+元の未保存値を保持して続行する。値質問の回答から別欄を選ばず、失効後に元指示を再実行しない。
+[追加フェーズ3の変更・検証・未確認範囲](voice-target-autocorrection-phase3-2026-10-08.md)を参照する。
+
+## 2026-10-07：欄名自動補正の新契約（追加フェーズ1）
+
+利用者が近似一候補の自動補正、保存後の画面確認、読み上げなしを明示したため、直前の
+「一候補でも聞き返して未保存」を変更する。従来の近似基準を満たす現在の所有候補が一つだけなら
+対象検索結果のhandleを採用する。最高スコアだけの採用、複数候補/無候補/値不足の保存は行わない。
+原指示と値を置換しない。近似だけでmappingや物理identityを再割当てする契約ではない。
+
+連続入力/局所録音のTTS取得と再生を終了し、正式receipt通知と欄/パネルの短い強調で知らせる。
+低動作設定は静的強調。選択・保存値・revisionを一時表示のために変えず、表示の遅い応答にも世代を照合する。
+従来の読み上げ反響検査を、この読み上げのないUIの受け入れ条件として要求しない。
+共通保存/undo/receipt、所有/ページ/局所範囲/turn/revisionのguard、OCR認識の契約は維持する。
+DB/schemaの変更や通常有効化はない。静的検査/buildと独立レビュー/最終マイク検証を区別する。
+[追加フェーズ1の記録と後続検証条件](voice-target-autocorrection-phase1-2026-10-07.md)を参照する。
+[追加フェーズ2レビュー](voice-target-autocorrection-phase2-2026-10-07.md)で、可視性だけの対象許可を拒否し、完全一致優先・明示位置による近似絞り込み・強調残留を修正した。
+近似も0件の検索は未保存で不足情報へ移行する。次の追加フェーズ3で全件回帰と実マイクを確認する。
+以下の近似質問、TTSと反響に関する記載は変更前の履歴であり、この新契約を優先する。
+
+## 2026-10-07：フェーズ19の近似対象質問と切替準備（進行中）
+
+実マイクで認識名称の表記差が発生したため、近い欄名の質問を追加した。近似順位だけで保存せず、
+一候補の対象質問への回答は元指示・同所有/同revision/同選択/同手動世代・期限内に限定する。
+明確な変更指示への毎回承認は追加しない。新API有効時だけ旧一括/assistant writeを410で閉鎖する。
+通常DBは未移行・新API無効。実TTS/echo/連続訂正と通常切替は未完了。
+実試験後のSTT欄名ヒントは所有catalogの名称だけに限定し、現在OCR値・画像・全文会話を送らない。
+音声停止後の遅い解析失敗は旧世代の表示を更新しない。保存開始後のreceipt復旧は維持する。
+[進行中のフェーズ19](voice-authoring-phase19-2026-10-07.md)を参照する。
+
+
+## 2026-10-07：フェーズ18の検証と音声停止境界
+
+音声取得の開始・終了と遅い応答を同じ世代へ束縛する。停止した取得の終了通知、取消、訂正分類を新しい取得へ適用しない。録音終了中の停止では待機を終了し、旧音声を送信しない。保存済みreceipt・業務revisionを音声停止のために戻さない。
+
+変更はfrontendの音声ライフサイクル2ファイルのみ。通常31テーブル・855ファイル、phase12の主要OCR境界8ファイル、72欄/290画像SHA、保存実応答25条件と実XLSX対応を照合し、既存OCR contractを維持した。全件backendテストは成功していない（旧仕様23失敗・34収集エラー、共有TEMPの1失敗は独立TEMPで再検証）。実マイク、通常移行、切替後の旧write拒否はphase19。[フェーズ18の証拠と限界](voice-authoring-phase18-2026-10-07.md)を参照する。
+
 ## 1. 目的と適用範囲
+
+### 2026-10-07 連続取得と音声UI（フェーズ17・通常利用は無効）
+
+[フェーズ17記録](voice-authoring-phase17-2026-10-07.md)の音声取得を既存controller/共通保存queueへ接続した。
+deltaは字幕だけとし、commit item IDに束縛したcompletedだけを実行する。取得開始のページ/選択/手動世代を保持し、
+先行する同じ会話の成功receiptだけでrevisionの進行を説明できる場合に限り後続指示を実行する。
+新発話の取得・分類中は旧指示の保存を保留する。保存前取消しと保存後undoを分け、取消しだけで保存済みデータを戻さない。
+TTSはサーバーの成功receiptまたは所有sessionの有効な不足情報質問だけを読み上げる。発話で再生を止めてもreceiptは変えない。
+
+WS接続/最初の音声送信の予算予約と音声metadataを同一transactionに置く。接続5分、累計20分、一発話30秒、
+保留最大2件/60秒を守り、失敗時の予約払い戻し・自動再接続・自動マイク再開を行わない。
+新2テーブルはstream/itemのID・世代・時間・予約のみを保持し、音声と全文文字起こしは永続化しない。
+手動OCRの全欄補正adapterも同じreceipt/履歴へ接続し、field集合・sourceRegionId・boundingBoxの変更を拒否して
+既存correct/revision経路で保存する。生成mappingや受付snapshotを現在テンプレートから置換しない。
+
+通常DBと新API無効状態を保持する。短いコピーAPI/ブラウザー確認は実マイク・実認識・全体回帰の代用ではない。
+必須全体回帰は合意した18、利用者参加の実マイクと通常切替は19で行う。OCR安全性を完全には検証できていない。
+
+### 2026-10-07 会話controller（フェーズ16・通常利用は無効）
+
+[フェーズ16記録](voice-authoring-phase16-2026-10-07.md)の会話経路は、有限catalog/22操作の解釈結果を共通保存queueへ直ちに渡す。
+承認操作は設けない。モデルはsession/turn/revision/request IDを指定せず、controllerが付与して要求digestを固定する。
+モデル待機中にDB transactionを保持しない。保存前後の既存revision/対応/ページ/局所範囲検査を維持する。
+曖昧な対象を最高スコアで選択せず、操作群全体を未保存として不足情報を質問する。質問記憶は60秒、世代と所有sessionに束縛する。
+
+直前の単一値/名称の対象訂正は、元欄の復元と別欄への同値適用を一transactionで行う。
+物理編集・複数変更・別値を過去のinverseから推測変換しない。訂正元IDを履歴に残し、undoは群全体を戻す。
+保存後の中止・通信断・表示失敗で保存済みデータを戻さず、元receiptと正本revisionで復旧する。
+全文会話を業務DBへ保存せず、タブjournalは型付き要求だけを保持する。
+通常DBは未移行、新APIはdefault無効。連続取得/局所録音UIと通知は17、全体回帰は18、実マイク/通常切替は19。
+
+### 2026-10-07 手動editorの共通保存接続（フェーズ15・通常利用は無効）
+
+[フェーズ15記録](voice-authoring-phase15-2026-10-07.md)の手動アダプターを追加した。
+意味差分は共通22操作へ変換する。枠・結合・印字修正・新領域はmanual sessionの許可項目だけを
+既存authoringのprepare/persistへ渡す。モデルのツールに全graph・自由なpath・新座標を公開しない。
+検出品質・既存path・結合前の物理履歴を手動snapshotで置換しない。物理変更を意味だけのundoで戻さない。
+
+空表、未割当のマーク、名前なし、表の意味解除は有効な未完成DRAFTとして保存できる。
+meaning.bind/unbindによる明示した接続変更で行所属を再生成しない。同じpathの表ラベル変更はrelation IDを保持する。
+recordsの空rows/columnLabels、configure.name=null、markのmeaning=null/空optionsは、この下書き契約を表す。
+表のrecordStructureVerifiedは現在の行の接続状態から導出し、OCR資格・ACTIVE化の代用としない。
+geometry・所有・重複path・列数・ページ・識別参照・過去受付snapshotの既存guardは維持する。
+
+手動書込はresource queueで直列化し、結果不明時は元キー/payloadのreceiptを照会する。
+入力中・IME・drag中にflushせず、本人の成功応答でも後続入力を上書きしない。
+競合で停止した入力は、保存版を明示確認するまで外部revisionへrebaseしない。
+保存後の表示失敗を未保存と混同せず、復旧だけで保持入力を新要求として再送しない。
+通常DBは未移行、新APIはdefault無効。連続音声の結合はフェーズ16以降、全体回帰は18、通常切替は19。
+
+### 2026-10-06 共通編集APIの意味付け拡張（フェーズ14・通常利用は無効）
+
+[フェーズ14記録](voice-authoring-phase14-2026-10-06.md)の13操作を追加し、共通APIは22操作となった。
+仮想見出し・表所属・マーク・書類識別・書類名を最終graphで検証し、既存のauthoring保存と原子的receiptを通す。
+この変更の境界は新編集APIであり、通常画面、OCR provider、crop、既存の保存フォーマット、過去の受付snapshotは変更しない。
+
+- 行の既存handleは同じ物理セル配列に束縛する。順序変更で行ID・relation ID・targetPathを再生成しない。
+  新しい未接続セルの保存先だけをserverが割り当てる。表の解除や行の除外は物理セルとその意味を保持する。
+- 既存のreviewStructureはrecordLabelCellIdsを列単位で解釈するため、1列の複数ラベルを列配列へ平坦化しない。
+  全ラベルはrelationに保持し、列の代表ラベルがそろわない場合はmappingの表示名から列名を導出する。
+  recordStructureVerifiedはこの明示的な行と意味の対応を表す。layoutVerified・renderer資格・有効化の代用にはしない。
+- マークは1set最大50選択肢。automatic/manualは同じ欄の保存済み領域を要求し、symbol/checklistは欄全体を使用する。
+  別欄の領域・未対応composite・pagedのchecklist以外は拒否する。自由な座標を受け取らない。
+- 識別と書類名の参照は最終graphの一意な通常text mappingへ解決する。識別labelは現行のmapping表示名を正本とする。
+  依存不整合はtyped failureとして全体を保存せず、失敗receiptも再送で保持する。
+- 見出しは循環・複数親・ページ越境を拒否する。ページと局所録音の境界は、セルだけでなく表・意味・識別・書類名の影響範囲にも適用する。
+  undoは意味graphを新revisionへ戻し、品質確認と有効化は再計算・失効を維持する。
+
+通常DBへのmigrationと有効化は行わない。短いAPI/DB・実XLSXページ検証と最終全体回帰を区別する。
+§8の現行検証経路を使い、退役済みの旧verify_ocr_contract.pyや旧Googleテストを必須コマンドとして復活させない。
+
+### 2026-10-06 共通編集APIの基本操作実装（フェーズ13・通常利用は無効）
+
+[フェーズ13記録](voice-authoring-phase13-2026-10-06.md)の通り、有限handleと型付き9操作、session/turn世代、原子的batch/receipt、resource共有履歴と直前undoを実装した。OCR値は受付mappingとpreview対応が一意な文字欄に限定し、対応のない追加欄は保存済み値を保持した閲覧専用とする。対応情報のある欄の不一致は拒否する。補正とtemplate保存は既存serviceを使い、provider・crop・過去受付snapshotを変更しない。
+
+`EDITING_API_ENABLED`はdefault false。新migrationは隔離コピーDBだけで確認し、実DBは未移行。旧write停止と新hand/voice同時切替は引き続きフェーズ19。基本操作の短い検証は最終回帰の代替ではなく、§8の全体検証と実paged境界は後続フェーズに残す。旧経路の契約は通常利用が切り替わるまで保持する。
+
+### 2026-10-06 連続音声・共通意味付けAPIの次期契約（フェーズ12・未実装）
+
+[フェーズ12統合設計](voice-authoring-phase12-design-2026-10-06.md)を、フェーズ13以降の編集APIと音声操作の設計正本とする。本段落は設計の追加であり、現行の実行契約を実装済みの新契約へ読み替えるものではない。
+
+- 次期仕様では明示的な音声指示を共通の型付き操作へ変換し、対象が一意なら承認画面/固定句なしで保存する。現行の「モデルは対象を選ばない」「音声から直接保存しない」は旧経路の仕様であり、新経路はserver発行handle・capabilities・turn世代・revisionで制限する。
+- 手動意味付けと音声意味付けは同じ保存APIと履歴を使う。一発話/一手動操作の複数変更は原子的な群。未完成DRAFTの保存と、不正graphの保存拒否を区別する。
+- 既存の物理セル/page/region・crop・mappingの対応、受付snapshot、確定/有効化境界を保持する。新意味の明示作成や表所属変更による対応変更は履歴へ記録し、過去jobを再構築しない。
+- 新undoは直前の手動/音声操作群を対象とする。構造全体のinverseを新revisionで適用し、過去の品質確認・資格・確定状態は復活させない。未実装の新inverseで旧履歴を実行しない。
+- `readingMode=number`は自動採番。新APIの`sequence`と対応させ、通常の数字転記や識別設定の`valueType=digits`と区別する。pagedのchecklist許可と他の未対応mark制限は§13を維持する。
+- 旧proposal自動承認、旧全layout書込による新API迂回、API予算のリセットは禁止する。HTTP/WSの予約、20分累計/5分接続の連続音声上限、旧write切替は統合設計§9〜10に従う。
+
+フェーズ12は文書のみで、製品source/DB/実APIを変更しない。実装時の段階検証と最終回帰は統合設計§11〜12。元の契約を意図的に変える箇所と保持する不変条件を同設計に列挙した。以下のフェーズ4〜11の契約は、旧経路が稼働する間の正本として保持する。
+
+### 2026-10-06 共通予算拒否の伝達（文之助フェーズ9）
+
+SDKが送信前hookの予算超過・送信先拒否をAPIConnectionErrorへ包む場合、共通通信層で
+元のAppErrorを復元する。OCRの接続失敗retryや音声の一般的なprovider失敗へ変換しない。
+100回上限、送信前DB予約、失敗時の消費、文書別予約の非払い戻しは維持する。
+この修正は認識の入力・model/prompt/schema・association・crop・補正・出力を変更しない。
+保存済み実応答の5 callについて、正常・token不一致・欠落・重複・不明IDの計25ケースで
+変更前後の送信引数・manifest・展開後の対応/値/判定が一致した。詳細は[フェーズ9記録](voice-assistant-phase9-2026-10-06.md)。
+
+### 2026-10-06 音声接続と共通API予算（文之助フェーズ8）
+
+[フェーズ8記録](voice-assistant-phase8-2026-10-06.md)の範囲で、音声と文章による指示を既存の4操作へ接続した。
+対象IDはモデルに選ばせず、サーバーで検証した選択対象へ束縛する。STT・LLM・TTSの外部通信中はDBロックを保持しない。
+提案生成・読み上げだけでは補正/authoringを保存せず、従来のrevision・所有関係・差分hash・challenge・receipt transactionを通す。
+音声承認は同じ提示challengeの読み上げ完了後に開始する別録音turnと固定句を要求し、そのturnの消費も保存transactionに含める。
+旧ボタン承認の要求digestは維持する。音声承認turnを指定しない再送に新しいnull項目を追加しない。
+
+共通AI通信層 `app/ai` の `api_call_ledger` は、音声とOCRの実HTTP送信前に最大100回をDB予約する。
+失敗・予約後の送信可否不明・再起動でも払い戻さず、SDK内retryとredirectを無効化する。
+OCR providerの入力・model/prompt/schema・association・crop・出力変換は変更しない。新しい制約は送信予算の上限だけである。
+音声に帳票画像・全layoutを送信せず、会話全文・生音声をDBと通常ログへ保存しない。
+録音は上限付きのメモリ処理とし、サーバーでも内容形式・解読後の長さ・無音を検査する。
+
+### 2026-10-06 永続undoと復旧（文之助フェーズ7）
+
+[フェーズ7記録](voice-assistant-phase7-2026-10-06.md)のとおり、サーバー履歴からの逆操作を追加した。
+現在revision=元操作afterRevision、現在対象値=保存後snapshot、編集可能状態を要求し、
+対象FieldReadingまたはセルを共通補正/authoringで復元する。他欄・ID・crop・受付snapshotは維持する。
+元履歴を削除せず、新revision・一意なundo_of_id・提案消費・receiptを同時commitする。
+undoのundo、多段undo、手動編集・確定/再編集・公開をまたぐ巻き戻しは拒否する。
+undoも差分表示・challenge・期限・context再検証を通し、過去の品質確認を自動復活させない。
+
+承認済み要求だけをブラウザーjournalへ送信前に記録する。未承認案は画面を越えて復元しない。
+結果不明時は元session/要求キーで照会し、未受付/PENDINGを失敗と断定せず同一要求を再送する。
+同一originのタブ間はWeb Locksとstorage通知で協調し、DBのreceipt・revision照合を正本とする。
+新sessionからresourceの履歴を取得できるが、他sessionのproposal/challenge/receiptを再送できない。
+完了時にはブラウザーjournalからtoken・challengeを除去する。表示取得失敗を保存失敗に戻さない。
+未保存入力・復元下書きは保持し、明示的な破棄後にだけ保存済み表示へ置き換える。
+DB schema・既存データの一括変換、認識・association・crop・出力adapterの変更はない。
+
+### 2026-10-05 提案・承認・適用（文之助フェーズ5〜6）
+
+[フェーズ5〜6記録](voice-assistant-phase56-2026-10-05.md)を現在の接続範囲とする。
+型付き手入力から、単一OCR値・DRAFTのセル名称・依存関係のない分類・所有選択肢名称を変更できる。
+
+- 提案はサーバー正本から差分を計算する。対象はsessionに束縛したjob/version/page/cell/mapping/choice、
+  resource revision、selection/local-edit世代。選択A→B→Aでもcontext世代が進み、古い案を復活させない。
+- 提案の有効期限は120秒、sessionは30分の非操作期限。表示後のchallengeを要求し、単なる
+  `approved=true`を受け付けない。challenge・hash・所有者・現在revisionを保存transaction内で照合する。
+- 提示・承認情報の保存だけでは業務データを変えない。明示適用は補正/authoring・revision・履歴・
+  逆操作payload・proposal消費・成功receiptを同時commitする。同じ要求キーの成功再送を現世代や期限より先に扱う。
+- `LayoutCell.fieldLabel` は1〜100字の表示名。未指定はnullで、serializerは未指定keyを省略する。
+  input mappingのlabelはfieldLabelを優先し、printedLabelText・ID・targetPath・座標を変更しない。
+  fork・duplicate・package・結合partsで保持する。異なる表示名の記入欄を黙って結合しない。
+- OCRの文字列は日付・数値へ推測変換しない。明示nullは空欄。対象の候補値と不確実理由だけを解消し、
+  他欄・全reviewItems・sourceRegionId・boundingBox・受付snapshot・cropを維持する。
+- templateの名称変更はlabel/headingのtext、inputのfieldLabelのみ。共通authoringが出力表示名と
+  識別表示名を更新し、検証状態を失効させる場合は案に示す。接続・階層・繰り返し・marks・結合等の
+  整理が必要な分類変更は拒否する。選択肢の追加・削除・並び替えは対象外。
+- symbol/checklistの選択肢はlabelとvalueを同時更新し、両方を提示する。manual/automaticはvalueを保持する。
+  保存済みページは明示page identityと元XLSXセルgeometryを検証し、ページ寸法・座標変換を変えない。
+- 永続undo・再読込を越える復旧はフェーズ7、STT/LLM/TTSとAPI予算ledgerはフェーズ8。
+  challengeは信頼するUIの提示処理との束縛であり、API単独で物理的なクリックの存在を証明するものではない。
+
+### 2026-10-05 共通保存とrevision（文之助フェーズ4）
+
+[設計書](voice-assistant-design-2026-10-05.md)に基づき、保存契約を意図的に変更した。
+実装・検証・移行の範囲は[フェーズ4記録](voice-assistant-phase4-2026-10-05.md)を正本とする。
+
+- TemplateVersionは整数revisionを持つ。authoring・mask・検証・公開等の更新をORMのCASで照合し、
+  HTTP変更要求は`expectedRevision`を必須にする。geometry用の内容hashとは別の競合条件である。
+- layout・mapping・識別項目・書類名は`PUT /template-versions/{id}/authoring`で一括保存する。
+  設定ファイルは内容SHA付きの不変ファイルとして先に公開し、DB参照・品質・mapping sidecar・
+  ページ設定を同じtransactionで切り替える。旧layout/field-mappings/print-layout-authoringのPUTは廃止。
+- 単一OCRの補正・確定・再編集・再試行受付・再処理結果保存は同じrevisionを増分する。
+  reopenにもbaseRevisionを要求する。過去のrevision番号・値・既存確定状態は移行で変更しない。
+- 共通transaction内のサービスはflushまでとし、内部commitを拒否する。receiptの成功照会を
+  現在revisionの照合より先に行う。操作・補正・履歴・成功receiptを同時にcommitする。
+- provider、認識prompt、schema、association、crop座標、受付snapshot、出力セル対応は変更しない。
+  生成・適用・undo・音声APIの接続は後続フェーズであり、この保存基盤だけで完成とは扱わない。
+
+### 2026-10-04 汎用形式への非互換変換（現行仕様）
+
+deploy版はOCR schema 2.0のみを受け付ける。値は `fields.<key>` に保存し、欄の意味は
+受付時のmapping・reviewStructure・テンプレート設定で定義する。旧document/pedigree/
+saleCalves/calvings/customFields構造は停止中の一回限りの変換で廃止する。旧構造や
+欠落した受付snapshotを実行時に補う互換処理は設けない。詳細な変換結果は [互換廃止・汎用変換記録](generic-cleanup-2026-10-04.md) を参照する。画像帳票とXLSXページ帳票の入力経路の区別は残す。
+
+- 変換は旧pathと新pathの対応を記録し、mappingId・region ID・crop・座標・列/行IDを保持する。
+- 補正値・候補値・状態・alternatives・reviewReason・reviewItems・revision・確定日時を保持する。
+  未設定かつ空の業種モデル初期値だけを除去する。手入力された値はラベル付きの汎用欄へ移す。
+- 識別項目はテンプレートが指定する。全帳票共通の個体番号・10桁・一意性を要求しない。
+- フィールド名から業種・単位・日付・前行の同上値を推測しない。同上は未確定候補として確認する。
+  選択肢、数字桁数、連番は明示的な設定で扱う。
+- 補正APIはfieldsとreviewItemsを受け取る。補正で欄集合、sourceRegionId、crop座標を変えない。
+  revision競合は409、確定済み補正は拒否し、明示再編集を要求する。
+- 確定はローカルtransactionで完結する。未確定XLSXは拒否する。画像帳票の出力は凍結した
+  reviewStructure、XLSX帳票は受付時原本・adapter・bindingを使用する。
+- Google認証・同期・検索・書類ライブラリ・業種候補辞書を起動、公開API、通常UIから除く。
+- 検証は退避DBと保存済み実responseの比較、短いAPI integration、XLSX内容確認、frontend buildを
+  優先する。廃止契約のテストは理由を記録して退避し、重複unitを追加しない。
 
 この文書はOCRシステムの技術的契約の正本である。作業の優先順位・許可範囲・Git保護は [AGENTS.md](../AGENTS.md) に置き、詳細仕様を二重管理しない。
 
@@ -74,21 +816,24 @@ document image → crop / physical region → physical cell identity
 | XLSXページ定義・geometry | `domain/print_layout.py`、`services/print_layout_service.py`、`services/workbook_geometry.py` | 版所有、保存range、geometry version、page-local transform（§12） |
 | paged受付・実行 | `domain/job_pages.py`、`services/job_page_service.py`、`services/paged_ocr_execution.py` | 明示binding、全ページsnapshot、ページ別artifact、部分失敗・retry（§12） |
 | reference・環境認定 | `services/reference_qualification_service.py`、`services/renderer_environment.py`、`services/office_reference_renderer.py`、`services/renderer_raster.py`、`services/reference_crop_safety.py` | 原本保持、evidence失効、隔離、font、crop安全性、本番gate（§12） |
-| template・rectangle / region検出 | `services/template_service.py` — `TemplatePreparationService.process`、`services/layout_service.py` — `LayoutService.detect` / `save`、`layout_analysis/detector.py`、`segmentation/`、`template_recovery/` | layout、cell / region、ラベルと入力セルの対応 |
+| template・rectangle / region検出 | `services/template_service.py` — `TemplatePreparationService.process`、`services/layout_service.py` — `LayoutService.detect` / `prepare_layout`、`services/template_authoring_service.py`、`layout_analysis/detector.py`、`segmentation/`、`template_recovery/` | layout、cell / region、ラベルと入力セルの対応 |
 | 画像抽出・crop | `services/extraction_service.py` — `ImageExtractionService.process`、`extraction/region_cropper.py` — `RegionCropper.crop`、`image_processing/`、`extraction/` | alignment、前処理、padding込みcrop.bbox、fieldPreview |
-| orchestration | `services/ocr_workflow_service.py` — `OcrWorkflowService.process` / `_create_provider` | provider生成・呼出し、DB・artifact保存、reconciliation |
+| orchestration | `services/ocr_workflow_service.py` — `OcrWorkflowService.process` / `_create_provider` | provider生成・呼出し、DB・artifact保存 |
 | request計算 | `services/ocr_request_preparation_service.py` — `OcrRequestPreparer.prepare` | mapping選択、region入力、request、初期mappedCells |
 | provider / association | `ocr/openai_provider.py` — `OpenAIOcrProvider`、`_compact_request_ids`、`_build_request_manifest`、`_association_tokens`、`_expand_compact_item` | 送信画像、compact ID、token、応答検証・展開 |
-| model / prompt / schema | `core/config.py`、`ocr/prompt_loader.py`、`ocr/transcription_models.py`、`ocr/schema_loader.py`、`backend/resources/templates/cow-breeding-ledger-v1/`（root基準） | primary / fallback設定、prompt、wire / 内部schema。OpenAI転記はload_transcription_promptとcompact modelを使用 |
+| model / prompt / schema | `core/config.py`、`ocr/prompt_loader.py`、`ocr/transcription_models.py`、`domain/ocr_models.py`、`backend/resources/templates/generic-document-v1/`（root基準） | primary / fallback設定、prompt、wire / 内部schema。OpenAI転記はload_transcription_promptとcompact modelを使用 |
 | response計算 | `ocr/deterministic_mapper.py` — `build_mapped_document`、`services/ocr_response_finalization_service.py` — `OcrResponseFinalizer.finalize` | field ownership、値・判定・警告、mappedCells、diagnostics |
 | reviewStructure・表示 | `services/review_display_structure.py` — `build_review_display_structure`、`frontend/src/pages/ReviewPage.tsx` | 構造由来group、保存mapping、行移動 |
 | 補正・確定・reopen | `domain/ocr_models.py`、`services/ocr_result_service.py` — `OcrResultService.correct` / `confirm` / `reopen`、`repositories/ocr_result_repository.py` | 原候補・補正・revision履歴・確定snapshot |
-| 再読取 | `services/document_reconciliation_service.py` — `DocumentReconciliationService.resolve` / `mark_confirmed` | RESCAN_PAGE、対象page / job、merge・履歴 |
-| Spreadsheet / Drive | `services/spreadsheet_template_output_service.py` — `SpreadsheetTemplateOutputService.snapshot` / `render`、`services/google_sheets_sync_service.py`、`services/google_drive_service.py`、`services/output_layout_template_service.py`、`services/excel_export_service.py` | 出力セル対応、snapshot、確定revision、同期・再試行 |
+| XLSX出力 | `services/spreadsheet_template_output_service.py` — `SpreadsheetTemplateOutputService.snapshot` / `render`、`services/output_layout_template_service.py`、`services/excel_export_service.py` | 受付時原本・セルbinding、凍結reviewStructure、確定revision |
 
 `backend/app/ocr/**` と上表のデータ契約はOCR-sensitiveである。Reactやテンプレート編集でも、見た目だけか、保存layout / mapping / cell associationを変えるかで分類する。
 
-legacy単一ページの主要経路は `JobRunner → PipelineJobHandler → DocumentOcrExecutionService.execute → ImageExtractionService.process → OcrWorkflowService.process`。新しい`jobPages`形式は同じjob lifecycle内で`PagedOcrExecution`へ分岐し、既存の抽出・workflowをページ別に利用する。request/response計算へHTTP・DB・Google・filesystem責務を持ち込まない。依存テストは直接importと特定のfilesystem呼出しの検査であり、推移的依存の完全分離は保証しない。
+現行 `OcrResultService` は取得・補正・再編集・ローカル確定・XLSX取得を所有する。
+表示画像は `ocr_result_preview.py`、補正値の型は `ocr_result_types.py` に置く。
+旧同期facade、外部同期service、業種別の文書統合は廃止した。
+
+単一画像の主要経路は `JobRunner → PipelineJobHandler → DocumentOcrExecutionService.execute → ImageExtractionService.process → OcrWorkflowService.process`。新しい`jobPages`形式は同じjob lifecycle内で`PagedOcrExecution`へ分岐し、既存の抽出・workflowをページ別に利用する。request/response計算へHTTP・DB・filesystem責務を持ち込まない。依存テストは直接importと特定のfilesystem呼出しの検査であり、推移的依存の完全分離は保証しない。
 
 以下の既存ReviewPage・単一OcrResult・補正・確定・出力の実装説明はlegacy経路のもので、新paged結果に対応済みという意味ではない。§3〜7のidentity・association・値保護の契約は新経路にも適用し、未対応操作は§12に従い明示拒否する。
 
@@ -116,7 +861,7 @@ Quest / MRや非HTTP入口でも既存の受付・snapshot・job lifecycleを利
 
 mappingのずれの帳尻合わせとして、空欄OCR結果の削除、array compaction、後続値の前後シフト、隣セルのコピー、配列index・応答順・文字内容だけによる再割当てを行わない。sourceRegionId・boundingBox・cropを値に合わせて変更しない。不確かな対応は安全側へ失敗させる。
 
-reconciliationにも同じprovenance・physical identity契約を適用する。§6の既存mergeを安全性の証拠や禁止の例外とせず、provider associationと混同して推測修正しない。
+別の帳票や別jobの値を、番号・ラベル・配列位置だけで統合しない。業種別の文書merge経路は廃止した。
 
 ### 3.4 手動追加した多角形
 
@@ -225,7 +970,7 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 
 表示上のgroup化とfield identity統合を混同しない。独立項目のgroup identityはlabel文字列でなく `parentLabelCellId + labelCellIds` に基づく。現在の `_logical_field_group_id` はlabel cell IDを重複除去・sortし、情報がなければ `field:{mappingId}` にfallbackする。
 
-過去jobの表示は保存済みreviewStructure / fieldMappingsを基準とする。reviewStructureがない旧jobは既存の独立項目fallbackを維持し、現在のTemplateVersionから勝手に対応を再構築しない。
+過去jobの表示は保存済みreviewStructure / fieldMappingsを基準とする。reviewStructureまたはrecordStructureがない結果は409で拒否する。現行TemplateVersionやラベルから勝手に対応を再構築しない。
 
 認識結果に属する `raw`、current value、`normalized`、`status`、`alternatives`、`reviewReason`、warning / review item情報と関連metadataは、行移動時に一式として移す。物理identityは行位置側に固定する。行オブジェクト全体のswapや、文字列だけ移して警告を元位置に残す実装は禁止する。
 
@@ -268,7 +1013,7 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 | 確定・保存API失敗 / revision競合 | 修正値と復旧手段を保持。lockやエラーを確認完了の代用にしない |
 | セル選択・crop閲覧 | 確定後も閲覧を許可し、レビュー編集UIの再表示とは分離する |
 | 明示的なreopen成功 | サーバーの `confirmed=false` に従って編集・必要な警告表示を有効化する |
-| Google同期失敗 | 確定を取り消さず、既存の外部出力再試行経路へ送る |
+| XLSX取得失敗 | 修正値・確定状態を保持し、原因を示して再取得できるようにする |
 
 ## 6. 補正・revision・再読取
 
@@ -278,38 +1023,32 @@ provider契約を変更せず、過去jobのsnapshotや公開版のDB内容を�
 
 `correct` はREVIEW_REQUIREDを要求し、candidateを正規化・検証する。repositoryの `save_correction` はbase_revision条件付き更新、revision増分、source付き履歴を記録する。競合を上書きせず、mapping / sourceRegionId / boundingBox / field ownershipを保存・再取得まで照合する。
 
-`confirm` はユーザーが見たbaseRevision、validation、document解決を検査して確定snapshotを保存する。確定や正規化は不確実なOCRを自動的に正読へ昇格させる許可ではない。
+`confirm` はユーザーが見たbaseRevision、validation、受付時の識別項目と明示書類名を検査して確定snapshotを保存する。確定や正規化は不確実なOCRを自動的に正読へ昇格させる許可ではない。
 
-`reopen` は確定snapshotの存在を検査し、jobをREVIEW_REQUIREDへ戻してconfirmed_atを解除する。OCR再実行やresult revision増分はなく、補正済み値・既存確定snapshotを残す。
+`reopen` はbaseRevisionと確定snapshotの世代を検査し、jobをREVIEW_REQUIREDへ戻してconfirmed_atを解除する。OCR再実行はせず、result revisionと履歴を増分し、補正済み値・過去の確定snapshotを保持する。`confirm`も新revisionを作り、現在のConfirmedResultと追記専用のOcrConfirmationRevisionへ同時に記録する。
 
-### 6.2 retry / RESCAN_PAGE
+### 6.2 retry
 
-現在、独立したre-read service / endpointはない。job retry、別OCRジョブの受付・実行、`document-resolution` の `RESCAN_PAGE`、document reconciliationの組合せを区別する。
+`JobService.retry` は状態制約、受付入力・template snapshot、attempt管理に従う。
+最新templateへ差し替えない。別OCRジョブは別の結果として扱い、旧業種のRESCAN_PAGE・
+document-resolution・parity/indexによる文書mergeは公開APIと実行経路から廃止した。
+`save_provider_result` の再処理履歴と補正履歴を区別する。新旧jobのID一致だけで値やcropを移さない。
 
-- `JobService.retry` は既存の状態制約、受付入力・template snapshot、attempt管理に従う。最新templateへ暗黙に差し替えない。
-- `RESCAN_PAGE` は対象document / page / jobを検証し、replaces_page_idとRECONCILIATION revisionを記録する。
-- 現 `_merge_documents` は新しい非空のreadingを採用し、空欄等では旧readingを残す。saleCalves / calvingsの対応にはparityまたはindexを使う。これは別文書のmerge仕様であり、provider associationの証明ではない。
-- `save_provider_result` は再処理時に現在結果を更新し、REPROCESS履歴を追加する。再OCR・reconciliationが「常に旧補正値を優先する」とは記述しない。
-
-新旧jobの座標・mappingは同一とは限らない。snapshot / pageを含むprovenanceを保ち、ID文字列一致だけで安全としない。旧値を残すmergeのcrop / fieldPreview整合性はケースごとに確認する。UX変更で採用規則を変えず、誤対応は証拠・比較・テストを伴うOCR改善タスクとする。
-
-## 7. ローカル確定・Google同期・Spreadsheetセル
+## 7. ローカル確定とXLSXセル
 
 ### 7.1 現在の処理順と失敗
 
-`OcrResultService.confirm` は確定snapshot・document reconciliation・job/document状態をDBにcommitした後、Spreadsheet templateなら `_publish_spreadsheet_template`、それ以外は条件付きDrive名同期と `GoogleSheetsSyncService.sync` を同期的に呼び、最後に結果を返す。UIから別endpointを呼んで初めて全同期が始まる設計ではない。
-
-`confirmed=true` はローカル確定、`spreadsheetSync.status=synced` は外部反映成功、`failed` は外部出力失敗を意味する。同期失敗をレビュー未完了へ変換しない。
-
-Sheets同期とtemplateのDrive作成失敗はfailedを記録する。ただしXLSX生成・出力先確認等のtry外の処理は例外を伝播し得る。commit後のAPIエラー／通信断を未確定と決め付けず、入力を保護してサーバー状態を確認し復旧する。
-
-`POST /ocr-jobs/{job_id}/spreadsheet-sync`（API v1配下）から再試行できる。修正・reopenでも条件によりSheets同期が走るため、「外部同期は確定後だけ」とは扱わない。Driveのaccount / ownership / conflict保護、operation IDによる冪等性、revision照合を迂回しない。Google由来の編集は既存の `apply_spreadsheet_edit` と検証・revision経路を使う。
+単一画像の確定はbaseRevision、validation、受付時の明示識別条件を検査し、XLSX生成を
+成功させてから確定snapshotとjob状態を同じローカルtransactionで保存する。
+`confirmed=true` の正本はサーバーのjob状態。Google / Drive同期と再同期endpointは廃止した。
+XLSX生成失敗は未確定のまま値を保持する。commit後の応答消失は未確定と決め付けず再取得する。
+確定済みの取得失敗だけで確認を解除しない。再編集は値・revision・履歴を保持する。
 
 ### 7.2 OCR値から出力セルへの対応
 
 Spreadsheet template出力は受付時の `spreadsheetOutput` と `fieldMappings` snapshotを基準に、targetPathの値を `_destinations` と結合anchorへ解決する。UIの配列順や表示名で出力セルを推測しない。元XLSXと生成コピーを区別し、OCRテキストを式として扱わない既存処理を維持する。
 
-`OutputLayoutTemplateService` の保存layout、通常Sheets同期、`ExcelExportService` の出力も対応境界に含める。UX都合でbinding・sheet・元cell・確定revisionを変更しない。
+`OutputLayoutTemplateService` のローカル保存layoutと `ExcelExportService` の出力も対応境界に含める。UX都合でbinding・sheet・元cell・確定revisionを変更しない。
 
 ### 7.3 Excel出力の元結合範囲（2026-09-05修正）
 
@@ -320,14 +1059,14 @@ OCR identity契約は変更しない。Excel出力についてのみ、従来の
 
 範囲展開を利用する新規出力snapshotはschemaVersion 2とし、各結合の
 sourceRangesを保存する。元XLSXのSHA-256、sheet、保存したpartsから
-出力時に一致を再検証する。schemaVersion 1の既存jobは従来どおり解釈する。
+出力時に一致を再検証する。現在はschemaVersion 2のみを受け付け、schemaVersion 1を拒否する。
 parts、mappingId、targetPath、sourceRegionId、boundingBox、crop、
 reviewStructure、補正保存およびprovider associationを変更しない。
 
 出力コピーでは、選択した元結合範囲に完全一致する既存結合だけを解除して
 再結合できる。従来拒否していた既存結合の包含を、この根拠がある場合に限って
 許可する。部分交差、別結合との重複、数式消失、未承認の内部値消失は拒否する。
-元XLSXは書き換えない。旧形式の重複拒否テストは維持し、新形式を別ケースで検証する。
+元XLSXは書き換えない。重複・欠落・部分交差・式消失の拒否は現在のschemaVersion 2でも維持する。
 
 選択したliteral部品と元セル値の比較では、取込・編集時に除去される前後空白の差を
 非空の文字列に限り許容する。比較だけであり、原本・保存partsを正規化しない。
@@ -340,57 +1079,63 @@ reviewStructure、補正保存およびprovider associationを変更しない。
 
 この変更はExcel出力契約の拡張であり、OCR認識・物理identity契約の変更ではない。
 
+### 7.4 汎用帳票の識別とXLSX出力（2026-10-04）
+
+すべての現行テンプレートは `generic-document`。OCRの正本はschemaVersion `2.0` の
+`fields` と `fieldLabels`、保存先は `fields.<key>`。旧階層path、単一documentIdentity、
+CSV設定、業種辞書・年号・単位の推測は廃止した。旧補正payloadを無視して受理しない。
+現行パッケージはformat/schemaVersion 2、旧package v1は拒否する。
+
+識別情報は `documentIdentityFields` の配列に明示設定する。番号・名称・日付・組合せを
+扱い、全帳票共通の番号・10桁・DB主キーの一意性を要求しない。明示されたdigits / exactLengthは守る。
+書類ライブラリの検索・自動統合は行わず、読み取り後に設定した値とcropを利用者が確認する。
+
+画像帳票は受付時の非空fieldMappingsと凍結reviewStructureから独立項目・見出し・明細表を
+出力する。列はcolumn ID、値はfield ID / mappingId / targetPathの一致で解決し、ラベルや
+配列位置から推測しない。全enabled mappingが一度ずつ対応することを検証する。
+同名列、明示空セル、途中・末尾の空行、未mappingの保存済み手動項目を保持する。
+構造不足や不一致は409で拒否し、出力時に対応を補充しない。
+
+値はnormalized（nullならraw）を文字列として出力し、先頭ゼロ・改行・式文字列を保持する。
+列を編成する際も既存relation.targetPathと欄IDを保持し、保存先を再生成しない。
+原XLSXがある帳票は受付時adapterと原本SHAによる経路を優先する。
+未確定出力拒否、確定revision、所有原本・paged cell binding・書式保持を維持する。
+
+変換済みの既存候補・補正・確定値は再計算しない。今後の新規OCRでは、例えば `26 9 27` を
+業種別の生年月日と見なして西暦へ推測変換しない。既存保存値 `2014年9月27日` は保持する。
+対応関係の維持と、この意図した正規化仕様変更を区別して報告する。
+
 ## 8. 検証基盤と変更範囲別の検証
 
-### 8.1 実在する基盤と限界
+### 8.1 現在の検証方法
 
-`scripts/verify_ocr_contract.py` と `backend/tests/ocr_contract/` は現在存在する。scriptは実行Pythonのpytestをbackend作業ディレクトリで起動し、固有の `.pt-ocr-*` を生成する。対象はscript内の `targets` が正本。
+保存済みの実provider response、停止時の退避DB、同一受付snapshot、crop SHAを比較し、
+短いAPI integrationとXLSX内容照合を行う。検証script・fixture・ログは製品外に保存する。
+旧 `scripts/verify_ocr_contract.py` と廃止仕様のテストは退役理由付きで退避済み。
+その旧成功件数を現行schema 2.0の回帰成功として使用しない。
+現行の条件・コマンド・結果・退役一覧は [互換廃止・汎用変換記録](generic-cleanup-2026-10-04.md) を参照する。
 
-| 対象 | 現在の検証入口（backendのtestは `backend/tests/` 配下） |
+### 8.2 選択する検証
+
+| 変更 | 必須検証 |
 | --- | --- |
-| provider / association / mapping | `unit/test_openai_call_budget.py`、`unit/test_openai_mapped_payload.py`、`unit/test_deterministic_mapper.py` |
-| request / response計算・workflow | `ocr_contract/test_phase5a_request_preparation_contract.py`、`ocr_contract/test_phase5b_response_finalization_contract.py`、`unit/test_ocr_workflow_optimization.py`、`ocr_contract/test_reading_logic_audit.py` |
-| 受付・execution・cancel / retry・永続化 | `ocr_contract/test_phase2_pipeline_contract.py`、`ocr_contract/test_phase3_job_submission_contract.py`、`ocr_contract/test_phase4_document_ocr_execution_contract.py`、`unit/test_job_state.py`、`integration/test_jobs_api.py` |
-| preview / reviewStructure / 補正・確定 | `unit/test_ocr_result_previews.py`、`unit/test_review_display_structure.py`、`unit/test_ocr_confirmation_revision.py`、`unit/test_document_reconciliation_service.py`、`integration/test_ocr_review_api.py` |
-| Spreadsheet境界 | `unit/test_spreadsheet_template_output_contract.py`、`unit/test_spreadsheet_edit_sync.py` |
-| 計算境界の依存 | `ocr_contract/test_phase6_architecture_dependencies.py` |
-| frontend review / identity / state | `frontend/src/pages/ReviewPage.test.tsx`（scriptには含まれない） |
-| schema fixture | `golden/test_schema_fixture.py`（mock-resultのschema検証。scriptには含まれない） |
+| 文書 | 現行コード・参照パス・文書間整合性、diff確認 |
+| frontend表示・操作 | `npm run build` と関係する実画面操作。保存・競合・確定・再取得等の必要な遷移 |
+| backend / DB / lifecycle | 短い隔離API integration、対象静的検査。導入・起動・停止・再起動への影響は実入口で確認 |
+| OCR / mapping / association | 同じ保存responseからrequest・manifest・compact ID・応答・値・判定・所有権を比較。重複・欠落・不明IDを検査 |
+| crop / template / 補正 / 出力 | mappingId・targetPath・sourceRegionId・boundingBox・画像SHA、revisionと保存値、XLSXセル対応を比較 |
+| paged / renderer | §12の所有原本・ページbinding・実入力・geometry・隔離gateを変更範囲に応じて実測。単一画像の成功を代用しない |
 
-scriptにはfrontend、backend全体、すべての検出・cropテストは含まれない。汎用の保存実response Golden replayと旧文書の推奨fixtureディレクトリは未整備。現contract testsの固定入力・stub比較を全Golden replay成功と扱わない。
+ユニットテストの追加・全件実行は既定にしない。短い上記検証で未確認の具体的な境界だけ、
+最小の既存テストや追加検証を選ぶ。必要時のpytestは [Artifact Storage Policy](../ARTIFACT_STORAGE_POLICY.md)
+に従い、未使用のDドライブ絶対パスをbasetempに指定する。既存tempやユーザーデータを削除しない。
 
-### 8.2 実行コマンド
+### 8.3 比較と報告
 
-Windowsの現リポジトリでは、pytestの入った `backend/.venv` を使う。別環境では依存を備えたPythonへ読み替える。
-
-| コマンド | 作業ディレクトリ |
-| --- | --- |
-| `git status --short`、`git diff --check`、対象の `git diff` | リポジトリroot |
-| `npm test -- ReviewPage.test.tsx`（変更対象に合わせて選択） | `frontend/` |
-| `npm test` | `frontend/` |
-| `npm run build` | `frontend/` |
-| `backend\.venv\Scripts\python.exe scripts\verify_ocr_contract.py` | リポジトリroot |
-| `.\.venv\Scripts\python.exe -m pytest tests/ocr_contract -q`（これだけではscript全対象を代替しない） | `backend/` |
-| `.\.venv\Scripts\python.exe -m pytest` | `backend/` |
-| `.\.venv\Scripts\python.exe -m ruff check app tests` | `backend/` |
-| `.\.venv\Scripts\python.exe -m mypy app` | `backend/` |
-
-pytestのtemp権限に問題がある場合は、未使用のrepo-localパスを `--basetemp` に指定する。既存のtempやユーザーデータを再利用・削除しない。静的検査は変更対象と全体の既存エラーを区別する。
-
-### 8.3 検証の適用
-
-| 変更 | 必須検証と追加条件 |
-| --- | --- |
-| 文書だけ | 実コード・パス・文書間整合性、diff確認。記載した動作に未確認点があれば該当テストを実行 |
-| 表示・操作・一時UI stateだけ | frontend対象テストとbuild。状態変更は関係する成功・失敗・再取得・再マウント・reopen・同期失敗を確認。共通UI / 複数画面への影響時はfrontend full tests |
-| backend（OCR-sensitive以外） | 関連unit / integration、該当静的検査。共有service / DB / lifecycle変更時はbackend full tests |
-| OCR core（prompt / model / schema含む） | 変更前後の専用script、同入力の保存response / fixture比較、関連境界テスト、backend full tests。provider変更はrequest・association・schemaを検証 |
-| ReviewPage mapping / 補正payload / revision / 出力対応 | OCR-sensitiveとして上記を実行。field identity、sourceRegionId、targetPath、crop、保存・再取得、frontend対象テスト・buildを含める |
-| Crop / rectangle / region / template layoutデータ変更 | OCR-sensitiveとして上記を実行。検出・boundingBox・sourceRegionId・実crop SHA / 見た目とreview対応を追加確認 |
-
-変更前にrevision・worktree・条件を記録し、変更後と同じ対象で比較する。意図しないmappingId / targetPath / sourceRegionId / boundingBox差分は重大回帰として停止し、原因を調査する。認識文字列やstatusの差分は、意図した精度改善か別途評価する。
-
-必須検証が実行不能なら理由と代替の既存テスト・未検証範囲を報告し、「OCR安全性を完全には検証できていない」と明記する。未整備のGolden基盤を実行済みとしない。必要な対応関係を証明できない変更や契約回帰は完了扱いにしない。
+変更前のworktree・入力・受付snapshotと、変更後の同じ条件を記録する。意図しない値・ID・
+crop・revision・確定状態の差分は回帰として調査する。意図した非互換変換は旧新仕様と理由を記録する。
+未検証範囲、失敗、中断は成功と分ける。全体unit / E2Eを実行していなければ全件成功と表現しない。
+必要な対応関係の回帰が残る場合は完了扱いにしない。
 
 ## 9. Golden・テスト保護・実API
 
@@ -413,11 +1158,31 @@ Golden expectedを現在出力へ合わせるだけの更新は禁止する。�
 
 ### 9.3 実API利用
 
-unit → 保存response / Golden比較 → integration・必要な回帰 → 必要時のみ実API smoke testの順で検証する。mock / stubで足りるテストにOpenAI / Google APIを使わない。実API呼出しの既存許可・予算を守る。
+保存実response / Golden比較 → 短いAPI・出力integration → 未確認の境界検証 → 必要時のみ実APIの順で検証する。保存responseやmockで足りる条件にOpenAIを使わない。実API呼出しの既存許可・予算を守る。
 
 model・prompt・schema・provider request・association方式変更、または固定fixtureだけでは評価できない精度課題では実API smokeを検討する。実施時は目的、API calls、image count、model、association mismatch、mapping誤対応、schema error、recognition-only errorを分けて記録する。未実測項目を0件と報告しない。
 
 ## 10. OCR改善と意図的な契約変更
+
+### 見出しのない番号欄（2026-09-26）
+
+記入欄の「番号を読む」は、2026-09-26の利用者の訂正要求により、自動採番の設定とする。
+明示選択されたinputセルだけに `readingMode=number` を保存する。未設定の既存セルには
+metadataを追加しない。保存先がない場合だけ、重複しない「番号」の項目と、見出しを
+必要としない既存relationを追加する。設定済みtargetPath・cell ID・矩形は維持する。
+保存時に番号欄をcanonicalのy、x、cell IDの順に並べ、1開始・1増分の
+`sequenceNumber`をfield mappingへ固定する。region・受付snapshotにも保持し、
+実行やページ抽出の際には数え直さない。これは文書ごとの欄番号で、文書間通し番号ではない。
+番号欄はOpenAI/PaddleOCRの送信・検査対象から外し、画像内容に関係なく保存済み番号を
+文字列のFieldReadingとして生成する。sourceRegionId・boundingBox・targetPathはその欄の
+既存対応を保持し、mappedCellsに`automatic_sequence_number`と送信対象外を記録する。
+番号欄だけならprovider呼出しは0回。番号を含む要求では帳票全体画像もproviderへ送らない。
+①や先頭ゼロ等の印刷表記は転記しない。レビュー・手動補正・確定は既存経路を使用する。
+旧行番号roleへ変換しない。model・応答schema・association・crop・出力先の対応は変更しない。
+以前保存したsequenceNumberのない番号OCR版・受付済みjobは従来の転記動作を保持する。
+新方式を適用するには編集用の版でレイアウトを保存し有効化する。既存jobへ後付けしない。
+別形式のAI汎用定義では番号設定を保持できないため、黙って落とさず既存の未対応拒否へ含める。
+今回の検証は明示要求に従い最小XLSXを使う実画面確認を中心とし、全体テストは実行しない。
 
 ### 記入欄内の記号判定（2026-09-25）
 
@@ -440,6 +1205,19 @@ model、応答schema、association token、mapping/sourceRegion identity、crop�
 記号モードの新規選択を無効にする。実画像での認識精度はoffline境界テストだけでは保証しない。
 検証の範囲・結果は [記号判定の実装記録](verification/symbol-reading-20260925.md) を参照する。
 
+### 単一ページOCRの文字読み取り選択肢（2026-09-29）
+
+明示要求により、単一ページOCR画面の「文字読み取りも実行する」トグルを初期状態では隠し、
+文字読み取りを必須とする。backend設定 `OCR_TEXT_RECOGNITION_TOGGLE_ENABLED` が `false` の場合、
+frontendはトグルを表示せず、受付値を `ocrEnabled=true` に固定する。
+`JobService.create_ocr_job` は同じ設定状態での `ocrEnabled=false` 受付を拒否する。
+画像処理のみの経路やprovider処理自体は削除せず、既に受付済みのjobは受付時snapshotどおり実行する。
+
+トグルを復活させる場合は `OCR_TEXT_RECOGNITION_TOGGLE_ENABLED=true` としてbackendを再起動する。
+`/health` からその状態をfrontendへ渡し、従来の画像処理のみの選択を利用可能にする。
+この設定はトグルを持つ単一ページOCR受付だけに適用し、paged OCR、mapping、crop、association、
+補正・確定・出力、既存job snapshotの意味は変更しない。
+
 ### Template編集の版境界
 
 mapping生成validationの失敗を空mappingへの置換保存に変換しない。
@@ -449,7 +1227,7 @@ mapping生成validationを正本にvalidForOcr=falseと対象fieldの警告を�
 保持したmappingを読み取り確認・ACTIVE化・新規OCR受付で有効化しない。
 frontendの未割当（保存先なし）と設定不完全（保存先あり・mark必須設定不足）を区別し、
 共通fixtureでbackendとの判定一致を固定する。過去job snapshotは再検証対象にしない。
-DBとconfig YAML全体のatomic saveは別課題であり、この保護を全面transactionと称さない。
+2026-10-05以降は統合authoring保存を使用する。設定ファイルの不変公開後に、DB内のlayout・config参照・品質・sidecar・準備jobのページ設定を同時にcommitする。失敗で残った未参照ファイルを有効な設定とは扱わず、旧設定ファイルを上書きしない。
 
 公開済みTemplateVersionのlayout・field mappings・mask・汎用定義を直接変更しない。
 ACTIVEからの編集は同じ原本のDRAFTを1つ作るか再開する。途中保存では版を増やさず、
@@ -460,6 +1238,13 @@ logical identityのsidecarをprovider associationの代用にしない。
 詳細と意図的なlifecycle変更は [Template Versioning](template-versioning.md) を参照する。
 
 ### 契約変更の手順
+
+2026-10-04のデプロイ版の依頼では、汎用化・最適化に必要な破壊的変更が明示的に
+許可された。対象と検証方針は [AGENTS §1.1](../AGENTS.md#11-デプロイ版の汎用化最適化に関する許可2026-10-04)
+を参照する。変更を必要とする具体的な問題、旧契約と新契約、既存データへの影響を示し、
+両文書を同時に更新する。ユニットテスト追加は極力避け、保存response・実API・
+短いintegration・出力比較で契約を確認する。許可の取得と検証結果は区別し、
+未検証の変更を検証済みと報告しない。
 
 OCRコア変更には、AGENTS §5の明示されたタスク範囲、再現可能な問題または測定可能な精度課題、変更前後比較、§8の検証が必要である。コード整理・抽象化・美観・一般化・speculative optimization・将来用途だけでは変更しない。
 
@@ -586,17 +1371,17 @@ legacyの`OcrResult`へ上書きせず、page IDをキーとする全ページ�
 受付transactionでlayout全体（見出し・繰り返し・結合を含む）、config、reviewStructure、
 logicalFieldIds、承認済み汎用定義、既存XLSX出力snapshot、page ID/source rangeによる出力bindingを固定する。
 原本のSHAを確認したjob専用コピーを所有artifactとして保持し、元作成jobや現行版の変更を参照しない。
-旧schemaVersion 1を実行・レビュー時に暗黙更新せず、必要な出力snapshotがない場合の全ページ確定は拒否する。
+現在は受付bundle schemaVersion 2のみを実行・レビュー可能とし、schemaVersion 1を拒否する。必要な出力snapshotがない全ページ確定も拒否する。
 新形式の実行では所有コピーの範囲・SHAも最初のprovider呼出しより前に検証する。
 
 確定は全ページ共通baseRevisionと全page IDの明示確認、既存の値/画像品質検証を要求する。
 PagedConfirmationへ全ページの現在値・文書名・受付bundle SHAを一括保存し、jobのCONFIRMEDと同じtransactionでcommitする。
-OCR値・statusを自動昇格せず、既存単一ConfirmedResultやLedgerDocumentPageへPage 1を代入しない。
-新paged経路では確定・reopenもrevisionを増分する。旧単一reopenのrevision維持は変更しない。
+OCR値・statusを自動昇格せず、単一ConfirmedResultへPage 1を代入しない。
+paged経路では確定・reopenもrevisionを増分する。単一OCRにも2026-10-05から同じ増分原則を適用する。pagedと単一の保存モデル・API・受付identityは引き続き分離する。
 これによりreopen後の古い確定/補正要求を拒否し、過去の確定snapshotと全履歴を保持する。
 確定の成否が不明な通信失敗では再取得まで状態変更/編集を止めるが、通常の補正保存では追加編集を維持する。
 競合で保持した下書きは確定済み値として表示せず、明示reopen後に編集値として復元する。
-書類一覧への統合は未実装。既存単一ページ用APIの拒否と本番受付gateは維持する。
+書類ライブラリは製品対象外。既存単一ページ用APIの拒否と本番受付gateは維持する。
 意図的な新paged保存/確定契約の拡張と残る制限は[全ページ確定](paged-confirmation.md)に記録する。
 詳細とmigration適用状況は[ページ別レビュー](paged-review.md)を参照する。
 
@@ -638,7 +1423,8 @@ OCR結果出力（§7）は変更しない。小数％倍率等、既存adapter�
 `draft-visible-cells-v1`は非表示行列を表示幅・高さから除き、セル内縮小を参考描画する
 未認定の表示モデルである。保存済みlegacy/LOモデルを自動更新しない。原本の設定・セルを
 書き換えず、元セルIDからページ表示座標を参照する。元セルの表示座標はlayoutへ保存しない。
-`PUT print-layout/authoring`はDRAFT/revisionを確認する。通常矩形と結合partsへ展開した元セル集合は
+2026-10-05以降は統合`PUT /template-versions/{id}/authoring?expectedRevision=...`でDRAFT/revisionを確認する。
+通常矩形と結合partsへ展開した元セル集合は
 重複のない既存集合の部分集合とし、残存元セルのphysical ID・canonical座標・形状を保持する。
 既存LayoutServiceへ人間の区分・意味づけ・明示的な削除・同一ページ内の結合/解除を保存する。
 結合親は元partsの外接矩形と一致し、元XLSXから解決したpartsの範囲は欠落・重複のない連続矩形に限る。
@@ -1071,3 +1857,35 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
 今回の検証は明示要求に従い対象テスト・build・実画面確認に限定する。
 全体テスト、実WSL再描画、実OCR品質評価は別であり、fixture通過をその証明にしない。
 詳細は[通常OCR準備の検証](verification/reviewed-ocr-entry-20260922.md)を参照する。
+
+## 13. チェックリスト（2026-10-04）
+
+ユーザーの明示依頼により `markRecognitionMode=checklist` を追加した。紙のペン記入、印刷/セル文字のチェック記号、Excelセル内チェックボックスを対象とする。従来の automatic/manual/symbol の判定方法は変更しない。
+
+- checklist は `mappingType=mark` / `markSelectionMode=multiple`。候補は1〜50件、同名不可。候補名に選択値の区切り文字 `・、,;` / 改行を含めない。
+- 設定した欄全体のalignedColor cropを送信し、チェックされた候補ラベルを候補順に `・` で連結する。未選択は `blank` / null、曖昧・候補外・対応不明は `uncertain`。空の読取可能応答を未選択へ変換しない。
+- プロンプトは checklist の画像だけ、手書きと印刷のチェック印を対象とし、選択値を `v` に返す。ASSOC、compact ID、返却対応検査は従来どおり。
+- 補正は既存revision経路で保存する。確定前に受付snapshotの候補と照合し、判別不能・未知の候補・重複選択を拒否する。checkboxをfalseへ落として確定しない。
+- ページ別実行は、従来のtextに加えchecklistだけを許可する。page field bindingから欄全体のrectangleを取得する。選択肢ID/値を保持し、選択肢rectangleは欄全体へ設定する。これは画像差分検出用の範囲ではない。その他のmark・複合項目の未対応制限は維持する。
+- XLSX直接入力はACTIVEな単一ページSPREADSHEET_TEMPLATEに限定する。同じsheet/行列寸法/結合/記入欄以外の値を検査し、受付対象のセルだけを描画用コピーへ転記する。原入力xlsxとSHA、セル内checkbox数を記録する。原本を書き換えない。
+- Excelのセル内checkboxは、OOXMLのFeaturePropertyBag→XFComplement→XFControls→Checkboxとboolean cellの対応を検証する。候補が1つのchecklist欄だけに割り当てる。書式のないTRUE/FALSEをcheckboxと推定しない。
+- セル内checkbox原本の出力では、確定値をbooleanへ変換し、所有するsheetのcell XMLだけを変更する。他のZIP partと原sheet名を保持する。手動結合との併用は拒否する。通常の文字チェックリストは既存XLSX出力を使用する。
+- 旧フォーム/ActiveX、外部リンク、数式を含む直接入力、paged XLSX直接入力は未対応として停止する。画像にしたチェック欄は通常の画像OCRで確認できる。paged rendererの資格・入力検査を緩和しない。
+
+検証の範囲と残る制約は [チェックリストOCR](checklist-ocr.md) を参照する。実筆記・実撮影画像の精度は、合成検証画像やExcel描画画像の結果では証明しない。
+
+## 14. テンプレートの線接続操作（2026-10-05・範囲訂正）
+
+ユーザーの追加指示により、接続方法を置換した前回変更を撤回し、線で結ぶ操作の改善に限定した。
+
+- 項目名から記入欄へドラッグし、離したときに反映する。複数欄の選び方は従来の `meaningLinkLaneCells` を使用する。選択一覧や追加の接続確認ボタンを要求しない。
+- 描画時と確定時は同じ `meaningDragSelection` を使う。終点セルの中心への補正、役割による絞り込み、方向・経路の対象判定を共有し、強調表示と実際の対象が食い違わないようにする。
+- 接続線は丸い端と白い縁取り、視認できる一定の表示太さにする。ドラッグ中は接続先の枠と件数を表示する。これらは一時UI状態であり、セル座標・crop・値・保存先を変更しない。
+- 2026-10-05追加最適化: 項目名のhover時に接続点とgrabカーソルを表示する。接続中は原画像の文字を見やすくするため認識文字の重ね描きを抑え、仮想見出しは表示する。保存した文字は変更しない。
+- セル内のヒットを優先する。セル外では項目名/記入欄の矩形までの距離を表示pxで測り、8px以内を吸着候補にする。最短2候補の距離差が2px未満なら対象を決めず、利用者に欄の中へ移動するよう示す。多角形の外側への吸着は行わない。吸着はポインターの解釈だけに適用し、セルの座標・形状や既存の接続を変更しない。
+- ドラッグ中の表示更新と端から32px以内の自動スクロールはrequestAnimationFrameで処理する。スクロール後のcanvas座標から候補を再計算する。マウスを離す・Esc・pointer cancel・ウィンドウ非アクティブ化で停止し、4px未満のクリック移動は接続変更を行わない。
+- 保存先の推定・重複回避、relation作成・並び順、既存保存APIは従来の経路を使用する。前回追加したID維持方式への置換も撤回した。利用者の接続操作によるrelation ID更新は従来の仕様であり、OCRのmappingIdと混同しない。
+- Esc、pointer cancel、工程・ページ・ツール変更で未確定の線を破棄する。取り消しは直前のrelationと親関連に加え、recordStructureVerified / allowCrossAxisLabelsを元の値へ戻す。確認状態を再計算して変更しない。
+- 既存テンプレートや受付snapshotの一括変換は不要。provider・prompt・OCR実行・補正revision・XLSX出力は変更しない。
+
+検証範囲は [テンプレート作成GUIの変更と検証](template-authoring-ux-2026-10-05.md) を参照する。前回の選択パネル方式の記録は製品外に退避し、現行仕様として扱わない。

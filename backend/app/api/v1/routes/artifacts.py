@@ -36,7 +36,7 @@ def list_artifacts(request: Request, job_id: str) -> ArtifactList:
         return ArtifactList(
             items=[
                 ArtifactItem(
-                    name=item.artifact_name,
+                    name=item.artifact_name.split("~", 1)[0],
                     media_type=item.media_type,
                     url=(
                         f"/api/v1/jobs/{job_id}/artifacts/{item.artifact_name}"

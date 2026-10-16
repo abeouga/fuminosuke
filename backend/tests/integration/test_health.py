@@ -10,6 +10,7 @@ def test_health_and_docs(client: TestClient) -> None:
         "database": "ok",
         "jobWorker": "running",
         "ocrProvider": "mock",
+        "ocrTextRecognitionToggleEnabled": True,
     }
     assert client.get("/docs").status_code == 200
     assert "app.db" not in response.text.lower()

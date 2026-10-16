@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, FieldError
 from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
+from app.db.mutation import require_revision
 from app.db.session import Database
 from app.domain.enums import TemplateMode
 from app.domain.field_targets import (
-    FIELD_TARGET_BY_PATH,
-    custom_field_key,
+    field_key,
     is_supported_field_path,
 )
 from app.domain.template_config import (
@@ -23,7 +23,6 @@ from app.domain.template_config import (
     FieldMappingConfig,
     MarkOptionConfig,
 )
-from app.domain.template_fields import parse_legacy_spreadsheet_metadata
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.line_detection import LineDetector, adaptive_ink_mask
 from app.layout_analysis.detector import LayoutDetector, TextRegion
@@ -31,7 +30,6 @@ from app.layout_analysis.models import (
     LayoutCell,
     LayoutDefinition,
     LayoutLabelPoolEntry,
-    LayoutRecordGroup,
     LayoutRelation,
 )
 from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
@@ -48,7 +46,6 @@ from app.services.label_cell_ocr_service import (
     recognize_label_cells,
 )
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
-from app.services.template_management_service import TemplateManagementService
 from app.services.template_mutation import (
     LAYOUT_INPUT_REVISION_KEY,
     LAYOUT_VERIFICATION_FINGERPRINT_KEY,
@@ -63,6 +60,7 @@ from app.storage.local_storage import LocalStorageService
 class _VerificationInputs:
     layout: LayoutDefinition
     fingerprint: str
+    revision: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,36 +105,17 @@ class LayoutService:
                     canonical_height=version.canonical_height,
                 )
             )
-            legacy_config_path = (
-                version.config_relative_path
-                if version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value
-                and not layout.label_pool
-                else None
-            )
             if version.mode == TemplateMode.SPREADSHEET_TEMPLATE.value:
                 layout = self._with_saved_text_placement(
-                    layout, version.quality_json.get("spreadsheetPrintCells"),
+                    layout,
+                    version.quality_json.get("spreadsheetPrintCells"),
                 )
-        if legacy_config_path is None:
-            return layout
-        legacy = parse_legacy_spreadsheet_metadata(
-            self._storage.read_bytes(legacy_config_path).decode("utf-8")
-        )
-        if legacy is None:
-            return layout
-        _, field_catalog = legacy
-        return layout.model_copy(
-            update={
-                "label_pool": [
-                    LayoutLabelPoolEntry.model_validate(item) for item in field_catalog
-                ]
-            },
-            deep=True,
-        )
+        return layout
 
     @staticmethod
     def _with_saved_text_placement(
-        layout: LayoutDefinition, print_cells: object,
+        layout: LayoutDefinition,
+        print_cells: object,
     ) -> LayoutDefinition:
         # Only reuse evidence from this version and the same unchanged physical rectangle.
         if not isinstance(print_cells, list):
@@ -144,17 +123,20 @@ class LayoutService:
         cells = []
         for cell in layout.cells:
             matches = [
-                item for item in print_cells
-                if isinstance(item, dict) and item.get("id") == cell.id
+                item for item in print_cells if isinstance(item, dict) and item.get("id") == cell.id
             ]
             if cell.text_vertical_alignment is None and len(matches) == 1:
                 item = matches[0]
                 if "vertical" in item and all(
                     item.get(key) == getattr(cell, key) for key in ("x", "y", "width", "height")
                 ):
-                    cell = cell.model_copy(update={
-                        "text_vertical_alignment": spreadsheet_vertical_alignment(item["vertical"]),
-                    })
+                    cell = cell.model_copy(
+                        update={
+                            "text_vertical_alignment": spreadsheet_vertical_alignment(
+                                item["vertical"]
+                            ),
+                        }
+                    )
             cells.append(cell)
         return layout.model_copy(update={"cells": cells})
 
@@ -245,7 +227,8 @@ class LayoutService:
 
     @staticmethod
     def _isolate_detected_layout(
-        version: TemplateVersion, layout: LayoutDefinition,
+        version: TemplateVersion,
+        layout: LayoutDefinition,
     ) -> LayoutDefinition:
         if not version.quality_json.get("forkParentVersionId"):
             return layout
@@ -323,55 +306,44 @@ class LayoutService:
             }
         )
 
-    def save(self, version_id: str, layout: LayoutDefinition) -> LayoutDefinition:
-        with template_mutation_lock():
-            return self._save_locked(version_id, layout)
+    def prepare_layout(
+        self, session: Session, version: TemplateVersion, layout: LayoutDefinition,
+    ) -> tuple[LayoutDefinition, list[FieldMappingConfig] | None, bool]:
+        """Validate a candidate without saving any part of the aggregate."""
+        from app.services.template_mutation import require_draft, require_isolated_structure
 
-    def _save_locked(self, version_id: str, layout: LayoutDefinition) -> LayoutDefinition:
-        with self._database.session() as session:
-            version = TemplateRepository(session).get_version(version_id)
-            if version is None:
-                raise self._not_found()
-            from app.services.template_mutation import require_draft, require_isolated_structure
+        require_draft(version)
+        require_isolated_structure(version, layout.model_dump(mode="json", by_alias=True))
+        from app.services.page_authoring_validation import (
+            validate_page_edit,
+            validate_page_headings,
+        )
 
-            require_draft(version)
-            require_isolated_structure(version, layout.model_dump(mode="json", by_alias=True))
-            from app.services.page_authoring_validation import (
-                validate_page_edit,
-                validate_page_headings,
+        proposed = layout.model_dump(mode="json", by_alias=True)
+        validate_page_headings(proposed, version.quality_json.get("printLayout"))
+        if any(cell.page_range is not None for cell in layout.cells) or any(
+            c.get("pageRange") for c in version.layout_json.get("cells", [])
+        ):
+            # The ordinary layout endpoint must not bypass source identity checks.
+            validate_page_edit(version.layout_json, proposed)
+        if (
+            layout.canonical_width != version.canonical_width
+            or layout.canonical_height != version.canonical_height
+        ):
+            raise AppError(
+                status=422,
+                code="INVALID_LAYOUT_DIMENSIONS",
+                title="Invalid layout dimensions",
+                detail="レイアウト寸法がテンプレート画像と一致しません。",
             )
-
-            proposed = layout.model_dump(mode="json", by_alias=True)
-            validate_page_headings(proposed, version.quality_json.get("printLayout"))
-            if (any(cell.page_range is not None for cell in layout.cells)
-                    or any(c.get("pageRange") for c in version.layout_json.get("cells", []))):
-                # The ordinary layout endpoint must not bypass source identity checks.
-                validate_page_edit(version.layout_json, proposed)
-            if (
-                layout.canonical_width != version.canonical_width
-                or layout.canonical_height != version.canonical_height
-            ):
-                raise AppError(
-                    status=422,
-                    code="INVALID_LAYOUT_DIMENSIONS",
-                    title="Invalid layout dimensions",
-                    detail="レイアウト寸法がテンプレート画像と一致しません。",
-                )
-
         layout = self._increment_duplicate_target_paths(layout)
         if layout.cell_merges:
             # Validate against the proposed layout before saving mappings or artifacts.
-            with self._database.session() as session:
-                version = TemplateRepository(session).get_version(version_id)
-                if version is None:
-                    raise self._not_found()
-                SpreadsheetTemplateOutputService(self._storage).snapshot(
-                    session, version=version, layout=layout.model_dump(mode="json", by_alias=True)
-                )
+            SpreadsheetTemplateOutputService(self._storage).snapshot(
+                session, version=version, layout=layout.model_dump(mode="json", by_alias=True)
+            )
         layout = layout.model_copy(
-            update={
-                "record_structure_verified": self._record_structure_is_complete(layout)
-            }
+            update={"record_structure_verified": self._record_structure_is_complete(layout)}
         )
         mapping_finalized = False
         try:
@@ -401,38 +373,7 @@ class LayoutService:
                 raise
             # A failed candidate is not an explicit request to delete mappings.
             mappings = None
-        if mappings is not None:
-            TemplateManagementService(self._database, self._storage).save_field_mappings(
-                version_id, mappings
-            )
-        with self._database.session() as session:
-            begin_immediate(session)
-            version = TemplateRepository(session).get_version(version_id)
-            if version is None:
-                raise self._not_found()
-            version.layout_json = layout.model_dump(mode="json", by_alias=True)
-            version.quality_json = {
-                **invalidated_layout_quality(
-                    version.quality_json,
-                    bump_input_revision=True,
-                ),
-                "layoutCellCount": len(layout.cells),
-                "layoutLabelCount": sum(cell.role == "label" for cell in layout.cells),
-                "layoutParentLabelCount": sum(cell.role == "parent_label" for cell in layout.cells),
-                "layoutInputCount": sum(cell.role == "input" for cell in layout.cells),
-                "layoutMarkCount": sum(cell.role == "mark" for cell in layout.cells),
-                "layoutRelationCount": len(layout.relations),
-                "layoutDetector": layout.detector,
-                "layoutFinalized": mapping_finalized,
-                "layoutDraftSaved": True,
-                "processingOrder": [
-                    "PERSPECTIVE_CORRECTION",
-                    "LAYOUT_CLASSIFICATION",
-                    "LAYOUT_VERIFICATION",
-                ],
-            }
-            session.commit()
-        return layout
+        return layout, mappings, mapping_finalized
 
     @staticmethod
     def _increment_duplicate_target_paths(layout: LayoutDefinition) -> LayoutDefinition:
@@ -466,25 +407,7 @@ class LayoutService:
                 used_paths.add(requested_path)
                 return requested_path
 
-            collection_parts = requested_path.split(".")
-            if (
-                len(collection_parts) == 3
-                and collection_parts[0] in {"saleCalves", "calvings"}
-                and collection_parts[1].isdigit()
-            ):
-                collection, index_text, field = collection_parts
-                index = int(index_text) + 1
-                while True:
-                    candidate = f"{collection}.{index}.{field}"
-                    if not is_supported_field_path(candidate):
-                        break
-                    if candidate not in reserved_paths and candidate not in used_paths:
-                        used_paths.add(candidate)
-                        reserved_paths.add(candidate)
-                        return candidate
-                    index += 1
-
-            custom_key = custom_field_key(requested_path)
+            custom_key = field_key(requested_path)
             if custom_key is not None:
                 stem, separator, suffix = custom_key.rpartition("_")
                 if separator and suffix.isdigit() and stem:
@@ -500,7 +423,7 @@ class LayoutService:
             for number in range(next_number, next_number + 2000):
                 suffix = f"_{number}"
                 truncated_base = base_key[: max(1, 100 - len(suffix))]
-                candidate = f"customFields.{truncated_base}{suffix}"
+                candidate = f"fields.{truncated_base}{suffix}"
                 if candidate in reserved_paths or candidate in used_paths:
                     continue
                 used_paths.add(candidate)
@@ -571,77 +494,7 @@ class LayoutService:
             for cell in layout.cells
         ]
 
-        cell_by_id = {cell.id: cell for cell in cells}
         groups = [group.model_copy(deep=True) for group in layout.record_groups]
-        group_by_input = {input_id: group for group in groups for input_id in group.input_cell_ids}
-        for input_id, replacement_path in replacement_by_input.items():
-            original_relations = relations_by_input.get(input_id, [])
-            original_path = original_relations[0].target_path if original_relations else ""
-            if replacement_path == original_path:
-                continue
-            original_parts = original_path.split(".")
-            replacement_parts = replacement_path.split(".")
-            if not (
-                len(original_parts) == 3
-                and len(replacement_parts) == 3
-                and original_parts[0] == replacement_parts[0]
-                and original_parts[0] in {"saleCalves", "calvings"}
-                and replacement_parts[1].isdigit()
-            ):
-                continue
-            source_group = group_by_input.get(input_id)
-            input_cell = cell_by_id.get(input_id)
-            if source_group is None or input_cell is None:
-                continue
-            target_order = int(replacement_parts[1]) + 1
-            source_group.input_cell_ids = [
-                candidate for candidate in source_group.input_cell_ids if candidate != input_id
-            ]
-            target_group = next(
-                (
-                    group
-                    for group in groups
-                    if group.section_id == source_group.section_id
-                    and group.order == target_order
-                    and group is not source_group
-                ),
-                None,
-            )
-            if target_group is None:
-                digest = hashlib.sha256(
-                    f"{source_group.section_id}:{target_order}".encode()
-                ).hexdigest()[:12]
-                target_group = LayoutRecordGroup(
-                    id=f"record_incremented_{digest}",
-                    section_id=source_group.section_id,
-                    order=target_order,
-                    x=input_cell.x,
-                    y=input_cell.y,
-                    width=input_cell.width,
-                    height=input_cell.height,
-                    input_cell_ids=[input_id],
-                    record_key_field=source_group.record_key_field,
-                    record_key_value=str(target_order),
-                    source="inferred",
-                )
-                groups.append(target_group)
-            else:
-                target_group.input_cell_ids.append(input_id)
-                left = min(target_group.x, input_cell.x)
-                top = min(target_group.y, input_cell.y)
-                right = max(
-                    target_group.x + target_group.width,
-                    input_cell.x + input_cell.width,
-                )
-                bottom = max(
-                    target_group.y + target_group.height,
-                    input_cell.y + input_cell.height,
-                )
-                target_group.x = left
-                target_group.y = top
-                target_group.width = right - left
-                target_group.height = bottom - top
-            group_by_input[input_id] = target_group
         groups = [group for group in groups if group.input_cell_ids]
 
         pool_by_path = {entry.target_path: entry for entry in layout.label_pool}
@@ -650,13 +503,10 @@ class LayoutService:
             if generated_path in pool_by_path or len(label_pool) >= 500:
                 continue
             original_entry = pool_by_path.get(original_path)
-            known_target = FIELD_TARGET_BY_PATH.get(original_path)
             base_label = (
                 original_entry.label
                 if original_entry is not None
-                else known_target.label
-                if known_target is not None
-                else custom_field_key(original_path) or original_path
+                else field_key(original_path) or original_path
             )
             digest = hashlib.sha256(generated_path.encode("utf-8")).hexdigest()[:16]
             entry = LayoutLabelPoolEntry(
@@ -707,6 +557,7 @@ class LayoutService:
             version_id,
             inputs.fingerprint,
             finalization,
+            expected_revision=inputs.revision,
         )
         return layout
 
@@ -743,19 +594,23 @@ class LayoutService:
             )
             version.quality_json = {**version.quality_json, "layoutVerificationInProgress": True}
             session.commit()
-        return _VerificationInputs(layout=layout, fingerprint=fingerprint)
+        return _VerificationInputs(layout=layout, fingerprint=fingerprint, revision=version.revision)
 
     def _complete_verification(
         self,
         version_id: str,
         expected_fingerprint: str,
         finalization: _HandwritingFinalization,
+        *, expected_revision: int,
     ) -> None:
         with template_mutation_lock(), self._database.session() as session:
             begin_immediate(session)
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
                 raise self._not_found()
+            require_revision(version, expected_revision)
+            from app.services.template_mutation import require_draft
+            require_draft(version)
             current_fingerprint = self._verification_fingerprint(session, version)
             if current_fingerprint != expected_fingerprint:
                 version.quality_json = invalidated_layout_quality(
@@ -858,7 +713,7 @@ class LayoutService:
             if (
                 candidate_artifact is not None
                 and candidate_artifact.job_id == source_job.id
-                and candidate_artifact.artifact_name == "handwritingMaskEdited"
+                and candidate_artifact.artifact_name.split("~", 1)[0] == "handwritingMaskEdited"
             ):
                 edited_mask_artifact = candidate_artifact
         if has_saved_edit and edited_mask_artifact is None:
@@ -872,7 +727,7 @@ class LayoutService:
             if (
                 candidate_artifact is not None
                 and candidate_artifact.job_id == source_job.id
-                and candidate_artifact.artifact_name == "handwritingMaskEdited"
+                and candidate_artifact.artifact_name.split("~", 1)[0] == "handwritingMaskEdited"
             ):
                 edited_mask_artifact = candidate_artifact
         if not has_saved_edit and has_inherited_edit and version.mask_artifact_id:
@@ -880,7 +735,7 @@ class LayoutService:
             if (
                 candidate_artifact is not None
                 and candidate_artifact.job_id == source_job.id
-                and candidate_artifact.artifact_name in {"handwritingMaskEdited", "handwritingMask"}
+                and candidate_artifact.artifact_name.split("~", 1)[0] in {"handwritingMaskEdited", "handwritingMask"}
             ):
                 edited_mask_artifact = candidate_artifact
         if (has_saved_edit or has_inherited_edit) and edited_mask_artifact is None:
@@ -999,7 +854,7 @@ class LayoutService:
                 if (
                     candidate_artifact is not None
                     and candidate_artifact.job_id == source_job.id
-                    and candidate_artifact.artifact_name == "handwritingMaskEdited"
+                    and candidate_artifact.artifact_name.split("~", 1)[0] == "handwritingMaskEdited"
                 ):
                     edited_mask_artifact = candidate_artifact
             if has_saved_edit and edited_mask_artifact is None:
@@ -1013,7 +868,7 @@ class LayoutService:
                 if (
                     candidate_artifact is not None
                     and candidate_artifact.job_id == source_job.id
-                    and candidate_artifact.artifact_name == "handwritingMaskEdited"
+                    and candidate_artifact.artifact_name.split("~", 1)[0] == "handwritingMaskEdited"
                 ):
                     edited_mask_artifact = candidate_artifact
             if not has_saved_edit and has_inherited_edit and version.mask_artifact_id:
@@ -1021,7 +876,7 @@ class LayoutService:
                 if (
                     candidate_artifact is not None
                     and candidate_artifact.job_id == source_job.id
-                    and candidate_artifact.artifact_name
+                    and candidate_artifact.artifact_name.split("~", 1)[0]
                     in {"handwritingMaskEdited", "handwritingMask"}
                 ):
                     edited_mask_artifact = candidate_artifact
@@ -1393,12 +1248,12 @@ class LayoutService:
 
     @staticmethod
     def _composite_target_path(parent_target_path: str, semantic_type: str) -> str:
-        base_key = custom_field_key(parent_target_path).strip() or "複合項目"
+        base_key = field_key(parent_target_path).strip() or "複合項目"
         suffix = {
             "address_prefecture": "都道府県",
             "address_municipality": "市区町村",
         }[semantic_type]
-        return f"customFields.{base_key}_{suffix}"[:200]
+        return f"fields.{base_key}_{suffix}"[:200]
 
     @staticmethod
     def mapping_validation_error(layout: LayoutDefinition) -> AppError | None:
@@ -1424,6 +1279,21 @@ class LayoutService:
     @staticmethod
     def _as_field_mappings(layout: LayoutDefinition) -> list[FieldMappingConfig]:
         cell_by_id = {cell.id: cell for cell in layout.cells}
+        # Freeze the physical order at template save, before page/request filtering.
+        sequence_numbers = {
+            cell.id: index
+            for index, cell in enumerate(
+                sorted(
+                    (
+                        cell
+                        for cell in layout.cells
+                        if cell.role == "input" and cell.reading_mode == "number"
+                    ),
+                    key=lambda cell: (cell.y, cell.x, cell.id),
+                ),
+                start=1,
+            )
+        }
         relations_by_input: dict[str, list[LayoutRelation]] = {}
         for relation in layout.relations:
             relations_by_input.setdefault(relation.input_cell_id, []).append(relation)
@@ -1471,15 +1341,15 @@ class LayoutService:
                 for label_id in dict.fromkeys(label_ids)
                 if cell_by_id[label_id].text.strip()
             ]
-            target = FIELD_TARGET_BY_PATH.get(target_path)
             mappings.append(
                 FieldMappingConfig(
                     mapping_id=f"layout_{input_id}",
                     target_path=target_path,
                     label=(
-                        " / ".join(label_texts)
+                        input_cell.field_label
+                        or " / ".join(label_texts)
                         or input_cell.printed_label_text.strip()
-                        or (target.label if target else custom_field_key(target_path))
+                        or field_key(target_path)
                         or target_path
                     ),
                     x=input_cell.x,
@@ -1488,13 +1358,19 @@ class LayoutService:
                     height=input_cell.height,
                     vertices=input_cell.vertices,
                     padding=min(
-                        4, input_cell.x, input_cell.y,
+                        4,
+                        input_cell.x,
+                        input_cell.y,
                         layout.canonical_width - input_cell.x - input_cell.width,
                         layout.canonical_height - input_cell.y - input_cell.height,
-                    ) if input_cell.vertices else 4,
+                    )
+                    if input_cell.vertices
+                    else 4,
                     enabled=True,
                     model_detail="high",
                     printed_label_text=input_cell.printed_label_text.strip(),
+                    reading_mode=input_cell.reading_mode,
+                    sequence_number=sequence_numbers.get(input_id),
                     composite_subfields=[
                         CompositeSubfieldConfig(
                             id=subfield.id,
@@ -1532,8 +1408,12 @@ class LayoutService:
                     code="MARK_OPTIONS_REQUIRED",
                     title="Mark options are required",
                     detail=f"{cell.id} の選択肢を設定してください。",
-                    field_errors=[FieldError(field=f"cells.{cell.id}.markSets",
-                                             message=f"{cell.id}: 選択肢を設定してください。")],
+                    field_errors=[
+                        FieldError(
+                            field=f"cells.{cell.id}.markSets",
+                            message=f"{cell.id}: 選択肢を設定してください。",
+                        )
+                    ],
                 )
             for mark_set in cell.mark_sets:
                 target_path = mark_set.target_path
@@ -1549,12 +1429,16 @@ class LayoutService:
                         status=422,
                         code="MARK_OPTIONS_REQUIRED",
                         title="Mark options are required",
-                        detail=(f"{cell.text or cell.id} ({cell.id} / {mark_set.id} / "
-                                f"{target_path}): 選択肢を1件以上設定してください。"),
-                        field_errors=[FieldError(
-                            field=f"cells.{cell.id}.markSets.{mark_set.id}.options",
-                            message=f"{target_path}: 選択肢を1件以上設定してください。",
-                        )],
+                        detail=(
+                            f"{cell.text or cell.id} ({cell.id} / {mark_set.id} / "
+                            f"{target_path}): 選択肢を1件以上設定してください。"
+                        ),
+                        field_errors=[
+                            FieldError(
+                                field=f"cells.{cell.id}.markSets.{mark_set.id}.options",
+                                message=f"{target_path}: 選択肢を1件以上設定してください。",
+                            )
+                        ],
                     )
                 if not is_supported_field_path(target_path):
                     raise AppError(
@@ -1571,7 +1455,6 @@ class LayoutService:
                         detail=f"同じ保存先が複数の矩形に割り当てられています: {target_path}",
                     )
                 target_paths.add(target_path)
-                target = FIELD_TARGET_BY_PATH.get(target_path)
                 mapping_id = f"layout_{cell.id}_{mark_set.id}"
                 if len(mapping_id) > 100:
                     mapping_id = mapping_id[:100]
@@ -1580,8 +1463,7 @@ class LayoutService:
                         mapping_id=mapping_id,
                         target_path=target_path,
                         label=(
-                            " / ".join(mark_label_texts)
-                            or (target.label if target else target_path)
+                            " / ".join(mark_label_texts) or field_key(target_path) or target_path
                         ),
                         x=cell.x,
                         y=cell.y,
@@ -1605,101 +1487,6 @@ class LayoutService:
         return mappings
 
     @staticmethod
-    def _record_structure_is_complete(layout: LayoutDefinition) -> bool:
-        has_array_bindings = any(
-            relation.target_path.startswith(("saleCalves.", "calvings."))
-            for relation in layout.relations
-        ) or any(
-            mark_set.target_path.startswith(("saleCalves.", "calvings."))
-            for cell in layout.cells
-            if cell.role == "mark"
-            for mark_set in cell.mark_sets
-        )
-        if not has_array_bindings:
-            return layout.record_structure_verified
-        try:
-            LayoutService._require_verified_record_structure(layout)
-        except AppError:
-            return False
-        return True
-
-    @staticmethod
-    def _require_verified_record_structure(layout: LayoutDefinition) -> None:
-        array_relations = [
-            relation
-            for relation in layout.relations
-            if relation.target_path.startswith(("saleCalves.", "calvings."))
-        ]
-        mark_bindings = [
-            (cell.id, mark_set.target_path)
-            for cell in layout.cells
-            if cell.role == "mark"
-            for mark_set in cell.mark_sets
-            if mark_set.target_path.startswith(("saleCalves.", "calvings."))
-        ]
-        if not array_relations and not mark_bindings:
-            return
-        grouped_inputs = {
-            input_id for group in layout.record_groups for input_id in group.input_cell_ids
-        }
-        missing_inputs = sorted(
-            {
-                relation.input_cell_id
-                for relation in array_relations
-                if relation.input_cell_id not in grouped_inputs
-            }
-            | {cell_id for cell_id, _ in mark_bindings if cell_id not in grouped_inputs}
-        )
-        if not layout.record_sections or not layout.record_groups or missing_inputs:
-            raise AppError(
-                status=422,
-                code="RECORD_STRUCTURE_REQUIRED",
-                title="Record structure is required",
-                detail=(
-                    "売却子牛・繁殖履歴の記入欄は、行レコードへまとめて"
-                    "親セクションを設定してください。"
-                ),
-                metadata={"unassignedInputCellIds": missing_inputs},
-            )
-        grouped_section_ids = {group.section_id for group in layout.record_groups}
-        missing_parent_sections = sorted(
-            section.id
-            for section in layout.record_sections
-            if section.id in grouped_section_ids and section.parent_label_cell_id is None
-        )
-        if missing_parent_sections:
-            raise AppError(
-                status=422,
-                code="RECORD_PARENT_LABEL_REQUIRED",
-                title="Record parent label is required",
-                detail=(
-                    "列ラベルから作成したレコードを表全体の親ラベルへ接続してください。"
-                ),
-                metadata={"recordSectionIds": missing_parent_sections},
-            )
-        relations_by_input: dict[str, list[LayoutRelation]] = {}
-        for relation in array_relations:
-            relations_by_input.setdefault(relation.input_cell_id, []).append(relation)
-        missing_keys = [
-            group.id
-            for group in layout.record_groups
-            if not group.record_key_value
-            and not any(
-                relation.target_path.endswith(".parity")
-                for input_id in group.input_cell_ids
-                for relation in relations_by_input.get(input_id, [])
-            )
-        ]
-        if missing_keys:
-            raise AppError(
-                status=422,
-                code="RECORD_KEY_REQUIRED",
-                title="Record key is required",
-                detail="各行レコードの産次キーを入力するか、産次セルを意味づけしてください。",
-                metadata={"recordGroupIds": missing_keys},
-            )
-
-    @staticmethod
     def _verification_conflict() -> AppError:
         return AppError(
             status=409,
@@ -1716,3 +1503,17 @@ class LayoutService:
             title="Template version not found",
             detail="指定されたテンプレート版が見つかりません。",
         )
+
+    @staticmethod
+    def _record_structure_is_complete(layout: LayoutDefinition) -> bool:
+        return layout.record_structure_verified
+
+    @staticmethod
+    def _require_verified_record_structure(layout: LayoutDefinition) -> None:
+        if layout.record_groups and not layout.record_structure_verified:
+            raise AppError(
+                status=422,
+                code="TEMPLATE_RECORD_STRUCTURE_REQUIRED",
+                title="Record structure is not verified",
+                detail="表の行・列の対応を確認してください。",
+            )

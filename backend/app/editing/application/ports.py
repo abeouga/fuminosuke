@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from app.editing.domain.command import BoundOperation, PreparedChange, ResolvedInstruction
+from app.editing.domain.planning import CandidateSet
+from app.editing.domain.planning_catalog import PlanningCatalog
+
+
+class InstructionResolver(Protocol):
+    async def resolve(self, instruction: str, context: dict[str, Any]) -> ResolvedInstruction: ...
+
+
+class DecisionSelector(Protocol):
+    async def choose(self, instruction: str, candidates: CandidateSet) -> dict[str, Any]: ...
+
+
+class TextPlanner(Protocol):
+    async def plan(self, instruction: str, catalog: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class PlanBinding(Protocol):
+    def bind(
+        self, plan: dict[str, Any], instruction: str, catalog: PlanningCatalog
+    ) -> ResolvedInstruction: ...
+
+
+class MutationUnitOfWork(Protocol):
+    def register(self, command_id: str, value: dict[str, Any]) -> None: ...
+    def forget(self, command_id: str) -> None: ...
+    def prepare(
+        self,
+        command_id: str,
+        operations: tuple[BoundOperation, ...],
+        resolution: ResolvedInstruction | None = None,
+    ) -> PreparedChange: ...
+    def execute(self, command_id: str, fence: int, change: PreparedChange) -> dict[str, Any]: ...
+    def discard(self, change: PreparedChange) -> None: ...
+
+
+class CommandRepository(Protocol):
+    def input_context(self, session_id: str, token: str) -> dict[str, Any]: ...
+    def rebind_context(
+        self, session_id: str, token: str, context: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    def scope_replay(
+        self, session_id: str, token: str, request_id: str, fingerprint: str
+    ) -> dict[str, Any] | None: ...
+    def query(self, session_id: str, token: str, request_id: str) -> dict[str, Any]: ...
+    def hold_status(self, command_id: str, fence: int) -> bool: ...
+    def stop(self) -> None: ...
+    def admit(
+        self,
+        session_id: str,
+        token: str,
+        value: dict[str, Any],
+        *,
+        continuation_of: str | None = None,
+        scope_rebinding: bool = False,
+        fingerprint: str | None = None,
+        provider_free: bool = False,
+    ) -> dict[str, Any]: ...
+    def claim(self, command_id: str) -> dict[str, Any] | None: ...
+    def stage(self, command_id: str, fence: int, state: str) -> None: ...
+    def finish(self, command_id: str, fence: int, state: str, payload: dict[str, Any]) -> bool: ...
+    def context_for_command(self, command_id: str, fence: int) -> dict[str, Any]: ...

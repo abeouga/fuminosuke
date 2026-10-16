@@ -1,0 +1,20 @@
+.template-analysis { border: 1px solid var(--border, #d5dce4); border-radius: 8px; padding: 14px; background: var(--surface, #fff); margin-block: 12px; font-size: .9rem; }
+.template-analysis-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.template-analysis p { margin-block: 8px; }
+.template-analysis-options { display: grid; gap: 8px; padding-block: 10px; }
+.template-analysis-options label { display: flex; gap: 8px; align-items: center; }
+.template-analysis-pages { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 10px; color: #526173; }
+.template-analysis-units { padding: 0; list-style: none; max-height: 350px; overflow: auto; margin-block: 10px; }
+.template-analysis-units li { padding: 9px 4px; border-bottom: 1px solid #e3e8ee; display: grid; gap: 4px; }
+.template-analysis-units label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.template-analysis-units small { color: #526173; margin-left: 24px; overflow-wrap: anywhere; }
+.template-analysis-message { overflow-wrap: anywhere; }
+.template-analysis-stale { color: #92400e; border-left: 2px solid #b45309; padding-left: 8px; }
+.template-analysis-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: #526173; font-size: .8rem; }
+.template-analysis-geometry { margin-left: 24px; overflow-wrap: anywhere; }
+.template-analysis-geometry ul { padding-left: 18px; }
+.template-analysis-geometry li { border: 0; padding-block: 4px; }
+.template-analysis-geometry small { margin-left: 0; }
+.template-analysis-geometry button { justify-self: start; width: fit-content; }
+.template-analysis-detail > summary { cursor: pointer; color: #334155; }
+.template-analysis-detail > small { display: block; margin-block: 4px; }

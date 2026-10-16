@@ -116,7 +116,7 @@ class SpreadsheetTemplateOutputService:
             cell_merges.append(merge)
 
         snapshot = {
-            "schemaVersion": 2 if any("sourceRanges" in m for m in cell_merges) else 1,
+            "schemaVersion": 2,
             "templateVersionId": version.id,
             "sourceWorkbook": {
                 "artifactId": source_artifact.id,
@@ -205,6 +205,34 @@ class SpreadsheetTemplateOutputService:
         source_bytes = self._storage.read_bytes(source_artifact.relative_path)
         if hashlib.sha256(source_bytes).hexdigest() != expected_sha256:
             raise self._source_error("テンプレート作成時の元XLSXの整合性を確認できません。")
+        from app.services.xlsx_checkboxes import checkbox_cells, write_values
+        native_checks = checkbox_cells(source_bytes).get(str(snapshot["sourceSheetName"]), {})
+        if native_checks:
+            if snapshot.get("cellMerges"):
+                raise self._snapshot_error("セル内チェックボックスを含むExcelでは手動結合を使用できません。")
+            values: dict[str, Any] = {}
+            for mapping in job.config_snapshot_json.get("fieldMappings", []):
+                if mapping.get("enabled") is False:
+                    continue
+                value = self._mapping_value(document, mapping)
+                if value is _MISSING:
+                    raise self._snapshot_error("チェックリストの確定値が不足しています。")
+                for coordinate, destination_value in self._destinations(mapping, snapshot, value):
+                    if coordinate in native_checks:
+                        options = mapping.get("markOptions", [])
+                        if mapping.get("markRecognitionMode") != "checklist" or len(options) != 1:
+                            raise self._snapshot_error("セル内チェックボックスには候補が1つのチェックリストを設定してください。")
+                        if value not in {None, "", options[0]["label"]}:
+                            raise self._snapshot_error("チェックボックスの確定値が候補と一致しません。")
+                        values[coordinate] = bool(value)
+                    else:
+                        values[coordinate] = None if destination_value is None else str(destination_value)
+            if not values:
+                raise self._snapshot_error("Excelの出力セルがありません。")
+            return FilledSpreadsheetTemplate(
+                content=write_values(source_bytes, str(snapshot["sourceSheetName"]), values),
+                file_name=f"{normalize_spreadsheet_output_name(document_name)}.xlsx",
+            )
         try:
             workbook = load_workbook(
                 io.BytesIO(source_bytes),
@@ -965,7 +993,7 @@ class SpreadsheetTemplateOutputService:
             )
         source = raw_snapshot.get("sourceWorkbook")
         if (
-            raw_snapshot.get("schemaVersion") not in (1, 2)
+            raw_snapshot.get("schemaVersion") != 2
             or raw_snapshot.get("templateVersionId") != job.template_version_id
             or not isinstance(raw_snapshot.get("sourceSheetName"), str)
             or not isinstance(raw_snapshot.get("sourceFileName"), str)

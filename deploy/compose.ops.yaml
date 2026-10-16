@@ -1,0 +1,5 @@
+# Offline one-shot maintenance; backend must already be stopped.
+services:
+  backend:
+    volumes:
+      - ${BETA_WORK_DIR:?Set the dedicated backup workspace}:/backup-work

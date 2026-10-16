@@ -1,92 +1,52 @@
-import { useEffect, useState } from "react";
-import { api, exportUrl } from "../api";
-import { copyExcelTable } from "../excelClipboard";
+import { authenticatedFetch } from "../auth/transport";
+import { useRef, useState } from "react";
+import { FiDownload } from "react-icons/fi";
+import { exportUrl } from "../api";
 
-export function ExcelExportActions({
-  jobId,
-  compact = false,
-  driveFileName,
-}: {
+export function ExcelExportActions({ jobId, documentName, compact = false }: {
   jobId: string;
   compact?: boolean;
-  driveFileName?: string | null;
+  documentName?: string | null;
 }) {
-  const [copying, setCopying] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [fileName, setFileName] = useState(driveFileName ?? "");
-  const [lastSavedName, setLastSavedName] = useState(driveFileName ?? "");
-  const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (driveFileName === undefined) return;
-    const next = driveFileName ?? "";
-    setFileName(next);
-    setLastSavedName(next);
-  }, [driveFileName, jobId]);
-
-  useEffect(() => {
-    if (driveFileName === undefined || fileName === lastSavedName) return;
-    const trimmed = fileName.trim();
-    if (!trimmed) {
-      setMessage("出力ファイル名を入力してください。");
-      return;
-    }
-    const timeout = window.setTimeout(async () => {
-      setRenaming(true);
-      setMessage(null);
-      try {
-        const renamed = await api.renameSpreadsheet(jobId, trimmed);
-        const savedName = renamed.fileName ?? trimmed.replace(/\.xlsx$/i, "").trim();
-        setFileName(savedName);
-        setLastSavedName(savedName);
-        setMessage("Drive上のファイル名へ反映しました。");
-      } catch (reason) {
-        setMessage(reason instanceof Error ? reason.message : "ファイル名を変更できませんでした。");
-      } finally {
-        setRenaming(false);
-      }
-    }, 500);
-    return () => window.clearTimeout(timeout);
-  }, [driveFileName, fileName, jobId, lastSavedName]);
-
-  async function copy(): Promise<void> {
-    setCopying(true);
-    setMessage(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const downloading = useRef(false);
+  async function download() {
+    if (downloading.current) return;
+    downloading.current = true; setBusy(true); setError(null);
     try {
-      await copyExcelTable(await api.excelTable(jobId));
-      setMessage("罫線付きでコピーしました。Excelで貼り付けできます。");
+      const response = await authenticatedFetch(exportUrl(jobId, "xlsx"), { credentials: "include" });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        throw new Error(problem.detail ?? problem.message ?? "XLSXを取得できませんでした。もう一度お試しください。");
+      }
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const encoded = /filename\*=utf-8''([^;]+)/i.exec(disposition)?.[1];
+      let filename = /filename="([^"]+)"/i.exec(disposition)?.[1] ?? "読み取り結果.xlsx";
+      if (encoded) {
+        try { filename = decodeURIComponent(encoded); } catch { /* Use the fallback filename. */ }
+      }
+      const savedName = documentName?.trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+        .replace(/[. ]+$/g, "");
+      if (savedName) filename = `${savedName.replace(/\.xlsx$/i, "")}.xlsx`;
+      const url = URL.createObjectURL(await response.blob());
+      const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+      const link = document.createElement("a");
+      link.href = url; link.download = filename;
+      document.body.appendChild(link);
+      try { link.click(); } finally {
+        link.remove(); window.setTimeout(() => revokeObjectURL(url), 1000);
+      }
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "コピーできませんでした。");
-    } finally {
-      setCopying(false);
-    }
+      setError(reason instanceof Error ? reason.message : "XLSXを取得できませんでした。");
+    } finally { downloading.current = false; setBusy(false); }
   }
-
   return (
     <div className={`excel-export-actions${compact ? " compact-export" : ""}`}>
-      {driveFileName !== undefined && (
-        <label className="output-file-name-field">
-          <span>書類名</span>
-          <span className="output-file-name-input">
-            <input
-              type="text"
-              value={fileName}
-              maxLength={185}
-              aria-label="書類名"
-              onChange={(event) => setFileName(event.target.value)}
-            />
-            <span>.xlsx</span>
-          </span>
-          <small>{renaming ? "Driveへ反映中…" : "ライブラリ、Drive、保存するXLSX名に反映します。"}</small>
-        </label>
-      )}
-      <button className={`primary${compact ? " compact" : ""}`} disabled={copying} onClick={copy}>
-        {copying ? "コピー中…" : "Excelへコピー"}
+      <button className={`primary${compact ? " compact" : ""}`} disabled={busy} onClick={() => void download()}>
+        <FiDownload aria-hidden="true" />{busy ? "XLSXを取得中…" : ".xlsxを保存"}
       </button>
-      <a className={`secondary button-link${compact ? " compact" : ""}`} href={exportUrl(jobId, "xlsx")}>
-        .xlsxを保存
-      </a>
-      {message && <span className="excel-export-message" role="status">{message}</span>}
+      {error && <p className="error-box" role="alert">{error}</p>}
     </div>
   );
 }

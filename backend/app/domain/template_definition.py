@@ -42,12 +42,20 @@ class TemplateMarkOption(TemplateDefinitionModel):
 class TemplateMarkSet(TemplateDefinitionModel):
     id: str = Field(min_length=1, max_length=100)
     target_path: str = Field(min_length=1, max_length=200)
-    recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
+    recognition_mode: Literal["automatic", "manual", "symbol", "checklist"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
     options: list[TemplateMarkOption] = Field(min_length=1, max_length=50)
 
     @model_validator(mode="after")
     def validate_symbol_mode(self) -> TemplateMarkSet:
+        if self.recognition_mode == "checklist":
+            if self.selection_mode != "multiple":
+                raise ValueError("Checklist recognition requires multiple selection")
+            labels = [option.label for option in self.options]
+            if any(not label.strip() or label != label.strip() or any(
+                separator in label for separator in "・、,;\n\r"
+            ) for label in labels):
+                raise ValueError("Checklist labels must not contain selection separators")
         if self.recognition_mode == "symbol" and self.selection_mode != "single":
             raise ValueError("Symbol recognition requires single selection")
         return self
@@ -108,7 +116,7 @@ class TemplateField(TemplateDefinitionModel):
     required: bool = False
     confidence: float = Field(ge=0, le=1)
     reason_codes: list[str] = Field(default_factory=list, max_length=20)
-    legacy_target_path: str | None = Field(default=None, max_length=200)
+    source_target_path: str | None = Field(default=None, max_length=200)
     mark_set_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("name", mode="before")

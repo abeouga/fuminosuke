@@ -86,7 +86,7 @@ def _seed_version(
         )
         template = Template(
             name="verification-concurrency",
-            document_type="cow-breeding-ledger",
+            document_type="generic-document",
         )
         session.add_all([job, template])
         session.flush()

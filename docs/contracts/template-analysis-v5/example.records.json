@@ -1,0 +1,66 @@
+{
+  "version": "template-analysis.focused.v5",
+  "marks": [
+    {
+      "id": "m1",
+      "kind": "symbol",
+      "options": [
+        "○",
+        "◎",
+        "×",
+        "△"
+      ],
+      "evidence": [
+        "c20"
+      ]
+    }
+  ],
+  "units": [
+    {
+      "kind": "records",
+      "grid": "g2",
+      "rows": {
+        "first": "r2",
+        "last": "r5"
+      },
+      "title": {
+        "kind": "named",
+        "name": "設備点検",
+        "parent": null
+      },
+      "columns": [
+        {
+          "column": "k1",
+          "use": "row_label",
+          "headers": [
+            "c5"
+          ]
+        },
+        {
+          "column": "k2",
+          "use": "value",
+          "binding": {
+            "kind": "labeled",
+            "labels": [
+              "c6"
+            ],
+            "name": null
+          },
+          "reading": "m1"
+        },
+        {
+          "column": "k3",
+          "use": "context",
+          "headers": [
+            "c7"
+          ]
+        }
+      ],
+      "rowKeyStrategy": "position",
+      "includeEmptyRows": true
+    }
+  ],
+  "roles": [],
+  "headings": [],
+  "hierarchy": []
+}

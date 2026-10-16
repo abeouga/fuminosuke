@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+from contextlib import nullcontext
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +17,10 @@ from app.core.errors import AppError
 from app.db.models import JobArtifact, ProcessingJob
 from app.domain.calc_print_grid import MODEL as CALC_GEOMETRY_MODEL
 from app.domain.print_layout import PAPER_MM, PrintLayoutRequest, page_plan, print_error
+from app.rendering import adapter as linux_renderer
+from app.rendering import geometry as linux_geometry
+from app.rendering.contract import RENDERER_VERSION as LINUX_RENDERER_VERSION
+from app.rendering.fonts import validate_fonts
 from app.services import calc_workbook_geometry
 from app.services.office_reference_renderer import _RENDER_LOCK
 from app.services.page_authoring_validation import validate_page_headings
@@ -31,7 +36,12 @@ from app.services.wsl_workbook_geometry import apply_dimensions, dimensions
 class PrintPreparationService(PrintLayoutService):
     def prepare(self, version_id: str, expected: str, distribution: str,
                 *, runtime_id: str | None = None,
-                geometry_model: str | None = None) -> dict[str, Any]:
+                geometry_model: str | None = None, backend: str = "wsl") -> dict[str, Any]:
+        if backend not in {"wsl", "linux"}:
+            raise ValueError("Unsupported print backend")
+        if backend == "linux" and (geometry_model is not None or runtime_id is not None):
+            raise print_error("旧WSLの座標・runtime指定はLinux版へ転用できません。",
+                              "PRINT_GEOMETRY_CHANGED", 409)
         if geometry_model not in {None, CALC_GEOMETRY_MODEL}:
             raise print_error("指定された座標モデルは未対応です。", "PRINT_GEOMETRY_CHANGED", 409)
         if geometry_model == CALC_GEOMETRY_MODEL and runtime_id is None:
@@ -42,9 +52,9 @@ class PrintPreparationService(PrintLayoutService):
         if not _RENDER_LOCK.acquire(blocking=False):
             raise print_error("別の印刷用ファイルを生成中です。", "RENDERER_BUSY", 409)
         try:
-            with renderer_mutex():
+            with renderer_mutex() if backend == "wsl" else nullcontext():
                 return self._prepare(version_id, expected, distribution, runtime_id=runtime_id,
-                                     geometry_model=geometry_model)
+                                     geometry_model=geometry_model, backend=backend)
         except AppError:
             raise
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
@@ -58,7 +68,7 @@ class PrintPreparationService(PrintLayoutService):
 
     def _prepare(self, version_id: str, expected: str, distribution: str,
                  *, runtime_id: str | None = None,
-                 geometry_model: str | None = None) -> dict[str, Any]:
+                 geometry_model: str | None = None, backend: str = "wsl") -> dict[str, Any]:
         with self.database.session() as session:
             version = self._version(session, version_id)
             require_draft(version)
@@ -102,7 +112,10 @@ class PrintPreparationService(PrintLayoutService):
         observation_args = ({"dimension_request": {
             "sheetName": saved["sheetName"], "rows": source["endRow"],
             "columns": source["endCol"]}} if calc_grid else {})
-        fods, measured_report = import_wsl_geometry(
+        import_geometry = (linux_renderer.import_geometry
+                           if backend == "linux" else import_wsl_geometry)
+        render_reference = linux_renderer.reference if backend == "linux" else render_wsl_reference
+        fods, measured_report = import_geometry(
             content, distribution=distribution, font_source="windows", runtime_id=runtime_id,
             **observation_args,
         )
@@ -110,12 +123,20 @@ class PrintPreparationService(PrintLayoutService):
         # Ordinary GET/save/reopen never remeasure or upgrade historical geometry.
         measure = calc_workbook_geometry.dimensions if calc_grid else dimensions
         project = calc_workbook_geometry.apply_dimensions if calc_grid else apply_dimensions
+        if backend == "linux":
+            measure, project = linux_geometry.dimensions, linux_geometry.apply_dimensions
         evidence = measure(fods, saved["sheetName"], source["endRow"], source["endCol"])
         if calc_grid:
             calc_workbook_geometry.verify_dimension_observation(
                 evidence, measured_report, saved["sheetName"], source_sha)
         fonts = measured_report["resolvedFonts"]
-        if not fonts or any(
+        if backend == "linux":
+            try:
+                evidence["fontDecisions"] = validate_fonts(fonts)
+            except ValueError as exc:
+                raise print_error("Linux版で対応するフォントを確認できません。",
+                                  "PRINT_FONT_UNRESOLVED", 409) from exc
+        elif not fonts or any(
             font["requestedFamily"].casefold()
             not in {name.casefold() for name in font["resolvedFamily"].split(",")}
             for font in fonts
@@ -123,7 +144,8 @@ class PrintPreparationService(PrintLayoutService):
             raise print_error(
                 "指定されたフォントの実体を確認できません。", "PRINT_FONT_UNRESOLVED", 409
             )
-        evidence.update(sourceSha256=source_sha, fontSource="windows", importReport=measured_report)
+        evidence.update(sourceSha256=source_sha, fontSource=measured_report["fontSource"],
+                        importReport=measured_report)
         measured = project(source, evidence)
         request = PrintLayoutRequest.model_validate(
             {
@@ -145,13 +167,18 @@ class PrintPreparationService(PrintLayoutService):
         validate_page_headings(layout, plan)
         plan["layoutSha256"] = digest(layout)
         printable = workbook_copy(content, plan)
-        pdf, images, report = render_wsl_reference(
+        pdf, images, report = render_reference(
             printable, distribution=distribution, runtime_id=runtime_id,
         )
         if report["resolvedFonts"] != fonts:
             raise print_error(
                 "生成中にフォント条件が変更されました。", "PRINT_GEOMETRY_CHANGED", 409
             )
+        if backend == "linux" and any(report.get(key) != measured_report.get(key) for key in (
+            "execution", "fontDirectorySha256", "packagesSha256", "workerSha256",
+        )):
+            raise print_error("生成中にLinuxの実行環境が変更されました。",
+                              "PRINT_GEOMETRY_CHANGED", 409)
         if runtime_id is not None:
             measured_runtime = measured_report.get("runtimeImage")
             measured_fonts = measured_report.get("fontDirectoryIdentity")
@@ -243,7 +270,8 @@ class PrintPreparationService(PrintLayoutService):
                     "renderer.json", json.dumps(report, sort_keys=True).encode(), "application/json"
                 ),
             }
-            plan["rendererVersion"] = "wsl-print-reference-v1"
+            plan["rendererVersion"] = (LINUX_RENDERER_VERSION if backend == "linux"
+                                       else "wsl-print-reference-v1")
             plan["source"] = "user"
             quality = {**version.quality_json, "printLayout": plan}
             quality.pop("referenceQualification", None)

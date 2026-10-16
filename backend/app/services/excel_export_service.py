@@ -4,7 +4,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any, Literal
 
@@ -19,13 +18,7 @@ from openpyxl.styles import (  # type: ignore[import-untyped]
 )
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 
-from app.domain.field_targets import (
-    CALVING_FIELDS,
-    DOCUMENT_FIELDS,
-    PEDIGREE_FIELDS,
-    SALE_CALF_FIELDS,
-)
-from app.domain.text_encoding import repair_utf8_mojibake
+from app.core.errors import AppError
 
 CellKind = Literal["text", "identifier", "integer", "decimal", "currency", "date"]
 RowKind = Literal["title", "section", "header", "data", "blank"]
@@ -81,52 +74,35 @@ class ExcelExportService:
         document: dict[str, Any],
         *,
         config_snapshot: dict[str, Any] | None = None,
-        individual_id: str | None = None,
         confirmed_at: datetime | None = None,
+        document_name: str | None = None,
     ) -> ExcelTable:
         generic_data = self._mapping(document.get("genericData"))
         generic_title = generic_data.get("templateName")
-        title = (
+        snapshot = config_snapshot or {}
+        template_snapshot = self._mapping(snapshot.get("templateSnapshot"))
+        template_config = self._mapping(template_snapshot.get("config"))
+        title = document_name or (
             str(generic_title)
             if isinstance(generic_title, str) and generic_title.strip()
-            else "帳票読み取り結果"
+            else str(template_config.get("name") or "帳票読み取り結果")
         )
         rows: list[ExcelRow] = [
             ExcelRow("title", (ExcelCell(title, title),)),
             ExcelRow("blank"),
         ]
-        identity = self._mapping(document.get("document"))
-        pedigree = self._mapping(document.get("pedigree"))
-        sale_calves = self._records(document.get("saleCalves"))
-        calvings = self._records(document.get("calvings"))
-        custom_fields = self._mapping(document.get("customFields"))
-
-        if generic_data:
-            self._append_generic_data(rows, generic_data)
-        else:
-            self._append_key_value_section(rows, "基本情報", DOCUMENT_FIELDS, identity)
-            self._append_key_value_section(rows, "血統", PEDIGREE_FIELDS, pedigree)
-            self._append_record_section(
-                rows,
-                self._section_title(config_snapshot, "saleCalves", "売却子牛一覧"),
-                SALE_CALF_FIELDS,
-                sale_calves,
-                collection="saleCalves",
+        mappings = snapshot.get("fieldMappings")
+        if not isinstance(mappings, list) or not mappings:
+            raise AppError(
+                status=409,
+                code="XLSX_REVIEW_STRUCTURE_INVALID",
+                title="Saved export structure missing",
+                detail="受付時の出力構造がありません。",
             )
-            self._append_record_section(
-                rows,
-                self._section_title(config_snapshot, "calvings", "繁殖履歴"),
-                CALVING_FIELDS,
-                calvings,
-                collection="calvings",
-            )
-            if custom_fields:
-                custom_labels = self._custom_labels(config_snapshot)
-                labels = {
-                    key: custom_labels.get(key) or self._humanize_key(key)
-                    for key in custom_fields
-                }
-                self._append_key_value_section(rows, "追加項目", labels, custom_fields)
+        used_paths = self._append_review_structure(
+            rows, document, snapshot.get("reviewStructure"), mappings
+        )
+        self._append_unbound_values(rows, document, used_paths, config_snapshot)
 
         review_items = document.get("reviewItems")
         if isinstance(review_items, list) and review_items:
@@ -159,14 +135,8 @@ class ExcelExportService:
                 )
             rows.append(ExcelRow("blank"))
 
-        resolved_id = individual_id or self._reading_text(identity.get("unifiedEarTag"))
-        cattle_name = self._reading_text(identity.get("cattleName")) or "牛名未入力"
         stamp = (confirmed_at or datetime.now()).strftime("%Y%m%d")
-        file_stem = self._safe_file_component(
-            f"{title}_{stamp}"
-            if generic_data
-            else f"繁殖台帳_{resolved_id or '個体番号未入力'}_{cattle_name}_{stamp}"
-        )
+        file_stem = self._safe_file_component(document_name or f"{title}_{stamp}")
         max_columns = max((len(row.cells) for row in rows), default=1)
         return ExcelTable(
             file_name=f"{file_stem}.xlsx",
@@ -175,38 +145,148 @@ class ExcelExportService:
             max_columns=max_columns,
         )
 
-    def _append_generic_data(
-        self, rows: list[ExcelRow], generic_data: dict[str, Any]
-    ) -> None:
-        standalone = self._records(generic_data.get("standaloneFields"))
-        if standalone:
-            standalone_labels = {
-                str(field.get("key")): str(field.get("name") or field.get("key"))
-                for field in standalone
-            }
-            readings = {
-                str(field.get("key")): field.get("reading") for field in standalone
-            }
-            self._append_key_value_section(rows, "基本項目", standalone_labels, readings)
-        for section in self._records(generic_data.get("sections")):
-            title = str(section.get("name") or section.get("key") or "明細")
-            labels: dict[str, str] = {}
-            records: list[dict[str, Any]] = []
-            for record in self._records(section.get("records")):
-                values: dict[str, Any] = {}
-                for field in self._records(record.get("fields")):
-                    key = str(field.get("key") or field.get("fieldId") or "field")
-                    labels.setdefault(key, str(field.get("name") or key))
-                    values[key] = field.get("reading")
-                records.append(values)
-            if labels:
-                self._append_record_section(
-                    rows,
-                    title,
-                    labels,
-                    records,
-                    collection="generic",
+    def _append_review_structure(
+        self,
+        rows: list[ExcelRow],
+        document: dict[str, Any],
+        structure: object,
+        mappings: list[Any],
+    ) -> set[str]:
+        """Project accepted field IDs; labels and array positions never resolve values."""
+
+        def invalid() -> AppError:
+            return AppError(
+                status=409,
+                code="XLSX_REVIEW_STRUCTURE_INVALID",
+                title="Saved export structure is invalid",
+                detail="受付時の項目と表の対応を確認できません。結果を再取得してください。",
+            )
+
+        if not isinstance(structure, dict) or structure.get("schemaVersion") != 1:
+            raise invalid()
+        accepted: dict[str, str] = {}
+        for mapping in mappings:
+            if not isinstance(mapping, dict) or mapping.get("enabled") is False:
+                continue
+            identifier, path = mapping.get("mappingId"), mapping.get("targetPath")
+            if (
+                not isinstance(identifier, str)
+                or not isinstance(path, str)
+                or identifier in accepted
+            ):
+                raise invalid()
+            accepted[identifier] = path
+        if len(set(accepted.values())) != len(accepted):
+            raise invalid()
+        fields: dict[str, dict[str, Any]] = {}
+        for field in self._records(structure.get("fields")):
+            identifier = field.get("id")
+            if (
+                not isinstance(identifier, str)
+                or identifier in fields
+                or field.get("mappingId") != identifier
+                or accepted.get(identifier) != field.get("targetPath")
+            ):
+                raise invalid()
+            fields[identifier] = field
+        if set(fields) != set(accepted):
+            raise invalid()
+        visited: set[str] = set()
+
+        def value(identifier: object) -> ExcelCell:
+            if not isinstance(identifier, str) or identifier not in fields or identifier in visited:
+                raise invalid()
+            visited.add(identifier)
+            reading: object = document
+            for part in accepted[identifier].split("."):
+                if isinstance(reading, dict):
+                    reading = reading.get(part)
+                elif isinstance(reading, list) and part.isdigit() and int(part) < len(reading):
+                    reading = reading[int(part)]
+                else:
+                    raise invalid()
+            if not isinstance(reading, dict) or not ("raw" in reading or "normalized" in reading):
+                raise invalid()
+            text = reading.get("normalized")
+            if text is None:
+                text = reading.get("raw")
+            # Generic fields stay literal: no inferred dates, units, or numeric identifiers.
+            return ExcelCell(
+                text if isinstance(text, str) else None,
+                text if isinstance(text, str) else "",
+            )
+
+        def append_fields(title: str, identifiers: object) -> None:
+            if not isinstance(identifiers, list):
+                raise invalid()
+            if not identifiers:
+                return
+            rows.extend(
+                [
+                    ExcelRow("section", (self._text_cell(title),)),
+                    ExcelRow("header", (self._text_cell("項目"), self._text_cell("値"))),
+                ]
+            )
+            for identifier in identifiers:
+                cell = value(identifier)
+                field = fields[str(identifier)]
+                label = str(field.get("label") or accepted[str(identifier)])
+                rows.append(ExcelRow("data", (self._text_cell(label), cell)))
+            rows.append(ExcelRow("blank"))
+
+        append_fields("基本項目", structure.get("independentFieldIds"))
+        for section in self._records(structure.get("parentSections")):
+            append_fields(str(section.get("title") or "項目"), section.get("fieldIds"))
+        for section in self._records(structure.get("recordSections")):
+            columns = self._records(section.get("columns"))
+            column_ids = [column.get("id") for column in columns]
+            if (
+                not columns
+                or any(not isinstance(item, str) for item in column_ids)
+                or len(set(column_ids)) != len(column_ids)
+            ):
+                raise invalid()
+            rows.extend(
+                [
+                    ExcelRow("section", (self._text_cell(str(section.get("title") or "明細")),)),
+                    ExcelRow(
+                        "header",
+                        tuple(self._text_cell(str(c.get("label") or "項目")) for c in columns),
+                    ),
+                ]
+            )
+            for record in self._records(section.get("rows")):
+                entries = self._records(record.get("cells"))
+                by_column = {entry.get("columnId"): entry.get("fieldId") for entry in entries}
+                if len(by_column) != len(entries) or set(by_column) != set(column_ids):
+                    raise invalid()
+                rows.append(
+                    ExcelRow(
+                        "data",
+                        tuple(
+                            ExcelCell(None, "")
+                            if by_column[column_id] is None
+                            else value(by_column[column_id])
+                            for column_id in column_ids
+                        ),
+                    )
                 )
+            rows.append(ExcelRow("blank"))
+        if visited != set(fields):
+            raise invalid()
+        return set(accepted.values())
+
+    def _append_unbound_values(self, rows, document, used_paths, config_snapshot) -> None:
+        readings = {
+            key: reading
+            for key, reading in self._mapping(document.get("fields")).items()
+            if f"fields.{key}" not in used_paths
+        }
+        if readings:
+            labels = self._mapping(document.get("fieldLabels"))
+            self._append_key_value_section(
+                rows, "追加項目", {key: str(labels.get(key) or key) for key in readings}, readings
+            )
 
     def render_xlsx(self, table: ExcelTable) -> bytes:
         workbook = Workbook()
@@ -300,35 +380,6 @@ class ExcelExportService:
             )
         rows.append(ExcelRow("blank"))
 
-    def _append_record_section(
-        self,
-        rows: list[ExcelRow],
-        title: str,
-        labels: dict[str, str],
-        records: list[dict[str, Any]],
-        *,
-        collection: str,
-    ) -> None:
-        rows.append(ExcelRow("section", (self._text_cell(title),)))
-        rows.append(ExcelRow("header", tuple(self._text_cell(label) for label in labels.values())))
-        for record in records:
-            if not self._record_has_meaningful_value(record):
-                continue
-            rows.append(
-                ExcelRow(
-                    "data",
-                    tuple(
-                        self._reading_cell(
-                            record.get(key),
-                            field_key=key,
-                            collection=collection,
-                        )
-                        for key in labels
-                    ),
-                )
-            )
-        rows.append(ExcelRow("blank"))
-
     @staticmethod
     def _mapping(value: object) -> dict[str, Any]:
         return dict(value) if isinstance(value, dict) else {}
@@ -338,11 +389,6 @@ class ExcelExportService:
         if not isinstance(value, list):
             return []
         return [dict(item) for item in value if isinstance(item, dict)]
-
-    def _record_has_meaningful_value(self, record: dict[str, Any]) -> bool:
-        return any(
-            key != "parity" and bool(self._reading_text(reading)) for key, reading in record.items()
-        )
 
     def _reading_cell(
         self,
@@ -354,20 +400,6 @@ class ExcelExportService:
         text = self._reading_text(reading)
         if not text:
             return ExcelCell(None, "", "text")
-        if field_key == "unifiedEarTag":
-            return ExcelCell(text, text, "identifier")
-        date_value = self._date_value(text)
-        if field_key in {"birthDate", "saleDate", "calvingDate"} and date_value:
-            return ExcelCell(date_value, text, "date")
-        if field_key in {"parity", "ageDays", "priceYen"}:
-            integer_value = self._integer_value(text)
-            if integer_value is not None:
-                kind: CellKind = "currency" if field_key == "priceYen" else "integer"
-                return ExcelCell(integer_value, str(integer_value), kind)
-        if field_key == "weightKg":
-            decimal_value = self._decimal_value(text)
-            if decimal_value is not None:
-                return ExcelCell(decimal_value, str(decimal_value), "decimal")
         return self._text_cell(text)
 
     @staticmethod
@@ -380,32 +412,6 @@ class ExcelExportService:
     @staticmethod
     def _text_cell(value: str) -> ExcelCell:
         return ExcelCell(value, value, "text")
-
-    @staticmethod
-    def _integer_value(value: str) -> int | None:
-        compact = unicodedata.normalize("NFKC", value).replace(",", "").strip()
-        if not compact.isdigit():
-            return None
-        return int(compact)
-
-    @staticmethod
-    def _decimal_value(value: str) -> float | int | None:
-        compact = unicodedata.normalize("NFKC", value).replace(",", "").strip()
-        try:
-            number = Decimal(compact)
-        except InvalidOperation:
-            return None
-        return int(number) if number == number.to_integral_value() else float(number)
-
-    @staticmethod
-    def _date_value(value: str) -> date | None:
-        match = _JAPANESE_DATE.fullmatch(unicodedata.normalize("NFKC", value).strip())
-        if match is None:
-            return None
-        try:
-            return date(*(int(part) for part in match.groups()))
-        except ValueError:
-            return None
 
     @staticmethod
     def _write_cell(cell: Cell, excel_cell: ExcelCell) -> None:
@@ -444,58 +450,6 @@ class ExcelExportService:
             sheet.column_dimensions[get_column_letter(column_index)].width = min(widest, 34)
 
     @staticmethod
-    def _section_title(
-        config_snapshot: dict[str, Any] | None,
-        collection: str,
-        fallback: str,
-    ) -> str:
-        if not isinstance(config_snapshot, dict):
-            return fallback
-        structure = config_snapshot.get("recordStructure")
-        if not isinstance(structure, dict):
-            return fallback
-        sections = structure.get("sections")
-        if not isinstance(sections, list):
-            return fallback
-        for section in sections:
-            if not isinstance(section, dict) or section.get("collectionPath") != collection:
-                continue
-            title = section.get("title")
-            if isinstance(title, str) and title.strip():
-                return repair_utf8_mojibake(title.strip())
-        return fallback
-
-    @staticmethod
-    def _custom_labels(config_snapshot: dict[str, Any] | None) -> dict[str, str]:
-        if not isinstance(config_snapshot, dict):
-            return {}
-        mappings = config_snapshot.get("fieldMappings")
-        if not isinstance(mappings, list):
-            return {}
-        result: dict[str, str] = {}
-        for mapping in mappings:
-            if not isinstance(mapping, dict):
-                continue
-            path = mapping.get("targetPath")
-            label = mapping.get("label")
-            if (
-                isinstance(path, str)
-                and path.startswith("customFields.")
-                and isinstance(label, str)
-                and label.strip()
-            ):
-                result.setdefault(
-                    path.removeprefix("customFields."),
-                    repair_utf8_mojibake(label.strip()),
-                )
-        return result
-
-    @staticmethod
-    def _humanize_key(value: str) -> str:
-        spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", value).replace("_", " ")
-        return spaced.strip() or value
-
-    @staticmethod
     def _safe_file_component(value: str) -> str:
         sanitized = _UNSAFE_FILE_NAME.sub("_", value).strip(" .")
-        return (sanitized or "繁殖台帳")[:120]
+        return (sanitized or "帳票")[:120]

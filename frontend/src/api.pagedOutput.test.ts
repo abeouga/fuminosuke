@@ -14,7 +14,12 @@ test("paged output uses authenticated download and validates the result revision
     reader.readAsText(blob);
   });
   expect(content).toBe("xlsx");
-  expect(fetcher).toHaveBeenCalledWith("/api/v1/ocr-jobs/job%2Fid/page-review/output.xlsx?revision=7", { credentials: "include" });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const [url, options] = fetcher.mock.calls[0];
+  expect(url).toBe("/api/v1/ocr-jobs/job%2Fid/page-review/output.xlsx?revision=7");
+  const headers: Record<string, string> = {};
+  new Headers(options.headers).forEach((value, key) => { headers[key] = value; });
+  expect({ ...options, headers }).toEqual({ credentials: "include", headers: {} });
 });
 
 test.each([null, "6"])("rejects a download from an absent or wrong revision: %s", async (header) => {

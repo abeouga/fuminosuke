@@ -1,0 +1,101 @@
+{
+  "version": "template-analysis.phase24-repair.result.v1",
+  "date": "2026-10-12",
+  "status": "implementation_local_acceptance_passed_review_pending",
+  "apiCalls": 0,
+  "budget": {
+    "used": 366,
+    "limit": 496,
+    "remaining": 130
+  },
+  "productActivation": false,
+  "oracleOnly": true,
+  "modelInvoked": false,
+  "localAcceptancePassed": true,
+  "independentRepairReviewPassed": null,
+  "originalPhase24ResultPreserved": true,
+  "completeProjectionMatched": 5,
+  "originalBoundaryPassed": 83,
+  "newBoundaryPassed": 48,
+  "legacyResponses": 30,
+  "legacyAccepted": 26,
+  "legacyRejected": 4,
+  "legacyExactNoop": 26,
+  "legacyScoringTimingsAndUsagePreserved": true,
+  "sourceLockSha256": "071bbabedb5502f8b7fa1d1b6527a2029fed655859ca612e45cc0dc2571f54e9",
+  "sourceFileCount": 393,
+  "sourceHashes": {
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\factor_plan.py": "4cfefe3884b80ff7d6fa34ca3a11fc5ddd1d19b758bf79b7dbc5092bc8abce57",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\evidence_context.py": "510fe675bef10a24ba317bbe954c3d6c741275b0ac5d7f92dbe0b2c4446c5ca4",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\selected_adapter.py": "8f395dfa01eb7299ae26fbe1d231a9ef331554d9c46b46891fb25658d704103b",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\transport.py": "34ebbf5fcde820d91dfd965bf96ced3c33396fe70b58bc45f080c6abf9cb86c2",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\run_guard.py": "1a85ccd6b9517f117d72fa8d65a46b6378e0d4c524b17834662052619aca8080",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\runtime\\verified_snapshot.py": "37cc0c49f2b8b3401ee00dd53a86291f0cccb65b259413ebacbd244984b46fbe",
+    "D:\\llm-ocr-archive\\template-ai\\20261011-phase24-repair\\runtime\\expand.py": "9d4f935ebffea997888a8786ac3b2406149d679e3458e9515bbfdd3bc878e5b5"
+  },
+  "timings": [
+    {
+      "caseId": "T1",
+      "oldMedianMs": 504.2639,
+      "newMedianMs": 306.0332,
+      "improvementPercent": 39.31090446887036,
+      "targetMs": 500,
+      "passed": true
+    },
+    {
+      "caseId": "T2",
+      "oldMedianMs": 751.7546,
+      "newMedianMs": 472.9608,
+      "improvementPercent": 37.08574580055778,
+      "targetMs": 500,
+      "passed": true
+    },
+    {
+      "caseId": "T3",
+      "oldMedianMs": 364.2499,
+      "newMedianMs": 188.5109,
+      "improvementPercent": 48.24682175616247,
+      "targetMs": 500,
+      "passed": true
+    },
+    {
+      "caseId": "H1",
+      "oldMedianMs": 388.7574,
+      "newMedianMs": 197.3793,
+      "improvementPercent": 49.22815617143236,
+      "targetMs": 500,
+      "passed": true
+    },
+    {
+      "caseId": "H2",
+      "oldMedianMs": 368.2848,
+      "newMedianMs": 191.0273,
+      "improvementPercent": 48.13055005256802,
+      "targetMs": 500,
+      "passed": true
+    }
+  ],
+  "phase25": {
+    "eligible": false,
+    "reason": "independent_repair_review_and_user_phase_instruction_pending",
+    "maximumSends": 20,
+    "callsReserved": 0,
+    "callsSent": 0
+  },
+  "nextPhase": {
+    "name": "24-repair-review",
+    "modelRequested": "Astra",
+    "effortRequested": "XHigh",
+    "apiCalls": 0
+  },
+  "limitations": [
+    "Only five known scopes, oracle answers",
+    "No new live model latency or accuracy",
+    "No product HTTP, DB save, UI or microphone acceptance",
+    "Three repeats do not establish p95 or production latency"
+  ],
+  "implementationRevision": 2,
+  "firstRevisionArchive": "development-revision1",
+  "firstRevisionArchiveReason": "same lease could revive after source change and restore",
+  "finalTimingRetriedForSameImplementation": false
+}

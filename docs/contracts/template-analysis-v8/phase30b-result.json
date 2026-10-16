@@ -1,0 +1,109 @@
+{
+  "version": "template-analysis.v8.phase30b-result.v1",
+  "status": "local_acceptance_passed_independent_review_pending",
+  "date": "2026-10-12",
+  "checkout": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy",
+  "implementation": "D:\\llm-ocr-archive\\template-ai\\20261012-phase30b",
+  "source": "D:\\llm-ocr-archive\\template-ai\\20261012-phase28",
+  "sourceLockSha256": "5006ff34c7b555daf930d109973ce24c223a8ccedcf78f8fa7205d4e0ad20e45",
+  "implementationLockSha256": "8971b33738afe1830f34f77b6f11281d645231be1e9ab56d4624d05ed2caeb27",
+  "sourceFiles": 401,
+  "changedOriginalSources": [
+    "runtime\\evidence_pack.py",
+    "evidence_context.py",
+    "run_guard.py",
+    "image_transport_pack.py",
+    "run_transport.py"
+  ],
+  "addedSources": [
+    "run_execution.py",
+    "run_image_evidence.py"
+  ],
+  "unchangedOriginalSources": 394,
+  "executionContract": "single-owner-dispatch.v2",
+  "apiCalls": 0,
+  "api": {
+    "used": 376,
+    "limit": 496,
+    "remaining": 120
+  },
+  "requestedModel": "GPT-6.1 Sol",
+  "requestedEffort": "High",
+  "actualChatModelVerified": false,
+  "existingBoundaryPassed": 201,
+  "newBoundaryPassed": 51,
+  "additionalSharedTargetBoundaryPassed": 1,
+  "savedResponseCount": 40,
+  "savedAccepted": 35,
+  "savedRejected": 5,
+  "syntheticExpectedDtoScopes": 24,
+  "fullManualScopes": 5,
+  "localTiming": {
+    "repeats": 3,
+    "schedule": [
+      {
+        "repeat": 1,
+        "arm": "baseline"
+      },
+      {
+        "repeat": 1,
+        "arm": "repair"
+      },
+      {
+        "repeat": 2,
+        "arm": "repair"
+      },
+      {
+        "repeat": 2,
+        "arm": "baseline"
+      },
+      {
+        "repeat": 3,
+        "arm": "baseline"
+      },
+      {
+        "repeat": 3,
+        "arm": "repair"
+      }
+    ],
+    "medianMs": {
+      "baseline": {
+        "T1": 290.231799997855,
+        "T2": 639.692999975523,
+        "T3": 222.6811999862548,
+        "H1": 237.2070999990683,
+        "H2": 213.3730000059586
+      },
+      "repair": {
+        "T1": 269.0773999784142,
+        "T2": 389.4645000109449,
+        "T3": 195.08949998999014,
+        "H1": 200.04440000047907,
+        "H2": 191.0945999843534
+      }
+    },
+    "targetMs": 500,
+    "passed": true,
+    "applicationCache": false,
+    "importsExcluded": true,
+    "oracleCostIncluded": true,
+    "networkLedgerAndReceiptWritingExcluded": true
+  },
+  "t2ReductionPercent": 39.11696704108889,
+  "mockScopeReadyMs": {
+    "T1": 843.7491999939084,
+    "T2": 1054.7640000004321,
+    "T3": 747.6745000167284,
+    "H1": 790.3437000059057,
+    "H2": 740.7116999966092
+  },
+  "providerTimeMeasured": false,
+  "actualDbCommitMeasured": false,
+  "productIntegrated": false,
+  "normalDataMigrated": false,
+  "independentReviewAccepted": false,
+  "phase30DEligible": false,
+  "nextPhase": "30-C",
+  "nextModel": "Astra",
+  "nextEffort": "XHigh"
+}

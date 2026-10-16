@@ -20,7 +20,6 @@ from app.domain.template_candidates import (
 from app.domain.template_config import (
     DocumentIdentityConfig,
     DocumentNameConfig,
-    ExportConfig,
     FieldMappingConfig,
     MarkConfig,
     RegionConfig,
@@ -40,7 +39,7 @@ from app.template_packages.feature_registry import TemplatePackageFeature
 from app.template_packages.package_paths import validate_package_path
 from app.validation.template_definition_validator import validate_template_definition
 
-CANONICAL_TEMPLATE_SCHEMA_VERSION = 1
+CANONICAL_TEMPLATE_SCHEMA_VERSION = 2
 CANONICAL_QUALITY_SCHEMA_VERSION = 1
 CANONICAL_OUTPUT_LAYOUT_SCHEMA_VERSION = 1
 PACKAGE_INTERNAL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
@@ -64,7 +63,6 @@ class CanonicalRuntimeConfig(CanonicalModel):
     )
     document_name: DocumentNameConfig | None = None
     marks: list[MarkConfig] = Field(default_factory=list, max_length=300)
-    export: ExportConfig
 
 
 class CanonicalSpreadsheetSource(CanonicalModel):
@@ -190,9 +188,9 @@ class CanonicalAssetReferences(CanonicalModel):
 
 
 class CanonicalTemplate(CanonicalModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     name: str = Field(min_length=1, max_length=300)
-    document_type: str = Field(min_length=1, max_length=200)
+    document_type: Literal["generic-document"]
     mode: TemplateMode
     canonical_width: int = Field(gt=0)
     canonical_height: int = Field(gt=0)
@@ -208,12 +206,14 @@ class CanonicalTemplate(CanonicalModel):
 
     @model_validator(mode="after")
     def validate_portable_template(self) -> Self:
-        # Package v1 has no saved printLayout; accepting page-local display nodes
+        # Packages have no saved printLayout; accepting page-local display nodes
         # would silently lose their page ownership on import.
-        if (any(cell.page_range is not None for cell in self.layout.cells)
-                or any(part.cell.page_range is not None
-                       for merge in self.layout.cell_merges for part in merge.parts)):
-            raise ValueError("Page virtual headings require printLayout, unsupported in package v1")
+        if any(cell.page_range is not None for cell in self.layout.cells) or any(
+            part.cell.page_range is not None
+            for merge in self.layout.cell_merges
+            for part in merge.parts
+        ):
+            raise ValueError("Page virtual headings require printLayout, unsupported in packages")
         runtime_config = TemplateConfig(
             template_id="package-template",
             template_version=1,
@@ -223,11 +223,9 @@ class CanonicalTemplate(CanonicalModel):
             registration=self.runtime.registration,
             regions=self.runtime.regions,
             field_mappings=self.runtime.field_mappings,
-            document_identity=None,
             document_identity_fields=self.runtime.document_identity_fields,
             document_name=self.runtime.document_name,
             marks=self.runtime.marks,
-            export=self.runtime.export,
         )
         if (
             self.layout.canonical_width != self.canonical_width
@@ -313,7 +311,7 @@ class CanonicalTemplate(CanonicalModel):
                 }
             )
         if self.assets.output_layout is not None:
-            features.add(TemplatePackageFeature.GOOGLE_OUTPUT_LAYOUT)
+            features.add(TemplatePackageFeature.LOCAL_OUTPUT_LAYOUT)
         return sorted(features)
 
 
@@ -349,9 +347,7 @@ class CanonicalOutputLayoutCell(CanonicalModel):
     @classmethod
     def reject_internal_template_note(cls, value: str | None) -> str | None:
         if value is not None and value.startswith("llm-ocr:"):
-            raise ValueError(
-                "Output layout notes cannot contain internal LLM OCR references"
-            )
+            raise ValueError("Output layout notes cannot contain internal LLM OCR references")
         return value
 
 

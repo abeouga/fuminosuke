@@ -1,0 +1,1305 @@
+{
+  "$defs": {
+    "CellMeaningRef": {
+      "additionalProperties": false,
+      "properties": {
+        "cell": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cell",
+        "meaning"
+      ],
+      "type": "object"
+    },
+    "CellRename": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "cell.rename"
+          ]
+        },
+        "cell": {
+          "pattern": "^t_[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "cell",
+        "name"
+      ],
+      "type": "object"
+    },
+    "CellSetReading": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "cell.set_reading"
+          ]
+        },
+        "cells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        },
+        "reading": {
+          "enum": [
+            "text",
+            "sequence"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "cells",
+        "reading"
+      ],
+      "type": "object"
+    },
+    "CellSetRole": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "cell.set_role"
+          ]
+        },
+        "cells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "input",
+            "label",
+            "parent_label",
+            "mark",
+            "record_key_cell",
+            "column_key_cell",
+            "ignored"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "cells",
+        "role"
+      ],
+      "type": "object"
+    },
+    "DocumentNameConfigure": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "document_name.configure"
+          ]
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NameRule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "rule"
+      ],
+      "type": "object"
+    },
+    "HeadingAttach": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "heading.attach"
+          ]
+        },
+        "heading": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "children": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^t_[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/LocalRef"
+              }
+            ]
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "heading",
+        "children"
+      ],
+      "type": "object"
+    },
+    "HeadingCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "heading.create_virtual"
+          ]
+        },
+        "localRef": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "localRef",
+        "name",
+        "page",
+        "anchor"
+      ],
+      "type": "object"
+    },
+    "HeadingDelete": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "heading.delete_virtual"
+          ]
+        },
+        "heading": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "heading"
+      ],
+      "type": "object"
+    },
+    "HeadingDetach": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "heading.detach"
+          ]
+        },
+        "children": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^t_[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/LocalRef"
+              }
+            ]
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "children"
+      ],
+      "type": "object"
+    },
+    "HeadingUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "heading.update"
+          ]
+        },
+        "heading": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "heading",
+        "name"
+      ],
+      "type": "object"
+    },
+    "IdentityConfigure": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "identity.configure"
+          ]
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/IdentityEntry"
+          },
+          "maxItems": 20,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "IdentityEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/CellMeaningRef"
+            }
+          ]
+        },
+        "valueType": {
+          "enum": [
+            "text",
+            "digits"
+          ],
+          "type": "string"
+        },
+        "exactLength": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matchRole": {
+          "enum": [
+            "primary",
+            "confirmation"
+          ],
+          "type": "string"
+        },
+        "displayRole": {
+          "enum": [
+            "title",
+            "subtitle",
+            "none"
+          ],
+          "type": "string"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groupLabel": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "componentOrder": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "field",
+        "valueType",
+        "exactLength",
+        "matchRole",
+        "displayRole",
+        "group",
+        "groupLabel",
+        "componentOrder"
+      ],
+      "type": "object"
+    },
+    "LocalRef": {
+      "additionalProperties": false,
+      "properties": {
+        "localRef": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "localRef"
+      ],
+      "type": "object"
+    },
+    "MarkClear": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "mark.clear"
+          ]
+        },
+        "cell": {
+          "pattern": "^t_[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "cell"
+      ],
+      "type": "object"
+    },
+    "MarkConfigure": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "mark.configure"
+          ]
+        },
+        "cell": {
+          "pattern": "^t_[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "sets": {
+          "items": {
+            "$ref": "#/$defs/MarkSetSpec"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "cell",
+        "sets"
+      ],
+      "type": "object"
+    },
+    "MarkOptionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "option": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localRef": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "whole-cell"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "option",
+        "localRef",
+        "label",
+        "value",
+        "region"
+      ],
+      "type": "object"
+    },
+    "MarkSetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localRef": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recognitionMode": {
+          "enum": [
+            "automatic",
+            "manual",
+            "symbol",
+            "checklist"
+          ],
+          "type": "string"
+        },
+        "selectionMode": {
+          "enum": [
+            "single",
+            "multiple"
+          ],
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/MarkOptionSpec"
+          },
+          "maxItems": 50,
+          "type": "array"
+        }
+      },
+      "required": [
+        "set",
+        "localRef",
+        "meaning",
+        "recognitionMode",
+        "selectionMode",
+        "options"
+      ],
+      "type": "object"
+    },
+    "MeaningBind": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "meaning.bind"
+          ]
+        },
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "inputCells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        },
+        "labelCells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 30,
+          "type": "array"
+        },
+        "axis": {
+          "enum": [
+            "horizontal",
+            "vertical",
+            "direct"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "meaning",
+        "inputCells",
+        "labelCells",
+        "axis"
+      ],
+      "type": "object"
+    },
+    "MeaningCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "meaning.create"
+          ]
+        },
+        "localRef": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "localRef",
+        "name",
+        "aliases"
+      ],
+      "type": "object"
+    },
+    "MeaningDelete": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "meaning.delete"
+          ]
+        },
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "meaning"
+      ],
+      "type": "object"
+    },
+    "MeaningUnbind": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "meaning.unbind"
+          ]
+        },
+        "relations": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "relations"
+      ],
+      "type": "object"
+    },
+    "MeaningUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "meaning.update"
+          ]
+        },
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "meaning",
+        "name",
+        "aliases"
+      ],
+      "type": "object"
+    },
+    "NameRule": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^t_[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/CellMeaningRef"
+              }
+            ]
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "separator": {
+          "maxLength": 20,
+          "type": "string"
+        },
+        "prefix": {
+          "maxLength": 100,
+          "type": "string"
+        },
+        "suffix": {
+          "maxLength": 100,
+          "type": "string"
+        }
+      },
+      "required": [
+        "fields",
+        "separator",
+        "prefix",
+        "suffix"
+      ],
+      "type": "object"
+    },
+    "OcrSetValue": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "ocr.set_value"
+          ]
+        },
+        "target": {
+          "pattern": "^t_[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "target",
+        "value"
+      ],
+      "type": "object"
+    },
+    "RecordColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "meaning": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "labelCells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 30,
+          "type": "array"
+        }
+      },
+      "required": [
+        "meaning",
+        "labelCells"
+      ],
+      "type": "object"
+    },
+    "RecordOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "rowKeyStrategy": {
+          "enum": [
+            "printed",
+            "position"
+          ],
+          "type": "string"
+        },
+        "includeEmptyRows": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rowKeyStrategy",
+        "includeEmptyRows"
+      ],
+      "type": "object"
+    },
+    "RecordRow": {
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localRef": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        },
+        "rowKeyCell": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rowKeyValue": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "group",
+        "localRef",
+        "cells",
+        "rowKeyCell",
+        "rowKeyValue"
+      ],
+      "type": "object"
+    },
+    "RecordsConfigure": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "records.configure"
+          ]
+        },
+        "section": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "$ref": "#/$defs/RecordOptions"
+        },
+        "columnLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^t_[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "maxItems": 30,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "section",
+        "name",
+        "options",
+        "columnLabels"
+      ],
+      "type": "object"
+    },
+    "RecordsDefine": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "records.define"
+          ]
+        },
+        "localRef": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,39}$",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/RecordColumn"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/RecordRow"
+          },
+          "maxItems": 300,
+          "type": "array"
+        },
+        "options": {
+          "$ref": "#/$defs/RecordOptions"
+        },
+        "columnLabels": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^t_[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "maxItems": 30,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "localRef",
+        "name",
+        "columns",
+        "rows",
+        "options",
+        "columnLabels"
+      ],
+      "type": "object"
+    },
+    "RecordsDissolve": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "records.dissolve"
+          ]
+        },
+        "section": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "section"
+      ],
+      "type": "object"
+    },
+    "RecordsReplaceRows": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "records.replace_rows"
+          ]
+        },
+        "section": {
+          "anyOf": [
+            {
+              "pattern": "^t_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LocalRef"
+            }
+          ]
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/RecordRow"
+          },
+          "maxItems": 300,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "section",
+        "rows"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "operations": {
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/OcrSetValue"
+          },
+          {
+            "$ref": "#/$defs/CellSetRole"
+          },
+          {
+            "$ref": "#/$defs/CellRename"
+          },
+          {
+            "$ref": "#/$defs/CellSetReading"
+          },
+          {
+            "$ref": "#/$defs/MeaningCreate"
+          },
+          {
+            "$ref": "#/$defs/MeaningUpdate"
+          },
+          {
+            "$ref": "#/$defs/MeaningDelete"
+          },
+          {
+            "$ref": "#/$defs/MeaningBind"
+          },
+          {
+            "$ref": "#/$defs/MeaningUnbind"
+          },
+          {
+            "$ref": "#/$defs/HeadingCreate"
+          },
+          {
+            "$ref": "#/$defs/HeadingUpdate"
+          },
+          {
+            "$ref": "#/$defs/HeadingAttach"
+          },
+          {
+            "$ref": "#/$defs/HeadingDetach"
+          },
+          {
+            "$ref": "#/$defs/HeadingDelete"
+          },
+          {
+            "$ref": "#/$defs/RecordsDefine"
+          },
+          {
+            "$ref": "#/$defs/RecordsReplaceRows"
+          },
+          {
+            "$ref": "#/$defs/RecordsConfigure"
+          },
+          {
+            "$ref": "#/$defs/RecordsDissolve"
+          },
+          {
+            "$ref": "#/$defs/MarkConfigure"
+          },
+          {
+            "$ref": "#/$defs/MarkClear"
+          },
+          {
+            "$ref": "#/$defs/IdentityConfigure"
+          },
+          {
+            "$ref": "#/$defs/DocumentNameConfigure"
+          }
+        ]
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "operations"
+  ],
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

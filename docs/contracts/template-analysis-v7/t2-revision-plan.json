@@ -1,0 +1,73 @@
+{
+  "version": "template-analysis.v7.t2-revision-plan.v1",
+  "date": "2026-10-11",
+  "status": "design_complete_implementation_not_started",
+  "sourcePhase": 24,
+  "worktree": "C:/Users/hanam/Desktop/llm-ocr-deploy",
+  "oldCheckoutReadOnly": "C:/Users/hanam/Desktop/llm-ocr",
+  "evidenceDirectory": "D:/llm-ocr-archive/template-ai/20261011-t2-revision-design",
+  "implementationDirectory": "D:/llm-ocr-archive/template-ai/20261011-phase24-repair",
+  "reviewModelRequested": "Astra",
+  "reviewEffortRequested": "XHigh",
+  "activeChatModelVerified": false,
+  "apiCalls": 0,
+  "budget": {"used": 366, "limit": 496, "remaining": 130},
+  "originalGate": {"overallPassed": false, "phase25Eligible": false, "failedScope": "T2", "medianMs": 716.8097, "targetMs": 500, "scopeCount": 5, "repeatsPerScope": 3},
+  "diagnostic": {
+    "implementationModified": false,
+    "unmodifiedMedianMs": 706.2431,
+    "runsMs": [734.4354, 673.2618, 706.2431],
+    "profileOnlyCumulativeMs": {"geometryBuild": 311.6436, "implementationFingerprint": 252.1138, "schemaChecks": 120.5028, "catalogCopies": 6.444},
+    "cumulativeTimesOverlap": true,
+    "counts": {"geometryBuild": 12, "snapshotUnpack": 11, "fingerprint": 6, "sourceFiles": 391, "sourceBytes": 3071205, "distinctSchemaChecks": 2, "catalogCopies": 5},
+    "fullProjectionMatched": true,
+    "measuredSpeedup": null
+  },
+  "internalContract": "verified-run-input.v1",
+  "wireContractUnchanged": "template-analysis.factor-answer.v7",
+  "changes": [
+    {"priority": 1, "name": "verified_input_factory", "newCaptureGeometryBuilds": 1, "restoredSnapshotGeometryRebuilds": 1, "crossRunReuse": false, "restoredPublicDigestIsSufficient": false, "immutableOwnedBytes": true, "untrustedProofRejected": true, "commonSemanticCore": true},
+    {"priority": 2, "name": "separate_live_state_from_implementation_proof", "offlineSynchronousSegmentFingerprintPasses": 2, "sourceClosureReduction": false, "newSourcesAddedToManifest": true, "unchangedContentAndMembershipRequired": true, "noAwaitWithinSegment": true, "hotReloadAllowed": false, "allLiveStateAndPackGuardsRetained": true, "responsesOneSendSegments": 2, "decisionsTwoSendSegments": 3, "sourceCheckBeforeBudgetReservation": true, "publishBeforeSegmentExitAllowed": false}
+  ],
+  "excludedFromFirstRepair": ["schema_validation_moved_out_of_timer", "catalog_rearchitecture", "geometry_algorithm_changes", "weaker_or_fewer_claim_checks", "source_mtime_only_cache", "persistent_cross_run_cache", "monkeypatch_or_trusted_boolean", "model_or_prompt_changes", "fixture_or_gold_changes", "T2_specific_logic", "product_integration", "database_changes", "live_api"],
+  "unchangedBoundaries": ["physical_id_and_order", "mapping_and_target_path", "source_region_crop_and_image", "expected_owner_revision_and_scope", "same_value_manual_facets", "all_rejected_claims_and_dependency_closure", "read_only_cells", "common_command_and_manual_compiler", "snapshot_on_ocr_intake", "correction_revision_and_output_binding"],
+  "limitsUnchanged": {"choicesIncludingAbstention": 32, "activeQuestions": 64, "allQuestions": 512, "alternatives": 8192, "stages": 2, "sends": 2, "retries": 0},
+  "acceptance": {
+    "scopeIds": ["T1", "T2", "T3", "H1", "H2"],
+    "completeManualProjectionMatches": 5,
+    "originalBoundaryChecks": 83,
+    "originalMetamorphicChecksRetained": true,
+    "legacyResponsesAgainstChangedRuntime": 30,
+    "legacyAccepted": 26,
+    "legacyRejected": 4,
+    "legacyScoringTimingsAndUsageUnchanged": true,
+    "acceptedLegacyExactExistingGraphNoops": 26,
+    "newBoundaryGroups": ["forged_snapshot_or_proof", "mutable_alias", "cross_run_and_live_state_staleness", "same_size_same_mtime_source_changes_and_membership", "external_wait_and_cancel_and_restart", "held_claim_dependency_and_full_semantics"],
+    "localTiming": {
+      "repeatsPerScope": 3,
+      "allScopeMedianLimitMs": 500,
+      "engineeringAimMsNotPrediction": 400,
+      "baselineResultPreserved": true,
+      "separateProcessesPerImplementation": true,
+      "pairedOrderByRepeat": [["old", "new"], ["new", "old"], ["old", "new"]],
+      "scopeOrderPerProcess": ["T1", "T2", "T3", "H1", "H2"],
+      "newContextsEveryRun": true,
+      "newProofAndInitializationCostsInsideTimer": true,
+      "exclude": ["existing_python_import_startup", "oracle_selection", "scoring", "wire_build", "real_network_and_model", "UI", "database_save"],
+      "warmFirstRunDiscardAllowed": false,
+      "postHocRetrySelectionAllowed": false,
+      "profileIsSeparate": true
+    }
+  },
+  "stages": [
+    {"id": "24-repair-design", "model": "Astra", "effort": "XHigh", "apiCalls": 0, "state": "complete"},
+    {"id": "24-repair-implementation", "model": "GPT-6.1 Sol", "effort": "High", "apiCalls": 0, "state": "awaiting_user_phase_instruction"},
+    {"id": "24-repair-review", "model": "Astra", "effort": "XHigh", "apiCalls": 0, "state": "not_started"},
+    {"id": "25", "model": "GPT-6.1 Sol", "effort": "High", "maximumSends": 20, "callsReserved": 0, "callsSent": 0, "requires": ["repair_quality_pass", "repair_all_local_medians_le_500ms", "review_pass", "user_phase_instruction"], "state": "blocked_by_failed_local_gate"},
+    {"id": "26", "model": "Astra", "effort": "XHigh", "apiCallsDefault": 0, "state": "not_started"}
+  ],
+  "apiModelsUnchanged": {"decisions": "gpt-6-luna", "responses": "gpt-6-luna", "responsesEffort": "low"},
+  "productActivation": false,
+  "realDatabaseAcceptance": false,
+  "voiceAcceptance": false
+}

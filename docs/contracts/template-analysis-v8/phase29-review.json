@@ -1,0 +1,87 @@
+{
+  "version": "template-analysis.v8.phase29-review.v1",
+  "date": "2026-10-12",
+  "phase": 29,
+  "status": "rejected_revision_required",
+  "reviewModelRequested": "Astra",
+  "reasoningRequested": "XHigh",
+  "activeChatModelVerified": false,
+  "target": "D:\\llm-ocr-archive\\template-ai\\20261012-phase28",
+  "sourceLockSha256": "5006ff34c7b555daf930d109973ce24c223a8ccedcf78f8fa7205d4e0ad20e45",
+  "sealedArtifactsVerified": 634,
+  "implementationFilesVerified": 399,
+  "apiCalls": 0,
+  "budget": {
+    "used": 376,
+    "limit": 496,
+    "remaining": 120
+  },
+  "findings": [
+    {
+      "id": "R1",
+      "priority": 1,
+      "title": "同一runの同時実行で一送信上限を破る",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase28\\run_transport.py",
+      "line": 114,
+      "endLine": 116,
+      "observed": "永続化callbackで最初のexecuteを待機させ、同じRunへ二度目のexecuteを開始すると、予約2・mock送信2。二度目はsends=2のdraftを返し、最初はSYNCHRONOUS_SEGMENT_REQUIREDで失敗。",
+      "cause": "開始時にclosedだけを検査し、実行中状態と送信済み回数を排他的に確定していない。closedは最後にしか立たない。",
+      "impact": "一run最大一送信と共有guardの所有が破れる。通常DBへの二重適用は今回未実施。",
+      "required": "実行開始を原子的に一度だけ取得する。重複呼出しをguardや台帳へ触れる前に拒否し、一度取得したrunの一送信上限を別途保持する。"
+    },
+    {
+      "id": "R2",
+      "priority": 2,
+      "title": "接続初期化中のキャンセル後にHTTP送信が始まる",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase28\\run_transport.py",
+      "line": 61,
+      "endLine": 67,
+      "observed": "client初期化を待機させてキャンセルすると呼出し元はRUN_CANCELLEDを返す。この時点のHTTP要求は0件だが、初期化を解放するとmock HTTPが1件送信される。",
+      "cause": "cancelledを外側の待機loopだけが検査し、workerの_exchangeへ渡していない。workerは初期化後にdeadlineだけを検査して送信する。",
+      "impact": "キャンセル済みの不要なAPI送信が後から発生する。返却済みrunへの結果適用を確認したものではない。",
+      "required": "初期化・接続待機後、実送信の直前にworker側でもキャンセルを検査する。既に送信した要求の遅延応答拒否と、未送信要求の停止を両方検証する。"
+    },
+    {
+      "id": "R3",
+      "priority": 2,
+      "title": "予算予約待機中の対象変更を送信前に再検査しない",
+      "file": "D:\\llm-ocr-archive\\template-ai\\20261012-phase28\\run_transport.py",
+      "line": 136,
+      "endLine": 142,
+      "observed": "ledger.reserve中にinteraction epochを変更すると、予約1・mock送信1が発生し、応答後にCURRENT_BINDING_STALEで拒否される。",
+      "cause": "所有・現在性の最終検査がreserveより前にある。reserve後のcheckはcancelとdeadlineだけを見て、そのままtransportへ渡す。",
+      "impact": "古い要求が送られ予算と時間を使う。応答後の現在性検査は機能し、古いdraftの返却は防止された。",
+      "required": "台帳予約の完了後から実送信開始までの待機境界で所有・scope・revision・epochの現在性を再検証する。予約済み枠は払い戻さず、失効要求の送信だけを止める。"
+    }
+  ],
+  "knownBlocker": {
+    "id": "K1",
+    "description": "T2 local median exceeds 500 ms",
+    "reportedPhase28MedianMs": 625.3379000118002,
+    "reviewMedianMs": 634.5470000233036,
+    "reviewValuesMs": [
+      634.5470000233036,
+      625.0307999725919,
+      638.8108000101056
+    ],
+    "thresholdMs": 500
+  },
+  "regression": {
+    "existingBoundaries": 201,
+    "savedResponses": 40,
+    "accepted": 35,
+    "rejected": 5,
+    "priorScoresUnchanged": true
+  },
+  "syntheticExpectedDtoScopes": 24,
+  "productIntegrated": false,
+  "normalDataMigrated": false,
+  "phase30Eligible": false,
+  "fixesImplemented": false,
+  "nextStep": "Repair design for R1/R2/R3 and T2 local latency, followed by implementation and independent re-review; no Phase30 sends",
+  "limitations": [
+    "No live endpoint acceptance, model quality, actual connection reuse, UI or microphone test",
+    "Shared ledger/durable persistence remain injected interfaces",
+    "The synthetic expected DTO replay shares the unchanged compiler and does not independently adjudicate semantic gold"
+  ]
+}

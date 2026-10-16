@@ -1,0 +1,26 @@
+{
+  "version": "template-analysis.focused.v5",
+  "marks": [],
+  "units": [
+    {
+      "kind": "labeled_fields",
+      "parent": "c16",
+      "axis": "horizontal",
+      "reading": "text",
+      "items": [
+        {
+          "value": "c18",
+          "labels": [
+            "c17"
+          ],
+          "name": null
+        }
+      ]
+    }
+  ],
+  "roles": [],
+  "headings": [
+    "c16"
+  ],
+  "hierarchy": []
+}

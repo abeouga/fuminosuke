@@ -32,7 +32,7 @@ def mark_config() -> TemplateConfig:
         field_mappings=[
             FieldMappingConfig(
                 mapping_id="calving_outcome",
-                target_path="calvings.0.outcome",
+                target_path="fields.outcome",
                 label="結果",
                 x=10,
                 y=5,

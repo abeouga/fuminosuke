@@ -18,7 +18,7 @@ def build_generic_data(document: OcrDocument, raw_definition: object) -> Generic
     if not isinstance(raw_definition, dict):
         return None
     definition = TemplateDefinition.model_validate(raw_definition)
-    readings = document.custom_fields
+    readings = document.fields
     standalone_mapping_key = {
         location.field.id: location.mapping_key
         for location in generic_field_locations(definition)

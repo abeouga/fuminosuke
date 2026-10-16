@@ -11,8 +11,8 @@ from app.template_packages.package_paths import path_collision_key, validate_pac
 from app.template_packages.semantic_version import SEMVER_PATTERN, validate_semantic_version
 
 FORMAT_NAME = "llm-ocr-template"
-FORMAT_VERSION = 1
-SCHEMA_VERSION = 1
+FORMAT_VERSION = 2
+SCHEMA_VERSION = 2
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 CONTENT_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -89,8 +89,8 @@ class PackageFile(ManifestModel):
 
 class TemplatePackageManifest(ManifestModel):
     format: Literal["llm-ocr-template"] = "llm-ocr-template"
-    format_version: Literal[1] = 1
-    schema_version: Literal[1] = 1
+    format_version: Literal[2] = 2
+    schema_version: Literal[2] = 2
     publisher_id: str = Field(min_length=3, max_length=253, pattern=PUBLISHER_ID_PATTERN)
     package_id: str = Field(min_length=1, max_length=100, pattern=PACKAGE_ID_PATTERN)
     name: str = Field(min_length=1, max_length=300)

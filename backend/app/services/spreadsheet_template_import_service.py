@@ -42,6 +42,7 @@ from app.layout_analysis.models import (
 from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
 from app.repositories.job_repository import JobRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.spreadsheet_preview_geometry import LINUX_MODEL as LINUX_PREVIEW_MODEL
 from app.services.spreadsheet_preview_geometry import MODEL, project_preview_geometry
 from app.services.spreadsheet_source_bounds import (
     MAX_SOURCE_CELLS as DEFAULT_MAX_SOURCE_CELLS,
@@ -51,6 +52,8 @@ from app.services.spreadsheet_source_bounds import (
     empty_tail_is_inspectable,
 )
 from app.services.workbook_geometry import read_office_dimensions
+from app.services.xlsx_checkboxes import preview_bytes
+from app.storage.immutable_artifact import publish_config
 from app.storage.local_storage import LocalStorageService
 
 
@@ -228,8 +231,8 @@ class SpreadsheetTemplateImportService:
                 canonical_width=layout.canonical_width,
                 canonical_height=layout.canonical_height,
             )
-            config_relative = self._storage.write_text(
-                f"templates/{template.id}/versions/{version_number}/template.yaml",
+            config_relative = publish_config(
+                self._storage,
                 yaml.safe_dump(
                     version_config.model_dump(mode="json", by_alias=True),
                     allow_unicode=True,
@@ -246,10 +249,10 @@ class SpreadsheetTemplateImportService:
                 mask_artifact_id=None,
                 config_relative_path=config_relative,
                 quality=quality,
+                layout=layout.model_dump(mode="json", by_alias=True),
             )
             if version.version_number != version_number:
                 raise RuntimeError("Spreadsheet template version number changed during persistence")
-            version.layout_json = layout.model_dump(mode="json", by_alias=True)
             stored_job = session.get(ProcessingJob, job.id)
             if stored_job is None:
                 raise RuntimeError("Spreadsheet template job disappeared during import")
@@ -647,7 +650,7 @@ class SpreadsheetTemplateImportService:
         content: bytes,
     ) -> tuple[LayoutDefinition, list[dict[str, Any]], str, np.ndarray[Any, Any]]:
         try:
-            workbook = load_workbook(io.BytesIO(content), data_only=False, read_only=False)
+            workbook = load_workbook(io.BytesIO(preview_bytes(content)), data_only=False, read_only=False)
         except Exception as exc:
             raise AppError(
                 status=422,
@@ -967,8 +970,9 @@ class SpreadsheetTemplateImportService:
         canonical_height: int,
         geometry: dict[str, Any] | None = None,
     ) -> tuple[bytes, np.ndarray[Any, Any] | None, int]:
-        soffice = self._find_soffice()
-        if soffice is None:
+        linux = os.environ.get("PRINT_PDF_RENDERER") == "linux"
+        soffice = None if linux else self._find_soffice()
+        if soffice is None and not linux:
             raise AppError(
                 status=503,
                 code="SPREADSHEET_RENDERER_NOT_AVAILABLE",
@@ -982,7 +986,7 @@ class SpreadsheetTemplateImportService:
             source_path = directory / "source.xlsx"
             profile_path = directory / "libreoffice-profile"
             try:
-                workbook = load_workbook(io.BytesIO(content), data_only=False, read_only=False)
+                workbook = load_workbook(io.BytesIO(preview_bytes(content)), data_only=False, read_only=False)
                 selected_index = next(
                     index
                     for index, sheet in enumerate(workbook.worksheets)
@@ -1015,6 +1019,32 @@ class SpreadsheetTemplateImportService:
                     title="Spreadsheet preview could not be prepared",
                     detail="XLSXの印刷プレビューを準備できませんでした。",
                 ) from exc
+
+            if linux:
+                from app.rendering.client import render
+                from app.rendering.geometry import dimensions as linux_dimensions
+
+                files, report = render(source_path.read_bytes(), "preview")
+                dimensions = linux_dimensions(
+                    files["page.fods"], sheet_name,
+                    self._worksheet_bounds(worksheet, content=content)[3],
+                    self._worksheet_bounds(worksheet, content=content)[2],
+                )
+                if geometry is not None:
+                    geometry.update(
+                        model=LINUX_PREVIEW_MODEL, sourceSha256=hashlib.sha256(content).hexdigest(),
+                        sheetName=sheet_name,
+                        bounds=list(self._worksheet_bounds(worksheet, content=content)),
+                        rows=dimensions["rows"], columns=dimensions["columns"],
+                    )
+                # Native PDF parsing and rasterization happened in the isolated worker.
+                image = cv2.imdecode(
+                    np.frombuffer(files["page-1.png"], dtype=np.uint8), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError("Isolated preview is missing")
+                image = cv2.resize(image, (canonical_width, canonical_height),
+                                   interpolation=cv2.INTER_AREA)
+                return files["page.pdf"], image, report["pageCount"]
 
             command = [
                 str(soffice),

@@ -1,0 +1,27 @@
+[Unit]
+Description=Fuminosuke restricted renderer supervisor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Slice=llmocr-beta.slice
+MemoryMax=256M
+EnvironmentFile=/etc/llmocr/renderer.env
+WorkingDirectory=/opt/llmocr/backend
+ExecStart=/usr/bin/python3 -B -m app.rendering.supervisor
+Restart=on-failure
+RuntimeDirectory=llmocr-renderer
+RuntimeDirectoryMode=0750
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=30
+# A pipe core handler honors the Linux special limit=1, and children inherit it.
+LimitCORE=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/llmocr-renderer /var/lib/llmocr-renderer
+
+[Install]
+WantedBy=multi-user.target

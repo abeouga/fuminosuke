@@ -41,6 +41,22 @@ def test_template_upload_is_queued_and_processed(client: TestClient) -> None:
         time.sleep(0.01)
     assert detail["status"] == "REVIEW_REQUIRED"
 
+    template = client.get("/api/v1/templates").json()[0]
+    assert template["documentType"] == "generic-document"
+    version = client.get(f"/api/v1/templates/{template['id']}").json()["versions"][0]
+    with client.app.state.database.session() as session:
+        from app.db.models import TemplateVersion
+        from app.domain.template_config import parse_template_config
+
+        saved = session.get(TemplateVersion, version["id"])
+        assert saved is not None
+        config = parse_template_config(
+            client.app.state.storage.read_bytes(saved.config_relative_path).decode("utf-8")
+        )
+    assert config.regions == []
+    assert config.field_mappings == []
+    assert config.marks == []
+
     listed = client.get("/api/v1/jobs", params={"limit": 10})
     assert listed.status_code == 200
     assert listed.json()[0]["id"] == job_id
@@ -51,6 +67,25 @@ def test_template_upload_is_queued_and_processed(client: TestClient) -> None:
     protected_delete = client.delete(f"/api/v1/jobs/{job_id}")
     assert protected_delete.status_code == 409
     assert protected_delete.json()["code"] == "JOB_IN_USE"
+
+    reprocessed = client.post(f"/api/v1/template-versions/{version['id']}/reprocess")
+    assert reprocessed.status_code == 202
+    for _ in range(500):
+        detail = client.get(f"/api/v1/jobs/{job_id}").json()
+        if detail["status"] in {"REVIEW_REQUIRED", "FAILED"}:
+            break
+        time.sleep(0.01)
+    assert detail["status"] == "REVIEW_REQUIRED"
+    versions = client.get(f"/api/v1/templates/{template['id']}").json()["versions"]
+    assert len(versions) == 2
+    with client.app.state.database.session() as session:
+        regenerated = session.get(TemplateVersion, versions[0]["id"])
+        assert regenerated is not None
+        new_config = parse_template_config(
+            client.app.state.storage.read_bytes(regenerated.config_relative_path).decode("utf-8")
+        )
+    assert new_config.regions == []
+    assert new_config.marks == []
 
 
 def test_attention_only_lists_old_review_jobs_beyond_the_recent_limit(
@@ -246,7 +281,7 @@ def test_failed_empty_template_does_not_block_recovery(
     with client.app.state.database.session() as session:
         orphan = Template(
             name="復旧可能テンプレート",
-            document_type="cow-breeding-ledger",
+            document_type="generic-document",
         )
         session.add(orphan)
         session.commit()

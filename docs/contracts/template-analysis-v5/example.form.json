@@ -1,0 +1,25 @@
+{
+  "version": "template-analysis.focused.v5",
+  "marks": [],
+  "units": [
+    {
+      "kind": "form",
+      "grid": "g2",
+      "rows": {
+        "first": "r1",
+        "last": "r3"
+      },
+      "parent": "c8",
+      "labelColumns": [
+        "k1"
+      ],
+      "valueColumn": "k2",
+      "reading": "text"
+    }
+  ],
+  "roles": [],
+  "headings": [
+    "c8"
+  ],
+  "hierarchy": []
+}

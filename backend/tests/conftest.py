@@ -29,6 +29,7 @@ def settings_factory(tmp_path: Path) -> Callable[..., Settings]:
             "database_url": f"sqlite:///{(data_dir / 'app.db').as_posix()}",
             "log_file": data_dir / "logs" / "app.log",
             "ocr_provider": "mock",
+            "ocr_text_recognition_toggle_enabled": True,
         }
         values.update(overrides)
         # Unit/integration tests must not inherit the developer's real .env

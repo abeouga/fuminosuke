@@ -13,7 +13,7 @@ vi.mock("../hooks/useJobPoller", () => ({ useJobPoller: (_id: string | null, cal
 } }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const template: Template = { id: "t", name: "複数ページ帳票", documentType: "form",
-  activeVersionId: "v", createdAt: "2026-09-13", versions: [{ id: "v", versionNumber: 1,
+  activeVersionId: "v", createdAt: "2026-09-13", versions: [{ id: "v", versionNumber: 1, revision: 1,
     mode: "SPREADSHEET_TEMPLATE", status: "ACTIVE", sourceJobId: "source",
     canonicalWidth: 100, canonicalHeight: 100, createdAt: "2026-09-13",
     quality: { layoutVerified: true, printLayout: { pages: [{}] } } }] };

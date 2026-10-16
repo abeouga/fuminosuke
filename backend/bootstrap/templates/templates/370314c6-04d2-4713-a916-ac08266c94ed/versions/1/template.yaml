@@ -130,7 +130,7 @@ regions:
   printedLabelText: ''
 fieldMappings:
 - mappingId: layout_cell_0015
-  targetPath: saleCalves.0.priceYen
+  targetPath: fields.f_081f35f66c50aec3fdb5afd3
   label: 価格
   x: 809
   y: 281
@@ -140,8 +140,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0025
-  targetPath: saleCalves.1.priceYen
+  targetPath: fields.f_a51b56fd87a179f2f0db1afb
   label: 価格
   x: 809
   y: 311
@@ -151,8 +156,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0030
-  targetPath: saleCalves.2.priceYen
+  targetPath: fields.f_c5ce2b1254dc5e2466bab195
   label: 価格
   x: 809
   y: 340
@@ -162,8 +172,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0041
-  targetPath: saleCalves.3.priceYen
+  targetPath: fields.f_147c6c7499935bc7b34ba945
   label: 価格
   x: 809
   y: 370
@@ -173,8 +188,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0049
-  targetPath: saleCalves.4.priceYen
+  targetPath: fields.f_5df6c0482b40bbbd3bb696c7
   label: 価格
   x: 809
   y: 400
@@ -184,8 +204,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0056
-  targetPath: saleCalves.5.priceYen
+  targetPath: fields.f_8e34dbc6f3317c557ead5e6d
   label: 価格
   x: 808
   y: 430
@@ -195,8 +220,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0064
-  targetPath: saleCalves.6.priceYen
+  targetPath: fields.f_4264217130147c2862ec6c04
   label: 価格
   x: 808
   y: 459
@@ -206,8 +236,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0071
-  targetPath: saleCalves.7.priceYen
+  targetPath: fields.f_94fec87df1e02ba6f1fb47d3
   label: 価格
   x: 808
   y: 488
@@ -217,8 +252,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0079
-  targetPath: saleCalves.8.priceYen
+  targetPath: fields.f_fdfb3458e0f7987019cafd22
   label: 価格
   x: 808
   y: 519
@@ -228,8 +268,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0088
-  targetPath: saleCalves.9.priceYen
+  targetPath: fields.f_4de5f464d21beea6355e32bc
   label: 価格
   x: 808
   y: 548
@@ -239,8 +284,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0018
-  targetPath: saleCalves.0.weightKg
+  targetPath: fields.f_e54cdb5eb005bfa5548c7ec5
   label: 体重
   x: 756
   y: 282
@@ -250,8 +300,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0024
-  targetPath: saleCalves.1.weightKg
+  targetPath: fields.f_90061a2b8c0ab8402fa00925
   label: 体重
   x: 756
   y: 311
@@ -261,8 +316,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0034
-  targetPath: saleCalves.2.weightKg
+  targetPath: fields.f_269289ed9bf4bd6231270199
   label: 体重
   x: 756
   y: 341
@@ -272,8 +332,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0040
-  targetPath: saleCalves.3.weightKg
+  targetPath: fields.f_a2073fb117ac554871601fcf
   label: 体重
   x: 756
   y: 370
@@ -283,8 +348,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0048
-  targetPath: saleCalves.4.weightKg
+  targetPath: fields.f_cb1282fd1afe34867c18409d
   label: 体重
   x: 756
   y: 400
@@ -294,8 +364,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0055
-  targetPath: saleCalves.5.weightKg
+  targetPath: fields.f_741198760bbf0f2cc9f28f96
   label: 体重
   x: 756
   y: 430
@@ -305,8 +380,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0065
-  targetPath: saleCalves.6.weightKg
+  targetPath: fields.f_d14a4c5155a0a5d1ee20c5cd
   label: 体重
   x: 756
   y: 460
@@ -316,8 +396,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0073
-  targetPath: saleCalves.7.weightKg
+  targetPath: fields.f_27c95f1cba6c2399aaa5269d
   label: 体重
   x: 756
   y: 490
@@ -327,8 +412,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0080
-  targetPath: saleCalves.8.weightKg
+  targetPath: fields.f_8bc945dd35fd5e53197b1a0b
   label: 体重
   x: 756
   y: 520
@@ -338,8 +428,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0089
-  targetPath: saleCalves.9.weightKg
+  targetPath: fields.f_6441522a80d927828b506150
   label: 体重
   x: 756
   y: 550
@@ -349,8 +444,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0014
-  targetPath: saleCalves.0.sireName
+  targetPath: fields.f_129b029e969e87b70c062592
   label: 種雄牛名
   x: 935
   y: 280
@@ -360,8 +460,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0022
-  targetPath: saleCalves.1.sireName
+  targetPath: fields.f_b277b97d5d76d1606b064042
   label: 種雄牛名
   x: 935
   y: 310
@@ -371,8 +476,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0031
-  targetPath: saleCalves.2.sireName
+  targetPath: fields.f_0eb1804b9d3c5de9c37139c5
   label: 種雄牛名
   x: 935
   y: 340
@@ -382,8 +492,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0039
-  targetPath: saleCalves.3.sireName
+  targetPath: fields.f_df3ef47e6ff85bf6740e3f53
   label: 種雄牛名
   x: 935
   y: 369
@@ -393,8 +508,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0047
-  targetPath: saleCalves.4.sireName
+  targetPath: fields.f_20faa7d0383f0f77f223f9f2
   label: 種雄牛名
   x: 935
   y: 399
@@ -404,8 +524,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0054
-  targetPath: saleCalves.5.sireName
+  targetPath: fields.f_44398fdd85cbc7639dc13877
   label: 種雄牛名
   x: 935
   y: 429
@@ -415,8 +540,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0063
-  targetPath: saleCalves.6.sireName
+  targetPath: fields.f_604817de82c84916d5824463
   label: 種雄牛名
   x: 935
   y: 458
@@ -426,8 +556,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0072
-  targetPath: saleCalves.7.sireName
+  targetPath: fields.f_14f23e46d735bb61d42e3b93
   label: 種雄牛名
   x: 935
   y: 488
@@ -437,8 +572,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0078
-  targetPath: saleCalves.8.sireName
+  targetPath: fields.f_436c58a09b6d8ecad348a1be
   label: 種雄牛名
   x: 935
   y: 517
@@ -448,8 +588,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0087
-  targetPath: saleCalves.9.sireName
+  targetPath: fields.f_9a59a92a24e971548b64a5c4
   label: 種雄牛名
   x: 936
   y: 547
@@ -459,8 +604,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0013
-  targetPath: saleCalves.0.saleDate
+  targetPath: fields.f_a3805c72c7bd9e0cc93e9f88
   label: 壳却日
   x: 1021
   y: 279
@@ -470,8 +620,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0021
-  targetPath: saleCalves.1.saleDate
+  targetPath: fields.f_eac56dc7bac18e692a4e9241
   label: 壳却日
   x: 1021
   y: 308
@@ -481,8 +636,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0029
-  targetPath: saleCalves.2.saleDate
+  targetPath: fields.f_e3cf4edd5f83838ab33f8f0a
   label: 壳却日
   x: 1021
   y: 339
@@ -492,8 +652,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0038
-  targetPath: saleCalves.3.saleDate
+  targetPath: fields.f_ed1a63511c1f9e78c17b29c9
   label: 壳却日
   x: 1021
   y: 368
@@ -503,8 +668,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0046
-  targetPath: saleCalves.4.saleDate
+  targetPath: fields.f_1d2b83e934288aca21bcbf41
   label: 壳却日
   x: 1021
   y: 398
@@ -514,8 +684,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0053
-  targetPath: saleCalves.5.saleDate
+  targetPath: fields.f_f386a213ec6b1f21bba094ce
   label: 壳却日
   x: 1021
   y: 428
@@ -525,8 +700,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0062
-  targetPath: saleCalves.6.saleDate
+  targetPath: fields.f_39cbb7550ea98deac4f456ef
   label: 壳却日
   x: 1021
   y: 457
@@ -536,8 +716,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0070
-  targetPath: saleCalves.7.saleDate
+  targetPath: fields.f_aa3c9d55ad93723a7c1deb6b
   label: 壳却日
   x: 1021
   y: 487
@@ -547,8 +732,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0077
-  targetPath: saleCalves.8.saleDate
+  targetPath: fields.f_0101ab7c2d07f0bc51f053e6
   label: 壳却日
   x: 1021
   y: 516
@@ -558,8 +748,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0086
-  targetPath: saleCalves.9.saleDate
+  targetPath: fields.f_31030a0d5b79b1833d916cca
   label: 壳却日
   x: 1022
   y: 546
@@ -569,8 +764,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0012
-  targetPath: saleCalves.0.notes
+  targetPath: fields.f_e08d2e1ffbe4d96626ab3fa9
   label: 備考
   x: 1094
   y: 276
@@ -580,8 +780,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0020
-  targetPath: saleCalves.1.notes
+  targetPath: fields.f_72e59044201bac0361f140c0
   label: 備考
   x: 1094
   y: 306
@@ -591,8 +796,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0028
-  targetPath: saleCalves.2.notes
+  targetPath: fields.f_b1462a64711ea49125a52f03
   label: 備考
   x: 1094
   y: 336
@@ -602,8 +812,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0037
-  targetPath: saleCalves.3.notes
+  targetPath: fields.f_449c6861807659f52b8b58f1
   label: 備考
   x: 1094
   y: 366
@@ -613,8 +828,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0044
-  targetPath: saleCalves.4.notes
+  targetPath: fields.f_2646abcc8b53cfe8f32535fe
   label: 備考
   x: 1094
   y: 396
@@ -624,8 +844,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0052
-  targetPath: saleCalves.5.notes
+  targetPath: fields.f_2f750b51358c8550d86023b1
   label: 備考
   x: 1094
   y: 426
@@ -635,8 +860,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0061
-  targetPath: saleCalves.6.notes
+  targetPath: fields.f_5fee9d0c8cfd4605e409fb4d
   label: 備考
   x: 1095
   y: 455
@@ -646,8 +876,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0068
-  targetPath: saleCalves.7.notes
+  targetPath: fields.f_0ca9d51e95b4855084f028c2
   label: 備考
   x: 1095
   y: 485
@@ -657,8 +892,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0076
-  targetPath: saleCalves.8.notes
+  targetPath: fields.f_1b95132b8e2ed444ec65898f
   label: 備考
   x: 1095
   y: 515
@@ -668,8 +908,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0085
-  targetPath: saleCalves.9.notes
+  targetPath: fields.f_2afa60b1c06a19bc4665d79f
   label: 備考
   x: 1095
   y: 545
@@ -679,8 +924,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0016
-  targetPath: saleCalves.0.parity
+  targetPath: fields.f_18d7e3910e82ca4b0338cb64
   label: 産次
   x: 668
   y: 282
@@ -690,8 +940,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0026
-  targetPath: saleCalves.1.parity
+  targetPath: fields.f_bc80f9b9eb1889c733791ba9
   label: 産次
   x: 667
   y: 312
@@ -701,8 +956,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0032
-  targetPath: saleCalves.2.parity
+  targetPath: fields.f_92e9dc6f100b7031de565511
   label: 産次
   x: 667
   y: 341
@@ -712,8 +972,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0042
-  targetPath: saleCalves.3.parity
+  targetPath: fields.f_b4bc35ad2f30f23a17bc73f9
   label: 産次
   x: 667
   y: 371
@@ -723,8 +988,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0050
-  targetPath: saleCalves.4.parity
+  targetPath: fields.f_16902df1d86ee4f2a9368ced
   label: 産次
   x: 667
   y: 401
@@ -734,8 +1004,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0057
-  targetPath: saleCalves.5.parity
+  targetPath: fields.f_d9402e75b5df915958562516
   label: 産次
   x: 667
   y: 431
@@ -745,8 +1020,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0066
-  targetPath: saleCalves.6.parity
+  targetPath: fields.f_dde4956da0d1a8a10ceb7b6c
   label: 産次
   x: 667
   y: 461
@@ -756,8 +1036,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0075
-  targetPath: saleCalves.7.parity
+  targetPath: fields.f_05109b7719049a6fa51bb625
   label: 産次
   x: 667
   y: 492
@@ -767,8 +1052,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0082
-  targetPath: saleCalves.8.parity
+  targetPath: fields.f_ccf95f105c238fc6f6bfb67a
   label: 産次
   x: 667
   y: 522
@@ -778,8 +1068,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0091
-  targetPath: saleCalves.9.parity
+  targetPath: fields.f_e815cb2b5d75af362321c233
   label: 産次
   x: 667
   y: 552
@@ -789,8 +1084,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0017
-  targetPath: saleCalves.0.ageDays
+  targetPath: fields.f_9d9d44c77bff7e300873afd1
   label: 日令
   x: 704
   y: 282
@@ -800,8 +1100,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0027
-  targetPath: saleCalves.1.ageDays
+  targetPath: fields.f_285965e127b088c8b84cac82
   label: 日令
   x: 704
   y: 312
@@ -811,8 +1116,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0033
-  targetPath: saleCalves.2.ageDays
+  targetPath: fields.f_1d62d150d5212b1af73dbe79
   label: 日令
   x: 704
   y: 341
@@ -822,8 +1132,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0043
-  targetPath: saleCalves.3.ageDays
+  targetPath: fields.f_378a0b3d3ed4cb55b3237fc4
   label: 日令
   x: 704
   y: 371
@@ -833,8 +1148,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0051
-  targetPath: saleCalves.4.ageDays
+  targetPath: fields.f_874eed2b7c6d3a1c0591696b
   label: 日令
   x: 704
   y: 401
@@ -844,8 +1164,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0058
-  targetPath: saleCalves.5.ageDays
+  targetPath: fields.f_0713a0cd3bfb16cfd80a0334
   label: 日令
   x: 704
   y: 431
@@ -855,8 +1180,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0067
-  targetPath: saleCalves.6.ageDays
+  targetPath: fields.f_60d9ce0e0c2c4cf050e2aa2e
   label: 日令
   x: 704
   y: 461
@@ -866,8 +1196,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0074
-  targetPath: saleCalves.7.ageDays
+  targetPath: fields.f_14fab940da956769e75eac2e
   label: 日令
   x: 704
   y: 491
@@ -877,8 +1212,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0081
-  targetPath: saleCalves.8.ageDays
+  targetPath: fields.f_747327bc3c5a212814673d31
   label: 日令
   x: 704
   y: 521
@@ -888,8 +1228,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0090
-  targetPath: saleCalves.9.ageDays
+  targetPath: fields.f_f0ea4089a7d14c7b47e88713
   label: 日令
   x: 704
   y: 551
@@ -899,8 +1244,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0003
-  targetPath: pedigree.mother
+  targetPath: fields.f_078f0ac879b57a0979b4a2e7
   label: 名号
   x: 137
   y: 214
@@ -910,8 +1260,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: 名号
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
 - mappingId: layout_cell_0019
-  targetPath: document.birthDate
+  targetPath: fields.f_245f08175545e1630dc1a4c5
   label: 生年月日
   x: 137
   y: 304
@@ -921,6 +1276,13 @@ fieldMappings:
   enabled: true
   modelDetail: high
   printedLabelText: ''
+  mappingType: text
+  markRecognitionMode: automatic
+  markSelectionMode: multiple
+  markOptions: []
+  compositeSubfields: []
+documentIdentityFields: []
+documentName: null
 marks:
 - markId: calving_01_sex_female
   regionId: calvings_left
@@ -931,8 +1293,3 @@ marks:
   width: 45
   height: 45
   method: TEMPLATE_DIFFERENCE
-export:
-  csvColumns:
-  - document.unifiedEarTag.raw
-  - document.cattleName.raw
-  - document.birthDate.raw

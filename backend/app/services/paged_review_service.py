@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import PagedConfirmation, PagedReview, PagedReviewRevision, ProcessingJob
 from app.db.session import Database
-from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_models import FieldReading, OcrDocument
 from app.domain.paged_document_metadata import proposed_name
 from app.domain.paged_review import PageConfirmation, PageCorrection, PageReopen
@@ -71,7 +70,7 @@ class PagedReviewService:
                         check_other_readings(child, f"{path}.{key}")
 
         raw = document.model_dump(mode="json", by_alias=True)
-        for root in ("document", "pedigree", "saleCalves", "calvings", "customFields"):
+        for root in ("fields",):
             check_other_readings(raw.get(root), root)
 
     @staticmethod
@@ -87,8 +86,7 @@ class PagedReviewService:
                 "受付ページの対応を確認できません。", "JOB_PAGE_SNAPSHOT_INVALID", 409
             )
         pages = bundle["pages"]
-        if bundle.get("schemaVersion") == 2:
-            load_document_snapshot(job)
+        load_document_snapshot(job)
         if not pages or len({p["pageId"] for p in pages}) != len(pages):
             raise print_error(
                 "受付ページが欠落または重複しています。", "JOB_PAGE_SNAPSHOT_INVALID", 409
@@ -210,6 +208,10 @@ class PagedReviewService:
                         "mappingId": mapping["mappingId"],
                         "targetPath": mapping["targetPath"],
                         "label": mapping.get("label", mapping["mappingId"]),
+                        "mappingType": mapping.get("mappingType", "text"),
+                        "markRecognitionMode": mapping.get("markRecognitionMode"),
+                        "markSelectionMode": mapping.get("markSelectionMode"),
+                        "markOptions": mapping.get("markOptions", []),
                         "reading": reading.model_dump(mode="json", by_alias=True)
                         if reading
                         else None,
@@ -308,7 +310,6 @@ class PagedReviewService:
             candidate.review_items = [
                 i for i in candidate.review_items if i.path not in edited_paths
             ]
-            candidate = normalize_document_numbers(candidate)
             validator = DeterministicValidator()
             report = validator.validate(
                 candidate,
@@ -364,6 +365,8 @@ class PagedReviewService:
             for page in pages:
                 payload = stored.current_pages_json[page["pageId"]]
                 document = OcrDocument.model_validate(payload["result"])
+                from app.domain.checklist import require_resolved_checklists
+                require_resolved_checklists(document, page["fieldMappings"])
                 report = validator.validate(
                     document,
                     image_quality=payload.get("quality"),

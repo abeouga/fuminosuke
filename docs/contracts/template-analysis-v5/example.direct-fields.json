@@ -1,0 +1,20 @@
+{
+  "version": "template-analysis.focused.v5",
+  "marks": [],
+  "units": [
+    {
+      "kind": "direct_fields",
+      "parent": null,
+      "reading": "text",
+      "items": [
+        {
+          "value": "c4",
+          "name": "受付番号"
+        }
+      ]
+    }
+  ],
+  "roles": [],
+  "headings": [],
+  "hierarchy": []
+}

@@ -43,12 +43,20 @@ class LayoutMarkOption(LayoutModel):
 class LayoutMarkSet(LayoutModel):
     id: str = Field(min_length=1, max_length=100)
     target_path: str = Field(default="", max_length=200)
-    recognition_mode: Literal["automatic", "manual", "symbol"] = "automatic"
+    recognition_mode: Literal["automatic", "manual", "symbol", "checklist"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
     options: list[LayoutMarkOption] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_unique_options(self) -> Self:
+        if self.recognition_mode == "checklist":
+            if self.selection_mode != "multiple":
+                raise ValueError("Checklist recognition requires multiple selection")
+            labels = [option.label for option in self.options]
+            if any(not label.strip() or label != label.strip() or any(
+                separator in label for separator in "・、,;\n\r"
+            ) for label in labels):
+                raise ValueError("Checklist labels must not contain selection separators")
         if self.recognition_mode == "symbol" and self.selection_mode != "single":
             raise ValueError("Symbol recognition requires single selection")
         for attribute in ("id", "label", "value"):
@@ -85,7 +93,10 @@ class LayoutCell(LayoutModel):
     height: int = Field(gt=0)
     confidence: float = Field(ge=0, le=1)
     text: str = Field(default="", max_length=300)
+    field_label: str | None = Field(default=None, min_length=1, max_length=100)
     printed_label_text: str = Field(default="", max_length=300)
+    # Authoring preset; saving freezes a local sequence number in each mapping.
+    reading_mode: Literal["number"] | None = None
     text_confidence: float | None = Field(default=None, ge=0, le=1)
     text_direction: Literal["horizontal", "vertical"] = "horizontal"
     text_alignment: Literal["left", "center", "right"] = "left"
@@ -123,10 +134,18 @@ class LayoutCell(LayoutModel):
         if self.page_range is None:
             data.pop("pageRange", None)
             data.pop("page_range", None)
+        if self.reading_mode is None:
+            data.pop("readingMode", None)
+            data.pop("reading_mode", None)
+        if self.field_label is None:
+            data.pop("fieldLabel", None)
+            data.pop("field_label", None)
         return data
 
     @model_validator(mode="after")
     def validate_shape(self) -> Self:
+        if self.reading_mode is not None and self.role != "input":
+            raise ValueError("Number reading requires an input cell")
         if (self.shape_type == "polygon") != bool(self.vertices):
             raise ValueError("Only polygon cells require vertices")
         validate_polygon(self.vertices, self.x, self.y, self.width, self.height)
@@ -141,10 +160,17 @@ class LayoutCell(LayoutModel):
             raise ValueError("Page-local coordinates are only allowed for virtual headings")
         return self
 
-    @field_validator("text", "printed_label_text", mode="before")
+    @field_validator("text", "printed_label_text", "field_label", mode="before")
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @field_validator("field_label")
+    @classmethod
+    def validate_field_label(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or value != value.strip()):
+            raise ValueError("Field labels require a name without surrounding whitespace")
+        return value
 
 
 class LayoutCellMergePart(LayoutModel):
@@ -204,7 +230,7 @@ class LayoutRecordSection(LayoutModel):
     title: str = Field(min_length=1, max_length=200)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     collection_path: str = Field(min_length=1, max_length=120)
-    record_type: Literal["saleCalf", "calving", "generic"]
+    record_type: Literal["generic"]
     record_label_cell_ids: list[str] = Field(default_factory=list, max_length=30)
     parent_label_cell_id: str | None = Field(default=None, max_length=100)
     row_key_strategy: Literal["printed", "position"] = "position"
@@ -215,23 +241,10 @@ class LayoutRecordSection(LayoutModel):
     @field_validator("collection_path")
     @classmethod
     def validate_collection_path(cls, value: str) -> str:
-        if value in {"saleCalves", "calvings"}:
-            return value
         if not re.fullmatch(r"genericRecords\.[A-Za-z][A-Za-z0-9_]{0,99}", value):
             raise ValueError("Generic record collection paths must use genericRecords.<key>")
         return value
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_single_record_label(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        raw: dict[str, Any] = dict(value)
-        plural = raw.get("recordLabelCellIds", raw.get("record_label_cell_ids"))
-        singular = raw.pop("recordLabelCellId", raw.pop("record_label_cell_id", None))
-        if plural is None:
-            raw["recordLabelCellIds"] = [singular] if isinstance(singular, str) else []
-        return raw
 
     @field_validator("record_label_cell_ids")
     @classmethod
@@ -281,132 +294,6 @@ class LayoutDefinition(LayoutModel):
     allow_cross_axis_labels: bool = False
     warnings: list[str] = Field(default_factory=list, max_length=30)
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_array_relations(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        raw: dict[str, Any] = dict(value)
-        raw.setdefault("layoutSchemaVersion", raw.get("layout_schema_version", 3))
-        sections = raw.get("recordSections", raw.get("record_sections"))
-        groups = raw.get("recordGroups", raw.get("record_groups"))
-        if sections or groups:
-            return raw
-
-        relations = raw.get("relations")
-        cells = raw.get("cells")
-        if not isinstance(relations, list) or not isinstance(cells, list):
-            return raw
-        normalized_cells = [
-            item.model_dump(mode="json", by_alias=True) if isinstance(item, LayoutCell) else item
-            for item in cells
-        ]
-        cell_by_id = {
-            item.get("id"): item
-            for item in normalized_cells
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        }
-        grouped: dict[tuple[str, int], list[str]] = {}
-        label_ids_by_collection: dict[str, list[str]] = {}
-        pattern = re.compile(r"^(saleCalves|calvings)\.(\d+)\.[^.]+$")
-        for untyped_relation in relations:
-            relation = (
-                untyped_relation.model_dump(mode="json", by_alias=True)
-                if isinstance(untyped_relation, LayoutRelation)
-                else untyped_relation
-            )
-            if not isinstance(relation, dict):
-                continue
-            target_path = relation.get("targetPath", relation.get("target_path"))
-            input_id = relation.get("inputCellId", relation.get("input_cell_id"))
-            if not isinstance(target_path, str) or not isinstance(input_id, str):
-                continue
-            match = pattern.fullmatch(target_path)
-            if match is None:
-                continue
-            collection, index_text = match.groups()
-            key = (collection, int(index_text))
-            if input_id not in grouped.setdefault(key, []):
-                grouped[key].append(input_id)
-            raw_label_ids = relation.get("labelCellIds", relation.get("label_cell_ids", []))
-            if isinstance(raw_label_ids, list):
-                for label_id in raw_label_ids:
-                    if isinstance(
-                        label_id, str
-                    ) and label_id not in label_ids_by_collection.setdefault(collection, []):
-                        label_ids_by_collection[collection].append(label_id)
-        if not grouped:
-            return raw
-
-        section_rows: list[dict[str, object]] = []
-        group_rows: list[dict[str, object]] = []
-        collection_metadata = {
-            "saleCalves": ("section_sale_calves", "売却子牛一覧", "saleCalf"),
-            "calvings": ("section_calvings", "繁殖履歴", "calving"),
-        }
-        for collection in dict.fromkeys(key[0] for key in grouped):
-            section_id, title, record_type = collection_metadata[collection]
-            parent_label_id = next(
-                (
-                    label_id
-                    for label_id in label_ids_by_collection.get(collection, [])
-                    if isinstance((cell := cell_by_id.get(label_id)), dict)
-                    and title.removesuffix("一覧") in str(cell.get("text", ""))
-                ),
-                None,
-            )
-            section_rows.append(
-                {
-                    "id": section_id,
-                    "title": title,
-                    "collectionPath": collection,
-                    "recordType": record_type,
-                    "recordLabelCellIds": [
-                        label_id
-                        for label_id in label_ids_by_collection.get(collection, [])
-                        if label_id != parent_label_id
-                    ],
-                    "parentLabelCellId": parent_label_id,
-                    "source": "inferred",
-                }
-            )
-            for (item_collection, index), input_ids in grouped.items():
-                if item_collection != collection:
-                    continue
-                member_cells = [
-                    cell_by_id[input_id]
-                    for input_id in input_ids
-                    if isinstance(cell_by_id.get(input_id), dict)
-                ]
-                if not member_cells:
-                    continue
-                x = min(int(cell.get("x", 0)) for cell in member_cells)
-                y = min(int(cell.get("y", 0)) for cell in member_cells)
-                right = max(
-                    int(cell.get("x", 0)) + int(cell.get("width", 1)) for cell in member_cells
-                )
-                bottom = max(
-                    int(cell.get("y", 0)) + int(cell.get("height", 1)) for cell in member_cells
-                )
-                group_rows.append(
-                    {
-                        "id": f"record_{collection}_{index + 1}",
-                        "sectionId": section_id,
-                        "order": index + 1,
-                        "x": x,
-                        "y": y,
-                        "width": max(1, right - x),
-                        "height": max(1, bottom - y),
-                        "inputCellIds": input_ids,
-                        "recordKeyField": "parity",
-                        "recordKeyValue": str(index + 1),
-                        "source": "inferred",
-                    }
-                )
-        raw["recordSections"] = section_rows
-        raw["recordGroups"] = group_rows
-        raw.setdefault("recordStructureVerified", False)
-        return raw
 
     @model_validator(mode="after")
     def validate_references_and_geometry(self) -> LayoutDefinition:
@@ -516,15 +403,6 @@ class LayoutDefinition(LayoutModel):
                     raise ValueError(
                         f"Record section {section.id} row keys must be row number cells"
                     )
-            expected_type = (
-                "saleCalf"
-                if section.collection_path == "saleCalves"
-                else "calving"
-                if section.collection_path == "calvings"
-                else "generic"
-            )
-            if section.record_type != expected_type:
-                raise ValueError(f"Record section {section.id} has an incompatible record type")
         group_ids = [group.id for group in self.record_groups]
         if len(group_ids) != len(set(group_ids)):
             raise ValueError("Record group IDs must be unique")
@@ -567,28 +445,8 @@ class LayoutDefinition(LayoutModel):
                     raise ValueError(f"Input cell {input_id} belongs to more than one record group")
                 claimed_inputs.add(input_id)
                 for relation in relations_by_input.get(input_id, []):
-                    if record_section.record_type == "generic":
-                        if not relation.target_path.startswith("customFields."):
-                            raise ValueError(
-                                f"Generic record input {input_id} must use a custom field target"
-                            )
-                        continue
-                    match = re.fullmatch(
-                        r"^(saleCalves|calvings)\.(\d+)\.([^.]+)$",
-                        relation.target_path,
-                    )
-                    if match is None:
-                        raise ValueError(
-                            f"Record input {input_id} must use a collection target path"
-                        )
-                    collection, index_text, _field = match.groups()
-                    if (
-                        collection != record_section.collection_path
-                        or int(index_text) != group.order - 1
-                    ):
-                        raise ValueError(
-                            f"Record group {group.id} does not match {relation.target_path}"
-                        )
+                    if not relation.target_path.startswith("fields."):
+                        raise ValueError(f"Record input {input_id} must use a generic field target")
             orders = orders_by_section.setdefault(group.section_id, set())
             if group.order in orders:
                 raise ValueError(f"Record order {group.order} is duplicated in {group.section_id}")

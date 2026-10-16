@@ -23,7 +23,6 @@ from app.layout_analysis.geometry import analyze_geometry
 from app.layout_analysis.models import LayoutDefinition
 from app.services.relationship_analyzer import infer_relationships_with_openai
 from app.services.template_management_service import TemplateManagementService
-from app.services.template_mutation import begin_immediate, template_mutation_lock
 from app.storage.local_storage import LocalStorageService
 from app.validation.template_definition_validator import validate_template_definition
 
@@ -150,13 +149,13 @@ class TemplateDefinitionService:
             )
         if self._storage is None:
             raise RuntimeError("Template definition approval requires storage")
-        self._save_generic_mappings(version_id, approved)
-        return self._append(version_id, "APPROVED", approved)
-
-    def _save_generic_mappings(self, version_id: str, definition: TemplateDefinition) -> None:
-        with self._database.session() as session:
+        with self._database.transaction() as session:
             version = self._require_version(session, version_id)
-            self._require_supported_authoring(self._parse_layout(version))
+            self._save_generic_mappings(session, version, approved)
+            return self._append_in_transaction(session, version_id, "APPROVED", approved)
+
+    def _save_generic_mappings(self, session: Session, version: TemplateVersion, definition: TemplateDefinition) -> None:
+        self._require_supported_authoring(self._parse_layout(version))
         cells = {cell.id: cell for cell in definition.cells}
         mappings: list[FieldMappingConfig] = []
         for location in generic_field_locations(definition):
@@ -169,7 +168,7 @@ class TemplateDefinitionService:
             mappings.append(
                 FieldMappingConfig(
                     mapping_id=location.mapping_key,
-                    target_path=f"customFields.{location.mapping_key}",
+                    target_path=f"fields.{location.mapping_key}",
                     label=field.name[:100],
                     x=cell.bbox.x,
                     y=cell.bbox.y,
@@ -205,9 +204,24 @@ class TemplateDefinitionService:
         storage = self._storage
         if storage is None:
             raise RuntimeError("Template definition approval requires storage")
-        TemplateManagementService(self._database, storage).save_field_mappings(
-            version_id, mappings
-        )
+        import yaml
+
+        from app.domain.template_config import parse_template_config
+        from app.services.template_field_identity import reconcile
+        from app.services.template_mutation import invalidated_layout_quality
+        from app.storage.immutable_artifact import publish_config
+        config = parse_template_config(storage.read_bytes(version.config_relative_path).decode("utf-8"))
+        updated = TemplateManagementService.updated_config(version, config, mappings)
+        path = publish_config(storage, yaml.safe_dump(updated.model_dump(mode="json", by_alias=True),
+                                                     allow_unicode=True, sort_keys=False))
+        reconcile(session, version, config.field_mappings, mappings)
+        version.config_relative_path = path
+        version.quality_json = {
+            **invalidated_layout_quality(version.quality_json, bump_input_revision=True),
+            "fieldMappingCount": len(mappings), "mappingMode": "DETERMINISTIC",
+            "documentIdentityFieldCount": len(updated.document_identity_fields),
+            "documentNameConfigured": updated.document_name is not None,
+        }
 
     def _append(
         self,
@@ -215,69 +229,72 @@ class TemplateDefinitionService:
         source: str,
         definition: TemplateDefinition,
     ) -> TemplateDefinitionRevisionView:
-        validation = validate_template_definition(definition)
-        with template_mutation_lock(), self._database.session() as session:
-            begin_immediate(session)
-            version = self._require_version(session, version_id)
-            from app.services.template_mutation import require_draft, require_isolated_structure
+        with self._database.transaction() as session:
+            return self._append_in_transaction(session, version_id, source, definition)
 
-            require_draft(version)
-            require_isolated_structure(version, definition.model_dump(mode="json", by_alias=True))
-            layout_cell_ids = {
-                str(cell.get("id"))
-                for cell in version.layout_json.get("cells", [])
-                if isinstance(cell, dict) and cell.get("id")
-            }
-            definition_cell_ids = {cell.id for cell in definition.cells}
-            if (
-                definition.canonical_width != version.canonical_width
-                or definition.canonical_height != version.canonical_height
-                or definition_cell_ids != layout_cell_ids
-            ):
-                raise AppError(
-                    status=409,
-                    code="TEMPLATE_DEFINITION_LAYOUT_STALE",
-                    title="Template definition is stale",
-                    detail="矩形またはセル種別の変更後に構造草案を再生成してください。",
-                )
-            next_revision = (
-                session.scalar(
-                    select(func.max(TemplateDefinitionRevision.revision)).where(
-                        TemplateDefinitionRevision.template_version_id == version_id
-                    )
-                )
-                or 0
-            ) + 1
-            row = TemplateDefinitionRevision(
-                template_version_id=version_id,
-                revision=next_revision,
-                source=source,
-                definition_json=definition.model_dump(mode="json", by_alias=True),
-                validation_json=validation.model_dump(mode="json", by_alias=True),
+    def _append_in_transaction(self, session: Session, version_id: str, source: str,
+                               definition: TemplateDefinition) -> TemplateDefinitionRevisionView:
+        validation = validate_template_definition(definition)
+        version = self._require_version(session, version_id)
+        from app.services.template_mutation import require_draft, require_isolated_structure
+
+        require_draft(version)
+        require_isolated_structure(version, definition.model_dump(mode="json", by_alias=True))
+        layout_cell_ids = {
+            str(cell.get("id"))
+            for cell in version.layout_json.get("cells", [])
+            if isinstance(cell, dict) and cell.get("id")
+        }
+        definition_cell_ids = {cell.id for cell in definition.cells}
+        if (
+            definition.canonical_width != version.canonical_width
+            or definition.canonical_height != version.canonical_height
+            or definition_cell_ids != layout_cell_ids
+        ):
+            raise AppError(
+                status=409,
+                code="TEMPLATE_DEFINITION_LAYOUT_STALE",
+                title="Template definition is stale",
+                detail="矩形またはセル種別の変更後に構造草案を再生成してください。",
             )
-            session.add(row)
-            version.quality_json = {
-                **version.quality_json,
-                "templateDefinitionRevision": next_revision,
-                "templateDefinitionState": definition.state,
-                "templateDefinitionValid": validation.valid,
-                "templateDefinitionLayoutInputRevision": version.quality_json.get(
-                    "layoutInputRevision"
-                ),
-            }
-            session.commit()
-            session.refresh(row)
-            return self._view(row)
+        next_revision = (
+            session.scalar(
+                select(func.max(TemplateDefinitionRevision.revision)).where(
+                    TemplateDefinitionRevision.template_version_id == version_id
+                )
+            )
+            or 0
+        ) + 1
+        row = TemplateDefinitionRevision(
+            template_version_id=version_id,
+            revision=next_revision,
+            source=source,
+            definition_json=definition.model_dump(mode="json", by_alias=True),
+            validation_json=validation.model_dump(mode="json", by_alias=True),
+        )
+        session.add(row)
+        version.quality_json = {
+            **version.quality_json,
+            "templateDefinitionRevision": next_revision,
+            "templateDefinitionState": definition.state,
+            "templateDefinitionValid": validation.valid,
+            "templateDefinitionLayoutInputRevision": version.quality_json.get(
+                "layoutInputRevision"
+            ),
+        }
+        session.flush()
+        return self._view(row)
 
     @staticmethod
     def _require_supported_authoring(layout: LayoutDefinition) -> None:
         # This separate AI-assisted definition format cannot retain these explicit
         # authoring edges or polygon masks. Never silently replace them with boxes.
-        if any(cell.vertices or cell.virtual or cell.parent_label_cell_id for cell in layout.cells):
+        if any(cell.vertices or cell.virtual or cell.parent_label_cell_id or cell.reading_mode
+               for cell in layout.cells):
             raise AppError(
                 status=409, code="GENERIC_DEFINITION_AUTHORING_UNSUPPORTED",
                 title="Authoring geometry is not supported by generic definitions",
-                detail="多角形・仮想見出し・見出し階層は手動レイアウトで保存してください。"
+                detail="多角形・仮想見出し・見出し階層・番号の読み取り設定は手動レイアウトで保存してください。"
                        "別形式のAI汎用定義への変換には未対応です。",
             )
 

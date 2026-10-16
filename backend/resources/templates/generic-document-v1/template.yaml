@@ -1,0 +1,16 @@
+templateId: generic-document-v1
+templateVersion: 1
+name: 汎用帳票
+canonicalWidth: 1240
+canonicalHeight: 1754
+registration:
+  preferredMethod: ORB_RANSAC_ECC
+  minFeatureMatches: 30
+  minInliers: 20
+  minInlierRatio: 0.40
+  maxReprojectionErrorPx: 5.0
+  minEccScore: 0.75
+regions: []
+fieldMappings: []
+documentIdentityFields: []
+marks: []

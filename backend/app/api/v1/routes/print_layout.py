@@ -1,9 +1,9 @@
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
+from app.api.template_revision import template_revision_guard
 from app.domain.print_layout import PrintLayoutRequest, print_error
-from app.layout_analysis.models import LayoutDefinition
 from app.services.candidate_readiness_service import CandidateReadinessService
 from app.services.print_layout_service import PrintLayoutService
 from app.services.print_preparation_service import PrintPreparationService
@@ -13,18 +13,22 @@ from app.services.template_print_service import TemplatePrintService
 router = APIRouter(prefix="/template-versions/{version_id}/print-layout", tags=["templates"])
 
 
-@router.post("/prepare")
+@router.post("/prepare", dependencies=[Depends(template_revision_guard)])
 def prepare_print_files(
     request: Request, version_id: str,
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
     geometry_model: Literal["wsl-calc-print-grid-v1"] | None = None,
 ) -> dict[str, Any]:
-    if request.app.state.settings.app.print_pdf_renderer != "wsl":
-        raise print_error("WSLの印刷用変換環境を設定してください。", "RENDERER_UNAVAILABLE", 409)
+    backend = request.app.state.settings.app.print_pdf_renderer
+    if backend not in {"wsl", "linux"}:
+        raise print_error("隔離された印刷用変換環境を設定してください。",
+                          "RENDERER_UNAVAILABLE", 409)
+    selected_geometry = ((geometry_model or "wsl-calc-print-grid-v1")
+                         if backend == "wsl" else geometry_model)
     return PrintPreparationService(request.app.state.database, request.app.state.storage).prepare(
         version_id, base_revision, request.app.state.settings.app.print_wsl_distribution,
         runtime_id=request.app.state.settings.app.print_wsl_runtime_id,
-        geometry_model=geometry_model)
+        geometry_model=selected_geometry, backend=backend)
 
 
 @router.get("/files/{format}")
@@ -61,7 +65,7 @@ def qualification_status(request: Request, version_id: str) -> dict[str, Any]:
         request.app.state.database, request.app.state.storage).status_for_use(version_id)
 
 
-@router.post("/candidate-readiness")
+@router.post("/candidate-readiness", dependencies=[Depends(template_revision_guard)])
 def prepare_candidate_readiness(
     request: Request, version_id: str,
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
@@ -71,7 +75,7 @@ def prepare_candidate_readiness(
             version_id, base_revision, request.app.state.settings.app.print_wsl_distribution)
 
 
-@router.post("/ocr-readiness")
+@router.post("/ocr-readiness", dependencies=[Depends(template_revision_guard)])
 def prepare_reviewed_ocr(
     request: Request, version_id: str,
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
@@ -81,7 +85,7 @@ def prepare_reviewed_ocr(
             version_id, base_revision)
 
 
-@router.post("/qualification")
+@router.post("/qualification", dependencies=[Depends(template_revision_guard)])
 def qualify_reference(
     request: Request, version_id: str,
     base_revision: Annotated[str, Query(min_length=64, max_length=64)],
@@ -106,12 +110,12 @@ def preview_layout(request: Request, version_id: str, body: PrintLayoutRequest) 
     return _service(request).preview(version_id, body)
 
 
-@router.put("")
+@router.put("", dependencies=[Depends(template_revision_guard)])
 def save_layout(request: Request, version_id: str, body: PrintLayoutRequest) -> dict[str, Any]:
     return _service(request).save(version_id, body)
 
 
-@router.delete("")
+@router.delete("", dependencies=[Depends(template_revision_guard)])
 def clear_layout(
     request: Request,
     version_id: str,
@@ -120,12 +124,6 @@ def clear_layout(
     return _service(request).clear(version_id, base_revision)
 
 
-@router.put("/authoring")
-def save_authoring(
-    request: Request, version_id: str, body: LayoutDefinition,
-    base_revision: Annotated[str, Query(min_length=64, max_length=64)],
-) -> dict[str, Any]:
-    return _service(request).save_authoring(version_id, base_revision, body)
 
 
 @router.get("/pages/{page_number}/image")

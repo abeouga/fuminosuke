@@ -60,19 +60,24 @@ Excelのフォント・組版再現や本番OCRの座標保証を意味しない
 明示的な形状変更・既存結合情報の変更は従来どおり拒否する。
 詳細は [旧形状既定値の保存互換検証](verification/page-authoring-legacy-shape-save-20260920.md) を参照。
 
-`PUT /api/v1/template-versions/{id}/print-layout/authoring?base_revision=...`
+2026-10-05以降は共通authoring APIを使用する。旧print-layout/authoringは廃止した。
+保存契約と移行は[フェーズ4記録](voice-assistant-phase4-2026-10-05.md)を参照する。
 
-bodyは既存LayoutDefinition。DRAFT、revision、保存planのlayout SHAを検証する。
+`PUT /api/v1/template-versions/{id}/authoring?expectedRevision=...`
+
+bodyはlayout（既存LayoutDefinition）、documentIdentityFields、documentName。
+DRAFT、TemplateVersionの整数revision、保存planのlayout SHAを検証する。
 通常矩形と結合partsへ展開した元セル集合は、重複のない既存集合の部分集合だけを許可する。
 残存元セルの座標・形状を維持し、物理セルの追加IDは検証済み結合親と保存partsの復元だけに限定する。
 元XLSXからの範囲解決・出力結合の連続矩形検証・内部値保護と、保存済みページ境界による
 page_planの事前検証をDB/config保存前に実行する。任意の構造変更を許可するものではない。
-既存LayoutService.saveで手動編集内容を保存し、同じページ境界でfields/bindingsを更新する。
+LayoutService.prepare_layoutで検証し、TemplateAuthoringServiceで手動編集内容・設定参照・
+品質・履歴を同時保存する。同じページ境界でfields/bindingsを更新する。
 原本セル画像・transformを再利用し、TemplateVersionとその編集用PREPARE snapshotのみ更新する。
 受付済みOCR job、公開版、他versionは変更しない。物理枠追加・任意の位置やサイズの変更・競合は409で拒否する。
 不正な結合範囲・ページ横断は409または422で拒否し、保存前のlayout・config・planを保持する。
-保存失敗時はフロントの編集状態を保持する。通常layout APIで構造を変えた場合は、従来どおり
-printLayoutをstaleとして拒否し、ページの再保存を必要とする。
+保存失敗時はフロントの編集状態を保持する。保存planのlayout SHAが現在のlayoutと異なる場合は
+staleとして拒否する。競合後に最新revisionへ暗黙に載せ替えて再送しない。
 
 本番rendererの`environmentQualified=false` / `productionQualified=false`は変更しない。
 ACTIVE化の`PRINT_LAYOUT_OCR_NOT_AVAILABLE`、paged OCRの`PRINT_REFERENCE_NOT_VALIDATED`、

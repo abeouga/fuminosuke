@@ -95,12 +95,12 @@ export function uniqueMeaningEntry(
   let label = original;
   let number = 1;
   const keyFor = (value: string) => value.replace(/[\s　.。・:：／/()（）［］\[\]【】]+/g, "") || "項目";
-  while (occupiedNames.has(label) || occupiedPaths.has(`customFields.${keyFor(label)}`)) {
+  while (occupiedNames.has(label) || occupiedPaths.has(`fields.${keyFor(label)}`)) {
     const suffix = String(++number);
     label = original.slice(0, 100 - suffix.length) + suffix;
   }
   const key = keyFor(label);
-  return { id: `label_auto_${key}`, label, targetPath: `customFields.${key}`,
+  return { id: `label_auto_${key}`, label, targetPath: `fields.${key}`,
     section: "自動追加", aliases: [], source: "manual" };
 }
 

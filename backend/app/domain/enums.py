@@ -38,6 +38,10 @@ class EventLevel(StrEnum):
 
 class RevisionSource(StrEnum):
     OCR = "OCR"
+    CONFIRM = "CONFIRM"
+    REOPEN = "REOPEN"
+    ASSISTANT = "ASSISTANT"
+    ASSISTANT_UNDO = "ASSISTANT_UNDO"
     USER_EDIT = "USER_EDIT"
     SHEET_EDIT = "SHEET_EDIT"
     REPROCESS = "REPROCESS"

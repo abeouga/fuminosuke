@@ -4,12 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.domain.generic_data import build_generic_data, build_generic_values
-from app.domain.numeric_values import normalize_document_numbers
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus
 from app.domain.template_config import FieldMappingConfig
 from app.extraction.region_cropper import RegionCrops
 from app.ocr.base import OcrProviderResponse, OcrRegionInput
 from app.ocr.deterministic_mapper import assign_mapped_reading, get_mapped_reading
+from app.ocr.sequence_numbers import apply_sequence_numbers
 from app.services.extraction_service import ExtractionOutput
 from app.services.ocr_request_preparation_service import PreparedOcrRequest
 from app.validation.business_validators import DeterministicValidator, ValidationReport
@@ -58,25 +58,12 @@ class OcrResponseFinalizer:
             )
         provider_response.document.template_id = request.template_id
         provider_response.document.template_version = request.template_version
-        for fixed_region in prepared.fixed_record_regions:
-            target_path = fixed_region.target_path
-            if target_path is None:
-                continue
-            value = prepared.fixed_calving_keys[target_path]
-            box = fixed_region.bounding_box
-            assign_mapped_reading(
-                provider_response.document,
-                target_path,
-                FieldReading(
-                    raw=value,
-                    normalized=value,
-                    status=ReadingStatus.READABLE,
-                    alternatives=[],
-                    review_reason=None,
-                    source_region_id=(fixed_region.source_region_id or fixed_region.region_id),
-                    bounding_box=self._bounding_box(box),
-                ),
-            )
+        provider_response.document.field_labels = {
+            mapping.target_path.removeprefix("fields."): mapping.label
+            for mapping in extraction.config.field_mappings
+            if mapping.enabled
+            and mapping.target_path.removeprefix("fields.") in provider_response.document.fields
+        }
         for mapping in prepared.mark_mappings:
             if mapping.mapping_id in prepared.openai_mark_ids:
                 reading = get_mapped_reading(provider_response.document, mapping.target_path)
@@ -117,6 +104,11 @@ class OcrResponseFinalizer:
                     ),
                 ),
             )
+        apply_sequence_numbers(
+            provider_response.document,
+            prepared.sequence_regions,
+            extraction.crops,
+        )
         provider_response.document.generic_data = build_generic_data(
             provider_response.document,
             job_snapshot.get("genericTemplateDefinition"),
@@ -124,37 +116,21 @@ class OcrResponseFinalizer:
         provider_response.document.generic_values = build_generic_values(
             provider_response.document.generic_data
         )
-        mother_individual_id = job_snapshot.get("motherIndividualId")
-        if isinstance(mother_individual_id, str):
-            provider_response.document.document.unified_ear_tag = FieldReading(
-                raw=mother_individual_id,
-                normalized=mother_individual_id,
-                status=ReadingStatus.READABLE,
-                alternatives=[],
-                review_reason=None,
-                source_region_id="manual_mother_individual_id",
-                bounding_box=None,
-            )
         provider_response.document.processing_metadata.model_id = provider_response.model_id
         provider_response.document.processing_metadata.prompt_version = (
             provider_response.prompt_version
         )
         configured_paths = {region.target_path for region in all_regions if region.target_path}
-        configured_paths.update(prepared.fixed_calving_keys)
         configured_paths.update(mapping.target_path for mapping in prepared.mark_mappings)
+        configured_paths.update(
+            path for region in prepared.sequence_regions for path in region.expected_fields
+        )
         configured_paths.update(
             subfield.target_path
             for mapping in extraction.config.field_mappings
             for subfield in mapping.composite_subfields
         )
-        configured_paths.update(
-            self._apply_record_keys(
-                provider_response.document,
-                job_snapshot.get("recordStructure"),
-                configured_paths,
-            )
-        )
-        normalized_document = normalize_document_numbers(provider_response.document)
+        normalized_document = provider_response.document
         report = self._validator.validate(
             normalized_document,
             image_quality=extraction.quality,
@@ -239,95 +215,6 @@ class OcrResponseFinalizer:
                     }
                 ),
             )
-
-    @staticmethod
-    def _apply_record_keys(
-        document: OcrDocument,
-        raw_structure: object,
-        configured_paths: set[str],
-    ) -> set[str]:
-        if not isinstance(raw_structure, dict):
-            return set()
-        raw_sections = raw_structure.get("sections")
-        raw_groups = raw_structure.get("groups")
-        if not isinstance(raw_sections, list) or not isinstance(raw_groups, list):
-            return set()
-        collection_by_section = {
-            section.get("id"): section.get("collectionPath")
-            for section in raw_sections
-            if isinstance(section, dict)
-            and isinstance(section.get("id"), str)
-            and section.get("collectionPath") in {"saleCalves", "calvings"}
-        }
-        added: set[str] = set()
-        for raw_group in raw_groups:
-            if not isinstance(raw_group, dict):
-                continue
-            section_id = raw_group.get("sectionId")
-            collection = collection_by_section.get(section_id)
-            order = raw_group.get("order")
-            field = raw_group.get("recordKeyField")
-            value = raw_group.get("recordKeyValue")
-            group_id = raw_group.get("id")
-            if (
-                collection not in {"saleCalves", "calvings"}
-                or not isinstance(order, int)
-                or order < 1
-                or field != "parity"
-                or not isinstance(value, str)
-                or not value.strip()
-                or not isinstance(group_id, str)
-            ):
-                continue
-            target_path = f"{collection}.{order - 1}.parity"
-            records = (
-                document.sale_calves if collection == "saleCalves" else document.calvings
-            )
-            if order > len(records):
-                continue
-            current = records[order - 1].parity
-            if target_path in configured_paths:
-                # A record key entered in the template is the identity of the
-                # record. OpenAI still transcribes the parity crop, but can
-                # mistake a sequence such as 2, 3, 4 for 1, 2, 3. Keep a
-                # genuinely blank sale row blank; otherwise make the template
-                # key authoritative while retaining the mapped cell as the
-                # source so review previews continue to point at the parity
-                # crop. Calving-history parity is a printed, fixed row number
-                # in the ledger, so it must be materialized even when OCR
-                # returns the printed-number crop as blank.
-                if collection != "calvings" and current.raw is None and current.normalized is None:
-                    continue
-                records[order - 1].parity = current.model_copy(
-                    update={
-                        "raw": value.strip(),
-                        "normalized": value.strip(),
-                        "status": ReadingStatus.READABLE,
-                        "alternatives": [],
-                        "review_reason": None,
-                    }
-                )
-                added.add(target_path)
-                continue
-            box = None
-            if all(
-                isinstance(raw_group.get(key), int) for key in ("x", "y", "width", "height")
-            ):
-                box = BoundingBox(
-                    x=raw_group["x"],
-                    y=raw_group["y"],
-                    width=raw_group["width"],
-                    height=raw_group["height"],
-                )
-            records[order - 1].parity = FieldReading(
-                raw=value.strip(),
-                normalized=value.strip(),
-                status=ReadingStatus.READABLE,
-                source_region_id=f"record:{group_id}",
-                bounding_box=box,
-            )
-            added.add(target_path)
-        return added
 
     @staticmethod
     def _bounding_box(box: tuple[int, int, int, int] | None) -> BoundingBox | None:

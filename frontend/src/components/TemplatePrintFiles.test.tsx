@@ -4,7 +4,7 @@ import { api } from "../api";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 
 vi.mock("../api", () => ({ api: {
-  printLayout: vi.fn(), downloadTemplatePrint: vi.fn(), downloadLegacyTemplatePrint: vi.fn(),
+  printLayout: vi.fn(), downloadTemplatePrint: vi.fn(), downloadImportedTemplatePrint: vi.fn(),
 } }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 beforeEach(() => {
@@ -24,11 +24,11 @@ it.each(["xlsx", "pdf"] as const)("downloads saved version and revision as %s", 
   expect(api.printLayout).not.toHaveBeenCalled();
 });
 
-it.each(["xlsx", "pdf"] as const)("downloads a legacy single-page blank %s from the same version", async format => {
-  vi.mocked(api.downloadLegacyTemplatePrint).mockResolvedValue(new Blob(["blank fixture"]));
-  render(<TemplatePrintFiles versionId="legacy-v1" legacy />);
+it.each(["xlsx", "pdf"] as const)("downloads an imported single-page blank %s from the same version", async format => {
+  vi.mocked(api.downloadImportedTemplatePrint).mockResolvedValue(new Blob(["blank fixture"]));
+  render(<TemplatePrintFiles versionId="imported-v1" sourceImport />);
   fireEvent.click(screen.getByRole("button", { name: `印刷用${format.toUpperCase()}` }));
-  await waitFor(() => expect(api.downloadLegacyTemplatePrint).toHaveBeenCalledWith("legacy-v1", format));
+  await waitFor(() => expect(api.downloadImportedTemplatePrint).toHaveBeenCalledWith("imported-v1", format));
   expect(api.printLayout).not.toHaveBeenCalled();
   expect(api.downloadTemplatePrint).not.toHaveBeenCalled();
   await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce());

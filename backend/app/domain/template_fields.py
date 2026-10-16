@@ -37,7 +37,7 @@ def build_template_field_catalog(field_names: list[str]) -> list[dict[str, objec
         {
             "id": f"template_field_{index + 1}_{_field_digest(name)}",
             "label": name,
-            "targetPath": f"customFields.field_{_field_digest(name)}",
+            "targetPath": f"fields.field_{_field_digest(name)}",
             "section": "この書類",
             "aliases": [],
             "source": "manual",
@@ -65,29 +65,6 @@ def build_spreadsheet_field_catalog(field_names: list[str]) -> list[dict[str, ob
     return build_template_field_catalog(safe_names)
 
 
-def parse_legacy_spreadsheet_metadata(
-    content: str,
-) -> tuple[str, list[dict[str, object]]] | None:
-    try:
-        value = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if (
-        not isinstance(value, dict)
-        or value.get("mode") != "SPREADSHEET_TEMPLATE"
-        or "canonicalWidth" in value
-    ):
-        return None
-    name = value.get("name")
-    raw_catalog = value.get("fieldCatalog")
-    if not isinstance(name, str) or not name.strip() or not isinstance(raw_catalog, list):
-        return None
-    labels = [
-        item["label"]
-        for item in raw_catalog
-        if isinstance(item, dict) and isinstance(item.get("label"), str)
-    ]
-    return name.strip(), build_spreadsheet_field_catalog(labels)
 
 
 def _field_digest(name: str) -> str:

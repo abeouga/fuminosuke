@@ -1,0 +1,2 @@
+# Copy to the ignored terraform.tfvars and set the authorized recipient.
+notification_email = "operator@example.com"

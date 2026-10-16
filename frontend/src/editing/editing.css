@@ -1,0 +1,33 @@
+.editing-controls { border: 1px solid var(--border, #d9dee5); border-radius: 8px; padding: 12px; background: var(--surface, #fff); min-width: 0; }
+.review-assistant-workspace > .editing-controls { flex: 0 0 280px; position: sticky; top: 16px; }
+.editing-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.editing-actions button { display: inline-flex; gap: 6px; align-items: center; }
+.editing-scope { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #475569; }
+.editing-scope select { min-width: 140px; max-width: 220px; }
+.editing-status { min-height: 1.4em; margin: 8px 0 0; font-size: 13px; }
+.editing-caption { margin: 6px 0; color: #64748b; font-size: 12px; max-height: 5em; overflow: auto; white-space: pre-wrap; }
+.editing-text { margin-top: 8px; font-size: 12px; }
+.editing-text summary { cursor: pointer; width: fit-content; }
+.editing-text form { display: flex; gap: 8px; margin-top: 8px; }
+.editing-text textarea { flex: 1; min-width: 0; resize: vertical; }
+.editing-question { border-left: 2px solid #64748b; padding-left: 10px; }
+.ai-focus-layer { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+.ai-focus-clip { position: absolute; overflow: hidden; }
+.ai-focus-outline { position: absolute; border: 2px solid #2563eb; border-radius: 4px; box-sizing: border-box; box-shadow: inset 0 0 0 1px #fff9; animation: ai-focus-enter 160ms ease-out; }
+.ai-focus-outline.is-candidates { border-style: dashed; border-color: #64748b; }
+.ai-focus-outline.is-applied { border-color: #13846c; }
+.ai-focus-outline.is-exiting { animation: ai-focus-exit 160ms ease-in forwards; }
+.ai-focus-outline.is-added { border-color: #087a58; }
+.ai-focus-outline.is-before { border-color: #64748b; border-style: dashed; }
+.ai-focus-outline.is-changed { border-color: #1d4ed8; }
+.ai-focus-outline.is-removed { border-color: #b45309; border-style: dashed; background: #b4530909; }
+.ai-focus-outline.is-unresolved { border-color: #92400e; border-style: dotted; }
+.ai-focus-label { display: block; width: fit-content; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 3px; font-size: 11px; line-height: 16px; color: #263649; background: #fffffff0; }
+.ai-table-title { position: absolute; box-sizing: border-box; padding: 5px 10px; background: #f8fafaf2; border: 1px solid #cbd5e1; border-radius: 0 0 4px 4px; color: #334155; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 4px #0f172a12; }
+@keyframes ai-focus-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ai-focus-exit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ai-focus-outline { animation: none; } }
+@media (max-width: 1100px) {
+  .review-assistant-workspace:has(> .editing-controls) { flex-direction: column; }
+  .review-assistant-workspace > .editing-controls { position: static; flex-basis: auto; width: 100%; box-sizing: border-box; order: -1; }
+}

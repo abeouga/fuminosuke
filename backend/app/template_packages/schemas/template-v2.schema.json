@@ -1,0 +1,2675 @@
+{
+  "$defs": {
+    "CanonicalApprovedDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "canonicalHeight": {
+          "exclusiveMinimum": 0,
+          "title": "Canonicalheight",
+          "type": "integer"
+        },
+        "canonicalWidth": {
+          "exclusiveMinimum": 0,
+          "title": "Canonicalwidth",
+          "type": "integer"
+        },
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/TemplateCell"
+          },
+          "maxItems": 1000,
+          "title": "Cells",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "geometry": {
+          "items": {
+            "$ref": "#/$defs/CellGeometry"
+          },
+          "maxItems": 1000,
+          "title": "Geometry",
+          "type": "array"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/InferencePhase"
+          },
+          "maxItems": 3,
+          "title": "Phases",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "default": "1.0",
+          "pattern": "^\\d+\\.\\d+$",
+          "title": "Schemaversion",
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/TemplateSection"
+          },
+          "maxItems": 200,
+          "title": "Sections",
+          "type": "array"
+        },
+        "standaloneFields": {
+          "items": {
+            "$ref": "#/$defs/TemplateField"
+          },
+          "maxItems": 1000,
+          "title": "Standalonefields",
+          "type": "array"
+        },
+        "unassignedCellIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Unassignedcellids",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "canonicalWidth",
+        "canonicalHeight",
+        "confidence"
+      ],
+      "title": "CanonicalApprovedDefinition",
+      "type": "object"
+    },
+    "CanonicalAssetReferences": {
+      "additionalProperties": false,
+      "properties": {
+        "cleanTemplate": {
+          "default": "assets/clean-template.png",
+          "title": "Cleantemplate",
+          "type": "string"
+        },
+        "handwritingCandidates": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handwritingcandidates"
+        },
+        "handwritingMask": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handwritingmask"
+        },
+        "handwritingMaskEdited": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handwritingmaskedited"
+        },
+        "outputLayout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outputlayout"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preview"
+        },
+        "spreadsheetSource": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spreadsheetsource"
+        }
+      },
+      "title": "CanonicalAssetReferences",
+      "type": "object"
+    },
+    "CanonicalCandidateSet": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedSuffixes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Allowedsuffixes",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "targetPatterns": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 300,
+          "title": "Targetpatterns",
+          "type": "array"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "values"
+      ],
+      "title": "CanonicalCandidateSet",
+      "type": "object"
+    },
+    "CanonicalRuntimeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "documentIdentityFields": {
+          "items": {
+            "$ref": "#/$defs/DocumentIdentityConfig"
+          },
+          "maxItems": 20,
+          "title": "Documentidentityfields",
+          "type": "array"
+        },
+        "documentName": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentNameConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fieldMappings": {
+          "items": {
+            "$ref": "#/$defs/FieldMappingConfig"
+          },
+          "maxItems": 300,
+          "title": "Fieldmappings",
+          "type": "array"
+        },
+        "marks": {
+          "items": {
+            "$ref": "#/$defs/MarkConfig"
+          },
+          "maxItems": 300,
+          "title": "Marks",
+          "type": "array"
+        },
+        "regions": {
+          "items": {
+            "$ref": "#/$defs/RegionConfig"
+          },
+          "maxItems": 1000,
+          "title": "Regions",
+          "type": "array"
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationConfig"
+        }
+      },
+      "required": [
+        "registration"
+      ],
+      "title": "CanonicalRuntimeConfig",
+      "type": "object"
+    },
+    "CanonicalSpreadsheetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fileName": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        },
+        "sheetName": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Sheetname",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sheetName",
+        "fileName"
+      ],
+      "title": "CanonicalSpreadsheetSource",
+      "type": "object"
+    },
+    "CellGeometry": {
+      "additionalProperties": false,
+      "properties": {
+        "above": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Above",
+          "type": "array"
+        },
+        "below": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Below",
+          "type": "array"
+        },
+        "cellId": {
+          "title": "Cellid",
+          "type": "string"
+        },
+        "columnCluster": {
+          "minimum": 0,
+          "title": "Columncluster",
+          "type": "integer"
+        },
+        "containedCells": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Containedcells",
+          "type": "array"
+        },
+        "containingCell": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Containingcell"
+        },
+        "horizontalDistance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Horizontaldistance"
+        },
+        "left": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Left",
+          "type": "array"
+        },
+        "nearestAbove": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearestabove"
+        },
+        "nearestBelow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearestbelow"
+        },
+        "nearestLeft": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearestleft"
+        },
+        "nearestRight": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearestright"
+        },
+        "normalizedBbox": {
+          "$ref": "#/$defs/NormalizedBox"
+        },
+        "recordPatternCandidate": {
+          "default": false,
+          "title": "Recordpatterncandidate",
+          "type": "boolean"
+        },
+        "right": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Right",
+          "type": "array"
+        },
+        "rowCluster": {
+          "minimum": 0,
+          "title": "Rowcluster",
+          "type": "integer"
+        },
+        "sameColumnCells": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Samecolumncells",
+          "type": "array"
+        },
+        "sameRowCells": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Samerowcells",
+          "type": "array"
+        },
+        "verticalDistance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verticaldistance"
+        }
+      },
+      "required": [
+        "cellId",
+        "rowCluster",
+        "columnCluster",
+        "normalizedBbox"
+      ],
+      "title": "CellGeometry",
+      "type": "object"
+    },
+    "CompositeSubfieldConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "heightRatio": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Heightratio",
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "semanticType": {
+          "enum": [
+            "address_prefecture",
+            "address_municipality"
+          ],
+          "title": "Semantictype",
+          "type": "string"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        },
+        "widthRatio": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Widthratio",
+          "type": "number"
+        },
+        "xRatio": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Xratio",
+          "type": "number"
+        },
+        "yRatio": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Yratio",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "semanticType",
+        "targetPath",
+        "label",
+        "xRatio",
+        "yRatio",
+        "widthRatio",
+        "heightRatio"
+      ],
+      "title": "CompositeSubfieldConfig",
+      "type": "object"
+    },
+    "DocumentIdentityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "componentOrder": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Componentorder",
+          "type": "integer"
+        },
+        "displayRole": {
+          "default": "title",
+          "enum": [
+            "title",
+            "subtitle",
+            "none"
+          ],
+          "title": "Displayrole",
+          "type": "string"
+        },
+        "exactLength": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exactlength"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "mappingId": {
+          "maxLength": 100,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "title": "Mappingid",
+          "type": "string"
+        },
+        "matchGroupId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Matchgroupid"
+        },
+        "matchGroupLabel": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Matchgrouplabel"
+        },
+        "matchRole": {
+          "default": "primary",
+          "enum": [
+            "primary",
+            "confirmation"
+          ],
+          "title": "Matchrole",
+          "type": "string"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        },
+        "valueType": {
+          "default": "text",
+          "enum": [
+            "text",
+            "digits"
+          ],
+          "title": "Valuetype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mappingId",
+        "targetPath",
+        "label"
+      ],
+      "title": "DocumentIdentityConfig",
+      "type": "object"
+    },
+    "DocumentNameConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldPaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Fieldpaths",
+          "type": "array"
+        },
+        "prefix": {
+          "default": "",
+          "maxLength": 100,
+          "title": "Prefix",
+          "type": "string"
+        },
+        "separator": {
+          "default": "",
+          "maxLength": 20,
+          "title": "Separator",
+          "type": "string"
+        },
+        "suffix": {
+          "default": "",
+          "maxLength": 100,
+          "title": "Suffix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fieldPaths"
+      ],
+      "title": "DocumentNameConfig",
+      "type": "object"
+    },
+    "FieldMappingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "compositeSubfields": {
+          "items": {
+            "$ref": "#/$defs/CompositeSubfieldConfig"
+          },
+          "maxItems": 10,
+          "title": "Compositesubfields",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "mappingId": {
+          "maxLength": 100,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "title": "Mappingid",
+          "type": "string"
+        },
+        "mappingType": {
+          "default": "text",
+          "enum": [
+            "text",
+            "mark"
+          ],
+          "title": "Mappingtype",
+          "type": "string"
+        },
+        "markOptions": {
+          "items": {
+            "$ref": "#/$defs/MarkOptionConfig"
+          },
+          "maxItems": 50,
+          "title": "Markoptions",
+          "type": "array"
+        },
+        "markRecognitionMode": {
+          "default": "automatic",
+          "enum": [
+            "automatic",
+            "manual",
+            "symbol",
+            "checklist"
+          ],
+          "title": "Markrecognitionmode",
+          "type": "string"
+        },
+        "markSelectionMode": {
+          "default": "multiple",
+          "enum": [
+            "single",
+            "multiple"
+          ],
+          "title": "Markselectionmode",
+          "type": "string"
+        },
+        "modelDetail": {
+          "default": "high",
+          "title": "Modeldetail",
+          "type": "string"
+        },
+        "padding": {
+          "default": 4,
+          "maximum": 50,
+          "minimum": 0,
+          "title": "Padding",
+          "type": "integer"
+        },
+        "printedLabelText": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Printedlabeltext",
+          "type": "string"
+        },
+        "readingMode": {
+          "anyOf": [
+            {
+              "const": "number",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Readingmode"
+        },
+        "sequenceNumber": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequencenumber"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
+          "type": "array"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mappingId",
+        "targetPath",
+        "label",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "FieldMappingConfig",
+      "type": "object"
+    },
+    "InferencePhase": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "phase": {
+          "enum": [
+            "FIELD_BINDING",
+            "RECORD_GROUPING",
+            "SECTION_ASSIGNMENT"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "reasonCodes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Reasoncodes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "phase",
+        "confidence"
+      ],
+      "title": "InferencePhase",
+      "type": "object"
+    },
+    "LayoutCell": {
+      "additionalProperties": false,
+      "properties": {
+        "compositeSubfields": {
+          "items": {
+            "$ref": "#/$defs/LayoutCompositeSubfield"
+          },
+          "maxItems": 10,
+          "title": "Compositesubfields",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "fieldLabel": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fieldlabel"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "markSets": {
+          "items": {
+            "$ref": "#/$defs/LayoutMarkSet"
+          },
+          "maxItems": 10,
+          "title": "Marksets",
+          "type": "array"
+        },
+        "pageRange": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pagerange"
+        },
+        "parentLabelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentlabelcellid"
+        },
+        "printedLabelText": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Printedlabeltext",
+          "type": "string"
+        },
+        "readingMode": {
+          "anyOf": [
+            {
+              "const": "number",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Readingmode"
+        },
+        "role": {
+          "enum": [
+            "label",
+            "parent_label",
+            "input",
+            "mark",
+            "record_key_cell",
+            "column_key_cell",
+            "ignored"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "shapeType": {
+          "default": "rectangle",
+          "enum": [
+            "rectangle",
+            "polygon"
+          ],
+          "title": "Shapetype",
+          "type": "string"
+        },
+        "source": {
+          "default": "detected",
+          "enum": [
+            "detected",
+            "manual"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
+        },
+        "textAlignment": {
+          "default": "left",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "title": "Textalignment",
+          "type": "string"
+        },
+        "textConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Textconfidence"
+        },
+        "textDirection": {
+          "default": "horizontal",
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "title": "Textdirection",
+          "type": "string"
+        },
+        "textVerticalAlignment": {
+          "anyOf": [
+            {
+              "enum": [
+                "top",
+                "middle",
+                "bottom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Textverticalalignment"
+        },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
+          "type": "array"
+        },
+        "virtual": {
+          "default": false,
+          "title": "Virtual",
+          "type": "boolean"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "x",
+        "y",
+        "width",
+        "height",
+        "confidence"
+      ],
+      "title": "LayoutCell",
+      "type": "object"
+    },
+    "LayoutCellMerge": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "parentCellId": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Parentcellid",
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/LayoutCellMergePart"
+          },
+          "maxItems": 100,
+          "minItems": 2,
+          "title": "Parts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "parentCellId",
+        "direction",
+        "parts"
+      ],
+      "title": "LayoutCellMerge",
+      "type": "object"
+    },
+    "LayoutCellMergePart": {
+      "additionalProperties": false,
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/LayoutCell"
+        },
+        "literal": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Literal",
+          "type": "string"
+        },
+        "partType": {
+          "enum": [
+            "input",
+            "literal",
+            "ignored"
+          ],
+          "title": "Parttype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cell",
+        "partType"
+      ],
+      "title": "LayoutCellMergePart",
+      "type": "object"
+    },
+    "LayoutCompositeSubfield": {
+      "additionalProperties": false,
+      "properties": {
+        "heightRatio": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Heightratio",
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "semanticType": {
+          "enum": [
+            "address_prefecture",
+            "address_municipality"
+          ],
+          "title": "Semantictype",
+          "type": "string"
+        },
+        "widthRatio": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Widthratio",
+          "type": "number"
+        },
+        "xRatio": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Xratio",
+          "type": "number"
+        },
+        "yRatio": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Yratio",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "semanticType",
+        "label",
+        "xRatio",
+        "yRatio",
+        "widthRatio",
+        "heightRatio"
+      ],
+      "title": "LayoutCompositeSubfield",
+      "type": "object"
+    },
+    "LayoutDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCrossAxisLabels": {
+          "default": false,
+          "title": "Allowcrossaxislabels",
+          "type": "boolean"
+        },
+        "canonicalHeight": {
+          "exclusiveMinimum": 0,
+          "title": "Canonicalheight",
+          "type": "integer"
+        },
+        "canonicalWidth": {
+          "exclusiveMinimum": 0,
+          "title": "Canonicalwidth",
+          "type": "integer"
+        },
+        "cellMerges": {
+          "items": {
+            "$ref": "#/$defs/LayoutCellMerge"
+          },
+          "maxItems": 300,
+          "title": "Cellmerges",
+          "type": "array"
+        },
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/LayoutCell"
+          },
+          "maxItems": 1000,
+          "title": "Cells",
+          "type": "array"
+        },
+        "detector": {
+          "default": "opencv+paddleocr",
+          "maxLength": 100,
+          "title": "Detector",
+          "type": "string"
+        },
+        "labelPool": {
+          "items": {
+            "$ref": "#/$defs/LayoutLabelPoolEntry"
+          },
+          "maxItems": 500,
+          "title": "Labelpool",
+          "type": "array"
+        },
+        "layoutSchemaVersion": {
+          "default": 3,
+          "minimum": 3,
+          "title": "Layoutschemaversion",
+          "type": "integer"
+        },
+        "ocrAvailable": {
+          "default": false,
+          "title": "Ocravailable",
+          "type": "boolean"
+        },
+        "recordGroups": {
+          "items": {
+            "$ref": "#/$defs/LayoutRecordGroup"
+          },
+          "maxItems": 300,
+          "title": "Recordgroups",
+          "type": "array"
+        },
+        "recordSections": {
+          "items": {
+            "$ref": "#/$defs/LayoutRecordSection"
+          },
+          "maxItems": 100,
+          "title": "Recordsections",
+          "type": "array"
+        },
+        "recordStructureVerified": {
+          "default": false,
+          "title": "Recordstructureverified",
+          "type": "boolean"
+        },
+        "relations": {
+          "items": {
+            "$ref": "#/$defs/LayoutRelation"
+          },
+          "maxItems": 1000,
+          "title": "Relations",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "canonicalWidth",
+        "canonicalHeight"
+      ],
+      "title": "LayoutDefinition",
+      "type": "object"
+    },
+    "LayoutLabelPoolEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Aliases",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "section": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Section",
+          "type": "string"
+        },
+        "source": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "ocr"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "targetPath",
+        "section"
+      ],
+      "title": "LayoutLabelPoolEntry",
+      "type": "object"
+    },
+    "LayoutMarkOption": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "LayoutMarkOption",
+      "type": "object"
+    },
+    "LayoutMarkSet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/LayoutMarkOption"
+          },
+          "maxItems": 50,
+          "title": "Options",
+          "type": "array"
+        },
+        "recognitionMode": {
+          "default": "automatic",
+          "enum": [
+            "automatic",
+            "manual",
+            "symbol",
+            "checklist"
+          ],
+          "title": "Recognitionmode",
+          "type": "string"
+        },
+        "selectionMode": {
+          "default": "multiple",
+          "enum": [
+            "single",
+            "multiple"
+          ],
+          "title": "Selectionmode",
+          "type": "string"
+        },
+        "targetPath": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Targetpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "LayoutMarkSet",
+      "type": "object"
+    },
+    "LayoutRecordGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "inputCellIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Inputcellids",
+          "type": "array"
+        },
+        "order": {
+          "minimum": 1,
+          "title": "Order",
+          "type": "integer"
+        },
+        "recordKeyCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordkeycellid"
+        },
+        "recordKeyField": {
+          "default": "parity",
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Recordkeyfield",
+          "type": "string"
+        },
+        "recordKeyValue": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordkeyvalue"
+        },
+        "sectionId": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Sectionid",
+          "type": "string"
+        },
+        "source": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "inferred"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "sectionId",
+        "order",
+        "x",
+        "y",
+        "width",
+        "height",
+        "inputCellIds"
+      ],
+      "title": "LayoutRecordGroup",
+      "type": "object"
+    },
+    "LayoutRecordSection": {
+      "additionalProperties": false,
+      "properties": {
+        "collectionPath": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Collectionpath",
+          "type": "string"
+        },
+        "displayName": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Displayname"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "includeEmptyRows": {
+          "default": false,
+          "title": "Includeemptyrows",
+          "type": "boolean"
+        },
+        "parentLabelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentlabelcellid"
+        },
+        "recordLabelCellIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Recordlabelcellids",
+          "type": "array"
+        },
+        "recordType": {
+          "const": "generic",
+          "title": "Recordtype",
+          "type": "string"
+        },
+        "rowKeyCellIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 300,
+          "title": "Rowkeycellids",
+          "type": "array"
+        },
+        "rowKeyStrategy": {
+          "default": "position",
+          "enum": [
+            "printed",
+            "position"
+          ],
+          "title": "Rowkeystrategy",
+          "type": "string"
+        },
+        "source": {
+          "default": "manual",
+          "enum": [
+            "manual",
+            "inferred"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "collectionPath",
+        "recordType"
+      ],
+      "title": "LayoutRecordSection",
+      "type": "object"
+    },
+    "LayoutRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "axis": {
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "title": "Axis",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "inputCellId": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Inputcellid",
+          "type": "string"
+        },
+        "labelCellIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Labelcellids",
+          "type": "array"
+        },
+        "order": {
+          "minimum": 1,
+          "title": "Order",
+          "type": "integer"
+        },
+        "parentLabelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentlabelcellid"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "inputCellId",
+        "axis",
+        "order",
+        "targetPath"
+      ],
+      "title": "LayoutRelation",
+      "type": "object"
+    },
+    "MarkConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "markId": {
+          "title": "Markid",
+          "type": "string"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "optionGroup": {
+          "title": "Optiongroup",
+          "type": "string"
+        },
+        "optionValue": {
+          "title": "Optionvalue",
+          "type": "string"
+        },
+        "regionId": {
+          "title": "Regionid",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "markId",
+        "regionId",
+        "optionGroup",
+        "optionValue",
+        "x",
+        "y",
+        "width",
+        "height",
+        "method"
+      ],
+      "title": "MarkConfig",
+      "type": "object"
+    },
+    "MarkOptionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "MarkOptionConfig",
+      "type": "object"
+    },
+    "NormalizedBox": {
+      "additionalProperties": false,
+      "properties": {
+        "bottom": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Bottom",
+          "type": "integer"
+        },
+        "left": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Left",
+          "type": "integer"
+        },
+        "right": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Right",
+          "type": "integer"
+        },
+        "top": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Top",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ],
+      "title": "NormalizedBox",
+      "type": "object"
+    },
+    "PolygonPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "PolygonPoint",
+      "type": "object"
+    },
+    "RegionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "expectedFields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expectedfields",
+          "type": "array"
+        },
+        "fallbackEnabled": {
+          "title": "Fallbackenabled",
+          "type": "boolean"
+        },
+        "fieldType": {
+          "title": "Fieldtype",
+          "type": "string"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "markDetectionEnabled": {
+          "title": "Markdetectionenabled",
+          "type": "boolean"
+        },
+        "modelDetail": {
+          "title": "Modeldetail",
+          "type": "string"
+        },
+        "padding": {
+          "minimum": 0,
+          "title": "Padding",
+          "type": "integer"
+        },
+        "printedLabelText": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Printedlabeltext",
+          "type": "string"
+        },
+        "readingMode": {
+          "anyOf": [
+            {
+              "const": "number",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Readingmode"
+        },
+        "regionId": {
+          "title": "Regionid",
+          "type": "string"
+        },
+        "sequenceNumber": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sequencenumber"
+        },
+        "validatorNames": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Validatornames",
+          "type": "array"
+        },
+        "vertices": {
+          "items": {
+            "$ref": "#/$defs/PolygonPoint"
+          },
+          "maxItems": 100,
+          "title": "Vertices",
+          "type": "array"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "regionId",
+        "x",
+        "y",
+        "width",
+        "height",
+        "padding",
+        "fieldType",
+        "expectedFields",
+        "validatorNames",
+        "modelDetail",
+        "enabled",
+        "fallbackEnabled",
+        "markDetectionEnabled"
+      ],
+      "title": "RegionConfig",
+      "type": "object"
+    },
+    "RegistrationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maxReprojectionErrorPx": {
+          "exclusiveMinimum": 0,
+          "title": "Maxreprojectionerrorpx",
+          "type": "number"
+        },
+        "minEccScore": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Mineccscore",
+          "type": "number"
+        },
+        "minFeatureMatches": {
+          "minimum": 4,
+          "title": "Minfeaturematches",
+          "type": "integer"
+        },
+        "minInlierRatio": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Mininlierratio",
+          "type": "number"
+        },
+        "minInliers": {
+          "minimum": 4,
+          "title": "Mininliers",
+          "type": "integer"
+        },
+        "preferredMethod": {
+          "title": "Preferredmethod",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preferredMethod",
+        "minFeatureMatches",
+        "minInliers",
+        "minInlierRatio",
+        "maxReprojectionErrorPx",
+        "minEccScore"
+      ],
+      "title": "RegistrationConfig",
+      "type": "object"
+    },
+    "TemplateBox": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "TemplateBox",
+      "type": "object"
+    },
+    "TemplateCell": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/TemplateBox"
+        },
+        "detectionConfidence": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Detectionconfidence",
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "markSets": {
+          "items": {
+            "$ref": "#/$defs/TemplateMarkSet"
+          },
+          "maxItems": 10,
+          "title": "Marksets",
+          "type": "array"
+        },
+        "sourceRole": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourcerole"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
+        },
+        "textConfidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Textconfidence"
+        },
+        "type": {
+          "enum": [
+            "LABEL",
+            "VALUE",
+            "PARENT_LABEL",
+            "IGNORE"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "bbox"
+      ],
+      "title": "TemplateCell",
+      "type": "object"
+    },
+    "TemplateField": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "key": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,99}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "labelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Labelcellid"
+        },
+        "markSetId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Marksetid"
+        },
+        "name": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "reasonCodes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reasoncodes",
+          "type": "array"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "sourceTargetPath": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sourcetargetpath"
+        },
+        "valueCellId": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Valuecellid",
+          "type": "string"
+        },
+        "valueType": {
+          "default": "text",
+          "enum": [
+            "text",
+            "integer",
+            "decimal",
+            "date",
+            "boolean",
+            "enum"
+          ],
+          "title": "Valuetype",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "name",
+        "valueCellId",
+        "confidence"
+      ],
+      "title": "TemplateField",
+      "type": "object"
+    },
+    "TemplateMarkOption": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "TemplateMarkOption",
+      "type": "object"
+    },
+    "TemplateMarkSet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/TemplateMarkOption"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Options",
+          "type": "array"
+        },
+        "recognitionMode": {
+          "default": "automatic",
+          "enum": [
+            "automatic",
+            "manual",
+            "symbol",
+            "checklist"
+          ],
+          "title": "Recognitionmode",
+          "type": "string"
+        },
+        "selectionMode": {
+          "default": "multiple",
+          "enum": [
+            "single",
+            "multiple"
+          ],
+          "title": "Selectionmode",
+          "type": "string"
+        },
+        "targetPath": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Targetpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "targetPath",
+        "options"
+      ],
+      "title": "TemplateMarkSet",
+      "type": "object"
+    },
+    "TemplateMode": {
+      "enum": [
+        "REFERENCE_TEMPLATE",
+        "SINGLE_IMAGE_EXPERIMENTAL",
+        "SPREADSHEET_TEMPLATE"
+      ],
+      "title": "TemplateMode",
+      "type": "string"
+    },
+    "TemplateRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/TemplateBox"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/TemplateField"
+          },
+          "maxItems": 200,
+          "title": "Fields",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "order": {
+          "minimum": 1,
+          "title": "Order",
+          "type": "integer"
+        },
+        "reasonCodes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reasoncodes",
+          "type": "array"
+        },
+        "recordKeyValue": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordkeyvalue"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "order",
+        "bbox",
+        "confidence"
+      ],
+      "title": "TemplateRecord",
+      "type": "object"
+    },
+    "TemplateSection": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/TemplateBox"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "includeEmptyRecords": {
+          "default": false,
+          "title": "Includeemptyrecords",
+          "type": "boolean"
+        },
+        "key": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,99}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "parentLabelCellId": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentlabelcellid"
+        },
+        "reasonCodes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reasoncodes",
+          "type": "array"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/TemplateRecord"
+          },
+          "maxItems": 300,
+          "title": "Records",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "name",
+        "bbox",
+        "confidence"
+      ],
+      "title": "TemplateSection",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "approvedDefinition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CanonicalApprovedDefinition"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "assets": {
+      "$ref": "#/$defs/CanonicalAssetReferences"
+    },
+    "candidateSets": {
+      "items": {
+        "$ref": "#/$defs/CanonicalCandidateSet"
+      },
+      "maxItems": 30,
+      "title": "Candidatesets",
+      "type": "array"
+    },
+    "canonicalHeight": {
+      "exclusiveMinimum": 0,
+      "title": "Canonicalheight",
+      "type": "integer"
+    },
+    "canonicalWidth": {
+      "exclusiveMinimum": 0,
+      "title": "Canonicalwidth",
+      "type": "integer"
+    },
+    "documentType": {
+      "const": "generic-document",
+      "title": "Documenttype",
+      "type": "string"
+    },
+    "layout": {
+      "$ref": "#/$defs/LayoutDefinition"
+    },
+    "mode": {
+      "$ref": "#/$defs/TemplateMode"
+    },
+    "name": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "runtime": {
+      "$ref": "#/$defs/CanonicalRuntimeConfig"
+    },
+    "schemaVersion": {
+      "const": 2,
+      "default": 2,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "spreadsheet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CanonicalSpreadsheetSource"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "name",
+    "documentType",
+    "mode",
+    "canonicalWidth",
+    "canonicalHeight",
+    "runtime",
+    "layout",
+    "assets"
+  ],
+  "title": "CanonicalTemplate",
+  "type": "object"
+}

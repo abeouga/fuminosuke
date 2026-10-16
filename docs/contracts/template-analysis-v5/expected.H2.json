@@ -1,0 +1,96 @@
+{
+  "caseId": "H2",
+  "scope": "fixed local spot checks; derived before new responses; not a holdout or full-page denominator",
+  "roles": {
+    "xlsx_B5": "label",
+    "xlsx_C5": "label",
+    "xlsx_D5": "label",
+    "xlsx_B6": "label",
+    "xlsx_C6": "mark",
+    "xlsx_D6": "ignored",
+    "xlsx_B7": "label",
+    "xlsx_C7": "mark",
+    "xlsx_D7": "ignored",
+    "xlsx_B8": "label",
+    "xlsx_C8": "mark",
+    "xlsx_D8": "ignored",
+    "xlsx_B9": "label",
+    "xlsx_C9": "mark",
+    "xlsx_D9": "ignored"
+  },
+  "bindings": [
+    {
+      "valueCellId": "xlsx_C6",
+      "labelCellIds": [
+        "xlsx_B6",
+        "xlsx_C5"
+      ],
+      "parentCellId": null
+    },
+    {
+      "valueCellId": "xlsx_C7",
+      "labelCellIds": [
+        "xlsx_B7",
+        "xlsx_C5"
+      ],
+      "parentCellId": null
+    },
+    {
+      "valueCellId": "xlsx_C8",
+      "labelCellIds": [
+        "xlsx_B8",
+        "xlsx_C5"
+      ],
+      "parentCellId": null
+    },
+    {
+      "valueCellId": "xlsx_C9",
+      "labelCellIds": [
+        "xlsx_B9",
+        "xlsx_C5"
+      ],
+      "parentCellId": null
+    }
+  ],
+  "orderedRows": [
+    [
+      "xlsx_C6"
+    ],
+    [
+      "xlsx_C7"
+    ],
+    [
+      "xlsx_C8"
+    ],
+    [
+      "xlsx_C9"
+    ]
+  ],
+  "markOptions": {
+    "xlsx_C6": [
+      "○",
+      "◎",
+      "×",
+      "△"
+    ],
+    "xlsx_C7": [
+      "○",
+      "◎",
+      "×",
+      "△"
+    ],
+    "xlsx_C8": [
+      "○",
+      "◎",
+      "×",
+      "△"
+    ],
+    "xlsx_C9": [
+      "○",
+      "◎",
+      "×",
+      "△"
+    ]
+  },
+  "forbiddenBindings": []
+}

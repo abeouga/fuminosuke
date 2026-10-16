@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from typing import Any
 from uuid import uuid4
@@ -17,17 +18,15 @@ from app.db.session import Database
 from app.domain.calc_print_grid import MODEL as CALC_GEOMETRY_MODEL
 from app.domain.print_layout import PrintLayoutRequest, page_plan, print_error
 from app.domain.template_config import parse_template_config
-from app.layout_analysis.models import LayoutDefinition
+from app.rendering import geometry as linux_geometry
 from app.services.calc_workbook_geometry import apply_dimensions as apply_calc_dimensions
 from app.services.draft_page_geometry import draft_geometry
 from app.services.page_authoring_validation import (
     bounds,
     is_page_heading,
     physical_cells,
-    validate_page_edit,
     validate_page_headings,
 )
-from app.services.prepared_print_contract import render_key
 from app.services.print_layout_renderer import render_page
 from app.services.print_layout_source import DRAFT_GEOMETRY_VERSION, read_source
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
@@ -171,6 +170,10 @@ class PrintLayoutService:
             return apply_calc_dimensions(source, saved["geometryEvidence"])
         if saved and saved.get("geometryModelVersion") == WSL_GEOMETRY_MODEL:
             return apply_dimensions(source, saved["geometryEvidence"])
+        if saved and saved.get("geometryModelVersion") == linux_geometry.MODEL:
+            return linux_geometry.apply_dimensions(source, saved["geometryEvidence"])
+        if not saved and os.environ.get("PRINT_PDF_RENDERER") == "linux":
+            return draft_geometry(source, version.quality_json.get("spreadsheetPreviewGeometry"))
         if draft_support and (
             source["draftFeatures"]
             or (saved and saved.get("geometryModelVersion") == DRAFT_GEOMETRY_VERSION)
@@ -205,6 +208,7 @@ class PrintLayoutService:
             version = self._version(session, version_id)
             return {
                 "revision": self.revision(version),
+                "resourceRevision": version.revision,
                 "source": self._source(session, version),
                 "saved": copy.deepcopy(version.quality_json.get("printLayout")),
                 "editable": version.status == "DRAFT" and version.approved_at is None,
@@ -332,61 +336,6 @@ class PrintLayoutService:
                 job.config_snapshot_json = snapshot
             session.commit()
         return self.get(version_id)
-
-    def save_authoring(
-        self, version_id: str, expected: str, layout: LayoutDefinition,
-    ) -> dict[str, Any]:
-        """Save source-preserving semantics, deletion, merge and unmerge."""
-        from app.services.layout_service import LayoutService
-
-        with template_mutation_lock():
-            with self.database.session() as session:
-                version = self._version(session, version_id)
-                require_draft(version)
-                self._check_revision(version, expected)
-                saved = copy.deepcopy(version.quality_json.get("printLayout"))
-                if not saved or saved.get("layoutSha256") != digest(version.layout_json):
-                    raise print_error(
-                        "印刷ページを保存し直してください。", "PRINT_LAYOUT_STALE", 409)
-                previous = version.layout_json
-                proposed = layout.model_dump(mode="json", by_alias=True)
-                validate_page_edit(previous, proposed)
-                validate_page_headings(proposed, saved)
-                request = PrintLayoutRequest.model_validate({
-                    **{k: saved[k] for k in (
-                        "paperSize", "orientation", "margins", "horizontalCentering",
-                        "verticalCentering", "targetPagesWide", "targetPagesTall",
-                    )}, "baseRevision": expected,
-                    "breakAfterRows": [p["endRow"] for p in saved["pages"][:-1]],
-                    "autoArrange": False,
-                })
-                # Reject unsupported source ranges and cross-page merges before
-                # LayoutService writes either the DB or the config artifact.
-                preflight = page_plan(self._source(session, version, proposed), request, saved)
-                for page, old in zip(preflight["pages"], saved["pages"], strict=True):
-                    if any(page[k] != old[k] for k in ("range", "transform", "width", "height")):
-                        raise print_error("保存したページ境界・寸法を変更できません。",
-                                          "PRINT_AUTHORING_GEOMETRY_CHANGED", 409)
-            result = LayoutService(self.database, self.storage).save(version_id, layout)
-            with self.database.session() as session:
-                version = self._version(session, version_id)
-                plan = self._plan(session, version, request)
-                # Roles, bindings, and the explicit set of retained source cells may change.
-                # Reuse the immutable source-cell image; drop prior qualification rather
-                # than certifying the resulting field set as a production reference.
-                for page, old in zip(plan["pages"], saved["pages"], strict=True):
-                    page["referenceImage"] = old["referenceImage"]
-                if saved.get("printFiles") and render_key(plan) == saved["printFiles"]["renderKey"]:
-                    plan["printFiles"] = copy.deepcopy(saved["printFiles"])
-                    plan["rendererVersion"] = saved["rendererVersion"]
-                plan["source"] = "user"
-                version.quality_json = {**version.quality_json, "printLayout": plan}
-                job = session.get(ProcessingJob, version.source_job_id)
-                if job is not None:
-                    job.config_snapshot_json = {**job.config_snapshot_json, "printLayout": plan}
-                session.commit()
-            return {"layout": result.model_dump(mode="json", by_alias=True),
-                    "state": self.get(version_id)}
 
     def image(self, version_id: str, page_number: int) -> bytes:
         with self.database.session() as session:

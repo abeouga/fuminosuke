@@ -108,11 +108,9 @@ class CanonicalTemplateImporter:
             registration=canonical.runtime.registration,
             regions=canonical.runtime.regions,
             field_mappings=canonical.runtime.field_mappings,
-            document_identity=None,
             document_identity_fields=canonical.runtime.document_identity_fields,
             document_name=canonical.runtime.document_name,
             marks=canonical.runtime.marks,
-            export=canonical.runtime.export,
         )
         config_content = yaml.safe_dump(
             config.model_dump(mode="json", by_alias=True),
@@ -120,7 +118,7 @@ class CanonicalTemplateImporter:
             sort_keys=False,
         ).encode("utf-8")
         base = f"templates/{template_id}/versions/{version_number}"
-        config_path = f"{base}/template.yaml"
+        config_path = f"templates/configs/{hashlib.sha256(config_content).hexdigest()}-{version_id}.yaml"
         files: dict[str, bytes] = {config_path: config_content}
         artifacts: list[JobArtifact] = []
         artifact_ids: dict[str, str] = {}
@@ -198,9 +196,7 @@ class CanonicalTemplateImporter:
         candidate_mapping = {
             item.id: {
                 "localCandidateSetId": uuid_string(),
-                "localBindingIds": {
-                    target: uuid_string() for target in item.target_patterns
-                },
+                "localBindingIds": {target: uuid_string() for target in item.target_patterns},
             }
             for item in canonical.candidate_sets
         }
@@ -297,9 +293,7 @@ class CanonicalTemplateImporter:
                 {
                     "sourceFileName": canonical.spreadsheet.file_name,
                     "sourceSheetName": canonical.spreadsheet.sheet_name,
-                    "spreadsheetSourcePath": artifact_paths.get(
-                        "optional/spreadsheet-source.xlsx"
-                    ),
+                    "spreadsheetSourcePath": artifact_paths.get("optional/spreadsheet-source.xlsx"),
                     "layoutVerificationDetector": "xlsx-structure",
                 }
             )

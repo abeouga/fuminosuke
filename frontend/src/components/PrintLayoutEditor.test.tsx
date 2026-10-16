@@ -11,7 +11,7 @@ vi.mock("../api", () => ({ api: {
 } }));
 
 const state: PrintState = {
-  revision: "a".repeat(64), editable: true, saved: null,
+  resourceRevision: 1, revision: "a".repeat(64), editable: true, saved: null,
   source: {
     sheetName: "帳票", startRow: 2, endRow: 6, width: 200, height: 100,
     rowBoundaries: [2, 3, 4, 5, 6, 7].map((row, i) => ({ row, y: i * 20 })),
@@ -34,7 +34,7 @@ const busy = vi.fn();
 const saved = vi.fn();
 afterEach(cleanup);
 async function open() {
-  render(<PrintLayoutEditor versionId="v1" disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
+  render(<PrintLayoutEditor versionId="v1" resourceRevision={1} onMutationRevision={vi.fn()} disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
   fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
   await screen.findByText("2ページ / 共通縮小率 96.0%");
 }
@@ -53,11 +53,11 @@ describe("印刷ページ編集", () => {
     ] };
     const layout = { cells: [], relations: [] } as unknown as NonNullable<PrintState["layout"]>;
     vi.mocked(api.printLayout).mockResolvedValue(initial);
-    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, body) => ({
+    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, _revision, body) => ({
       ...initial, revision: "b".repeat(64), saved: planned(body), layout,
       pageHeadings: [{ ...initial.pageHeadings[0], pageRange: "B2:D2" }],
     }));
-    render(<PrintLayoutEditor versionId="v1" disabled={false} onDirtyChange={dirty}
+    render(<PrintLayoutEditor versionId="v1" resourceRevision={1} onMutationRevision={vi.fn()} disabled={false} onDirtyChange={dirty}
       onBusyChange={busy} onSavedChange={saved} onLayoutSaved={onLayoutSaved} />);
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
     await screen.findByText("2ページ / 共通縮小率 96.0%");
@@ -88,7 +88,7 @@ describe("印刷ページ編集", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "印刷ページを下書き保存" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを下書き保存" }));
     await screen.findByText("保存競合");
-    expect(api.savePrintLayout).toHaveBeenLastCalledWith("v1", expect.objectContaining({
+    expect(api.savePrintLayout).toHaveBeenLastCalledWith("v1", 1, expect.objectContaining({
       baseRevision: state.revision, breakAfterRows: [2],
       pageHeadingMoves: [{ cellId: "virtual-1", fromRange: "B2:D3", toRange: "B2:D2" }],
     }));
@@ -107,7 +107,7 @@ describe("印刷ページ編集", () => {
     expect(api.previewPrintLayout).not.toHaveBeenCalled();
     busy.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "印刷見本を作る" }));
-    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
+    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", 1, state.revision);
     expect(screen.getByRole("button", { name: "印刷見本を作成中…" })).toBeDisabled();
     expect(busy).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "拡大" })).not.toBeDisabled();
@@ -121,7 +121,7 @@ describe("印刷ページ編集", () => {
     await open();
     await waitFor(() => expect(screen.getByRole("button", { name: "印刷見本を作る" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "印刷見本を作る" }));
-    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", state.revision);
+    expect(api.preparePrintFiles).toHaveBeenCalledWith("v1", 1, state.revision);
     await screen.findByText("生成中に設定が変更されました");
     expect(screen.getByText("保存済み・2ページ")).toBeVisible();
     expect(screen.getByRole("button", { name: "印刷見本を作る" })).not.toBeDisabled();
@@ -132,7 +132,7 @@ describe("印刷ページ編集", () => {
     vi.mocked(api.printLayout).mockResolvedValue(initial);
     let finish!: (value: PrintState) => void;
     vi.mocked(api.preparePrintFiles).mockReturnValue(new Promise(resolve => { finish = resolve; }));
-    const props = { versionId: "v1", disabled: false, onDirtyChange: dirty, onBusyChange: busy, onSavedChange: saved };
+    const props = { versionId: "v1", resourceRevision: 1, onMutationRevision: vi.fn(), disabled: false, onDirtyChange: dirty, onBusyChange: busy, onSavedChange: saved };
     const view = render(<PrintLayoutEditor {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
     await screen.findByText("2ページ / 共通縮小率 96.0%");
@@ -168,7 +168,7 @@ describe("印刷ページ編集", () => {
     expect(screen.getByText("未保存")).toBeVisible();
     await screen.findByText("3ページ / 共通縮小率 96.0%");
     let persisted: PrintState = state;
-    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, body) => {
+    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, _revision, body) => {
       expect(body.breakAfterRows).toEqual([3, 5]);
       expect(body.baseRevision).toBe(state.revision);
       persisted = { ...state, revision: "b".repeat(64), saved: planned(body) };
@@ -210,7 +210,7 @@ describe("印刷ページ編集", () => {
   it("keeps saved page ranges when a target count is edited", async () => {
     const existing = planned({ ...printDefaults(state), breakAfterRows: [2, 3] });
     vi.mocked(api.printLayout).mockResolvedValue({ ...state, saved: existing });
-    render(<PrintLayoutEditor versionId="v1" disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
+    render(<PrintLayoutEditor versionId="v1" resourceRevision={1} onMutationRevision={vi.fn()} disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
     await screen.findByText("3ページ / 共通縮小率 96.0%");
     fireEvent.change(screen.getByLabelText("目標の縦ページ数"), { target: { value: "2" } });
@@ -241,7 +241,7 @@ describe("印刷ページ編集", () => {
     await screen.findByLabelText("Page 2 最終行");
     fireEvent.click(screen.getByRole("button", { name: "改ページ 2 を削除" }));
     await waitFor(() => expect(screen.queryByLabelText("Page 2 最終行")).toBeNull());
-    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, body) => ({ ...state, revision: "b".repeat(64), saved: planned(body) }));
+    vi.mocked(api.savePrintLayout).mockImplementation(async (_id, _revision, body) => ({ ...state, revision: "b".repeat(64), saved: planned(body) }));
     await screen.findByText("2ページ / 共通縮小率 96.0%");
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを下書き保存" }));
     await screen.findByText("旧方式への切り替え");
@@ -255,12 +255,12 @@ describe("印刷ページ編集", () => {
     expect(dirty).toHaveBeenLastCalledWith(false);
     vi.mocked(api.clearPrintLayout).mockResolvedValue({ ...state, revision: "c".repeat(64) });
     fireEvent.click(screen.getByRole("button", { name: "印刷ページ設定を解除して旧方式を使う" }));
-    await waitFor(() => expect(api.clearPrintLayout).toHaveBeenCalledWith("v1", "b".repeat(64)));
+    await waitFor(() => expect(api.clearPrintLayout).toHaveBeenCalledWith("v1", 1, "b".repeat(64)));
     await waitFor(() => expect(screen.queryByRole("button", { name: "印刷用XLSX" })).toBeNull());
   });
   it("disables editing for unsupported source features", async () => {
     vi.mocked(api.printLayout).mockResolvedValue({ ...state, source: { ...state.source, unsupported: ["非表示行は未対応です。"] } });
-    render(<PrintLayoutEditor versionId="v1" disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
+    render(<PrintLayoutEditor versionId="v1" resourceRevision={1} onMutationRevision={vi.fn()} disabled={false} onDirtyChange={dirty} onBusyChange={busy} onSavedChange={saved} />);
     fireEvent.click(screen.getByRole("button", { name: "印刷ページを編集" }));
     await screen.findByText("非表示行は未対応です。");
     expect(screen.getByRole("button", { name: "改ページを追加" })).toBeDisabled();

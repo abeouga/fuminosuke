@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class ReservationBudget(Protocol):
+    def status(self) -> dict[str, int]: ...
+    def reserve(self, purpose: str) -> str: ...

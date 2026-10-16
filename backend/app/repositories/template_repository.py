@@ -44,6 +44,7 @@ class TemplateRepository:
         mask_artifact_id: str | None,
         config_relative_path: str,
         quality: dict[str, Any],
+        layout: dict[str, Any],
     ) -> TemplateVersion:
         maximum = self._session.scalar(
             select(func.max(TemplateVersion.version_number)).where(
@@ -62,6 +63,7 @@ class TemplateRepository:
             mask_artifact_id=mask_artifact_id,
             config_relative_path=config_relative_path,
             quality_json=quality,
+            layout_json=layout,
         )
         self._session.add(version)
         # The caller adds the detected layout before committing so a template
@@ -78,13 +80,14 @@ class TemplateRepository:
         )
         return list(self._session.scalars(statement))
 
-    def name_exists(self, name: str) -> bool:
+    def name_exists(self, name: str, *, exclude_template_id: str | None = None) -> bool:
         normalized = self.normalize_name(name)
+        statement = select(Template).where(Template.archived_at.is_(None))
+        if exclude_template_id is not None:
+            statement = statement.where(Template.id != exclude_template_id)
         return any(
             self.normalize_name(template.name) == normalized
-            for template in self._session.scalars(
-                select(Template).where(Template.archived_at.is_(None))
-            )
+            for template in self._session.scalars(statement)
         )
 
     @staticmethod
@@ -129,7 +132,7 @@ class TemplateRepository:
         expected_revision: str | None = None,
         qualification_service: ReferenceQualificationService | None = None,
     ) -> TemplateVersion:
-        from app.domain.print_layout import require_legacy_ocr
+        from app.domain.print_layout import require_image_ocr
 
         version = self.get_version(version_id)
         if version is None:
@@ -143,7 +146,7 @@ class TemplateRepository:
             # validator; the validator performs the full current evidence read
             # inside this transaction.
             if qualification_service is None or expected_revision is None:
-                require_legacy_ocr(version.quality_json)
+                require_image_ocr(version.quality_json)
                 raise RuntimeError("Paged approval guard did not reject an incomplete caller")
             from app.services.candidate_readiness_service import require_for_use
 
@@ -154,7 +157,7 @@ class TemplateRepository:
                 expected_revision,
             )
         else:
-            require_legacy_ocr(version.quality_json)
+            require_image_ocr(version.quality_json)
         from app.services.layout_service import LayoutService
 
         LayoutService.require_valid_saved_mapping_layout(version)

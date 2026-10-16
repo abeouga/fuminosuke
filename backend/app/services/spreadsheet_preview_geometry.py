@@ -18,13 +18,14 @@ from app.layout_analysis.models import LayoutDefinition
 
 LEGACY_MODEL = "spreadsheet-preview-office-v1"
 MODEL = "spreadsheet-preview-office-v2"
+LINUX_MODEL = "spreadsheet-preview-linux-v1"
 
 
 def project_preview_geometry(
     content: bytes, layout: LayoutDefinition, print_cells: list[dict[str, Any]],
     snapshot: dict[str, Any],
 ) -> tuple[LayoutDefinition, list[dict[str, Any]]]:
-    if (snapshot.get("model") not in {LEGACY_MODEL, MODEL}
+    if (snapshot.get("model") not in {LEGACY_MODEL, MODEL, LINUX_MODEL}
             or snapshot.get("sourceSha256") != hashlib.sha256(content).hexdigest()):
         raise print_error("保存したプレビュー寸法と原本が一致しません。",
                           "PRINT_GEOMETRY_CHANGED", 409)

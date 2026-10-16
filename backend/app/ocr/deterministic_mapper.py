@@ -2,70 +2,13 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import cast
 
-from app.domain.field_targets import (
-    CALVING_ROW_COUNT,
-    SALE_CALF_ROW_COUNT,
-    custom_field_key,
-)
-from app.domain.japanese_dates import canonical_japanese_birth_date
-from app.domain.numeric_values import normalize_decimal, normalize_integer, normalize_yen
-from app.domain.ocr_factory import blank_ocr_document, blank_reading
-from app.domain.ocr_models import (
-    BoundingBox,
-    Calving,
-    FieldReading,
-    OcrDocument,
-    ReadingStatus,
-    ReviewItem,
-    SaleCalf,
-)
-from app.domain.sale_notes import canonical_sale_note
-from app.domain.sire_names import canonical_sire_candidate
+from app.domain.field_targets import field_key
+from app.domain.ocr_factory import blank_ocr_document
+from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus, ReviewItem
 from app.domain.template_candidates import canonical_managed_candidate
 from app.ocr.base import OcrProviderRequest
 from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
-
-DOCUMENT_ATTRIBUTES = {
-    "unifiedEarTag": "unified_ear_tag",
-    "cattleName": "cattle_name",
-    "birthDate": "birth_date",
-    "registrationNumber": "registration_number",
-    "coatColor": "coat_color",
-    "breeder": "breeder",
-    "owner": "owner",
-}
-
-PEDIGREE_ATTRIBUTES = {
-    "father": "father",
-    "mother": "mother",
-    "paternalGrandfather": "paternal_grandfather",
-    "paternalGrandmother": "paternal_grandmother",
-    "maternalGrandfather": "maternal_grandfather",
-    "maternalGrandmother": "maternal_grandmother",
-}
-
-SALE_CALF_ATTRIBUTES = {
-    "parity": "parity",
-    "ageDays": "age_days",
-    "weightKg": "weight_kg",
-    "priceYen": "price_yen",
-    "sireName": "sire_name",
-    "saleDate": "sale_date",
-    "notes": "notes",
-}
-
-CALVING_ATTRIBUTES = {
-    "parity": "parity",
-    "calvingDate": "calving_date",
-    "sex": "sex",
-    "outcome": "outcome",
-    "notes": "notes",
-}
-
-DITTO_MARKS = {"=", "==", "〃", "″", "こ"}
-CONTEXTUAL_DITTO_MARKS = {".", "..", "・", "・・", "·", "••", "∙", "ヽ"}
 
 
 def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch) -> OcrDocument:
@@ -104,7 +47,6 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
             candidates=region.candidates,
             allowed_suffixes=region.allowed_suffixes,
             candidate_type=region.candidate_type,
-            transcription_format=region.transcription_format,
             identity_value_type=region.identity_value_type,
             identity_exact_length=region.identity_exact_length,
         )
@@ -123,21 +65,11 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
             )
         elif issue_code:
             message = {
-                "SIRE_NAME_CANDIDATE_UNRESOLVED": (
-                    "種雄牛名を登録済み候補へ確実に照合できないため確認してください。"
-                ),
                 "MANAGED_CANDIDATE_UNRESOLVED": (
                     "登録済みの読み取り候補と一致しないため確認してください。"
                 ),
-                "SALE_NOTE_SEX_SYMBOL_UNRESOLVED": (
-                    "備考の先頭を♂または♀として確定できないため確認してください。"
-                ),
-                "BIRTH_DATE_ERA_REQUIRED": ("日付の元号(平成または令和)を選択してください。"),
-                "BIRTH_DATE_NUMBERS_INVALID": (
-                    "日付を元号年・月・日の3つの数字として確認してください。"
-                ),
                 "MARK_CHOICE_UNRESOLVED": (
-                    "選択マークを確定できないため、丸の付いた項目を確認してください。"
+                    "選択マークを確定できないため、印の付いた項目を確認してください。"
                 ),
                 "DOCUMENT_IDENTITY_FORMAT_INVALID": (
                     "書類を見分ける番号の形式が設定と一致しないため確認してください。"
@@ -175,14 +107,13 @@ def _reading(
     candidates: tuple[str, ...] = (),
     allowed_suffixes: tuple[str, ...] = (),
     candidate_type: str | None = None,
-    transcription_format: str | None = None,
     identity_value_type: str | None = None,
     identity_exact_length: int | None = None,
 ) -> tuple[FieldReading, str | None, bool]:
     if item is None:
         return _missing_mapped_reading(mapping_id, box), None, False
     raw = item.raw.strip() if item.raw else None
-    is_ditto = item.is_ditto or _looks_like_ditto(raw, target_path)
+    is_ditto = item.is_ditto
     bounding_box = BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3]) if box else None
     if is_ditto:
         return (
@@ -202,7 +133,7 @@ def _reading(
     review_reason = item.review_reason
     alternatives = item.alternatives
     issue_code: str | None = None
-    normalized = _normalize(target_path, raw) if status is ReadingStatus.READABLE else None
+    normalized = raw if status is ReadingStatus.READABLE else None
     if identity_value_type == "digits" and status is not ReadingStatus.BLANK:
         compact = re.sub(
             r"[\s\-\u2010\u2011\u2012\u2013\u2014\u2015\u30fc\uff0d]",
@@ -219,39 +150,7 @@ def _reading(
             normalized = None
             review_reason = "DOCUMENT_IDENTITY_FORMAT_INVALID"
             issue_code = review_reason
-    elif transcription_format == "japanese_era_date_numbers" and status is not ReadingStatus.BLANK:
-        numeric_raw, canonical_normalized, reason = canonical_japanese_birth_date(raw, None)
-        raw = numeric_raw
-        normalized = canonical_normalized
-        if reason:
-            status = ReadingStatus.UNCERTAIN
-            review_reason = reason
-            issue_code = reason
-        elif status is ReadingStatus.READABLE:
-            review_reason = None
-    elif candidate_type == "sale_calf_note_prefix" and status is not ReadingStatus.BLANK:
-        matched = canonical_sale_note(raw, item.matched_candidate, candidates)
-        alternatives = [
-            candidate
-            for value in item.alternatives
-            if (
-                candidate := canonical_sale_note(
-                    value,
-                    item.matched_candidate,
-                    candidates,
-                )
-            )
-            is not None
-        ]
-        if status is ReadingStatus.READABLE and matched is not None:
-            normalized = matched
-            review_reason = None
-        else:
-            status = ReadingStatus.UNCERTAIN
-            normalized = None
-            review_reason = "SALE_NOTE_SEX_SYMBOL_UNRESOLVED"
-            issue_code = review_reason
-    elif candidate_type in {"mark_choice", "symbol_choice"} and status is not ReadingStatus.BLANK:
+    elif candidate_type in {"mark_choice", "symbol_choice", "checklist"} and status is not ReadingStatus.BLANK:
         selected = (
             ([raw] if raw in candidates else [])
             if candidate_type == "symbol_choice"
@@ -269,11 +168,7 @@ def _reading(
             review_reason = "MARK_CHOICE_UNRESOLVED"
             issue_code = review_reason
     elif candidates and status is not ReadingStatus.BLANK:
-        candidate_matcher = (
-            canonical_managed_candidate
-            if candidate_type == "managed_text"
-            else canonical_sire_candidate
-        )
+        candidate_matcher = canonical_managed_candidate
         matched = candidate_matcher(
             item.matched_candidate,
             candidates,
@@ -298,11 +193,7 @@ def _reading(
         else:
             status = ReadingStatus.UNCERTAIN
             normalized = None
-            review_reason = review_reason or (
-                "MANAGED_CANDIDATE_UNRESOLVED"
-                if candidate_type == "managed_text"
-                else "SIRE_NAME_CANDIDATE_UNRESOLVED"
-            )
+            review_reason = review_reason or "MANAGED_CANDIDATE_UNRESOLVED"
             issue_code = review_reason
     return (
         FieldReading(
@@ -332,234 +223,39 @@ def _selected_mark_labels(raw: str | None, candidates: tuple[str, ...]) -> list[
     return [candidate for candidate in candidates if candidate in labels]
 
 
-def _looks_like_ditto(raw: str | None, target_path: str) -> bool:
-    if raw is None:
-        return False
-    compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", raw))
-    if compact in DITTO_MARKS:
-        return True
-    supports_contextual_ditto = (
-        target_path.startswith("saleCalves.") and target_path.endswith(".sireName")
-    ) or (target_path.startswith("calvings.") and target_path.endswith(".notes"))
-    if supports_contextual_ditto and compact in CONTEXTUAL_DITTO_MARKS:
-        return True
-    # On the ledger's short double-stroke ditto mark, vision OCR can return the
-    # visually similar katakana ミ. Restrict this alias to calving notes so a
-    # legitimate character in another field is never copied accidentally.
-    return (
-        target_path.startswith("calvings.") and target_path.endswith(".notes") and compact == "ミ"
-    )
-
-
-def _resolve_ditto_readings(
-    document: OcrDocument,
-    ditto_paths: list[tuple[str, str]],
-) -> None:
-    ordered = sorted(
-        ditto_paths,
-        key=lambda item: _record_path_sort_key(item[0]),
-    )
-    for target_path, source_region_id in ordered:
-        parts = target_path.split(".")
-        if (
-            len(parts) != 3
-            or parts[0] not in {"saleCalves", "calvings"}
-            or not parts[1].isdigit()
-            or int(parts[1]) == 0
-        ):
-            _mark_ditto_unresolved(document, target_path, source_region_id)
-            continue
-        previous_path = f"{parts[0]}.{int(parts[1]) - 1}.{parts[2]}"
-        current = _get_record_reading(document, target_path)
-        previous = _get_record_reading(document, previous_path)
-        if (
-            current is None
-            or previous is None
-            or previous.status is not ReadingStatus.READABLE
-            or previous.raw is None
-        ):
-            _mark_ditto_unresolved(document, target_path, source_region_id)
-            continue
-        _assign(
-            document,
-            target_path,
-            current.model_copy(
-                update={
-                    "normalized": previous.normalized or previous.raw,
-                    "status": ReadingStatus.READABLE,
-                    "alternatives": [],
-                    "review_reason": None,
-                }
-            ),
+def _resolve_ditto_readings(document: OcrDocument, paths: list[tuple[str, str]]) -> None:
+    for path, region in paths:
+        document.review_items.append(
+            ReviewItem(
+                code="DITTO_UNRESOLVED",
+                path=path,
+                message="同上の値を確認して入力してください。",
+                severity="warning",
+                source_region_id=region,
+            )
         )
-
-
-def _record_path_sort_key(target_path: str) -> tuple[str, str, int]:
-    parts = target_path.split(".")
-    if len(parts) == 3 and parts[1].isdigit():
-        return parts[0], parts[2], int(parts[1])
-    return target_path, "", -1
-
-
-def _mark_ditto_unresolved(
-    document: OcrDocument,
-    target_path: str,
-    source_region_id: str,
-) -> None:
-    current = _get_record_reading(document, target_path)
-    if current is not None:
-        _assign(
-            document,
-            target_path,
-            current.model_copy(
-                update={
-                    "normalized": None,
-                    "status": ReadingStatus.UNCERTAIN,
-                    "review_reason": "DITTO_SOURCE_UNAVAILABLE",
-                }
-            ),
-        )
-    document.review_items.append(
-        ReviewItem(
-            code="DITTO_SOURCE_UNAVAILABLE",
-            path=target_path,
-            message="同上マークの直上セルを確定できないため確認してください。",
-            severity="warning",
-            source_region_id=source_region_id,
-        )
-    )
-
-
-def _get_record_reading(
-    document: OcrDocument,
-    target_path: str,
-) -> FieldReading | None:
-    parts = target_path.split(".")
-    if len(parts) != 3 or not parts[1].isdigit():
-        return None
-    index = int(parts[1])
-    if (
-        parts[0] == "saleCalves"
-        and parts[2] in SALE_CALF_ATTRIBUTES
-        and index < len(document.sale_calves)
-    ):
-        return cast(
-            FieldReading,
-            getattr(document.sale_calves[index], SALE_CALF_ATTRIBUTES[parts[2]]),
-        )
-    if parts[0] == "calvings" and parts[2] in CALVING_ATTRIBUTES and index < len(document.calvings):
-        return cast(
-            FieldReading,
-            getattr(document.calvings[index], CALVING_ATTRIBUTES[parts[2]]),
-        )
-    return None
 
 
 def _missing_mapped_reading(mapping_id: str, box: tuple[int, int, int, int] | None) -> FieldReading:
     return FieldReading(
-        raw=None,
-        normalized=None,
         status=ReadingStatus.UNCERTAIN,
-        alternatives=[],
-        review_reason="MISSING_TRANSCRIPTION",
         source_region_id=mapping_id,
-        bounding_box=(
-            BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3]) if box else None
-        ),
+        review_reason="OCR_MAPPING_MISSING",
+        bounding_box=BoundingBox(x=box[0], y=box[1], width=box[2], height=box[3]) if box else None,
     )
 
 
-def _normalize(target_path: str, raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    if target_path == "document.unifiedEarTag":
-        digits = re.sub(r"\D", "", raw)
-        return digits if len(digits) == 10 else None
-    if target_path.endswith(".priceYen"):
-        return normalize_yen(raw)
-    if target_path.endswith(".weightKg"):
-        return normalize_decimal(raw)
-    if target_path.endswith((".ageDays", ".parity")):
-        return normalize_integer(raw)
-    if target_path.endswith(("Date", ".birthDate")):
-        return None
-    return raw
-
-
 def _assign(document: OcrDocument, target_path: str, reading: FieldReading) -> None:
-    parts = target_path.split(".")
-    custom_key = custom_field_key(target_path)
-    if custom_key is not None:
-        document.custom_fields[custom_key] = reading
-        return
-    if len(parts) == 2 and parts[0] == "document" and parts[1] in DOCUMENT_ATTRIBUTES:
-        setattr(document.document, DOCUMENT_ATTRIBUTES[parts[1]], reading)
-        return
-    if len(parts) == 2 and parts[0] == "pedigree" and parts[1] in PEDIGREE_ATTRIBUTES:
-        setattr(document.pedigree, PEDIGREE_ATTRIBUTES[parts[1]], reading)
-        return
-    if len(parts) != 3 or not parts[1].isdigit():
-        raise ValueError(f"Unsupported field mapping target: {target_path}")
-    index = int(parts[1])
-    if parts[0] == "saleCalves" and parts[2] in SALE_CALF_ATTRIBUTES:
-        if index >= SALE_CALF_ROW_COUNT:
-            raise ValueError(
-                f"Sale calf field mapping row must be 1-{SALE_CALF_ROW_COUNT}: {target_path}"
-            )
-        while len(document.sale_calves) <= index:
-            document.sale_calves.append(_blank_sale_calf())
-        setattr(document.sale_calves[index], SALE_CALF_ATTRIBUTES[parts[2]], reading)
-        return
-    if parts[0] == "calvings" and parts[2] in CALVING_ATTRIBUTES:
-        if index >= CALVING_ROW_COUNT:
-            raise ValueError(
-                f"Calving field mapping row must be 1-{CALVING_ROW_COUNT}: {target_path}"
-            )
-        while len(document.calvings) <= index:
-            document.calvings.append(_blank_calving())
-        setattr(document.calvings[index], CALVING_ATTRIBUTES[parts[2]], reading)
-        return
-    raise ValueError(f"Unsupported field mapping target: {target_path}")
+    key = field_key(target_path)
+    if key is None:
+        raise ValueError(f"Unsupported generic field path: {target_path}")
+    document.fields[key] = reading
 
 
-def assign_mapped_reading(
-    document: OcrDocument,
-    target_path: str,
-    reading: FieldReading,
-) -> None:
-    """Assign a local detector result through the normal field-mapping rules."""
+def assign_mapped_reading(document: OcrDocument, target_path: str, reading: FieldReading) -> None:
     _assign(document, target_path, reading)
 
 
 def get_mapped_reading(document: OcrDocument, target_path: str) -> FieldReading | None:
-    parts = target_path.split(".")
-    custom_key = custom_field_key(target_path)
-    if custom_key is not None:
-        return document.custom_fields.get(custom_key)
-    if len(parts) == 2 and parts[0] == "document" and parts[1] in DOCUMENT_ATTRIBUTES:
-        return cast(FieldReading, getattr(document.document, DOCUMENT_ATTRIBUTES[parts[1]]))
-    if len(parts) == 2 and parts[0] == "pedigree" and parts[1] in PEDIGREE_ATTRIBUTES:
-        return cast(FieldReading, getattr(document.pedigree, PEDIGREE_ATTRIBUTES[parts[1]]))
-    return _get_record_reading(document, target_path)
-
-
-def _blank_sale_calf() -> SaleCalf:
-    return SaleCalf(
-        parity=blank_reading("unmapped"),
-        age_days=blank_reading("unmapped"),
-        weight_kg=blank_reading("unmapped"),
-        price_yen=blank_reading("unmapped"),
-        sire_name=blank_reading("unmapped"),
-        sale_date=blank_reading("unmapped"),
-        notes=blank_reading("unmapped"),
-    )
-
-
-def _blank_calving() -> Calving:
-    return Calving(
-        parity=blank_reading("unmapped"),
-        calving_date=blank_reading("unmapped"),
-        sex=blank_reading("unmapped"),
-        outcome=blank_reading("unmapped"),
-        notes=blank_reading("unmapped"),
-    )
+    key = field_key(target_path)
+    return document.fields.get(key) if key is not None else None

@@ -14,21 +14,19 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.models import (
     JobArtifact,
-    LedgerDocument,
-    LedgerDocumentPage,
+    JobEvent,
+    OcrResult,
     ProcessingJob,
     Template,
     TemplateDefinitionRevision,
     TemplateVersion,
 )
+from app.db.mutation import require_revision, revision_conflict, touch_template_version
 from app.db.session import Database
-from app.domain.enums import JobStatus, JobType, TemplateMode, TemplateVersionStatus
+from app.domain.enums import JobStatus, JobType, RevisionSource, TemplateMode, TemplateVersionStatus
 from app.domain.field_targets import is_supported_field_path
-from app.domain.individual_id import normalize_individual_id
 from app.domain.job_inputs import job_input_bounds
 from app.domain.job_state import require_transition
-from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
-from app.domain.sire_names import SIRE_NAME_ALLOWED_SUFFIXES
 from app.domain.template_config import TemplateConfig, parse_template_config
 from app.domain.template_fields import build_template_field_catalog
 from app.domain.template_quality import (
@@ -39,9 +37,9 @@ from app.image_processing.image_loader import ImageLoader, LoadedImage
 from app.jobs.runner import JobRunner
 from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
+from app.repositories.ocr_result_repository import OcrResultRepository
 from app.repositories.template_repository import TemplateRepository
 from app.services.review_display_structure import build_review_display_structure
-from app.services.sire_name_service import SireNameService
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_candidate_service import TemplateCandidateService
 from app.storage.local_storage import LocalStorageService, StoragePathError
@@ -60,6 +58,7 @@ ATTENTION_JOB_STATUSES = (
 class UploadPayload:
     content: bytes
     declared_media_type: str | None
+    is_xlsx: bool = False
 
 
 class JobService:
@@ -128,26 +127,11 @@ class JobService:
         self,
         *,
         template_version_id: str,
-        mother_individual_id: str | None,
         upload: UploadPayload,
         ocr_enabled: bool,
         send_full_document_to_openai: bool = False,
-        document_action: str | None = None,
-        target_document_id: str | None = None,
-        target_page_id: str | None = None,
         idempotency_key: str | None,
     ) -> ProcessingJob:
-        normalized_mother_id: str | None = None
-        if mother_individual_id and mother_individual_id.strip():
-            try:
-                normalized_mother_id = normalize_individual_id(mother_individual_id)
-            except ValueError as exc:
-                raise AppError(
-                    status=422,
-                    code="INVALID_INDIVIDUAL_ID",
-                    title="Invalid mother individual identification number",
-                    detail="母牛の個体識別番号は10桁の数字で入力してください。",
-                ) from exc
         with self._database.session() as session:
             template_version = session.get(TemplateVersion, template_version_id)
             if template_version is None:
@@ -164,45 +148,16 @@ class JobService:
                     title="Template version is not active",
                     detail="OCRにはACTIVEテンプレート版を指定してください。",
                 )
-            from app.domain.print_layout import require_legacy_ocr
+            from app.domain.print_layout import require_image_ocr
 
-            require_legacy_ocr(template_version.quality_json)
-            if document_action not in {None, "ADD_PAGE", "RESCAN_PAGE", "NEW_DOCUMENT"}:
+            require_image_ocr(template_version.quality_json)
+            if not self._settings.ocr.text_recognition_toggle_enabled and not ocr_enabled:
                 raise AppError(
-                    status=422,
-                    code="DOCUMENT_ACTION_INVALID",
-                    title="Document action is invalid",
-                    detail="読み取り方法の指定が正しくありません。",
+                    status=409,
+                    code="OCR_TEXT_RECOGNITION_REQUIRED",
+                    title="OCR text recognition is required",
+                    detail="この画面では文字読み取りが必須です。画像処理のみの受付はできません。",
                 )
-            target_document = (
-                session.get(LedgerDocument, target_document_id) if target_document_id else None
-            )
-            if document_action in {"ADD_PAGE", "RESCAN_PAGE"}:
-                if target_document is None:
-                    raise AppError(
-                        status=404,
-                        code="LEDGER_DOCUMENT_NOT_FOUND",
-                        title="Ledger document was not found",
-                        detail="更新する台帳が見つかりません。",
-                    )
-                if target_document.template_id != template_version.template_id:
-                    raise AppError(
-                        status=409,
-                        code="DOCUMENT_TEMPLATE_MISMATCH",
-                        title="Document template does not match",
-                        detail="選択した台帳とテンプレートが一致しません。",
-                    )
-            if document_action == "RESCAN_PAGE":
-                target_page = (
-                    session.get(LedgerDocumentPage, target_page_id) if target_page_id else None
-                )
-                if target_page is None or target_page.ledger_document_id != target_document_id:
-                    raise AppError(
-                        status=404,
-                        code="TARGET_PAGE_REQUIRED",
-                        title="A page to reread is required",
-                        detail="読み直すページを選択してください。",
-                    )
             if has_full_image_boundary_fallback(template_version.quality_json):
                 raise AppError(
                     status=409,
@@ -306,20 +261,14 @@ class JobService:
                 clean_template_sha256=clean_template_sha256,
                 config=template_config,
             )
+            owner = session.get(Template, template_version.template_id)
+            if owner is not None:
+                template_snapshot["documentType"] = owner.document_type
             spreadsheet_output_snapshot = SpreadsheetTemplateOutputService(
                 self._storage
             ).snapshot(
                 session,
                 version=template_version,
-            )
-            sire_name_snapshot = (
-                self._sire_name_snapshot(session)
-                if ocr_enabled
-                else {
-                    "sireNamePool": [],
-                    "sireNameAllowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
-                    "sireNamePoolHash": None,
-                }
             )
             template_candidate_snapshot = (
                 TemplateCandidateService.snapshot(session, template_version.template_id)
@@ -329,9 +278,19 @@ class JobService:
                     "templateCandidatePoolsHash": None,
                 }
             )
+        xlsx_source = upload.content if upload.is_xlsx else None
+        xlsx_metadata = None
+        if xlsx_source is not None:
+            import asyncio
+
+            from app.services.xlsx_ocr_input import prepare_xlsx_input
+            image, xlsx_metadata = await asyncio.to_thread(prepare_xlsx_input,
+                self._database, self._storage, template_version_id, xlsx_source)
+            upload = UploadPayload(image, "image/png")
         loaded = [self._loader.load(upload.content, upload.declared_media_type)]
         config_snapshot = {
             "templateVersionId": template_version_id,
+            **({"xlsxInput": xlsx_metadata} if xlsx_metadata is not None else {}),
             "templateId": template_version.template_id,
             "templateVersionNumber": template_version.version_number,
             "ocrEnabled": ocr_enabled,
@@ -350,23 +309,8 @@ class JobService:
                 else {}
             ),
             **mapping_snapshot,
-            **sire_name_snapshot,
             **template_candidate_snapshot,
-            "saleNoteSexSymbolPool": list(SALE_NOTE_SEX_SYMBOLS),
-            **(
-                {"motherIndividualId": normalized_mother_id}
-                if normalized_mother_id is not None
-                else {}
-            ),
-            **(
-                {
-                    "documentAction": document_action,
-                    "targetDocumentId": target_document_id,
-                    "targetPageId": target_page_id,
-                }
-                if document_action is not None
-                else {}
-            ),
+
         }
         job, created = self._create_job_record(
             job_type=JobType.EXTRACT_DOCUMENT,
@@ -382,6 +326,13 @@ class JobService:
                 clean_template_bytes,
             )
             self._persist_inputs(job, [upload], loaded)
+            if xlsx_source is not None:
+                from app.image_processing.artifacts import ArtifactWriter
+                ArtifactWriter(self._database, self._storage).bytes(
+                    job_id=job.id, attempt_number=1, name="inputWorkbook",
+                    file_name="input.xlsx",
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    content=xlsx_source)
             self._mark_queued(job.id)
             await self._runner.enqueue(job.id)
         return self.get(job.id)
@@ -396,6 +347,7 @@ class JobService:
                     title="Job not found",
                     detail="指定されたジョブが見つかりません。",
                 )
+            job.resource_revision = self._resource_revision(session, job)
             session.expunge(job)
             return job
 
@@ -422,12 +374,52 @@ class JobService:
                 if attention_only
                 else repository.list(limit=limit)
             )
+            revisions = self._resource_revisions(session, jobs)
             for job in jobs:
+                job.resource_revision = revisions.get(job.id)
                 session.expunge(job)
             return jobs
 
-    async def retry(self, job_id: str) -> ProcessingJob:
-        with self._database.session() as session:
+    @classmethod
+    def _resource_revision(cls, session: Session, job: ProcessingJob) -> int | None:
+        return cls._resource_revisions(session, [job]).get(job.id)
+
+    @staticmethod
+    def _resource_revisions(session: Session, jobs: list[ProcessingJob]) -> dict[str, int]:
+        # Revisions only: avoid loading every result's JSON columns one job at a time.
+        revisions: dict[str, int] = {}
+        job_ids = [job.id for job in jobs]
+        for start in range(0, len(job_ids), 500):
+            chunk = job_ids[start:start + 500]
+            revisions.update(
+                session.execute(
+                    select(OcrResult.job_id, OcrResult.revision).where(OcrResult.job_id.in_(chunk))
+                ).tuples().all()
+            )
+        version_ids_by_job = {
+            job.id: version_id
+            for job in jobs
+            if job.id not in revisions
+            and (version_id := job.config_snapshot_json.get("reprocessTemplateVersionId"))
+        }
+        version_ids = list(set(version_ids_by_job.values()))
+        version_revisions: dict[str, int] = {}
+        for start in range(0, len(version_ids), 500):
+            chunk = version_ids[start:start + 500]
+            version_revisions.update(
+                session.execute(
+                    select(TemplateVersion.id, TemplateVersion.revision)
+                    .where(TemplateVersion.id.in_(chunk))
+                ).tuples().all()
+            )
+        for job_id, version_id in version_ids_by_job.items():
+            if version_id in version_revisions:
+                revisions[job_id] = version_revisions[version_id]
+        return revisions
+
+    async def retry(self, job_id: str, *, expected_revision: int | None = None,
+                    reprocess_version_id: str | None = None) -> ProcessingJob:
+        with self._database.transaction() as session:
             repository = JobRepository(session)
             job = repository.get(job_id)
             if job is None:
@@ -459,25 +451,38 @@ class JobService:
                         "画像を選び直し、新しい読み取りとして登録してください。"
                     ),
                 )
-            repository.update(
-                job_id,
-                status=JobStatus.QUEUED,
-                attempt_number=job.attempt_number + 1,
-                progress_stage=None,
-                progress_percent=0,
-                cancel_requested=False,
-                error_code=None,
-                error_message_safe=None,
-                started_at=None,
-                completed_at=None,
-                config_snapshot_json=snapshot,
-            )
-            repository.add_event(
-                job_id=job_id,
-                level="INFO",
-                event_code="JOB_RETRY_QUEUED",
-                metadata={"attemptNumber": job.attempt_number + 1},
-            )
+            result_repository = OcrResultRepository(session)
+            result = result_repository.get_by_job(job.id)
+            if result is not None:
+                if result.revision != expected_revision:
+                    raise revision_conflict()
+                result_repository.advance_revision(result, RevisionSource.REPROCESS)
+            source_id = reprocess_version_id or snapshot.get("reprocessTemplateVersionId")
+            if source_id:
+                from app.services.template_mutation import require_draft
+                version = session.get(TemplateVersion, source_id)
+                if version is None or version.source_job_id != job.id:
+                    raise revision_conflict()
+                require_draft(version)
+                require_revision(version, expected_revision)
+                touch_template_version(version)
+                session.flush()
+                snapshot["reprocessTemplateVersionId"] = version.id
+                snapshot["reprocessTemplateRevision"] = version.revision
+            job.status = JobStatus.QUEUED.value
+            job.attempt_number += 1
+            job.progress_stage = None
+            job.progress_percent = 0
+            job.cancel_requested = False
+            job.error_code = None
+            job.error_message_safe = None
+            job.started_at = None
+            job.completed_at = None
+            job.config_snapshot_json = snapshot
+            session.add(JobEvent(
+                job_id=job.id, level="INFO", event_code="JOB_RETRY_QUEUED",
+                metadata_json={"attemptNumber": job.attempt_number},
+            ))
         await self._runner.enqueue(job_id)
         return self.get(job_id)
 
@@ -645,6 +650,8 @@ class JobService:
                     ),
                     metadata={"templateVersionId": referenced_version_id},
                 )
+            if self._database.before_delete is not None:
+                self._database.before_delete("job", job_id)
             repository.delete(job_id)
         for directory in ("uploads", "artifacts", "exports"):
             relative = f"{directory}/{job_id}"
@@ -959,22 +966,6 @@ class JobService:
         review_structure = build_review_display_structure(None, serialized)
         if version.layout_json:
             layout = LayoutDefinition.model_validate(version.layout_json)
-            if (
-                any(
-                    mapping.target_path.startswith(("saleCalves.", "calvings."))
-                    for mapping in mappings
-                )
-                and not layout.record_structure_verified
-            ):
-                raise AppError(
-                    status=409,
-                    code="TEMPLATE_RECORD_STRUCTURE_REQUIRED",
-                    title="Template record structure is required",
-                    detail=(
-                        "売却子牛・繁殖履歴の各行をレコードとしてまとめ、"
-                        "親セクションと産次キーを確認してください。"
-                    ),
-                )
             group_by_input = {
                 input_id: group
                 for group in layout.record_groups
@@ -1068,23 +1059,6 @@ class JobService:
             "configSha256": hashlib.sha256(canonical_config).hexdigest(),
         }
 
-    @staticmethod
-    def _sire_name_snapshot(session: Session) -> dict[str, object]:
-        names = SireNameService.snapshot_names(session)
-        canonical = json.dumps(
-            {
-                "names": names,
-                "allowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return {
-            "sireNamePool": names,
-            "sireNameAllowedSuffixes": list(SIRE_NAME_ALLOWED_SUFFIXES),
-            "sireNamePoolHash": hashlib.sha256(canonical).hexdigest(),
-        }
 
     def validate_template_input_count(self, mode: TemplateMode, count: int) -> None:
         minimum, maximum = job_input_bounds(JobType.PREPARE_TEMPLATE, mode)

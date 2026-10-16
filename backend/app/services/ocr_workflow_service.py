@@ -5,6 +5,7 @@ import logging
 from dataclasses import replace
 from typing import Any
 
+from app.ai.api_budget import ApiBudget
 from app.core.config import Settings
 from app.db.session import Database
 from app.domain.ocr_factory import blank_ocr_document
@@ -16,7 +17,6 @@ from app.ocr.openai_provider import OpenAIOcrProvider
 from app.ocr.text_presence import PaddleTextPresenceGate
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
-from app.services.document_reconciliation_service import DocumentReconciliationService
 from app.services.extraction_service import ExtractionOutput
 from app.services.ocr_request_preparation_service import OcrRequestPreparer
 from app.services.ocr_response_finalization_service import OcrResponseFinalizer
@@ -43,7 +43,6 @@ class OcrWorkflowService:
         self._writer = ArtifactWriter(database, storage)
         self._validator = DeterministicValidator()
         self._presence_gate = PaddleTextPresenceGate()
-        self._documents = DocumentReconciliationService(self._validator)
         self._request_preparer = OcrRequestPreparer()
         self._response_finalizer = OcrResponseFinalizer(self._validator)
 
@@ -153,15 +152,17 @@ class OcrWorkflowService:
         response = (
             OcrProviderResponse(
                 document=blank_ocr_document(
-                    provider="local-mark-detector",
+                    provider=("local-numbering" if prepared.sequence_regions
+                              else "local-mark-detector"),
                     source_regions=[mapping.mapping_id for mapping in mark_mappings],
                 ),
-                provider="local-mark-detector",
+                provider=("local-numbering" if prepared.sequence_regions
+                          else "local-mark-detector"),
                 model_id=None,
                 prompt_version=None,
                 api_call_count=0,
             )
-            if provider_name == "openai" and not all_regions
+            if not all_regions and (provider_name == "openai" or prepared.sequence_regions)
             else asyncio.run(provider.extract(request))
         )
         if response.provider == "openai":
@@ -205,7 +206,6 @@ class OcrWorkflowService:
         response_document = response.document
         mapped_cells_payload = finalized.mapped_cells_payload
         openai_mapping_diagnostics = finalized.diagnostics_payload
-        configured_paths = finalized.configured_paths
         if mapped_cells_payload is not None:
             writer.json(
                 job_id=extraction.job_id,
@@ -231,38 +231,20 @@ class OcrWorkflowService:
                 "provider": response.provider, "modelId": response.model_id,
                 "apiCallCount": response.api_call_count,
             }
-        with self._database.session() as session:
+        with self._database.transaction() as session:
+            from app.core.errors import AppError
+            from app.db.models import ProcessingJob
+            job = session.get(ProcessingJob, extraction.job_id)
+            if job is None or job.status != "PROCESSING" or job.attempt_number != extraction.attempt_number:
+                raise AppError(status=409, code="OCR_ATTEMPT_STALE", title="Stale OCR attempt",
+                               detail="実行中の読み取り世代が変わったため、古い結果は保存しません。")
             stored = OcrResultRepository(session).save_provider_result(
                 job_id=extraction.job_id,
                 response=response,
                 report=report,
             )
-            current_job = JobRepository(session).get(extraction.job_id)
-            explicit_action = (
-                current_job.config_snapshot_json.get("documentAction")
-                if current_job is not None
-                else None
-            )
-            if current_job is not None and explicit_action in {
-                "ADD_PAGE",
-                "RESCAN_PAGE",
-                "NEW_DOCUMENT",
-            }:
-                stored = self._documents.resolve(
-                    session,
-                    job=current_job,
-                    stored=stored,
-                    action=explicit_action,
-                    target_document_id=current_job.config_snapshot_json.get("targetDocumentId"),
-                    target_job_id=None,
-                    target_page_id=current_job.config_snapshot_json.get("targetPageId"),
-                    configured_paths=configured_paths,
-                )
-                session.commit()
             revision = stored.revision
-        # A spreadsheet file belongs to a confirmed ledger document. Draft OCR
-        # results remain in the database so an abandoned review cannot create
-        # an orphan file in Google Drive.
+        # Only confirmed results produce downloadable XLSX files.
         self._progress(extraction.job_id, "WRITING_ARTIFACTS", 96)
         writer.json(
             job_id=extraction.job_id,
@@ -298,7 +280,7 @@ class OcrWorkflowService:
         if provider_name == "mock":
             return MockOcrProvider()
         if provider_name == "openai":
-            return OpenAIOcrProvider(self._settings.ocr)
+            return OpenAIOcrProvider(self._settings.ocr, ApiBudget(self._database))
         raise ValueError(f"Unsupported OCR provider: {provider_name}")
 
     def _progress(self, job_id: str, stage: str, percent: int) -> None:

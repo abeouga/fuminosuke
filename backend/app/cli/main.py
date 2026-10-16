@@ -10,8 +10,10 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from app.ai.api_budget import ApiBudget
 from app.core.config import Settings
-from app.domain.sale_notes import SALE_NOTE_SEX_SYMBOLS
+from app.db.session import Database
+from app.domain.ocr_factory import blank_ocr_document
 from app.domain.template_config import TemplateConfig, load_template_config
 from app.evaluation.runner import run_evaluation
 from app.extraction.handwriting_isolator import HandwritingIsolator
@@ -20,17 +22,18 @@ from app.extraction.region_cropper import RegionCropper
 from app.image_processing.artifacts import encode_png
 from app.image_processing.document_boundary import DocumentNormalizer
 from app.image_processing.registration import TemplateAligner
-from app.ocr.base import OcrProvider, OcrProviderRequest, OcrRegionInput
+from app.ocr.base import OcrProvider, OcrProviderRequest, OcrProviderResponse, OcrRegionInput
 from app.ocr.disabled_provider import DisabledOcrProvider
 from app.ocr.mock_provider import MockOcrProvider
 from app.ocr.openai_provider import OpenAIOcrProvider
+from app.ocr.sequence_numbers import apply_sequence_numbers
 from app.storage.atomic_writer import atomic_write_bytes, atomic_write_text
 from app.template_recovery.pipelines import PreparedTemplate, TemplateRecoveryPipelines
 from app.validation.business_validators import DeterministicValidator
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="牛繁殖台帳 OCR ローカルCLI")
+    parser = argparse.ArgumentParser(description="書類 OCR ローカルCLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("recover-reference", "recover-single"):
         item = subparsers.add_parser(command)
@@ -176,25 +179,9 @@ def _extract_document(
                     region_id if provider_name == "openai" else None
                 ),
                 bounding_box=region.bbox,
-                candidates=(
-                    SALE_NOTE_SEX_SYMBOLS
-                    if len(region.config.expected_fields) == 1
-                    and region.config.expected_fields[0].startswith("saleCalves.")
-                    and region.config.expected_fields[0].endswith(".notes")
-                    else ()
-                ),
-                candidate_type=(
-                    "sale_calf_note_prefix"
-                    if len(region.config.expected_fields) == 1
-                    and region.config.expected_fields[0].startswith("saleCalves.")
-                    and region.config.expected_fields[0].endswith(".notes")
-                    else None
-                ),
                 transcription_format=(
-                    "japanese_era_date_numbers"
-                    if len(region.config.expected_fields) == 1
-                    and region.config.expected_fields[0] == "document.birthDate"
-                    else None
+                    "printed_or_handwritten_number"
+                    if region.config.reading_mode == "number" else None
                 ),
                 printed_label_excluded=bool(
                     region.config.printed_label_text.strip()
@@ -202,10 +189,17 @@ def _extract_document(
                 printed_label_text=region.config.printed_label_text.strip(),
             )
             for index, (region_id, region) in enumerate(crops.items(), start=1)
+            if region.config.sequence_number is None
         ]
     )
     provider = _provider(provider_name, settings)
-    response = asyncio.run(provider.extract(request))
+    response = (
+        asyncio.run(provider.extract(request)) if request.regions else OcrProviderResponse(
+            document=blank_ocr_document(provider="local-numbering", source_regions=[]),
+            provider="local-numbering", model_id=None, prompt_version=None, api_call_count=0,
+        )
+    )
+    apply_sequence_numbers(response.document, regions, crops)
     quality: dict[str, Any] = {
         **normalized.quality.to_dict(),
         **registered.quality.to_dict(),
@@ -229,7 +223,7 @@ def _provider(name: str, settings: Settings) -> OcrProvider:
         return MockOcrProvider()
     if name == "disabled":
         return DisabledOcrProvider()
-    return OpenAIOcrProvider(settings.ocr)
+    return OpenAIOcrProvider(settings.ocr, ApiBudget(Database(settings.database)))
 
 
 def _write_image(path: Path, image: NDArray[np.uint8], *, rgb: bool = True) -> None:

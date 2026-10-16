@@ -1,0 +1,54 @@
+export type AuthSession = {
+  mode: "local" | "cognito"; authenticated: boolean; csrfToken?: string; storageScope?: string;
+};
+let current: AuthSession | null = null;
+let sessionEpoch = 0;
+export function endBrowserSession(): AuthSession {
+  sessionEpoch++;
+  current = { ...current, mode: "cognito", authenticated: false, csrfToken: undefined };
+  window.dispatchEvent(new Event("fuminosuke-auth-required"));
+  return current;
+}
+export async function loadSession(): Promise<AuthSession> {
+  const epoch = sessionEpoch;
+  const response = await fetch("/api/auth/session", { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw new Error("ログイン状態を確認できません。再読み込みしてください。");
+  const next = await response.json() as AuthSession;
+  if (epoch !== sessionEpoch && current) return current;
+  if (current?.storageScope && next.authenticated && current.storageScope !== next.storageScope) {
+    window.location.reload();
+    throw new Error("利用者が変更されました。");
+  }
+  if (current?.authenticated && !next.authenticated) {
+    window.dispatchEvent(new Event("fuminosuke-auth-required"));
+  }
+  current = next.authenticated ? next : { ...next, storageScope: current?.storageScope };
+  return next;
+}
+export function csrfHeaders(): Record<string, string> {
+  return current?.mode === "cognito" && current.csrfToken ? { "X-CSRF-Token": current.csrfToken } : {};
+}
+export async function authenticatedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
+    throw new Error("許可されていない通信先です。");
+  }
+  const headers = new Headers(init?.headers);
+  for (const [key, value] of Object.entries(csrfHeaders())) headers.set(key, value);
+  const response = await fetch(input, { ...init, headers, credentials: "include" });
+  if (response.status === 401 && current?.mode === "cognito") {
+    window.dispatchEvent(new Event("fuminosuke-auth-required"));
+  }
+  return response;
+}
+function scoped(kind: "localStorage" | "sessionStorage"): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
+  const key = (value: string) => current?.mode === "cognito"
+    ? `fuminosuke:${current.storageScope ?? "signed-out"}:${value}` : value;
+  return {
+    getItem: value => window[kind].getItem(key(value)),
+    setItem: (value, data) => window[kind].setItem(key(value), data),
+    removeItem: value => window[kind].removeItem(key(value)),
+  };
+}
+export const privateLocalStorage = scoped("localStorage");
+export const privateSessionStorage = scoped("sessionStorage");

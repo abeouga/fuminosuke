@@ -21,6 +21,7 @@ export function TemplateCandidateSettingsEditor({
   onClose: () => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
 }) {
+  const [revision, setRevision] = useState(version.revision);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [canonicalSize, setCanonicalSize] = useState({ width: version.canonicalWidth, height: version.canonicalHeight });
@@ -48,10 +49,13 @@ export function TemplateCandidateSettingsEditor({
     }
     void Promise.all([
       api.artifacts(version.sourceJobId),
-      api.fieldMappings(version.id),
-      api.templateCandidateSettings(template.id),
-    ]).then(([artifactResponse, mappingResponse, settings]) => {
+      api.authoring(version.id),
+      api.templateCandidateSettings(template.id, version.id),
+    ]).then(([artifactResponse, authoring, settings]) => {
       if (cancelled) return;
+      if (authoring.revision !== settings.resourceRevision) throw new Error("読み込み中に変更されました。再取得してください。");
+      const mappingResponse = authoring.mapping;
+      setRevision(settings.resourceRevision);
       const next = draftsFromSettings(settings);
       setArtifacts(artifactResponse.items);
       setMappings(mappingResponse.mappings.filter((mapping) => mapping.enabled && mapping.mappingType !== "mark"));
@@ -164,6 +168,7 @@ export function TemplateCandidateSettingsEditor({
       const saved = await api.saveTemplateCandidateSettings(
         template.id,
         version.id,
+        revision,
         sets.map((item) => ({
           name: item.name.trim(),
           values: uniqueValues(item.values),
@@ -171,6 +176,7 @@ export function TemplateCandidateSettingsEditor({
           targetPatterns: [...new Set(item.targetPatterns)],
         })),
       );
+      setRevision(saved.resourceRevision);
       const next = draftsFromSettings(saved);
       setSets(next);
       setActiveSetId((current) => next.some((item) => item.id === current) ? current : next[0]?.id ?? null);

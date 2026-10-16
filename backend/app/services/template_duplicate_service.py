@@ -37,6 +37,7 @@ from app.services.template_version_service import (
     remap,
     without_current_qualification,
 )
+from app.storage.immutable_artifact import publish_config
 
 
 def _generic_targets(value: Any, replacements: dict[str, str], reference: bool = False) -> Any:
@@ -151,12 +152,12 @@ class TemplateDuplicateService(TemplateVersionService):
             )
         else:
             LayoutService(self.database, self.storage).verify(version_id)
-            (_, _, mappings, identity, identity_fields, document_name) = (
+            (_, _, mappings, identity_fields, document_name) = (
                 TemplateManagementService(self.database, self.storage)
                 .get_mapping_configuration(version_id)
             )
             valid, warnings = _mapping_validation(
-                mappings, identity, identity_fields, document_name,
+                mappings, identity_fields, document_name,
                 require_identity=True,
             )
             if not valid:
@@ -313,8 +314,8 @@ class TemplateDuplicateService(TemplateVersionService):
                         if location.record else None,
                     )]
                     mapping_replacements[location.mapping_key] = new_key
-                    generic_targets[f"customFields.{location.mapping_key}"] = (
-                        f"customFields.{new_key}"
+                    generic_targets[f"fields.{location.mapping_key}"] = (
+                        f"fields.{new_key}"
                     )
                 definition_copies[row.id] = copied_definition.model_dump(
                     mode="json", by_alias=True,
@@ -443,6 +444,8 @@ class TemplateDuplicateService(TemplateVersionService):
                 "editedMaskSha256", "editedMaskArtifactId",
             ):
                 quality.pop(key, None)
+            config_text = yaml.safe_dump(config_data, allow_unicode=True)
+            config_path = publish_config(self.storage, config_text)
             version = TemplateVersion(
                 id=new_id, template_id=template.id, version_number=1,
                 mode=source.mode, status="DRAFT",
@@ -456,21 +459,6 @@ class TemplateDuplicateService(TemplateVersionService):
             )
             session.add(version)
             session.flush()
-            if self.storage.exists(config_path):
-                raise self._conflict(
-                    "TEMPLATE_ARTIFACT_DESTINATION_COLLISION", "複製先設定が既にあります。"
-                )
-            config_text = yaml.safe_dump(config_data, allow_unicode=True)
-            created_paths.append(config_path)
-            stored = self.storage.write_text(config_path, config_text)
-            if (
-                Path(stored).as_posix() != config_path
-                or self.storage.read_bytes(config_path) != config_text.encode("utf-8")
-            ):
-                raise self._conflict(
-                    "TEMPLATE_ARTIFACT_COPY_CHANGED", "複製先設定を再検証できません。"
-                )
-
             for key in identities(session, source, config.field_mappings):
                 mapping_id, separator, subfield_id = key.partition(":")
                 new_key = mapping_replacements[mapping_id]

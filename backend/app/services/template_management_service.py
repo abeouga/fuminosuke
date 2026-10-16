@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Literal
+from uuid import uuid4
 
 import cv2
 import numpy as np
@@ -9,7 +11,8 @@ import yaml
 from sqlalchemy import func, select
 
 from app.core.errors import AppError
-from app.db.models import LedgerDocument
+from app.db.models import JobArtifact, ProcessingJob, TemplateVersion
+from app.db.mutation import require_revision
 from app.db.session import Database
 from app.domain.field_targets import is_supported_field_path
 from app.domain.template_config import (
@@ -20,7 +23,6 @@ from app.domain.template_config import (
     build_blank_template_config,
     parse_template_config,
 )
-from app.domain.template_fields import parse_legacy_spreadsheet_metadata
 from app.image_processing.artifacts import ArtifactWriter, encode_png
 from app.image_processing.image_loader import verified_image_size
 from app.repositories.job_repository import JobRepository
@@ -33,6 +35,7 @@ from app.services.template_mutation import (
     require_isolated_structure,
     template_mutation_lock,
 )
+from app.storage.immutable_artifact import publish_bytes
 from app.storage.local_storage import LocalStorageService
 
 
@@ -50,7 +53,7 @@ class TemplateManagementService:
         self._artifact_writer = ArtifactWriter(database, storage)
 
     def get_field_mappings(self, version_id: str) -> tuple[int, int, list[FieldMappingConfig]]:
-        width, height, mappings, _, _, _ = self.get_mapping_configuration(version_id)
+        width, height, mappings, _, _ = self.get_mapping_configuration(version_id)
         return width, height, mappings
 
     def get_mapping_configuration(
@@ -59,7 +62,6 @@ class TemplateManagementService:
         int,
         int,
         list[FieldMappingConfig],
-        DocumentIdentityConfig | None,
         list[DocumentIdentityConfig],
         DocumentNameConfig | None,
     ]:
@@ -79,38 +81,16 @@ class TemplateManagementService:
             config.canonical_width,
             config.canonical_height,
             config.field_mappings,
-            config.document_identity,
             config.effective_document_identity_fields(),
             config.document_name,
         )
 
-    def save_field_mappings(
-        self,
-        version_id: str,
-        mappings: list[FieldMappingConfig],
-        *,
-        document_identity: DocumentIdentityConfig | None | _Unchanged = _UNCHANGED,
+    @staticmethod
+    def updated_config(
+        version, config: TemplateConfig, mappings: list[FieldMappingConfig], *,
         document_identity_fields: list[DocumentIdentityConfig] | _Unchanged = _UNCHANGED,
         document_name: DocumentNameConfig | None | _Unchanged = _UNCHANGED,
-    ) -> list[FieldMappingConfig]:
-        with template_mutation_lock():
-            return self._save_field_mappings_locked(
-                version_id,
-                mappings,
-                document_identity=document_identity,
-                document_identity_fields=document_identity_fields,
-                document_name=document_name,
-            )
-
-    def _save_field_mappings_locked(
-        self,
-        version_id: str,
-        mappings: list[FieldMappingConfig],
-        *,
-        document_identity: DocumentIdentityConfig | None | _Unchanged,
-        document_identity_fields: list[DocumentIdentityConfig] | _Unchanged,
-        document_name: DocumentNameConfig | None | _Unchanged,
-    ) -> list[FieldMappingConfig]:
+    ) -> TemplateConfig:
         unknown = [
             mapping.target_path
             for mapping in mappings
@@ -123,53 +103,16 @@ class TemplateManagementService:
                 title="Invalid field mapping",
                 detail=f"未対応の保存先です: {unknown[0]}",
             )
-        with self._database.session() as session:
-            begin_immediate(session)
-            version = TemplateRepository(session).get_version(version_id)
-            if version is None:
-                raise self._template_not_found()
-            require_draft(version)
-            require_isolated_ids(version, [mapping.mapping_id for mapping in mappings])
-            require_isolated_structure(
-                version, [mapping.model_dump(mode="json", by_alias=True) for mapping in mappings]
-            )
-            config_path = version.config_relative_path
-            config_context = (
-                version.template_id,
-                version.version_number,
-                version.canonical_width,
-                version.canonical_height,
-            )
-            version.quality_json = invalidated_layout_quality(
-                version.quality_json,
-                bump_input_revision=True,
-            )
-            session.commit()
-        config = self._load_version_config(config_path, *config_context)
-        selected_identity: DocumentIdentityConfig | None = (
-            config.document_identity
-            if isinstance(document_identity, _Unchanged)
-            else document_identity
+        require_draft(version)
+        require_isolated_ids(version, [mapping.mapping_id for mapping in mappings])
+        require_isolated_structure(
+            version, [mapping.model_dump(mode="json", by_alias=True) for mapping in mappings]
         )
         selected_identity_fields = (
             list(config.document_identity_fields)
             if isinstance(document_identity_fields, _Unchanged)
             else list(document_identity_fields)
         )
-        if (
-            not isinstance(document_identity, _Unchanged)
-            and isinstance(document_identity_fields, _Unchanged)
-        ):
-            selected_identity_fields = [document_identity] if document_identity is not None else []
-        if not isinstance(document_identity_fields, _Unchanged):
-            selected_identity = next(
-                (
-                    field
-                    for field in selected_identity_fields
-                    if field.match_role == "primary"
-                ),
-                None,
-            )
         selected_document_name = (
             config.document_name if isinstance(document_name, _Unchanged) else document_name
         )
@@ -190,7 +133,6 @@ class TemplateManagementService:
         if invalid_identity_field is not None:
             if isinstance(document_identity_fields, _Unchanged):
                 selected_identity_fields = []
-                selected_identity = None
             else:
                 raise AppError(
                     status=422,
@@ -198,70 +140,16 @@ class TemplateManagementService:
                     title="Invalid document identity field",
                     detail="書類を見分ける項目は、保存対象の文字欄から選択してください。",
                 )
-        if selected_identity is not None:
-            selected_mapping = next(
-                (
-                    mapping
-                    for mapping in mappings
-                    if mapping.mapping_id == selected_identity.mapping_id
-                    and mapping.enabled
-                    and mapping.mapping_type == "text"
-                ),
-                None,
-            )
-            if (
-                selected_mapping is None
-                or selected_mapping.target_path != selected_identity.target_path
-            ):
-                if isinstance(document_identity, _Unchanged):
-                    selected_identity = None
-                    selected_identity_fields = []
-                else:
-                    raise AppError(
-                        status=422,
-                        code="INVALID_DOCUMENT_IDENTITY",
-                        title="Invalid document identity field",
-                        detail="書類を見分ける項目は、保存対象の文字欄から選択してください。",
-                    )
         updated = config.model_copy(
             update={
                 "field_mappings": mappings,
-                "document_identity": selected_identity,
                 "document_identity_fields": selected_identity_fields,
                 "document_name": selected_document_name,
             },
             deep=True,
         )
         updated = updated.__class__.model_validate(updated.model_dump(mode="json", by_alias=True))
-        payload = yaml.safe_dump(
-            updated.model_dump(mode="json", by_alias=True),
-            allow_unicode=True,
-            sort_keys=False,
-        )
-        self._storage.write_text(config_path, payload)
-        with self._database.session() as session:
-            begin_immediate(session)
-            version = TemplateRepository(session).get_version(version_id)
-            if version is None:
-                raise RuntimeError("Template version disappeared")
-            from app.services.template_field_identity import reconcile
-
-            reconcile(session, version, config.field_mappings, mappings)
-            version.quality_json = {
-                **invalidated_layout_quality(
-                    version.quality_json,
-                    bump_input_revision=False,
-                ),
-                "fieldMappingCount": len(mappings),
-                "mappingMode": "DETERMINISTIC",
-                "documentIdentityMappingId": (
-                    selected_identity.mapping_id if selected_identity is not None else None
-                ),
-                "documentIdentityFieldCount": len(selected_identity_fields),
-                "documentNameConfigured": selected_document_name is not None,
-            }
-            session.commit()
-        return mappings
+        return updated
 
     def _load_version_config(
         self,
@@ -272,20 +160,7 @@ class TemplateManagementService:
         canonical_height: int,
     ) -> TemplateConfig:
         content = self._storage.read_bytes(config_path).decode("utf-8")
-        try:
-            return parse_template_config(content)
-        except (ValueError, yaml.YAMLError):
-            legacy = parse_legacy_spreadsheet_metadata(content)
-            if legacy is None:
-                raise
-            name, _ = legacy
-            return build_blank_template_config(
-                template_id=template_id,
-                template_version=template_version,
-                name=name,
-                canonical_width=canonical_width,
-                canonical_height=canonical_height,
-            )
+        return parse_template_config(content)
 
     def save_edited_mask(self, version_id: str, content: bytes) -> str:
         with template_mutation_lock():
@@ -299,28 +174,59 @@ class TemplateManagementService:
             if template is None:
                 raise self._template_not_found()
 
-            template_document_count = session.scalar(
-                select(func.count())
-                .select_from(LedgerDocument)
-                .where(LedgerDocument.template_id == template_id)
-            )
-            if template_document_count:
-                # Historical ledger records still need their template and
-                # version metadata. Hide an in-use template from future
-                # selection instead of cascading deletion into those records.
-                template.archived_at = datetime.now(UTC)
+
+            if self._database.before_delete is not None:
+                self._database.before_delete("template", template_id)
+            versions = repository.list_versions(template_id)
+            referenced = session.scalar(select(ProcessingJob.id).where(
+                ProcessingJob.template_version_id.in_(select(TemplateVersion.id).where(
+                    TemplateVersion.template_id == template_id,
+                )),
+            ).limit(1))
+            if referenced is not None:
+                # Accepted jobs retain their version identity and immutable output binding.
+                template.active_version_id, template.archived_at = None, datetime.now(UTC)
+                for version in versions:
+                    version.status = "ARCHIVED"
                 session.commit()
                 return "archived"
-
             template.active_version_id = None
-            for version in repository.list_versions(template_id):
+            session.flush()
+            for version in versions:
                 session.delete(version)
+            session.flush()
             session.delete(template)
             session.commit()
         relative_path = f"templates/{template_id}"
         if self._storage.exists(relative_path):
             self._storage.delete_tree(relative_path)
         return "deleted"
+
+    def rename_template(self, template_id: str, name: str) -> tuple[str, str]:
+        cleaned_name = name.strip()
+        if not cleaned_name or len(cleaned_name) > 200:
+            raise AppError(
+                status=422,
+                code="VALIDATION_FAILED",
+                title="Invalid template name",
+                detail="テンプレート名は1〜200文字で指定してください。",
+            )
+        with template_mutation_lock(), self._database.session() as session:
+            begin_immediate(session)
+            repository = TemplateRepository(session)
+            template = repository.get_template(template_id)
+            if template is None or template.archived_at is not None:
+                raise self._template_not_found()
+            if repository.name_exists(cleaned_name, exclude_template_id=template_id):
+                raise AppError(
+                    status=409,
+                    code="TEMPLATE_NAME_CONFLICT",
+                    title="Template name already exists",
+                    detail="同じ名前のテンプレートが既にあります。区別できる名前を指定してください。",
+                )
+            template.name = cleaned_name
+            session.commit()
+        return template_id, cleaned_name
 
     def _save_edited_mask_locked(self, version_id: str, content: bytes) -> str:
         if not content.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -348,10 +254,9 @@ class TemplateManagementService:
             source_job = JobRepository(session).get(version.source_job_id or "")
             if source_job is None:
                 raise self._invalid_mask("元ジョブが見つかりません。")
+            expected_revision = version.revision
             source_job_id = source_job.id
             attempt = source_job.attempt_number
-            template_id = version.template_id
-            version_number = version.version_number
         decoded = cv2.imdecode(
             np.frombuffer(content, dtype=np.uint8),
             cv2.IMREAD_GRAYSCALE,
@@ -360,46 +265,28 @@ class TemplateManagementService:
             raise self._invalid_mask("マスク画像を読み込めません。")
         normalized = (decoded >= 128).astype(np.uint8) * 255
         normalized_content = encode_png(normalized, rgb=False)
-        with self._database.session() as session:
-            begin_immediate(session)
+        path = publish_bytes(self._storage, "templates/masks", normalized_content, ".png")
+        with self._database.transaction() as session:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
-                raise RuntimeError("Template version disappeared")
-            version.quality_json = invalidated_layout_quality(
-                version.quality_json,
-                bump_input_revision=True,
+                raise self._template_not_found()
+            require_draft(version)
+            require_revision(version, expected_revision)
+            artifact = JobArtifact(
+                id=str(uuid4()), job_id=source_job_id, attempt_number=attempt,
+                artifact_name=f"handwritingMaskEdited~{uuid4().hex}", media_type="image/png",
+                relative_path=path, sha256=hashlib.sha256(normalized_content).hexdigest(),
+                width=width, height=height,
             )
-            session.commit()
-        artifact = self._artifact_writer.image(
-            job_id=source_job_id,
-            attempt_number=attempt,
-            name="handwritingMaskEdited",
-            file_name="handwriting_mask_edited.png",
-            image=normalized,
-            rgb=False,
-            replace=True,
-        )
-        self._storage.write_bytes(
-            f"templates/{template_id}/versions/{version_number}/handwriting_mask_edited.png",
-            normalized_content,
-        )
-        with self._database.session() as session:
-            begin_immediate(session)
-            version = TemplateRepository(session).get_version(version_id)
-            if version is None:
-                raise RuntimeError("Template version disappeared")
+            session.add(artifact)
+            # The artifact row and owning version become visible together.
+            session.flush()
             version.mask_artifact_id = artifact.id
             version.quality_json = {
-                **invalidated_layout_quality(
-                    version.quality_json,
-                    bump_input_revision=False,
-                ),
-                "editedMaskArtifactId": artifact.id,
-                "editedMaskSha256": artifact.sha256,
-                "editedMaskApplied": False,
-                "maskSource": "USER_EDITED",
+                **invalidated_layout_quality(version.quality_json, bump_input_revision=True),
+                "editedMaskArtifactId": artifact.id, "editedMaskSha256": artifact.sha256,
+                "editedMaskApplied": False, "maskSource": "USER_EDITED",
             }
-            session.commit()
         return artifact.artifact_name
 
     @staticmethod

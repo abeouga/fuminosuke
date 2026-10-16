@@ -33,7 +33,7 @@ def test_cancelled_persisted_template_version_is_compensated(
             )
             template = Template(
                 name="cancelled-template",
-                document_type="cow-breeding-ledger",
+                document_type="generic-document",
             )
             session.add_all([job, template])
             session.flush()
@@ -106,7 +106,7 @@ def test_failed_reprocess_cleanup_keeps_the_source_draft(
             )
             template = Template(
                 name="reprocess-source",
-                document_type="cow-breeding-ledger",
+                document_type="generic-document",
             )
             session.add_all([job, template])
             session.flush()

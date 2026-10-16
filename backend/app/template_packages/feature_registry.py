@@ -8,8 +8,8 @@ APPLICATION_VERSION = "0.1.0"
 
 
 class TemplatePackageFeature:
-    CORE = "template-package-core-v1"
-    FIELD_MAPPINGS = "field-mappings-v1"
+    CORE = "template-package-core-v2"
+    FIELD_MAPPINGS = "field-mappings-v2"
     LAYOUT = "layout-v3"
     COMPOSITE_DOCUMENT_DETECTION = "composite-document-detection-v2"
     DOCUMENT_NAME = "document-name-v1"
@@ -18,7 +18,7 @@ class TemplatePackageFeature:
     MARK_RECOGNITION = "mark-recognition-v1"
     SPREADSHEET_TEMPLATE = "spreadsheet-template-v1"
     XLSX_LAYOUT = "xlsx-layout-v1"
-    GOOGLE_OUTPUT_LAYOUT = "google-output-layout-v1"
+    LOCAL_OUTPUT_LAYOUT = "local-output-layout-v2"
 
 
 SUPPORTED_TEMPLATE_PACKAGE_FEATURES = frozenset(
@@ -33,7 +33,7 @@ SUPPORTED_TEMPLATE_PACKAGE_FEATURES = frozenset(
         TemplatePackageFeature.MARK_RECOGNITION,
         TemplatePackageFeature.SPREADSHEET_TEMPLATE,
         TemplatePackageFeature.XLSX_LAYOUT,
-        TemplatePackageFeature.GOOGLE_OUTPUT_LAYOUT,
+        TemplatePackageFeature.LOCAL_OUTPUT_LAYOUT,
     }
 )
 

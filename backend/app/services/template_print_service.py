@@ -19,7 +19,7 @@ from app.services.print_workbook import workbook_copy
 
 class TemplatePrintService(PrintLayoutService):
     def export(self, version_id: str, format: Literal["xlsx", "pdf"], expected: str, *,
-               pdf_renderer: Literal["appcontainer", "wsl"] = "appcontainer",
+               pdf_renderer: Literal["appcontainer", "wsl", "linux"] = "appcontainer",
                wsl_distribution: str = "Ubuntu-22.04") -> bytes:
         try:
             with self.database.session() as session:
@@ -80,8 +80,13 @@ class TemplatePrintService(PrintLayoutService):
                 result = cached
             elif format == "pdf":
                 workbook = workbook_copy(content, plan)
-                result = (render_wsl_print_pdf(workbook, plan, wsl_distribution)
-                          if pdf_renderer == "wsl" else render_print_pdf(workbook, plan))
+                if pdf_renderer == "linux":
+                    from app.services.print_pdf import render_linux_print_pdf
+
+                    result = render_linux_print_pdf(workbook, plan)
+                else:
+                    result = (render_wsl_print_pdf(workbook, plan, wsl_distribution)
+                              if pdf_renderer == "wsl" else render_print_pdf(workbook, plan))
             else:
                 result = workbook_copy(content, plan)
             # Long-running conversion must not return a stale draft or changed source.

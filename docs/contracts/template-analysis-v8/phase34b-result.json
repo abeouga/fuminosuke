@@ -1,0 +1,268 @@
+{
+  "version": "template-analysis.phase34b-result.v1",
+  "phase": "34-B",
+  "date": "2026-10-12",
+  "status": "isolated_implementation_complete_independent_review_pending",
+  "target": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy",
+  "evidenceRoot": "D:\\llm-ocr-archive\\template-ai\\20261012-phase34b",
+  "assignment": {
+    "model": "GPT-6.1 Sol",
+    "reasoningEffort": "high",
+    "currentChatModelVerified": false
+  },
+  "candidatePolicy": "template-analysis.factor-plan.v7.prototype2",
+  "budget": {
+    "used": 417,
+    "limit": 496,
+    "remaining": 79,
+    "usedThisPhase": 0,
+    "reservedThisPhase": 0
+  },
+  "productModified": false,
+  "productAdopted": false,
+  "liveComparisonEligible": false,
+  "nextPhaseStarted": false,
+  "runtimeModel": "gpt-6-luna",
+  "answerVersion": "template-analysis.semantic-answer.v8",
+  "changedExternalFiles": [
+    "audit_state.py",
+    "bootstrap.py",
+    "build_datasets.py",
+    "build_repaired_datasets.py",
+    "dataset_factory.py",
+    "experiment_contract.py",
+    "experiment_runner.py",
+    "experiment_session.py",
+    "factor_plan.py",
+    "new_boundary_acceptance.py",
+    "oracle_evaluation.py",
+    "pair_candidates.py",
+    "preflight.py",
+    "prepare_dataset_gold.py",
+    "repair_acceptance.py",
+    "run_execution.py",
+    "run_guard.py",
+    "run_timing.py",
+    "run_transport.py",
+    "supplementary_acceptance.py",
+    "v8_boundary_acceptance.py"
+  ],
+  "protectedByteIdentical": [
+    "evidence_context.py",
+    "selected_adapter.py",
+    "semantic_view.py",
+    "branch_schema.py",
+    "candidate_effects.py",
+    "decision_acceptance.py",
+    "experiment_config.py",
+    "image_transport_pack.py",
+    "run_image_evidence.py",
+    "task-prompt.txt"
+  ],
+  "sourceFilesLocked": 409,
+  "verification": {
+    "apiCalls": 0,
+    "networkAllowed": false,
+    "existingBoundaryChecks": 335,
+    "newPairChecks": 23,
+    "newContractChecks": 41,
+    "independentScenarioRegressions": 5,
+    "originalDatasetBefore": 27,
+    "originalDatasetAfter": 30,
+    "originalDatasetTotal": 30,
+    "newDatasetManualOrHeldChecks": 33,
+    "calibration": {
+      "count": 12,
+      "positive": 6,
+      "negative": 6,
+      "families": 6,
+      "decisions": 12
+    },
+    "evaluation": {
+      "count": 18,
+      "positive": 10,
+      "negative": 8,
+      "negativeSendable": 6,
+      "negativeDecisions": 6,
+      "negativeLocalHeld": 2
+    },
+    "repairedRegressionImages": 3,
+    "imagesMeasured": 33,
+    "requestsConstructed": 60,
+    "historicalImplementationByteIdenticalFiles": 406,
+    "historicalRawReplayAccepted": true,
+    "providerAccuracyMeasured": false
+  },
+  "performance": {
+    "apiCalls": 0,
+    "configuration": {
+      "arm": "Z",
+      "context": true,
+      "policy": "P3"
+    },
+    "freshProcesses": 3,
+    "gateMs": 500,
+    "passed": true,
+    "cases": [
+      {
+        "case": "T1",
+        "samplesMs": [
+          322.6709000009578,
+          311.4062999957241,
+          306.46329998853616
+        ],
+        "medianMs": 311.4062999957241,
+        "passed": true
+      },
+      {
+        "case": "T2",
+        "samplesMs": [
+          454.9929999921005,
+          452.3541000089608,
+          451.07179999467917
+        ],
+        "medianMs": 452.3541000089608,
+        "passed": true
+      },
+      {
+        "case": "T3",
+        "samplesMs": [
+          228.30319998320192,
+          221.90340000088327,
+          227.62500002863817
+        ],
+        "medianMs": 227.62500002863817,
+        "passed": true
+      },
+      {
+        "case": "H1",
+        "samplesMs": [
+          244.23729997943155,
+          235.00409998814575,
+          231.95260000647977
+        ],
+        "medianMs": 235.00409998814575,
+        "passed": true
+      },
+      {
+        "case": "H2",
+        "samplesMs": [
+          243.32440001307987,
+          242.72090001613833,
+          239.7190999763552
+        ],
+        "medianMs": 242.72090001613833,
+        "passed": true
+      }
+    ],
+    "includes": [
+      "input materialization",
+      "frozen candidate plan",
+      "view/schema/image pack",
+      "wire encoding",
+      "oracle overhead",
+      "validation/compile/manual",
+      "trial-bound immutable input checks",
+      "durable attempt reservation and publication checks"
+    ],
+    "excludes": [
+      "Python imports",
+      "gold loading",
+      "real ledger",
+      "HTTP/model",
+      "evidence persistence",
+      "complete Run orchestration"
+    ],
+    "providerLatencyMeasured": false,
+    "sourceFilesVerified": 409
+  },
+  "independentAcceptanceReaderChecks": 6,
+  "acceptance": [
+    {
+      "id": "A1",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A2",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A3",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A4",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending"
+    },
+    {
+      "id": "A5",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending"
+    },
+    {
+      "id": "A6",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A7",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A8",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A9",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending"
+    },
+    {
+      "id": "A10",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A11",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    },
+    {
+      "id": "A12",
+      "implementationCheck": "passed",
+      "independentAcceptance": "pending_phase34c"
+    }
+  ],
+  "scopeNotes": [
+    "One-time cohort content admission and immutable owned input bytes; per-trial ownership checks, not all-input rehashing.",
+    "StateSource JSON round-trip clone replaces deep-copy traversal on each read. It reads current state every time, returns fresh nested data, shares only immutable image bytes, and preserves mutation/epoch/commit checks.",
+    "InputSelection/PolicySelection require exact result bindings and hashes before issuing later schedules. Mock prerequisites used by timing never grant live authority.",
+    "A fixed Phase34-C acceptance registry must match the exact sender bytes, implementation lock and scoring manifest and be included in the independent review seal. No registry is installed.",
+    "Durable trial attempts start before input creation, including local-held trials. Uncertain, duplicate, concurrent and restarted attempts are never retried or refunded.",
+    "Initial two-row synthetic form intent was incompatible with the unchanged three-row grid contract. Entire initial authored revision retired to development before cohort r2 freeze; no final evaluation input was used to tune candidate semantics.",
+    "Known five control request bytes remain equal to the historical requests after retaining independent-pair label order; old raw receipts are replayed only in the old implementation copy."
+  ],
+  "outstanding": [
+    "Phase34-C independent code/gold/image/source-family review",
+    "Live model accuracy and actual response latency",
+    "At least four qualified real source families for product adoption"
+  ],
+  "next": {
+    "phase": "34-C",
+    "model": "Astra",
+    "reasoningEffort": "xhigh",
+    "apiCap": 0
+  },
+  "futurePhaseCaps": {
+    "35": 18,
+    "36": 24,
+    "37": 28
+  },
+  "unallocatedApiBudget": 9
+}

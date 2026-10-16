@@ -111,6 +111,7 @@ export type PrintPlan = Omit<PrintRequest, "baseRevision" | "breakAfterRows" | "
   printFiles?: { renderKey: string };
 };
 export type PrintState = {
+  resourceRevision: number;
   pageHeadings?: { cellId: string; text: string; pageRange: string }[];
   layout?: import("./types").LayoutDefinition;
   revision: string; editable: boolean; saved: PrintPlan | null;
@@ -126,9 +127,11 @@ export type PrintState = {
   };
 };
 
-export function formalReferencePreparationReady(plan: PrintPlan | null | undefined): boolean {
-  return plan?.geometryModelVersion === "wsl-calc-print-grid-v1"
-    && plan.rendererVersion === "wsl-print-reference-v1"
+export function printReferencePreparationReady(plan: PrintPlan | null | undefined): boolean {
+  return ((plan?.geometryModelVersion === "wsl-calc-print-grid-v1"
+    && plan.rendererVersion === "wsl-print-reference-v1")
+    || (plan?.geometryModelVersion === "linux-fods-physical-length-v1"
+    && plan.rendererVersion === "linux-print-reference-v1"))
     && typeof plan.printFiles?.renderKey === "string"
     && plan.printFiles.renderKey.length > 0;
 }

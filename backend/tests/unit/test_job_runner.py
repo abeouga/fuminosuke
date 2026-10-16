@@ -212,7 +212,12 @@ def test_provider_error_after_cancel_request_finishes_as_cancelled(
             handler=lambda _job_id: None,
             worker_count=1,
         )
-        runner._fail(job_id, "JOB_CANCELLED", "読み取りは取り消されました。")
+        runner._fail(
+            job_id,
+            "JOB_CANCELLED",
+            "読み取りは取り消されました。",
+            stack_trace="synthetic cancellation trace",
+        )
 
         with database.session() as session:
             cancelled = JobRepository(session).get(job_id)

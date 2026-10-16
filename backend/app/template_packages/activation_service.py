@@ -18,6 +18,7 @@ from app.db.models import (
     TemplatePackageInstallation,
     TemplateVersion,
 )
+from app.db.mutation import require_revision, touch_template_version
 from app.db.session import Database
 from app.domain.enums import JobStatus, TemplateVersionStatus
 from app.domain.template_candidates import normalize_candidate_target, normalize_candidate_text
@@ -48,6 +49,7 @@ class TemplatePackageActivationService:
         installation_id: str,
         *,
         expected_active_version_id: str | None,
+        expected_revision: int,
         owner_key: str,
         failure_injector: Callable[[str], None] | None = None,
     ) -> TemplatePackageActivationResult:
@@ -67,6 +69,7 @@ class TemplatePackageActivationService:
                         title="Template package installation is damaged",
                         detail="取り込み済みtemplateのlocal mappingが壊れています。",
                     )
+                require_revision(version, expected_revision)
                 if version.template_id != template.id:
                     raise AppError(
                         status=409,
@@ -137,6 +140,10 @@ class TemplatePackageActivationService:
 
                 if not already_active:
                     self._replace_candidates(session, template.id, candidate_plan)
+                    for affected in session.scalars(select(TemplateVersion).where(
+                        TemplateVersion.template_id == template.id,
+                    )):
+                        touch_template_version(affected)
                     if failure_injector is not None:
                         failure_injector("after_candidate_materialization")
                 self._materialize_output_layout(

@@ -58,13 +58,22 @@ def page_config(config: TemplateConfig, page: dict[str, Any]) -> TemplateConfig:
             if (
                 mapping is None
                 or mapping.target_path != binding["targetPath"]
-                or mapping.mapping_type != "text"
+                or (mapping.mapping_type != "text"
+                    and mapping.mark_recognition_mode != "checklist")
                 or mapping.composite_subfields
             ):
                 fail(
-                    "ページ別の複合項目・マーク設定は未対応です。", "PRINT_PAGE_CONFIG_UNSUPPORTED"
+                    "ページ別では文字・番号・チェックリストに対応しています。複合項目とその他のマーク設定は未対応です。", "PRINT_PAGE_CONFIG_UNSUPPORTED"
                 )
-            fields.append(mapping.model_copy(update=field["rectangle"], deep=True))
+            page_mapping = mapping.model_copy(update=field["rectangle"], deep=True)
+            if mapping.mark_recognition_mode == "checklist":
+                # Checklist OCR reads the validated page crop as a whole. Option
+                # rectangles are metadata, not separate image-difference regions.
+                page_mapping.mark_options = [option.model_copy(update={
+                    "x": 0, "y": 0,
+                    "width": page_mapping.width, "height": page_mapping.height,
+                }, deep=True) for option in mapping.mark_options]
+            fields.append(page_mapping)
     if not fields:
         fail("各ページに読み取り対象の設定が必要です。", "PRINT_PAGE_FIELDS_REQUIRED")
     raw = config.model_dump(mode="json", by_alias=True)
@@ -74,7 +83,6 @@ def page_config(config: TemplateConfig, page: dict[str, Any]) -> TemplateConfig:
         regions=[],
         fieldMappings=[m.model_dump(mode="json", by_alias=True) for m in fields],
         marks=[],
-        documentIdentity=None,
         documentIdentityFields=[],
         documentName=None,
     )
@@ -401,14 +409,13 @@ class JobPageService:
             "jobPagesSha256"
         ):
             fail("受付ページsnapshotの整合性を確認できません。")
-        if bundle.get("schemaVersion") not in {1, 2}:
+        if bundle.get("schemaVersion") != 2:
             fail("未対応の受付ページsnapshotです。")
         if bundle["executionConfig"] != execution_config(self.settings):
             fail("受付時の実行設定と現在の設定が異なります。", "PAGE_EXECUTION_CONFIG_CHANGED")
         if self.settings.ocr.provider == "openai":
             accepted_transcription_prompt(job.config_snapshot_json)
-        if bundle.get("schemaVersion") == 2:
-            load_document_snapshot(job, self.storage)
+        load_document_snapshot(job, self.storage)
         inputs = {i.id: i for i in JobRepository(session).list_inputs(job.id)}
         pages = bundle["pages"]
         if (

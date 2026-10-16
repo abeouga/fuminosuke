@@ -1,65 +1,38 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ExcelExportActions } from "./ExcelExportActions";
 
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-test("copies the confirmed table and offers a per-document xlsx download", async () => {
-  const writeText = vi.fn(async () => undefined);
-  vi.stubGlobal("navigator", { clipboard: { writeText } });
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-    fileName: "繁殖台帳.xlsx",
-    sheetName: "読み取り結果",
-    maxColumns: 1,
-    rows: [{
-      kind: "data",
-      cells: [{ value: "よつば", display: "よつば", kind: "text" }],
-    }],
-  }), { status: 200 })));
-
-  render(<ExcelExportActions jobId="job-1" />);
-  expect(screen.getByRole("link", { name: ".xlsxを保存" })).toHaveAttribute(
-    "href",
-    "/api/v1/ocr-jobs/job-1/export?format=xlsx",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Excelへコピー" }));
-
-  expect(await screen.findByText("罫線付きでコピーしました。Excelで貼り付けできます。")).toBeInTheDocument();
-  expect(writeText).toHaveBeenCalledWith("よつば");
-});
-
-test("renames the Drive spreadsheet after the output name is edited", async () => {
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-    enabled: true,
-    status: "synced",
-    spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-1/edit",
-    fileName: "面接カード_阿部桜雅",
-    lastError: null,
-  }), { status: 200 }));
+test.each([undefined, "確定した書類名"])("keeps download failures in the review and retries with document name %s", async (documentName) => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "XLSXを生成できませんでした。" }), { status: 500 }))
+    .mockResolvedValueOnce(new Response(new Blob(["xlsx"]), { headers: {
+      "Content-Disposition": "attachment; filename*=utf-8''%E7%A2%BA%E8%AA%8D%E6%9B%B8%E9%A1%9E.xlsx",
+    } }));
   vi.stubGlobal("fetch", fetchMock);
-
-  render(
-    <ExcelExportActions
-      jobId="job-1"
-      driveFileName="面接カード_入力済み"
-    />,
-  );
-  fireEvent.change(screen.getByRole("textbox", { name: "書類名" }), {
-    target: { value: "面接カード_阿部桜雅.xlsx" },
+  const createObjectURL = vi.fn(() => "blob:xlsx");
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = createObjectURL;
+    static revokeObjectURL = vi.fn();
   });
-
-  expect(await screen.findByText("Drive上のファイル名へ反映しました。", {}, { timeout: 2000 }))
-    .toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/api/v1/ocr-jobs/job-1/spreadsheet-name",
-    expect.objectContaining({
-      method: "PUT",
-      body: JSON.stringify({ fileName: "面接カード_阿部桜雅.xlsx" }),
-    }),
-  );
-  expect(screen.getByRole("textbox", { name: "書類名" }))
-    .toHaveValue("面接カード_阿部桜雅");
+  const downloads: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+  render(<ExcelExportActions jobId="job-1" documentName={documentName} />);
+  expect(fetchMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: ".xlsxを保存" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("XLSXを生成できませんでした。");
+  expect(createObjectURL).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: ".xlsxを保存" }));
+  await waitFor(() => expect(downloads).toEqual([documentName ? `${documentName}.xlsx` : "確認書類.xlsx"]));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  const [url, options] = fetchMock.mock.calls[1];
+  expect(url).toBe("/api/v1/ocr-jobs/job-1/export?format=xlsx");
+  const headers: Record<string, string> = {};
+  new Headers(options.headers).forEach((value, key) => { headers[key] = value; });
+  expect({ ...options, headers }).toEqual({ credentials: "include", headers: {} });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Excelへコピー" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Drive|Google|ライブラリ/)).not.toBeInTheDocument();
 });
