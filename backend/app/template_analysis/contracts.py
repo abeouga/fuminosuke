@@ -95,7 +95,7 @@ class AnalysisCreate(Contract):
     request_id: Id
     binding: Binding
     draft: ManualDraft
-    task: Literal["full", "roles", "structure"]
+    task: Literal["full", "roles", "structure", "draft"]
     page_scope: PageScope
     selected_table_id: str | None = Field(max_length=128)
     release_role_protection: list[Handle] = Field(default_factory=list, max_length=1000)

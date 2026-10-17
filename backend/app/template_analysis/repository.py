@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.errors import AppError
 from app.db.models import utc_now
 from app.editing.errors import reject
 from app.editing.infrastructure.sessions import aware
@@ -89,10 +90,18 @@ class AnalysisRepository:
         )
 
     def result(self, session: Any, run: AnalysisRun) -> dict[str, Any]:
-        check_visual_contract(run.snapshot_json)
+        # A finished run from a retired contract stays readable so a client can
+        # settle its journal, but carries no proposal that could be applied.
+        retired = False
+        try:
+            check_visual_contract(run.snapshot_json)
+        except AppError:
+            if run.state in ACTIVE | READABLE:
+                raise
+            retired = True
         pages = self.pages(session, run)
         snapshot = run.snapshot_json
-        proposal = copy.deepcopy(live_proposal(pages, run.snapshot_digest))
+        proposal = None if retired else copy.deepcopy(live_proposal(pages, run.snapshot_digest))
         if proposal:
             proposal["units"] = public_units(proposal["units"])
         return {
@@ -119,7 +128,7 @@ class AnalysisRepository:
                         **copy.deepcopy(p.proposal_json),
                         "units": public_units(p.proposal_json["units"]),
                     }
-                    if p.proposal_json
+                    if p.proposal_json and not retired
                     else None,
                 }
                 for p in pages

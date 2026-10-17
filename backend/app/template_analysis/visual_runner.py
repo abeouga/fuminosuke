@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import json
+import logging
 import time
 from typing import Any
 
@@ -26,6 +28,8 @@ from app.template_analysis.visual_input import (
     plan_visual_units,
 )
 from app.template_analysis.visual_provider import contract
+
+logger = logging.getLogger(__name__)
 
 
 def plan_snapshot(snapshot: dict[str, Any], storage: Any) -> None:
@@ -208,13 +212,29 @@ class VisualRunner:
                         await asyncio.to_thread(
                             service.repository.settled, aid, page["pageKey"], metrics
                         )
+                if page.get("wholePage"):
+                    # Whole-page drafts are tuned from their answers; keep the model JSON in
+                    # the server log only, never in a published proposal.
+                    logger.info(
+                        "template draft answer %s unit=%s: %s",
+                        aid,
+                        unit.unit_id,
+                        json.dumps(raw, ensure_ascii=False)[:200000],
+                    )
                 proposal = await asyncio.to_thread(
                     self.validate, sid, token, aid, page, source, plan, evidence, raw
                 )
         except AppError as exc:
             error = {"code": exc.code, "message": exc.detail}
-        except ValueError:
-            error = {"code": "PROPOSAL_INVALID", "message": "AI案の対応関係を確認できません。"}
+        except ValueError as exc:
+            logger.warning(
+                "template analysis proposal rejected %s unit=%s: %s", aid, unit.unit_id, exc
+            )
+            error = {
+                "code": "PROPOSAL_INVALID",
+                "message": "AI案の対応関係を確認できません。",
+                "detail": str(exc)[:200],
+            }
         await asyncio.to_thread(
             self.publish, sid, token, aid, page, unit, proposal, error, len(plan.units)
         )
@@ -254,10 +274,14 @@ class VisualRunner:
             focus = BusinessMutationUnitOfWork.focus(owner, catalog, prepared)
         return {
             "units": [
-                {**unit, "displayOrder": next(
-                    index for index, planned in enumerate(plan.units)
-                    if planned.unit_id == evidence.unit_id
-                )}
+                {
+                    **unit,
+                    "displayOrder": next(
+                        index
+                        for index, planned in enumerate(plan.units)
+                        if planned.unit_id == evidence.unit_id
+                    ),
+                }
                 for unit in compiled.units
             ],
             "focus": focus,

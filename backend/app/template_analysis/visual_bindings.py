@@ -12,6 +12,9 @@ POLICY = "template-analysis.visual-bindings.v1"
 MAX_LINKS = 4096
 MAX_METADATA_BYTES = 65536
 CONTACT_PIXELS = 2
+# Photographed cells overlap their neighbours by a few pixels; a touching pair may
+# overlap up to this fraction of the smaller cell along the axis (2026-10-17).
+CONTACT_OVERLAP_RATIO = .2
 MIN_OVERLAP_RATIO = .5
 Axis = Literal["horizontal", "vertical"]
 
@@ -19,7 +22,8 @@ Axis = Literal["horizontal", "vertical"]
 def policy_parameters() -> dict[str, int | float]:
     return {
         "maxLinks": MAX_LINKS, "maxMetadataBytes": MAX_METADATA_BYTES,
-        "contactPixels": CONTACT_PIXELS, "minOverlapRatio": MIN_OVERLAP_RATIO,
+        "contactPixels": CONTACT_PIXELS, "contactOverlapRatio": CONTACT_OVERLAP_RATIO,
+        "minOverlapRatio": MIN_OVERLAP_RATIO,
     }
 
 
@@ -116,7 +120,9 @@ def build_binding_catalog(metadata: dict[str, Any]) -> BindingCatalog:
             ) and b["existingRole"] != "label":
                 continue
             for direction, axis, gap in _directions(a, b):
-                if -CONTACT_PIXELS <= gap <= CONTACT_PIXELS:
+                size = "height" if axis == "vertical" else "width"
+                overlap = max(CONTACT_PIXELS, CONTACT_OVERLAP_RATIO * min(a[size], b[size]))
+                if -overlap <= gap <= CONTACT_PIXELS:
                     add(a["ref"], b["ref"], axis, "contact:" + direction, gap)
                 if gap >= 0:
                     found = nearest.get(direction, [])

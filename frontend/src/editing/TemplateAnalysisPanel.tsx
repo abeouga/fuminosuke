@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { analysisMergeAvailable, analysisRunning, type TemplateAnalysisStore } from "./templateAnalysisStore";
+import { analysisMergeAvailable, analysisRunning, type AnalysisTask, type TemplateAnalysisStore } from "./templateAnalysisStore";
 import type { PageScope } from "./template-analysis.generated";
 import { analysisControlVisibility } from "./analysisControlVisibility";
 import "./TemplateAnalysisPanel.css";
@@ -17,7 +17,7 @@ export function TemplateAnalysisPanel({ store, pageScope, multiplePages, blocked
   store: TemplateAnalysisStore; pageScope: PageScope; multiplePages: boolean; blocked: boolean; onSave(): void; saving: boolean; structureAvailable?: boolean;
 }) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [allPages, setAllPages] = useState(false), [release, setRelease] = useState(false), [task, setTask] = useState<"full" | "roles">("full");
+  const [allPages, setAllPages] = useState(false), [release, setRelease] = useState(false), [task, setTask] = useState<AnalysisTask>("full");
   const [selected, setSelected] = useState<string[]>([]);
   const panel = useRef<HTMLElement>(null);
   const reveal = useRef({ attempted: "", userMoved: true });
@@ -96,7 +96,7 @@ export function TemplateAnalysisPanel({ store, pageScope, multiplePages, blocked
       {running && <button className="secondary" disabled={state.busy} onClick={() => void store.cancel()}>解析を中止</button>}
       {state.held && <button className="secondary" disabled={locked || running || state.recovery || state.applied.length > 0} onClick={() => store.finish()}>手動編集に戻る</button>}
       <details><summary>解析の設定</summary><div className="template-analysis-options">
-        <label>解析内容<select value={task} disabled={locked || running} onChange={e => setTask(e.target.value as "full" | "roles")}><option value="full">{structureAvailable ? "枠・分類・意味・表" : "分類・意味・表"}</option><option value="roles">分類のみ</option></select></label>
+        <label>解析内容<select value={task} disabled={locked || running} onChange={e => setTask(e.target.value as AnalysisTask)}><option value="full">{structureAvailable ? "枠・分類・意味・表" : "分類・意味・表"}</option><option value="roles">分類のみ</option><option value="draft">下書きを一度で作る（ページ全体）</option></select></label>
         {multiplePages && <label><input type="checkbox" checked={allPages} disabled={locked || running} onChange={e => setAllPages(e.target.checked)} />全ページを解析</label>}
         <label><input type="checkbox" checked={release} disabled={locked || running} onChange={e => setRelease(e.target.checked)} />既存の分類も見直す</label>
         <small>既存の意味・表・読取設定は保護します。解析後の手修正は上書きしません。</small>

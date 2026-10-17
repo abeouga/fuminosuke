@@ -761,6 +761,7 @@ function TemplateReview({
     },
     pause: () => layoutEditorRef.current?.beginAssistant(),
     resume: () => layoutEditorRef.current?.endAssistant(),
+    saveDraft: async () => (await layoutEditorRef.current?.saveIfNeeded()) ?? false,
   }), [editingStore]);
   const analysisStatus = useSyncExternalStore(analysisStore.subscribe, analysisStore.getSnapshot);
   useEffect(() => {
@@ -820,6 +821,24 @@ function TemplateReview({
   const byName = useMemo(() => new Map(artifacts.map((item) => [item.name, item.url])), [artifacts]);
   const before = byName.get("alignedSource.1") ?? byName.get("normalized") ?? byName.get("cleanTemplate") ?? "";
   const after = byName.get("cleanPreview") ?? byName.get("cleanTemplate") ?? before;
+  // A freshly prepared template (no fork parent, nothing assigned yet) gets one AI draft
+  // automatically: run, apply the validated units, save. Edited or forked versions never
+  // start on their own; the panel's "下書きを一度で作る" covers those on request.
+  const autoDraftRef = useRef(false);
+  useEffect(() => {
+    if (autoDraftRef.current || !analysisEnabled || !layoutConfig || !mappingConfig || !after) return;
+    if (editingStatus.state !== "ready" || editorBusy || editorSaving || loadFailed || !mappingFresh) return;
+    if (version.status !== "DRAFT" || version.quality.forkParentVersionId || activatedVersion) return;
+    const untouched = layoutConfig.cells.length > 0 && layoutConfig.relations.length === 0
+      && (layoutConfig.recordSections ?? []).length === 0;
+    if (!untouched || analysisStatus.run || analysisStatus.recovery || analysisStatus.held || analysisStatus.busy) return;
+    autoDraftRef.current = true;
+    void analysisStore.startDraft(currentPrintPage
+      ? { mode: "current", pageId: `${currentPrintPage.page}:${currentPrintPage.range}` }
+      : { mode: "all", pageId: null });
+  }, [analysisEnabled, layoutConfig, mappingConfig, after, editingStatus.state, editorBusy, editorSaving, loadFailed, mappingFresh,
+    version.status, version.quality.forkParentVersionId, activatedVersion, analysisStatus.run, analysisStatus.recovery,
+    analysisStatus.held, analysisStatus.busy, analysisStore, currentPrintPage]);
   const mask = layoutVerified ? byName.get("handwritingMask") : undefined;
   const isSpreadsheetTemplate = version.mode === "SPREADSHEET_TEMPLATE";
   const layers = ["layoutVerificationOverlay", "debugOverlay", "handwritingOnly", "handwritingProbability"].filter((name) => byName.has(name));

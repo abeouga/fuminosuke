@@ -39,7 +39,8 @@ class ApiBudget:
     """Commit a reservation before each actual HTTP send, across all AI providers."""
 
     # 2026-10-13: 500 calls authorized from 424 already used; keep the ledger intact.
-    limit = 924
+    # 2026-10-17: 300 calls authorized from 445 already used (AI template drafts).
+    limit = 1224
 
     def __init__(self, database: Database) -> None:
         self.database = database

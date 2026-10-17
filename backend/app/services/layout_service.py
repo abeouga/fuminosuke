@@ -1279,6 +1279,7 @@ class LayoutService:
     @staticmethod
     def _as_field_mappings(layout: LayoutDefinition) -> list[FieldMappingConfig]:
         cell_by_id = {cell.id: cell for cell in layout.cells}
+        pool_labels = {entry.target_path: entry.label for entry in layout.label_pool}
         # Freeze the physical order at template save, before page/request filtering.
         sequence_numbers = {
             cell.id: index
@@ -1463,7 +1464,11 @@ class LayoutService:
                         mapping_id=mapping_id,
                         target_path=target_path,
                         label=(
-                            " / ".join(mark_label_texts) or field_key(target_path) or target_path
+                            " / ".join(mark_label_texts)
+                            or pool_labels.get(target_path)
+                            or (cell.field_label if len(cell.mark_sets) == 1 else None)
+                            or field_key(target_path)
+                            or target_path
                         ),
                         x=cell.x,
                         y=cell.y,

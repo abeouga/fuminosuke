@@ -166,6 +166,14 @@ def _parse_paddle_result(raw: Any) -> list[TextRegion]:
     return regions
 
 
+# A lone horizontal rule at least this long (pixels, or share of the page width)
+# outside every ruled box is a writing space drawn as an underline; the field above
+# it is this share of the page height tall (2026-10-17).
+UNDERLINE_MIN_PIXELS = 90
+UNDERLINE_MIN_RATIO = 0.06
+UNDERLINE_FIELD_RATIO = 0.03
+
+
 @dataclass(frozen=True, slots=True)
 class _Rect:
     x: int
@@ -197,6 +205,10 @@ class LayoutDetector:
         gray = np.asarray(cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY), dtype=np.uint8)
         line_mask = self._line_mask(gray)
         rectangles = self._rectangles(line_mask, width, height)
+        rectangles = sorted(
+            rectangles + self._underline_fields(gray, rectangles, width, height),
+            key=lambda rect: (rect.y, rect.x),
+        )
         text_regions = self._text_detector.detect(image_rgb)
         ocr_available = self._text_detector.available
         cells = [
@@ -297,6 +309,68 @@ class LayoutDetector:
             < 2
         ]
         return sorted(cells, key=lambda rect: (rect.y, rect.x))
+
+    @staticmethod
+    def _underline_fields(
+        gray: NDArray[np.uint8], rectangles: list[_Rect], image_width: int, image_height: int
+    ) -> list[_Rect]:
+        """Writing spaces drawn as a lone underline, such as a caption and a blank set
+        on a rule. A rule on the border of a ruled box, or inside one, is not one."""
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 9
+        )
+        horizontal = cv2.morphologyEx(
+            binary,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (max(18, image_width // 45), 1)),
+        )
+        count, _, stats, _ = cv2.connectedComponentsWithStats(horizontal, connectivity=8)
+        minimum = max(UNDERLINE_MIN_PIXELS, int(image_width * UNDERLINE_MIN_RATIO))
+        field_height = max(24, round(image_height * UNDERLINE_FIELD_RATIO))
+        fields: list[_Rect] = []
+        for item in range(1, count):
+            x, y, width, height = (int(v) for v in stats[item, :4])
+            if width < minimum or height > 6:
+                continue
+
+            def overlaps(rect: _Rect, x: int = x, width: int = width) -> int:
+                return min(rect.x + rect.width, x + width) - max(rect.x, x)
+
+            # The ruled boxes at this height (on the rule or around it) cover the rule
+            # when their spans together reach 30 % of its length.
+            spans = sorted(
+                (max(rect.x, x), min(rect.x + rect.width, x + width))
+                for rect in rectangles
+                if overlaps(rect) > 0 and rect.y - 6 <= y <= rect.y + rect.height + 6
+            )
+            covered = reach = 0
+            for start, end in spans:
+                start = max(start, reach)
+                if end > start:
+                    covered += end - start
+                    reach = end
+            if covered >= 0.3 * width:
+                continue
+            # A solid rule, not a dotted separator: dark along nearly its whole length.
+            row = gray[max(0, y - 1) : y + height + 1, x : x + width] < 128
+            if float(row.any(axis=0).mean()) < 0.9:
+                continue
+            top = max(0, y - field_height)
+            for rect in [*rectangles, *fields]:
+                bottom = rect.y + rect.height
+                if overlaps(rect) > 0 and top < bottom <= y:
+                    top = bottom + 1
+            if y - top < 16:
+                continue
+            # A writing space has a printed caption on the rule or just left of it, on
+            # paper; a bare rule, or the paper edge against a dark background, does not.
+            band = gray[top : max(top, y - 2), max(0, x - 4 * field_height) : x + width]
+            if band.size == 0 or float(np.median(band)) < 160:
+                continue
+            if not 0.004 <= float((band < 128).mean()) <= 0.5:
+                continue
+            fields.append(_Rect(x, top, width, y + height - top, 0.5))
+        return fields
 
     @staticmethod
     def _cell(

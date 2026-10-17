@@ -16,11 +16,12 @@ type PendingMerge = { owner: Owner; analysisId: string; body: AnalysisMergeReque
 type SaveCapture = { serial: number; analysisMergeIds: string[]; manualTouchedFacets: FacetTouch[] };
 type Journal = { owner: Owner | null; create: AnalysisCreate | null; analysisId: string | null; sequence: number;
   touches: [string, { touch: FacetTouch; serial: number }][]; serial: number; mergeIds: string[];
-  pendingMerge: PendingMerge | null; held: boolean; saveCapture?: SaveCapture; applied?: string[]; analysisSerial?: number;
+  pendingMerge: PendingMerge | null; held: boolean; saveCapture?: SaveCapture; applied?: string[]; analysisSerial?: number; autoApply?: boolean;
   staged?: { input: ManualDraft; output: ManualDraft; mergeId: string; unitIds: string[]; manualSerial?: number } };
 export type AnalysisView = { run: AnalysisResult | null; busy: boolean; held: boolean; message: string;
   focus: AiFocusState | null; applied: string[]; conflicts: string[]; staleUnits: string[]; recovery: boolean; storageBlocked: boolean; pendingFacets: number; manualSerial: number };
-type Editor = { read(): ManualDraft | null; matches?(input: ManualDraft): boolean; priorityBounds?(): number[] | null; apply(input: ManualDraft, merged: ManualDraft, action?: "apply" | "undo"): boolean; pause(): void; resume(): void };
+type Editor = { read(): ManualDraft | null; matches?(input: ManualDraft): boolean; priorityBounds?(): number[] | null; apply(input: ManualDraft, merged: ManualDraft, action?: "apply" | "undo"): boolean; pause(): void; resume(): void; saveDraft?(): Promise<boolean> };
+export type AnalysisTask = "full" | "roles" | "draft";
 const emptyJournal = (): Journal => ({ owner: null, create: null, analysisId: null, sequence: 0, touches: [], serial: 0, mergeIds: [], pendingMerge: null, held: false });
 const messageOf = (e: unknown) => e instanceof Error ? e.message : "解析処理を完了できませんでした。";
 const runMessage = (run: AnalysisResult) => run.error?.message ?? (analysisRunning(run)
@@ -137,16 +138,18 @@ export class TemplateAnalysisStore {
     this.publish({ held: !remembered, recovery: false, focus: null, run: null, applied: [], conflicts: [], pendingFacets: this.journal.touches.length,
       message: !remembered ? this.state.message : wasHeld ? "保存しました。AI案の再反映には再解析してください。" : "" });
   }
-  async start(scope: PageScope, task: "full" | "roles", releaseRoles: boolean) {
+  /** A whole-page draft for a freshly prepared template: run, apply every validated unit, save. */
+  startDraft(scope: PageScope) { return this.start(scope, "draft", false, { autoApply: true }); }
+  async start(scope: PageScope, task: AnalysisTask, releaseRoles: boolean, options: { autoApply?: boolean } = {}) {
     if (this.state.busy || this.state.storageBlocked || analysisRunning(this.state.run) || this.state.recovery || this.journal.mergeIds.length) return;
     const requestId = crypto.randomUUID(); this.mark("clicked", requestId); this.paintedUnits.clear();
-    this.publish({ run: null, busy: true, message: "解析を受け付けています。", focus: null, applied: [], conflicts: [] });
+    this.publish({ run: null, busy: true, message: task === "draft" ? "AIが下書きを作成しています。" : "解析を受け付けています。", focus: null, applied: [], conflicts: [] });
     try {
       this.hold();
       const context = await this.workbench.analysisContext(scope);
       const draft = this.editor.read(); if (!draft) throw new Error("入力を終了してから解析してください。");
       const owner = this.workbench.getOwner();
-      this.disconnect(); this.journal = { ...this.journal, owner, analysisId: null, sequence: 0, pendingMerge: null, analysisSerial: this.journal.serial,
+      this.disconnect(); this.journal = { ...this.journal, owner, analysisId: null, sequence: 0, pendingMerge: null, analysisSerial: this.journal.serial, autoApply: options.autoApply === true,
           create: { contractVersion: "template-analysis.v3", requestId, binding: bindingOf(context),
           draft, task, pageScope: scope, selectedTableId: context.scopeContext.selectedTableId,
           priorityBounds: this.editor.priorityBounds?.() ?? null,
@@ -176,6 +179,20 @@ export class TemplateAnalysisStore {
     this.journal.sequence = Math.max(this.journal.sequence, run.lastSequence); this.remember();
     this.publish({ run, recovery: false, message: runMessage(run) });
     if (analysisRunning(run)) this.connect(run);
+    else if (this.journal.autoApply) void this.autoApply(run);
+  }
+  /** Draft runs apply every validated unit and save once; a held or conflicting unit stays listed. */
+  private async autoApply(run: AnalysisResult) {
+    if (!this.journal.autoApply || this.state.busy) return;
+    this.journal.autoApply = false; this.tryRemember();
+    if (!analysisMergeAvailable(run)) { this.publish({ message: runMessage(run) }); return; }
+    const units = run.proposal?.units ?? run.pages.flatMap(p => p.proposal?.units ?? []);
+    const ids = units.filter(u => u.state === "mergeable" && !this.state.applied.includes(u.unitId) && !this.state.staleUnits.includes(u.unitId)).map(u => u.unitId);
+    if (!ids.length) { this.publish({ message: "AIが反映できる下書きを作れませんでした。欄は手動で設定してください。" }); return; }
+    await this.merge(ids);
+    if (!this.state.applied.length || !this.editor.saveDraft) return;
+    const saved = await this.editor.saveDraft();
+    if (!saved) this.publish({ message: "AIの下書きを反映しました。内容を確認して保存してください。" });
   }
   private connect(run: AnalysisResult) {
     if (this.stream || !this.journal.owner) return;

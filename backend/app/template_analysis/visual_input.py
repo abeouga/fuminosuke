@@ -22,6 +22,10 @@ from app.template_analysis.snapshot import physical
 
 POLICY = "template-analysis.visual-input.v1"
 MAX_UNIT_CELLS = 320
+# Whole-page drafts run as parallel bands cut at blank horizontal gaps (2026-10-17).
+DRAFT_MIN_GAP = 8
+DRAFT_MIN_BAND_CELLS = 6
+DRAFT_MAX_BANDS = 4
 MAX_PAGE_CELLS = 1000
 
 
@@ -160,10 +164,76 @@ def _touching(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return bool((overlap_x > 0 and overlap_y >= -2) or (overlap_y > 0 and overlap_x >= -2))
 
 
+def _gap_cut(cells: list[dict[str, Any]], axis: str) -> list[list[dict[str, Any]]]:
+    """Split cells where no cell covers a blank run of at least DRAFT_MIN_GAP on axis."""
+    start, size = ("y", "height") if axis == "y" else ("x", "width")
+    parts: list[list[dict[str, Any]]] = []
+    end = None
+    for cell in sorted(cells, key=lambda c: (c[start], c["ref"])):
+        if end is None or cell[start] - end >= DRAFT_MIN_GAP:
+            parts.append([])
+        parts[-1].append(cell)
+        end = cell[start] + cell[size] if end is None else max(end, cell[start] + cell[size])
+    return parts
+
+
+def _xy_leaves(cells: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    # Recursive XY cut: blank horizontal runs first, then blank vertical runs, so
+    # side-by-side sections of a page become separate leaves in reading order.
+    for axis in ("y", "x"):
+        parts = _gap_cut(cells, axis)
+        if len(parts) > 1:
+            return [leaf for part in parts for leaf in _xy_leaves(part)]
+    return [cells]
+
+
+def draft_bands(cells: list[dict[str, Any]]) -> list[list[str]]:
+    """Cut writable cells into regions at blank gaps no cell covers.
+
+    A gap is real whitespace between form sections, so a table, a field and its
+    adjacent label never straddle a cut. Cuts run across the page and then down
+    it (XY cut), and small regions join a neighbour in reading order.
+    """
+    bands = _xy_leaves(cells)
+    while len(bands) > 1 and (
+        len(bands) > DRAFT_MAX_BANDS or min(len(b) for b in bands) < DRAFT_MIN_BAND_CELLS
+    ):
+        i = min(range(len(bands)), key=lambda k: len(bands[k]))
+        # Join the smallest band to its smaller neighbour.
+        j = (
+            i - 1
+            if i == len(bands) - 1 or (i > 0 and len(bands[i - 1]) <= len(bands[i + 1]))
+            else i + 1
+        )
+        low, high = sorted((i, j))
+        bands[low : high + 1] = [bands[low] + bands[high]]
+    return [sorted(c["ref"] for c in band) for band in bands]
+
+
 def plan_visual_units(source: VisualPage, expected_pin: str) -> VisualPlan:
     snapshot, page = source.unpack(expected_pin)
     refs = page["refs"]
     targets = set(page["targets"])
+    if page.get("wholePage"):
+        # Whole-page draft: one form unit per band, sent in parallel, no bounds, so
+        # the compiled components merge independently instead of as one region.
+        draft_units = tuple(
+            VisualUnit(
+                "d_" + digest([POLICY, expected_pin, band])[:24],
+                tuple(band),
+                tuple(sorted(set(refs) - set(band))),
+                "ready",
+                None,
+                None,
+                "form",
+            )
+            for band in draft_bands([c for c in page["providerCells"] if c["ref"] in targets])
+        )
+        return VisualPlan(
+            expected_pin,
+            draft_units,
+            digest([POLICY, expected_pin, [u.__dict__ for u in draft_units]]),
+        )
     if page.get("structure"):
         if page.get("structureSemantics"):
             unit = VisualUnit(
@@ -348,6 +418,7 @@ def build_visual_evidence(
             "existingBindings": existing_bindings,
             "structure": bool(page.get("structure")),
             "structureSemantics": bool(page.get("structureSemantics")),
+            "draft": bool(page.get("wholePage")),
             "geometryEditable": page.get("geometryEditable", []),
             "geometryBounds": list(unit.bounds)
             if unit.bounds

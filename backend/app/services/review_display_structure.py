@@ -193,7 +193,9 @@ def build_review_display_structure(
     parent_sections = [
         {
             "id": parent_id,
-            "title": _cell_label(cells[parent_id]) or "名称未設定のグループ",
+            "title": _cell_label(cells[parent_id])
+            or _non_empty_text(cells[parent_id].field_label)
+            or "名称未設定のグループ",
             "fieldIds": sorted(
                 field_ids,
                 key=lambda field_id: _field_sort_key(

@@ -17,6 +17,7 @@ from app.editing.authoring_provenance import facets, touches
 from app.editing.domain.command import digest
 from app.editing.errors import reject
 from app.template_analysis.compose import compose, draft_from
+from app.template_analysis.draft_answer import TIMEOUT_SECONDS as DRAFT_TIMEOUT_SECONDS
 from app.template_analysis.graph import ROLE_NAMES, build_units, validate_graph
 from app.template_analysis.merge_chain import chain
 from app.template_analysis.merge_chain import proposal as live_proposal
@@ -38,7 +39,8 @@ class AnalysisService:
         self.database = self.repository.database
         self.provider = provider or VisualAnalysisProvider(settings, budget)
         self.visual = VisualRunner(self)
-        self.slots = asyncio.Semaphore(2)
+        # Four lets a whole-page draft send its bands at once (2026-10-17).
+        self.slots = asyncio.Semaphore(4)
         self.tasks: dict[str, asyncio.Task[None]] = {}
 
     def admit(self, sid: str, token: str, body: Any) -> tuple[dict[str, Any], bool]:
@@ -67,7 +69,7 @@ class AnalysisService:
                 raise reject(
                     "REGION_SCOPE_UNAVAILABLE", "この対象では領域限定解析を利用できません。", 422
                 )
-            if body.task in {"full", "structure"}:
+            if body.task in {"full", "structure", "draft"}:
                 plan_snapshot(snapshot, self.storage)
             snapshot_digest = digest(snapshot)
             for run in runs:
@@ -293,7 +295,7 @@ class AnalysisService:
         if not await asyncio.to_thread(self.start_page, aid, page["pageKey"]):
             return
         try:
-            if task in {"full", "structure"}:
+            if task in {"full", "structure", "draft"}:
                 await self.visual.process_page(sid, token, aid, page)
                 return
             else:
@@ -396,7 +398,8 @@ class AnalysisService:
         try:
             _, _, snapshot, task = await asyncio.to_thread(self.work, sid, token, aid)
             calls = sum(p["plannedCalls"] for p in snapshot["pages"])
-            async with asyncio.timeout(min(1800, 60 * ((calls + 1) // 2) + 30)):
+            limit = DRAFT_TIMEOUT_SECONDS if task == "draft" else 60 * ((calls + 1) // 2) + 30
+            async with asyncio.timeout(min(1800, limit)):
                 await asyncio.gather(
                     *(self.process_page(sid, token, aid, page, task) for page in snapshot["pages"])
                 )

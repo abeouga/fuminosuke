@@ -21,7 +21,9 @@ from app.template_analysis.visual_bindings import (
     BindingCatalog,
 )
 
-POLICY = "template-analysis.binding-resolution.v2"
+ORDER_TOLERANCE_RATIO = 0.4
+
+POLICY = "template-analysis.binding-resolution.v3"
 LinkRef = Annotated[str, Field(pattern=r"^b[1-9][0-9]{0,3}$", strict=True)]
 
 
@@ -72,13 +74,18 @@ class BindingResolver:
             if len({(b.input, b.axis) for b in selected}) != 1:
                 raise ValueError("VISUAL_BINDING_MIXED_TARGET")
             result = ResolvedBinding(
-                selected[0].input, tuple(b.label for b in selected), selected[0].axis, None,
+                selected[0].input,
+                tuple(b.label for b in selected),
+                selected[0].axis,
+                None,
             )
         else:
             cell, proof = binding.cell, binding.evidence
             if (
-                cell not in self.cells or not set(proof.refs) <= self.cells.keys()
-                or len(proof.refs) != len(set(proof.refs)) or not proof.text.strip()
+                cell not in self.cells
+                or not set(proof.refs) <= self.cells.keys()
+                or len(proof.refs) != len(set(proof.refs))
+                or not proof.text.strip()
                 or (proof.basis == "in_cell_caption" and proof.refs != [cell])
                 or (proof.basis == "free_entry" and not set(proof.refs) - {cell})
             ):
@@ -89,7 +96,10 @@ class BindingResolver:
         return result
 
     def table(
-        self, rows: list[list[str]], columns: list[ResolvedBinding], row_keys: list[str | None],
+        self,
+        rows: list[list[str]],
+        columns: list[ResolvedBinding],
+        row_keys: list[str | None],
     ) -> None:
         """Validate the whole physical body before propagating any column."""
         if not rows or any(len(row) != len(columns) for row in rows):
@@ -101,17 +111,25 @@ class BindingResolver:
         if not (set(body) | keys) <= self.targets:
             raise ValueError("VISUAL_BINDING_SCOPE")
         validate_row_keys(self.cells, rows, row_keys)
+        # Detected cells on a photographed form overlap their neighbours by a few
+        # pixels. Order checks tolerate a fraction of the smallest cell on that axis;
+        # the alignment/overlap ratio checks below are unchanged.
+        body_cells = [self.cells[r] for r in body]
+        row_tolerance = max(
+            CONTACT_PIXELS, ORDER_TOLERANCE_RATIO * min(c["height"] for c in body_cells)
+        )
+        column_tolerance = max(
+            CONTACT_PIXELS, ORDER_TOLERANCE_RATIO * min(c["width"] for c in body_cells)
+        )
         bands = []
         for row in rows:
             cells = [self.cells[r] for r in row]
             if min(c["y"] + c["height"] for c in cells) <= max(c["y"] for c in cells):
                 raise ValueError("VISUAL_TABLE_ROW_ALIGNMENT")
-            if any(
-                a["x"] + a["width"] > b["x"] + CONTACT_PIXELS for a, b in pairwise(cells)
-            ):
+            if any(a["x"] + a["width"] > b["x"] + column_tolerance for a, b in pairwise(cells)):
                 raise ValueError("VISUAL_TABLE_COLUMN_ORDER")
             bands.append((min(c["y"] for c in cells), max(c["y"] + c["height"] for c in cells)))
-        if any(a[1] > b[0] + CONTACT_PIXELS for a, b in pairwise(bands)):
+        if any(a[1] > b[0] + row_tolerance for a, b in pairwise(bands)):
             raise ValueError("VISUAL_TABLE_ROW_ORDER")
         exemptions = set(body) | keys | {r for column in columns for r in column.labels}
         for i, column in enumerate(columns):
@@ -123,7 +141,8 @@ class BindingResolver:
             column_cells = [self.cells[row[i]] for row in rows]
             for cell in column_cells:
                 if _overlap(anchor, cell, "x", "width") < MIN_OVERLAP_RATIO * min(
-                    anchor["width"], cell["width"],
+                    anchor["width"],
+                    cell["width"],
                 ):
                     raise ValueError("VISUAL_TABLE_COLUMN_ALIGNMENT")
             # Check intersections, including a cell whose centre lies outside
@@ -131,12 +150,19 @@ class BindingResolver:
             left = min(c["x"] for c in column_cells)
             right = max(c["x"] + c["width"] for c in column_cells)
             corridor = dict(
-                x=left, width=right-left, y=bands[0][0], height=bands[-1][1]-bands[0][0],
+                x=left,
+                width=right - left,
+                y=bands[0][0],
+                height=bands[-1][1] - bands[0][0],
             )
+            # A neighbour that only overlaps the table edge by photographic skew is not
+            # inside it; an omitted body cell overlaps by most of its own size.
             if any(
                 ref not in exemptions
-                and _overlap(corridor, cell, "x", "width") > CONTACT_PIXELS
-                and _overlap(corridor, cell, "y", "height") > CONTACT_PIXELS
+                and _overlap(corridor, cell, "x", "width")
+                > max(CONTACT_PIXELS, ORDER_TOLERANCE_RATIO * cell["width"])
+                and _overlap(corridor, cell, "y", "height")
+                > max(CONTACT_PIXELS, ORDER_TOLERANCE_RATIO * cell["height"])
                 for ref, cell in self.cells.items()
             ):
                 raise ValueError("VISUAL_TABLE_INTERIOR_OMISSION")

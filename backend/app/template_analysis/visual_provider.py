@@ -16,6 +16,12 @@ from jsonschema.exceptions import (  # type: ignore[import-untyped]
 from app.editing.domain.command import digest
 from app.editing.errors import reject
 from app.template_analysis.binding_resolution import POLICY as RESOLUTION_POLICY
+from app.template_analysis.draft_answer import INSTRUCTIONS as DRAFT_INSTRUCTIONS
+from app.template_analysis.draft_answer import MAX_OUTPUT_TOKENS as DRAFT_MAX_OUTPUT_TOKENS
+from app.template_analysis.draft_answer import POLICY as DRAFT_POLICY
+from app.template_analysis.draft_answer import REASONING_EFFORT as DRAFT_REASONING_EFFORT
+from app.template_analysis.draft_answer import TIMEOUT_SECONDS as DRAFT_TIMEOUT_SECONDS
+from app.template_analysis.draft_answer import DraftVisualAnswer
 from app.template_analysis.provider import OpenAIAnalysisProvider
 from app.template_analysis.region_contracts import RegionAnswer
 from app.template_analysis.region_pack import (
@@ -96,6 +102,10 @@ def contract() -> dict[str, str]:
         "structurePolicy": STRUCTURE_POLICY,
         "structureInstructionsDigest": digest(STRUCTURE_INSTRUCTIONS),
         "structureSchemaDigest": digest(StructureAnswer.model_json_schema(by_alias=True)),
+        "draftPolicy": DRAFT_POLICY,
+        "draftInstructionsDigest": digest(DRAFT_INSTRUCTIONS),
+        "draftSchemaDigest": digest(DraftVisualAnswer.model_json_schema(by_alias=True)),
+        "draftReasoningEffort": DRAFT_REASONING_EFFORT,
     }
 
 
@@ -108,10 +118,13 @@ def request_body(
     pack = region_pack(evidence) if is_region else build_model_pack(evidence)
     packed_at = time.perf_counter()
     is_grid = pack.grid is not None
-    is_structure = not is_grid and json.loads(evidence.metadata_json).get("structure", False)
+    is_draft = bool(meta.get("draft")) and not is_region and not is_grid
+    is_structure = not is_grid and not is_draft and meta.get("structure", False)
     schema_model = (
         RegionAnswer
         if is_region
+        else DraftVisualAnswer
+        if is_draft
         else GridVisualAnswer
         if is_grid
         else StructureAnswer
@@ -139,6 +152,8 @@ def request_body(
         "model": OpenAIAnalysisProvider.model,
         "instructions": REGION_INSTRUCTIONS
         if is_region
+        else DRAFT_INSTRUCTIONS
+        if is_draft
         else GRID_INSTRUCTIONS
         if is_grid
         else STRUCTURE_INSTRUCTIONS
@@ -155,15 +170,23 @@ def request_body(
                 ],
             }
         ],
-        "reasoning": {"effort": "none" if is_grid or is_region else "low"},
+        "reasoning": {
+            "effort": DRAFT_REASONING_EFFORT
+            if is_draft
+            else "none"
+            if is_grid or is_region
+            else "low"
+        },
         "store": False,
-        "max_output_tokens": 8192 if is_region else 24576,
+        "max_output_tokens": DRAFT_MAX_OUTPUT_TOKENS if is_draft else 8192 if is_region else 24576,
         "stream": True,
         "text": {
             "format": {
                 "type": "json_schema",
                 "name": "template_region"
                 if is_region
+                else "template_draft"
+                if is_draft
                 else "template_visual_grid"
                 if is_grid
                 else "template_structure"
@@ -184,11 +207,15 @@ def request_body(
         if is_region:
             metrics.update(
                 regionSchemaDigest=digest(schema),
-                regionScopeDigest=digest([
-                    REGION_SCHEMA_POLICY, sorted(meta["writeRefs"]),
-                    sorted(set(meta["geometryEditable"]) & set(meta["writeRefs"])),
-                    sorted(c["ref"] for c in meta["cells"]), meta["geometryBounds"],
-                ]),
+                regionScopeDigest=digest(
+                    [
+                        REGION_SCHEMA_POLICY,
+                        sorted(meta["writeRefs"]),
+                        sorted(set(meta["geometryEditable"]) & set(meta["writeRefs"])),
+                        sorted(c["ref"] for c in meta["cells"]),
+                        meta["geometryBounds"],
+                    ]
+                ),
             )
     return body
 
@@ -208,7 +235,9 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
         except ValueError as error:
             if str(error).startswith("REGION_SCHEMA_"):
                 raise reject(
-                    str(error), "解析対象に合う回答形式を作成できません。", 422,
+                    str(error),
+                    "解析対象に合う回答形式を作成できません。",
+                    422,
                 ) from error
             if str(error) == "VISUAL_BINDING_LIMIT":
                 raise reject(
@@ -220,7 +249,17 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
         metrics["requestDigest"] = digest(body)
         metrics["requestPreparationMs"] = round((time.perf_counter() - start) * 1000, 3)
         try:
-            result = await self.post("responses", body, reserved, metrics, start)
+            result = await self.post(
+                "responses",
+                body,
+                reserved,
+                metrics,
+                start,
+                # Stop the stream just inside the run's own bound so the partial answer is kept.
+                seconds=DRAFT_TIMEOUT_SECONDS - 2
+                if body["text"]["format"]["name"] == "template_draft"
+                else 60,
+            )
             metrics["usage"] = result.get("usage")
             if result.get("model") != self.model:
                 raise reject("PROVIDER_MODEL_MISMATCH", "解析モデルが指定と一致しません。", 422)
@@ -246,6 +285,8 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
             if body["text"]["format"]["name"] == "template_region":
                 Draft202012Validator(body["text"]["format"]["schema"]).validate(proposal)
                 return RegionAnswer.model_validate(proposal).model_dump(mode="json", by_alias=True)
+            if body["text"]["format"]["name"] == "template_draft":
+                return DraftVisualAnswer.model_validate(proposal).as_form()
             if body["text"]["format"]["name"] == "template_visual_grid":
                 return GridVisualAnswer.model_validate(proposal).canonical()
             if body["text"]["format"]["name"] == "template_structure":

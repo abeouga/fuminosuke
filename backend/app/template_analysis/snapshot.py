@@ -70,7 +70,7 @@ def capture(session: Any, owner: Any, catalog: Any, body: Any, storage: Any) -> 
     ):
         raise reject("PHYSICAL_DRAFT_UNSAVED", "枠の変更を保存してから解析してください。", 409)
     # Validate captured hand intent without saving or allocating business mappings.
-    if body.task in {"full", "structure"}:
+    if body.task in {"full", "structure", "draft"}:
         from app.template_analysis.draft import compile_hand
 
         compile_hand(catalog, body)
@@ -220,7 +220,7 @@ def capture(session: Any, owner: Any, catalog: Any, body: Any, storage: Any) -> 
             for r in targets
             if r not in role_locks
             or (
-                body.task in {"full", "structure"}
+                body.task in {"full", "structure", "draft"}
                 and refs[r]["role"] == "input"
                 and key(refs[r]["id"], "binding") not in protected
                 and key(refs[r]["id"], "meaning") not in protected
@@ -300,7 +300,7 @@ def capture(session: Any, owner: Any, catalog: Any, body: Any, storage: Any) -> 
             )
         count = (
             1
-            if body.task in {"full", "structure"}
+            if body.task in {"full", "structure", "draft"}
             else (len([r for r in targets if r not in role_locks]) + 199) // 200
         )
         manifest.append(
@@ -321,6 +321,9 @@ def capture(session: Any, owner: Any, catalog: Any, body: Any, storage: Any) -> 
                 "providerCells": provider_cells,
                 "plannedCalls": count,
                 "structure": structure_enabled and body.task in {"full", "structure"},
+                # A draft covers the page in one unit; no issued grid candidate or region split.
+                "wholePage": body.task == "draft",
+                "structureSemantics": body.task == "draft",
                 "geometryEditable": [r for r, c in refs.items() if c["id"] in geometry_editable],
                 "geometryBounds": [0, 0, *image_size]
                 if owner.mode != "local" and not body.selected_table_id

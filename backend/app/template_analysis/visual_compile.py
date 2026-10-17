@@ -115,10 +115,12 @@ def compile_visual_proposal(
         raise ValueError("VISUAL_FORM_VERSION")
     if raw.get("version") == "template-analysis.form.v2":
         metadata = json.loads(evidence.metadata_json)
-        expanded = FormVisualAnswer.model_validate(raw).expand(
-            build_binding_catalog(metadata),
-            metadata,
-        )
+        binding_catalog = build_binding_catalog(metadata)
+        if metadata.get("draft"):
+            from app.template_analysis.draft_answer import complete_draft
+
+            raw = complete_draft(raw, binding_catalog, metadata)
+        expanded = FormVisualAnswer.model_validate(raw).expand(binding_catalog, metadata)
         raw, notes = expanded.answer, expanded.notes
     if raw.get("version") == "template-analysis.visual.v3":
         raw = isolate_answer(
