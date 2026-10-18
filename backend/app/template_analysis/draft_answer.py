@@ -536,3 +536,76 @@ def complete_draft(
         "annotations": annotations,
         "unresolved": [*form["unresolved"], *issues],
     }
+
+
+# A band whose answer leaves cells out may get one follow-up request in the time left
+# (2026-10-18). The follow-up only adds what the first answer omitted: fields on the
+# omitted cells, a table returned again with more columns, or annotations on them.
+FOLLOW_UP_MIN_SECONDS = 6
+FOLLOW_UP_MARGIN_SECONDS = 4
+
+
+def follow_up_instruction(omitted: list[str]) -> str:
+    return (
+        "前回の回答では、作業範囲の次のセルが欄・表・注記のどれにも入っていません: "
+        + ", ".join(omitted)
+        + "。これらのセルについて、同じ形式で回答し直してください。"
+        "記入欄ならfieldsに、表の列が抜けているならその表を全ての列をそろえてtablesに、"
+        "記入する場所でなければannotationsに入れます。"
+        "前回扱ったセルは、表を全ての列で返し直す場合を除いて書かないでください。"
+    )
+
+
+def merge_follow_up(
+    first: dict[str, Any], second: dict[str, Any], omitted: set[str]
+) -> dict[str, Any]:
+    """Add the follow-up's answer for omitted cells to the first answer."""
+    renamed = {r["key"]: f"f_{r['key']}"[:64] for r in second["readings"]}
+    readings = [*first["readings"], *({**r, "key": renamed[r["key"]]} for r in second["readings"])]
+    used = {f["input"] for g in first["groups"] for f in g["fields"]}
+    groups = list(first["groups"])
+    for group in second["groups"]:
+        fields = [f for f in group["fields"] if f["input"] in omitted and f["input"] not in used]
+        if fields:
+            reading = renamed.get(group["reading"]) if group["reading"] else None
+            groups.append({**group, "reading": reading, "fields": fields})
+            used |= {f["input"] for f in fields}
+    tables = list(first["tables"])
+    for table in second["tables"]:
+        table = {
+            **table,
+            "columns": [
+                {**c, "reading": renamed.get(c["reading"]) if c["reading"] else None}
+                for c in table["columns"]
+            ],
+        }
+        headers = {c["header"] for c in table["columns"]}
+        overlapping = [t for t in tables if headers & {c["header"] for c in t["columns"]}]
+        if overlapping and all(len(table["columns"]) > len(t["columns"]) for t in overlapping):
+            tables = [t for t in tables if t not in overlapping]
+        elif overlapping:
+            continue
+        keys = {t["key"] for t in tables}
+        if table["key"] in keys:
+            table = {**table, "key": f"{table['key'][:60]}_f"}
+        tables.append(table)
+    headings = [*first["headings"]]
+    known = {h["cell"] for h in headings}
+    headings += [h for h in second["headings"] if h["cell"] not in known]
+    annotated = {a["cell"] for a in first["annotations"]}
+    annotations = [
+        *first["annotations"],
+        *(a for a in second["annotations"] if a["cell"] in omitted and a["cell"] not in annotated),
+    ]
+    referenced = {g["reading"] for g in groups if g["reading"]}
+    referenced |= {c["reading"] for t in tables for c in t["columns"] if c["reading"]}
+    first_keys = {r["key"] for r in first["readings"]}
+    readings = [r for r in readings if r["key"] in first_keys or r["key"] in referenced]
+    return {
+        **first,
+        "readings": readings,
+        "groups": groups,
+        "tables": tables,
+        "headings": headings,
+        "annotations": annotations,
+    }

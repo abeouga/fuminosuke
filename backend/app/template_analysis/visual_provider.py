@@ -226,6 +226,9 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
         evidence: VisualEvidence,
         reserved: Callable[[str], Awaitable[None]],
         metrics: dict[str, Any],
+        *,
+        follow_up: str | None = None,
+        seconds: float | None = None,
     ) -> dict[str, Any]:
         self.check_available()
         start = time.perf_counter()
@@ -246,6 +249,11 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
                     422,
                 ) from error
             raise
+        if follow_up is not None:
+            # A draft follow-up repeats the same request and names what the first answer
+            # left out; the answer is checked like any other.
+            body["input"][0]["content"].append({"type": "input_text", "text": follow_up})
+            metrics["followUp"] = True
         metrics["requestDigest"] = digest(body)
         metrics["requestPreparationMs"] = round((time.perf_counter() - start) * 1000, 3)
         try:
@@ -256,7 +264,9 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
                 metrics,
                 start,
                 # Stop the stream just inside the run's own bound so the partial answer is kept.
-                seconds=DRAFT_TIMEOUT_SECONDS - 2
+                seconds=seconds
+                if seconds is not None
+                else DRAFT_TIMEOUT_SECONDS - 2
                 if body["text"]["format"]["name"] == "template_draft"
                 else 60,
             )

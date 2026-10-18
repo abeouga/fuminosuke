@@ -16,6 +16,13 @@ from app.core.errors import AppError
 from app.editing.errors import reject
 from app.editing.infrastructure.mutation_uow import BusinessMutationUnitOfWork
 from app.template_analysis.compose import compose
+from app.template_analysis.draft_answer import (
+    FOLLOW_UP_MARGIN_SECONDS,
+    FOLLOW_UP_MIN_SECONDS,
+    follow_up_instruction,
+    merge_follow_up,
+)
+from app.template_analysis.draft_answer import TIMEOUT_SECONDS as DRAFT_TIMEOUT_SECONDS
 from app.template_analysis.models import AnalysisPage
 from app.template_analysis.repository import ACTIVE
 from app.template_analysis.visual_compile import compile_visual_proposal
@@ -224,6 +231,50 @@ class VisualRunner:
                 proposal = await asyncio.to_thread(
                     self.validate, sid, token, aid, page, source, plan, evidence, raw
                 )
+                omitted = self.omitted(page, unit, proposal) if page.get("wholePage") else []
+                remaining = (
+                    DRAFT_TIMEOUT_SECONDS
+                    - FOLLOW_UP_MARGIN_SECONDS
+                    - (time.perf_counter() - queued_at)
+                )
+                if omitted and remaining >= FOLLOW_UP_MIN_SECONDS:
+                    # One follow-up in the time left asks only for what the band's answer
+                    # left out; the merged answer is kept only if it resolves more cells.
+                    used = False
+                    follow_metrics: dict[str, Any] = {"omittedCells": len(omitted)}
+                    second = None
+                    try:
+                        second = await service.provider.analyze_visual(
+                            evidence,
+                            reserved,
+                            follow_metrics,
+                            follow_up=follow_up_instruction(omitted),
+                            seconds=remaining,
+                        )
+                    except (AppError, ValueError) as exc:
+                        logger.warning("template draft follow-up failed %s: %s", aid, exc)
+                    finally:
+                        if used:
+                            await asyncio.to_thread(
+                                service.repository.settled, aid, page["pageKey"], follow_metrics
+                            )
+                    if second is not None:
+                        logger.info(
+                            "template draft follow-up answer %s unit=%s: %s",
+                            aid,
+                            unit.unit_id,
+                            json.dumps(second, ensure_ascii=False)[:200000],
+                        )
+                        merged = merge_follow_up(raw, second, set(omitted))
+                        try:
+                            improved = await asyncio.to_thread(
+                                self.validate, sid, token, aid, page, source, plan, evidence, merged
+                            )
+                        except (AppError, ValueError) as exc:
+                            logger.warning("template draft follow-up rejected %s: %s", aid, exc)
+                        else:
+                            if len(improved["unresolved"]) < len(proposal["unresolved"]):
+                                proposal = improved
         except AppError as exc:
             error = {"code": exc.code, "message": exc.detail}
         except ValueError as exc:
@@ -237,6 +288,15 @@ class VisualRunner:
             }
         await asyncio.to_thread(
             self.publish, sid, token, aid, page, unit, proposal, error, len(plan.units)
+        )
+
+    @staticmethod
+    def omitted(page: dict[str, Any], unit: Any, proposal: dict[str, Any]) -> list[str]:
+        ref_by_id = {cell["id"]: ref for ref, cell in page["refs"].items()}
+        writable = set(unit.write_refs)
+        cells = {ref_by_id.get(item["cellId"]) for item in proposal["unresolved"]}
+        return sorted(
+            (r for r in cells if r is not None and r in writable), key=lambda r: int(r[1:])
         )
 
     def validate(
