@@ -1,0 +1,12 @@
+{
+  "ShortcutPath": "C:\\Users\\hanam\\Desktop\\llm-ocr起動スクリプト.lnk",
+  "ProjectRoot": "C:\\Users\\hanam\\Desktop\\llm-ocr",
+  "BackendHealthUrl": "http://127.0.0.1:8000/api/v1/health",
+  "FrontendUrl": "http://127.0.0.1:5173",
+  "StartupTimeoutSeconds": 120,
+  "ShutdownTimeoutSeconds": 20,
+  "FrontendPortRangeStart": 5173,
+  "FrontendPortRangeEnd": 5193,
+  "BackendPortRangeStart": 8000,
+  "BackendPortRangeEnd": 8020
+}

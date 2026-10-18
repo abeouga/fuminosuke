@@ -10,7 +10,7 @@ import { useInteractionContext } from "../assistant/useInteractionContext";
 import type { AssistantSnapshot } from "../assistant/contracts";
 import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
-import { AnchoredReviewPopover, buildReviewDisplayModel, CellStatusPopover, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, reviewEntryContext, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
+import { AnchoredReviewPopover, ReviewSeriesMarks, buildReviewDisplayModel, CellStatusPopover, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, reviewEntryContext, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
 import type { Artifact, DocumentIdentity, FieldReading, OcrDocument, OcrFieldPreview, OcrResult } from "../types";
 export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
 export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, }: {
@@ -28,6 +28,8 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
     const [name, setName] = useState(""), [selected, setSelected] = useState<string | null>(initialSelectedPath);
     const [mode, setMode] = useState<ReviewInteractionMode>("edit"), [inlineDirty, setInlineDirty] = useState(false);
     const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [message, setMessage] = useState<string | null>(null);
+    // Update of a confirmed document: the user may continue despite a different identity.
+    const [acceptMismatch, setAcceptMismatch] = useState(false), [addedOnly, setAddedOnly] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState(false), [paged, setPaged] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
     const [conflict, setConflict] = useState<{
@@ -106,6 +108,22 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
     const entries = useMemo<ReadingEntry[]>(() => draft ? Object.entries(draft.fields).map(([key, value]) => ({ path: `fields.${key}`, value,
         label: result?.reviewStructure?.fields.find(field => field.targetPath === `fields.${key}`)?.label ?? draft.fieldLabels[key] ?? key })) : [], [draft, result?.reviewStructure]);
     const previews = result?.fieldPreviews ?? [];
+    const series = result?.series ?? null;
+    const seriesMarks = useMemo(() => {
+        if (!series) return null;
+        const carried = new Set(series.carriedPaths), identityPaths = new Set(series.predecessorIdentity.map(item => item.targetPath));
+        // Only a blank_only update knows which fields were newly read; a full re-read marks nothing as added.
+        const added = new Set(series.mode === "blank_only"
+            ? entries.filter(entry => !carried.has(entry.path) && !identityPaths.has(entry.path) && entry.value.status !== "blank").map(entry => entry.path)
+            : []);
+        return { added, carried };
+    }, [series, entries]);
+    const identityMismatches = series ? series.predecessorIdentity.filter(item => {
+        const reading = entries.find(entry => entry.path === item.targetPath)?.value;
+        const current = foldIdentity(reading?.normalized ?? reading?.raw);
+        return current !== foldIdentity(item.value) && !(item.raw && current === foldIdentity(item.raw));
+    }) : [];
+    const mismatchBlocked = identityMismatches.length > 0 && !acceptMismatch;
     const display = useMemo(() => buildReviewDisplayModel(entries, previews, result?.reviewStructure), [entries, previews, result?.reviewStructure]);
     const byName = new Map(artifacts.map(item => [item.name, item.url])), fullImage = byName.get("alignedSource") ?? byName.get("normalizedSource");
     const selectedEntry = entries.find(entry => entry.path === selected), selectedPreview = previews.find(preview => preview.targetPath === selected);
@@ -179,7 +197,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
                 setDraft(latest.result);
             }
             requested = true;
-            const confirmed = await api.confirm(jobId, latest.revision, name.trim());
+            const confirmed = await api.confirm(jobId, latest.revision, name.trim(), acceptMismatch);
             if (editingEnabled) await editingStore.acceptOwnRevision(confirmed.revision);
             accept(confirmed);
             setMessage("結果と書類名を確定しました。");
@@ -276,14 +294,42 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
                 }}>再取得</button></aside> : <section className="identity-confirm-grid">
       {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><span>{field.label}</span><h2>「{field.label}」はこの内容ですか？</h2></header>
         <div className="identity-confirm-preview"><img src={previews.find(preview => preview.mappingId === field.mappingId)?.artifactUrl} alt={`${field.label}の読み取り範囲`}/></div>
+        {series && (() => {
+            const previous = series.predecessorIdentity.find(item => item.targetPath === field.targetPath);
+            const differs = identityMismatches.some(item => item.targetPath === field.targetPath);
+            const entry = entries.find(item => item.path === field.targetPath);
+            return <p className={`identity-previous${differs ? " differs" : ""}`}>前の版「{series.predecessorDocumentName ?? "名称なし"}」: <strong>{previous?.value ?? "（なし）"}</strong>
+              {previous?.raw && previous.raw !== previous.value && <small>（読み取り「{previous.raw}」）</small>}{differs ? " · 一致しません" : " · 一致"}
+              {previous?.value && entry && !locked && (entry.value.normalized ?? entry.value.raw) !== previous.value
+                && <button type="button" className="ghost compact" onClick={() => editText(entry, previous.value!)}>前の版の値にする</button>}</p>;
+        })()}
         <label className="field-label">検出結果<input aria-label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} disabled={locked || !readingFor(field)} inputMode={field.valueType === "digits" ? "numeric" : "text"} aria-invalid={identityInvalid(field)} onChange={event => editText(entries.find(entry => entry.path === field.targetPath)!, event.target.value)}/><small>{field.valueType === "digits" ? `数字${field.exactLength ? `${field.exactLength}桁` : ""}で確認してください。` : "書類に記載された内容を確認してください。"}</small></label></article>)}
       {!identities.length && <article className="identity-confirm-card"><h2>読み取り対象の書類</h2><p>識別項目は設定されていません。帳票全体を確認してください。</p>{fullImage && <img className="identity-full-image" src={fullImage} alt="読み取った帳票全体"/>}</article>}
-    </section>}<div className="page-actions"><button className="primary" disabled={busy || contextError || identities.some(identityInvalid)} onClick={() => setIdentityChecked(true)}><FiCheck />この書類を確認して結果へ</button></div>
+    </section>}
+    {series && <aside className={`notice compact series-identity-notice${identityMismatches.length ? " warn" : ""}`}>
+      <strong>「{series.predecessorDocumentName ?? "名称なし"}」の更新（版{series.seriesVersion}）</strong>
+      <span>{identityMismatches.length
+          ? `前の版と${identityMismatches.map(item => item.label).join("・")}が一致しません。同じ書類の更新か確認してください。`
+          : "書類を見分ける情報が前の版と一致しています。"}</span>
+      {identityMismatches.length > 0 && (acceptMismatch
+          ? <span>この書類の更新として続けます。</span>
+          : <span className="series-identity-actions">
+              <button className="secondary" disabled={busy} onClick={() => setAcceptMismatch(true)}>この書類の更新として続ける</button>
+              <button className="ghost" disabled={busy} onClick={async () => {
+                  setBusy(true);
+                  try { await api.cancel(jobId); onClose(); }
+                  catch (reason) { setError(reason instanceof ApiError ? reason.message : "読み取りを取り消せませんでした。"); }
+                  finally { setBusy(false); }
+              }}>更新をやめる（この読み取りを取り消す）</button>
+            </span>)}
+    </aside>}
+    {error && <p className="error-box" role="alert">{error}</p>}
+    <div className="page-actions"><button className="primary" disabled={busy || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}><FiCheck />この書類を確認して結果へ</button></div>
   </div>;
     return <ReviewDraftBoundary key={recoveryDiscardEpoch} onDirtyChange={setInlineDirty}><div ref={reviewRoot} className="page-stack review-page">
     <header className="page-header split"><div><span className="eyebrow">{result.confirmed ? "確定済み" : "読み取り結果の確認"}</span><h1>{name || "読み取り結果"}</h1><p>{entries.length}項目 · {result.confirmed ? "XLSXを取得できます" : "画像と照合して修正し、確定してください"}</p></div><div className="page-actions">
       <button className="ghost" disabled={assistantApplying} onClick={onClose}><FiArrowLeft />ホームへ</button>{result.confirmed ? <><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
-      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button><button className="primary" disabled={locked || inlineDirty || !name.trim() || contextError || identities.some(identityInvalid)} onClick={() => setConfirmDialog(true)}><FiCheck />確認して確定</button></>}</div></header>
+      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button><button className="primary" disabled={locked || inlineDirty || !name.trim() || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setConfirmDialog(true)}><FiCheck />確認して確定</button></>}</div></header>
     {error && <p className="error-box" role="alert">{error}</p>}{message && <aside className="notice compact">{message}</aside>}
     {conflict && <aside className="error-box"><strong>入力を保持しています</strong><p>最新結果を確認してから、退避した入力を復元できます。</p>
       <button className="secondary" onClick={async () => { const latest = await api.result(jobId); setConflict(current => current ? { ...current, latest } : current); accept(latest); }}>最新結果を表示</button>
@@ -309,17 +355,31 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
         catch (reason) { setError(reason instanceof Error ? reason.message : "編集を再開できません。"); }
         finally { setBusy(false); }
       }}>最新結果を採用</button></aside>}
+    {series && seriesMarks && <aside className="notice compact series-review-notice">
+      <strong>「{series.predecessorDocumentName ?? "名称なし"}」の更新（版{series.seriesVersion}）</strong>
+      <span>{series.mode === "blank_only"
+          ? `追加 ${seriesMarks.added.size}欄 · 前の版から引き継ぎ ${seriesMarks.carried.size}欄（前回空欄だった欄と識別情報だけを読み取りました）`
+          : "全欄を読み直した更新です。"}</span>
+      {mismatchBlocked && <span className="series-review-warning">前の版と{identityMismatches.map(item => item.label).join("・")}が一致しません。識別情報を確認してください。</span>}
+      {series.mode === "blank_only" && seriesMarks.added.size > 0 && <span className="series-identity-actions">
+        <label className="series-added-toggle"><input type="checkbox" checked={addedOnly} onChange={event => setAddedOnly(event.target.checked)}/>追加した欄を目立たせる</label>
+        <button className="secondary compact" onClick={() => {
+            const added = entries.filter(entry => seriesMarks.added.has(entry.path)), index = added.findIndex(entry => entry.path === selected);
+            setSelected(added[(index + 1) % added.length]?.path ?? null);
+        }}>次の追加欄へ</button>
+      </span>}
+    </aside>}
     <label className="field-label document-name-field">書類名<input value={name} maxLength={180} disabled={locked} onChange={event => setName(event.target.value)}/></label>
     <div className="review-assistant-workspace"><div className="generic-review-workspace"><section className="generic-review-source"><header><h2>帳票と読み取り範囲</h2><span>{reviewEntryContext(display, selectedEntry)}</span></header>
       {selectedPreview && <figure className="ocr-region-preview"><img src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}/><figcaption>{reviewEntryContext(display, selectedEntry)}</figcaption></figure>}{fullImage && <div className="ocr-page-preview"><img src={fullImage} alt="読み取った帳票全体"/></div>}
     </section><section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} onNextWarning={() => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); }}/>
-      <div className="ocr-edit-tables">{display.recordSections.map(section => <GenericRecordReviewTable key={section.id} section={section} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
+      <ReviewSeriesMarks.Provider value={seriesMarks}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{display.recordSections.map(section => <GenericRecordReviewTable key={section.id} section={section} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
                 if (!locked)
                     setDraft(current => current ? swapGenericRecordRowsAtFixedRegions(current, section, from, to) : current);
             }}/>)}
         {display.parentSections.map(section => <ReviewTableSection key={section.id} title={section.title}><KeyValueReviewTable entries={section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode === "reorder"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
         {display.independentEntries.length > 0 && <ReviewTableSection title="独立項目"><IndependentReviewGroups groups={display.independentGroups} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode === "reorder"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>}
-      </div>{!result.confirmed && selectedEntry && selectedPreview?.mappingType !== "mark" && mode === "edit" && <AnchoredReviewPopover path={selectedEntry.path} onClose={() => setSelected(null)}><CellStatusPopover entry={selectedEntry} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)} onClose={() => setSelected(null)}/></AnchoredReviewPopover>}
+      </div></ReviewSeriesMarks.Provider>{!result.confirmed && selectedEntry && selectedPreview?.mappingType !== "mark" && mode === "edit" && <AnchoredReviewPopover path={selectedEntry.path} onClose={() => setSelected(null)}><CellStatusPopover entry={selectedEntry} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)} onClose={() => setSelected(null)}/></AnchoredReviewPopover>}
     </section></div>
     {editingEnabled && <ReviewAiFocus rootRef={reviewRoot} focus={editingStatus.focus} context={editingStatus.context} viewRevision={result.revision} />}
     {editingEnabled ? <EditingControls store={editingStore} pageScope={{ mode: "all", pageId: null }}
@@ -549,4 +609,9 @@ function readingValueAtFixedRegion(value: FieldReading, fixedRegion: FieldReadin
             ? { ...fixedRegion.boundingBox }
             : null,
     };
+}
+
+/** Identity comparison with the previous version: width, spacing and case are ignored (same as the server). */
+function foldIdentity(value: string | null | undefined): string {
+    return (value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 }

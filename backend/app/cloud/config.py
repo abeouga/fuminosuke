@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,8 @@ class CloudSettings(BaseSettings):
     journal_bucket: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
     backup_bucket: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
     installation_id: str | None = None
+    database_url: SecretStr | None = None
+    object_bucket: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
     @model_validator(mode="after")
     def validate_boundary(self) -> CloudSettings:
@@ -44,6 +47,17 @@ class CloudSettings(BaseSettings):
             raise ValueError("Set a fixed installation identity with the journal")
         if self.ai_enabled and not self.journal_bucket:
             raise ValueError("Paid AI requires the shared remote journal")
+        if self.database_url is not None:
+            if not self.database_url.get_secret_value().startswith("postgresql+psycopg://"):
+                raise ValueError("Cloud persistence requires PostgreSQL/psycopg")
+            if not self.object_bucket or not self.installation_id:
+                raise ValueError("PostgreSQL cloud requires object bucket and fixed installation")
+        elif self.object_bucket is not None:
+            raise ValueError("S3 business storage requires PostgreSQL")
+        if os.environ.get("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE" and (
+            self.database_url is None or not self.journal_bucket or not self.backup_bucket
+        ):
+            raise ValueError("Fargate requires PostgreSQL, business objects, journal and backups")
         self.root = self.root.resolve()
         return self
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,15 +51,12 @@ class TemplateAssetCommitter:
         committed: list[str] = []
         try:
             for item in staged:
-                source = self._storage.resolve(item.staged_relative_path)
-                target = self._storage.resolve(item.final_relative_path)
-                if target.exists():
+                if self._storage.exists(item.final_relative_path):
                     raise TemplatePackageImportError(
                         "IMPORT_ASSET_CONFLICT",
                         f"書き込み先assetが既に存在します: {item.final_relative_path}",
                     )
-                target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(source, target)
+                self._storage.move_file(item.staged_relative_path, item.final_relative_path)
                 committed.append(item.final_relative_path)
                 if failure_injector is not None:
                     failure_injector("after_asset_move")
@@ -71,9 +67,7 @@ class TemplateAssetCommitter:
 
     def rollback(self, committed: list[str]) -> None:
         for relative_path in reversed(committed):
-            target = self._storage.resolve(relative_path)
-            if target.is_file():
-                target.unlink()
+            self._storage.delete_file(relative_path)
 
     def cleanup_stage(self, operation_id: str) -> None:
         relative = Path("tmp") / "template-package-imports" / operation_id

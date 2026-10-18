@@ -8,9 +8,9 @@ from pathlib import Path
 from app.cloud.backup import S3Backups, backup, restore
 from app.cloud.config import CloudSettings
 from app.cloud.journal import Journal, S3Receipts, s3_client
-from app.cloud.lease import runtime_lease
 from app.cloud.operations import Operations
 from app.cloud.registry import Registry
+from app.cloud.runtime import cloud_runtime
 from app.core.config import Settings
 
 
@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--backup-id")
     parser.add_argument("--target", type=Path)
     parser.add_argument("--workspace", type=Path, default=Path("/backup-work"))
+    parser.add_argument("--database-url-file", type=Path)
     args = parser.parse_args()
     settings, config = Settings.load(None), CloudSettings()
     if settings.app.environment != "cloud" or not config.journal_bucket:
@@ -30,17 +31,20 @@ def main() -> None:
     if args.action == "restore":
         if not config.backup_bucket or not args.backup_id or not args.target:
             parser.error("restore requires the backup bucket, --backup-id and --target")
+        target_url = (args.database_url_file.read_text().strip()
+                      if args.database_url_file else None)
         result = restore(settings, config, S3Backups(client, config.backup_bucket,
-                         str(config.installation_id)), args.backup_id, args.target, receipts)
+                         str(config.installation_id)), args.backup_id, args.target, receipts,
+                         target_url=target_url)
     elif args.action == "backup":
         if not config.backup_bucket:
             parser.error("backup requires BETA_BACKUP_BUCKET")
         destination = S3Backups(client, config.backup_bucket, str(config.installation_id))
         result = {"backupId": backup(settings, config, receipts, destination, args.workspace)}
     else:
-        with runtime_lease(config.root):
-            registry = Registry(config.root, config.max_users)
-            journal = Journal(config.root, str(config.installation_id), receipts)
+        with cloud_runtime(config) as control:
+            registry = Registry(config.root, config.max_users, control=control)
+            journal = Journal(config.root, str(config.installation_id), receipts, control=control)
             if args.action == "init-journal":
                 journal.initialize()
             else:

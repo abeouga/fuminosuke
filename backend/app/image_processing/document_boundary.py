@@ -46,6 +46,7 @@ class DocumentNormalizer:
             (max(1, round(source_width * scale)), max(1, round(source_height * scale))),
             interpolation=cv2.INTER_AREA,
         )
+        small = self._brightened_for_detection(small)
         gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 40, 130)
@@ -208,6 +209,19 @@ class DocumentNormalizer:
                 detail="四隅は画像内で、書類全体を囲むように指定してください。",
             )
         return ordered
+
+    @staticmethod
+    def _brightened_for_detection(image_rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        """Stretch a dark photo so the paper edge and paper colour can be detected.
+
+        Only the detection copy is changed. Normally lit images are returned as is.
+        """
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+        bright = float(np.percentile(gray, 95))
+        if bright >= 190:
+            return image_rgb
+        gain = 230.0 / max(bright, 8.0)
+        return np.clip(image_rgb.astype(np.float32) * gain, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _paper_mask(image_rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:

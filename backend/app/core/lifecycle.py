@@ -97,7 +97,9 @@ async def stop_runtime_services(app: FastAPI) -> None:
 async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = app.state.settings
     access_check = getattr(app.state, "access_check", None)
-    storage = LocalStorageService(settings.storage.data_dir, access_check=access_check)
+    factory = getattr(app.state, "storage_factory", None)
+    storage = (factory() if factory is not None else
+               LocalStorageService(settings.storage.data_dir, access_check=access_check))
     storage.initialize()
     if not getattr(app.state, "shared_logging", False):
         configure_logging(settings.logging)
@@ -105,6 +107,7 @@ async def application_lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.database, access_check=access_check,
         api_budget=getattr(app.state, "api_budget", None),
         before_delete=getattr(app.state, "before_delete", None),
+        transaction_fence=getattr(app.state, "transaction_fence", None),
     )
     database.check_connection()
     app.state.storage = storage

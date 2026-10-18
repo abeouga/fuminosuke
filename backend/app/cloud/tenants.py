@@ -57,8 +57,15 @@ class TenantApplications:
             if root.is_symlink() or root.parent.is_symlink():
                 raise ValueError("Tenant storage cannot be a symlink")
             root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            db = DatabaseSettings(url="sqlite+pysqlite:///" + (root / "app.db").as_posix())
-            await asyncio.to_thread(migrate, db)
+            if self.config.database_url is not None:
+                from app.cloud.postgres import initialize_tenant, tenant_settings
+                if self.registry.control is None:
+                    raise ValueError("PostgreSQL cloud requires the shared control database")
+                db = tenant_settings(self.config.database_url.get_secret_value(), tenant)
+                await asyncio.to_thread(initialize_tenant, db, fence=self.registry.control.fence)
+            else:
+                db = DatabaseSettings(url="sqlite+pysqlite:///" + (root / "app.db").as_posix())
+                await asyncio.to_thread(migrate, db)
             settings = replace(
                 self.settings, database=db,
                 storage=self.settings.storage.model_copy(update={"data_dir": root}),
@@ -70,6 +77,15 @@ class TenantApplications:
             app.state.access_check = lambda: self.registry.require_access(tenant)
             app.state.job_gate = self.job_gate
             app.state.shared_logging = True
+            if self.registry.control is not None:
+                from app.cloud.journal import s3_client
+                from app.storage.s3_storage import S3StorageService
+                app.state.transaction_fence = self.registry.control.fence
+                app.state.storage_factory = lambda: S3StorageService(
+                    root, control=self.registry.control, client=s3_client(),
+                    bucket=str(self.config.object_bucket), tenant=tenant,
+                    access_check=app.state.access_check,
+                )
             app.state.api_budget = (
                 self.operations.budget(tenant) if self.operations else ClosedBudget()
             )

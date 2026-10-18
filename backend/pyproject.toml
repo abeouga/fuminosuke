@@ -21,6 +21,7 @@ dependencies = [
   "pypdf==6.10.0",
   "pydantic==2.11.7",
   "pydantic-settings==2.10.1",
+  "psycopg[binary]==3.3.6",
   "PyJWT[crypto]==2.15.1",
   "python-multipart==0.0.20",
   "pyyaml==6.0.2",

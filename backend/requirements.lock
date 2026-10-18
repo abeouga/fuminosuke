@@ -46,6 +46,9 @@ pypdfium2==5.12.1
 pypdf==6.10.0
 pydantic==2.11.7
 pydantic-settings==2.10.1
+psycopg==3.3.6
+psycopg-binary==3.3.6
+tzdata==2026.5 ; sys_platform == "win32"
 pydantic_core==2.33.2
 Pygments==2.20.0
 pytest==8.4.1

@@ -83,7 +83,6 @@ export function DocumentBoundaryEditor({
     <section className="document-boundary-editor" aria-labelledby="document-boundary-title">
       <div className="document-boundary-heading">
         <div>
-          <span className="eyebrow">DOCUMENT AREA</span>
           <h3 id="document-boundary-title">書類の四隅を指定してください</h3>
           <p>4つの印を用紙の角へ合わせてください。指定した範囲を補正して、テンプレート準備を再開します。</p>
         </div>

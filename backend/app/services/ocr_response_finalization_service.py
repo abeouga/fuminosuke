@@ -38,6 +38,7 @@ class OcrResponseFinalizer:
         extraction: ExtractionOutput,
         job_snapshot: Mapping[str, object],
         provider_name: str,
+        carried: Mapping[str, tuple[str, FieldReading]] | None = None,
     ) -> FinalizedOcrComputation:
         request = prepared.request
         all_regions = request.regions
@@ -56,6 +57,13 @@ class OcrResponseFinalizer:
                 all_regions,
                 extraction,
             )
+        for carried_path, carried_reading in (carried or {}).values():
+            # Kept confirmed readings of an update (series_carry); assigned before labels,
+            # validation and mappedCells so they are treated like every other field.
+            assign_mapped_reading(provider_response.document, carried_path, carried_reading)
+            source_regions = provider_response.document.processing_metadata.source_regions
+            if carried_reading.source_region_id not in source_regions:
+                source_regions.append(carried_reading.source_region_id)
         provider_response.document.template_id = request.template_id
         provider_response.document.template_version = request.template_version
         provider_response.document.field_labels = {
@@ -65,6 +73,8 @@ class OcrResponseFinalizer:
             and mapping.target_path.removeprefix("fields.") in provider_response.document.fields
         }
         for mapping in prepared.mark_mappings:
+            if carried and mapping.mapping_id in carried:
+                continue
             if mapping.mapping_id in prepared.openai_mark_ids:
                 reading = get_mapped_reading(provider_response.document, mapping.target_path)
                 if (
@@ -130,6 +140,7 @@ class OcrResponseFinalizer:
             for mapping in extraction.config.field_mappings
             for subfield in mapping.composite_subfields
         )
+        configured_paths.update(path for path, _ in (carried or {}).values())
         normalized_document = provider_response.document
         report = self._validator.validate(
             normalized_document,

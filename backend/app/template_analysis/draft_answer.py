@@ -25,11 +25,16 @@ from app.template_analysis.binding_resolution import (
 )
 from app.template_analysis.contracts import CellRef, Key, Name
 from app.template_analysis.visual_answer import Reading
-from app.template_analysis.visual_bindings import CONTACT_PIXELS, MIN_OVERLAP_RATIO, BindingCatalog
+from app.template_analysis.visual_bindings import (
+    CONTACT_OVERLAP_RATIO,
+    CONTACT_PIXELS,
+    MIN_OVERLAP_RATIO,
+    BindingCatalog,
+)
 from app.template_analysis.visual_contracts import VisualHeading
 from app.template_analysis.visual_form_answer import Annotation
 
-POLICY = "template-analysis.draft-answer.v3"
+POLICY = "template-analysis.draft-answer.v4"
 REASONING_EFFORT = "low"
 MAX_OUTPUT_TOKENS = 32768
 # 2026-10-17: the user limited a draft to 30 s. One whole page with high reasoning took 175-190 s;
@@ -53,7 +58,8 @@ mustCoverは検出時に記入欄と判定されたセル。各セルをfields�
 captionCandidatesは枠内に項目名と記入スペースがありうる印字セル。項目名の右や下の余白、単位の間などに記入する。各候補は、fieldsのinputにするか、annotationsにlabel又はignoredとして書くか、必ずどちらかにする。画像で枠内に記入する場所、つまり空白・括弧・年月日や単位の間・手書きがあれば必ずfieldsにする。題名だけの枠はlabelのまま。
 印字の項目名と記入スペースが同じ枠にあるセルは、existingRoleがlabelでも記入欄として扱う。input=そのセル、labels=[]、evidenceはin_cell_caption、refs=[そのセル]。
 枠内に印字された選択肢を丸で囲む欄はreadingsにkind=symbol、options=印字の選択肢を宣言し、その欄のgroupのreadingにする。
-年・月・日・時・分・円などの単位だけが印字されて間が空いている枠、括弧の中が空いている枠は記入欄。印字された選択肢が並ぶ枠は記号の欄。どちらもlabelにしない。
+年・月・日・時・分・円などの単位だけが印字されて間が空いている枠、括弧の中が空いている枠は記入欄。印字された選択肢だけが並ぶ枠は記号の欄。どちらもlabelにしない。
+印字の選択肢と記入スペースが同じ枠にある欄、例えば「午前・後　時　分」「昭和・平成　年　月　日」は、記号の欄にせず文字の記入欄にする。選んだ印字も含めて文字で読む。
 題字の文字に重なる小さなセルなど、記入する場所でないセルはfieldsに入れない。
 記入欄はgroupsのfields。inputは記入欄のセル、labelsはその欄の印字見出しのセル、nameは見出しに基づく保存先名。
 labelsはlinksにinputとの組があるセルだけ。複数の見出しが必要なら同じ方向のものを並べる。隣接する自由記入欄をlabelにしない。
@@ -66,15 +72,18 @@ parentに使えるのは既存roleがparent_labelのセルか、このheadings�
 文字はreading=null。記号はreadingsのkey。symbolは一つ、checklistは複数選択。
 記号のoptions/evidenceTextは画像の凡例から指定する。枠外凡例はevidenceRefs=[]。checklistのoptionsには区切りの「・」「、」を含めず、印字にあれば半角の/に置き換える。
 同じ構造の行が繰り返す表はtablesにする。行は返さない。columnsだけを左から右に返す。
-tableCandidatesは同じ形のセルが格子状に並ぶ範囲ごとの最上段のセル。多くは列見出しの行で、表であれば必ずtablesで返す。
+tableCandidatesは同じ形のセルが格子状に並ぶ範囲ごとの最上段のセルと、その段の両端に並ぶ見出し。備考など背の高い見出しも含む。多くは列見出しの行で、表であれば必ずtablesで返す。
+データ行の上に見出しがある列は、右端・左端の列も含めて全てcolumnsに入れる。行ごとの項目名の列だけはkeyCellにする。
 各列のheaderはその列の印字見出しのセル。サーバーが見出しの直下のセルを最初のデータ行にする。
 見出しが2段以上あるときは、データ行の直上の段のセルをheaderにする。上の段に列ごとの記入欄があればfieldsで扱う。
+repeatedMarksは、同じ印字、例えば日付を書く斜線や空の括弧が横に繰り返す印字セルの並び。列ごとに日付や区分を書き込む記入欄なので、各セルを必ずfieldsのinputにする。labels=[]、evidenceはbasis=in_cell_caption、textは印字、refs=[そのセル]。名前は上位の見出しと列の順で区別する。
+repeatedMarksが表の見出しの段にあるときは、そのセルを列のheaderにもそのまま指定する。サーバーはその列を見出しなしの列にし、記入欄はfieldsに残す。
 サーバーが最初のデータ行から下へ同じ列構造が続く限り物理行を展開する。その行のセルをfieldsへ書かない。
 行ごとに印字された項目名や番号の列はcolumnsに入れず、keyCellに最初のデータ行のその列のセルを指定し、rowKeyStrategy=printed。なければkeyCell=null、position。
 途中で列見出しの行が繰り返す場合は、そこから別のtablesにする。
 左右に並ぶ同じ構造の表は別のtablesにする。左に項目名、右に記入欄の組が縦に並ぶだけの範囲は表にせず、個別のfieldsにする。
 annotationsは既存roleが誤っているセルだけ。印字項目はlabel、説明文・装飾・読み取らない印字はignored。
-返さなかったセルは既存のlabel/ignoredを保つ。同じセルを二つ以上の場所に書かない。
+返さなかったセルは既存のlabel/ignoredを保つ。同じセルを二つ以上の場所に書かない。ただしrepeatedMarksの見出しのセルは、fieldsと列のheaderの両方に書く。
 未固定roleやtextHintは参考にすぎない。locked/bound/protected/readOnlyRefsは保持する。
 既存設定・印字・座標・ID・保存先を変更しない。画像の意味を判断する下書きだけを返す。
 """.strip()
@@ -207,6 +216,37 @@ def _bindings(
 
     # A cell named as some field's input is not a printed header for another field.
     inputs = {f["input"] for g in form["groups"] for f in g["fields"]}
+    sharing: dict[str, set[str]] = {}
+    for group in form["groups"]:
+        for field in group["fields"]:
+            if len(field["labels"]) == 1:
+                sharing.setdefault(field["labels"][0], set()).add(field["input"])
+
+    def follows(a: dict[str, Any], b: dict[str, Any], axis: str) -> bool:
+        # b starts where a ends along the axis, in the same row or column band.
+        pos, size, cross, span = (
+            ("x", "width", "y", "height") if axis == "horizontal" else ("y", "height", "x", "width")
+        )
+        slack = max(CONTACT_PIXELS, CONTACT_OVERLAP_RATIO * min(a[size], b[size]))
+        gap = b[pos] - (a[pos] + a[size])
+        band = min(a[cross] + a[span], b[cross] + b[span]) - max(a[cross], b[cross])
+        return bool(-slack <= gap <= CONTACT_PIXELS and band >= 0.5 * min(a[span], b[span]))
+
+    def run_of(label: str) -> set[str]:
+        # One printed header for a run of writing spaces beside or below it (a date
+        # per column after "点検月日"): the run is the fields naming that header that
+        # follow it cell by cell. Only the first touches the header itself.
+        reached: set[str] = set()
+        for axis in ("horizontal", "vertical"):
+            frontier = [label]
+            while frontier:
+                current = cells[frontier.pop()]
+                for ref in sharing.get(label, set()) - reached:
+                    if ref in cells and follows(current, cells[ref], axis):
+                        reached.add(ref)
+                        frontier.append(ref)
+        return reached
+
     seen: dict[str, int] = {}
     placed: set[str] = set()
     groups = []
@@ -221,6 +261,12 @@ def _bindings(
             labels = [r for r in field["labels"] if r not in inputs]
             if labels:
                 value = linked(field["input"], labels, {"horizontal", "vertical"})
+                if value is None and len(labels) == 1 and field["input"] in run_of(labels[0]):
+                    value = {
+                        "kind": "unlabelled",
+                        "cell": field["input"],
+                        "evidence": {"basis": "free_entry", "text": field["name"], "refs": labels},
+                    }
             elif field["evidence"]:
                 value = {
                     "kind": "unlabelled",
@@ -288,7 +334,18 @@ def _bindings(
             continue
         columns = []
         for cell, header, column in anchored:
-            value = linked(str(cell), [header], {"vertical"})
+            # A header cell the model also gave as a field is a writing space above
+            # its column (a date per column); the field stays and the column is bound
+            # to its first cell without a printed header.
+            value = (
+                {
+                    "kind": "unlabelled",
+                    "cell": cell,
+                    "evidence": {"basis": "free_entry", "text": column["name"], "refs": [header]},
+                }
+                if header in inputs
+                else linked(str(cell), [header], {"vertical"})
+            )
             if value is None:
                 break
             columns.append({k: column[k] for k in ("key", "name", "reading")} | {"binding": value})
@@ -419,8 +476,15 @@ def complete_draft(
         )
     in_tables = {r for t in tables for row in t["rows"] for r in row["cells"]}
     in_tables |= {row["keyCell"] for t in tables for row in t["rows"] if row["keyCell"]}
-    # A printed column header of an accepted table is not also a field input.
-    headers = {r for t in tables for c in t["columns"] for r in labels_of(c["binding"])}
+    # A printed column header of an accepted table is not also a field input; a
+    # writing space above a headerless column stays a field.
+    headers = {
+        r
+        for t in tables
+        for c in t["columns"]
+        if c["binding"]["kind"] == "linked"
+        for r in labels_of(c["binding"])
+    }
     groups = [
         {**g, "fields": kept}
         for g in groups

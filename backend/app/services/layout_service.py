@@ -23,7 +23,7 @@ from app.domain.template_config import (
     FieldMappingConfig,
     MarkOptionConfig,
 )
-from app.image_processing.artifacts import ArtifactWriter, encode_png
+from app.image_processing.artifacts import ArtifactWriter
 from app.image_processing.line_detection import LineDetector, adaptive_ink_mask
 from app.layout_analysis.detector import LayoutDetector, TextRegion
 from app.layout_analysis.models import (
@@ -896,9 +896,6 @@ class LayoutService:
             )
             job_id = source_job.id
             attempt = source_job.attempt_number
-            template_id = version.template_id
-            version_number = version.version_number
-
         image_rgb = self._read_rgb(relative_path)
         edited_mask = (
             self._read_edited_mask(
@@ -1108,9 +1105,6 @@ class LayoutService:
             value=candidates_payload,
             replace=True,
         )
-        base_path = f"templates/{template_id}/versions/{version_number}"
-        self._storage.write_bytes(f"{base_path}/clean_template.png", encode_png(clean))
-        self._storage.write_bytes(f"{base_path}/handwriting_mask.png", encode_png(mask, rgb=False))
         return _HandwritingFinalization(
             detector=verified_layout.detector,
             clean_artifact_id=clean_artifact.id,

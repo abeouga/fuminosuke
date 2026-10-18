@@ -6,5 +6,6 @@ import "./styles.css";
 import "./candidate-editor.css";
 import "./workbench.css";
 import "./assistant/assistant.css";
+import "./mobile.css";
 
 createRoot(document.getElementById("root")!).render(<StrictMode><AuthBoundary><App /></AuthBoundary></StrictMode>);

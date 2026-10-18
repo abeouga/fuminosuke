@@ -36,7 +36,9 @@ def relative_file(name: str) -> Path:
             or any(p in {"logs", "tmp", ".runtime.lock", ".restore-incomplete"}
                    for p in path.parts)):
         raise ValueError("Unsafe backup member")
-    if name not in {"registry.db", "operations.db"} and not re.fullmatch(
+    if name not in {"registry.db", "operations.db", "cloud.json"} and not re.fullmatch(
+        r"control/[a-z_]+\.jsonl", name,
+    ) and not re.fullmatch(
         r"tenants/[0-9a-f]{32}/.+", name,
     ):
         raise ValueError("Unexpected backup namespace")
@@ -115,12 +117,27 @@ class S3Backups:
         if (created.utcoffset() != timedelta(0)
                 or not -timedelta(minutes=5) <= age <= timedelta(days=7)):
             raise ValueError("Backup is outside the seven-day recovery window")
-        if (manifest["version"] != 1 or manifest["installation"] != self.installation
-                or not {"registry.db", "operations.db"}.issubset(manifest["files"])
+        required = (
+            {"registry.db", "operations.db"} if manifest["version"] == 1 else
+            {"cloud.json", "control/users.jsonl", "control/receipts.jsonl", "control/objects.jsonl"}
+        )
+        if (manifest["version"] not in {1, 2} or manifest["installation"] != self.installation
+                or not required.issubset(manifest["files"])
                 or len(manifest["files"]) > 100_000
                 or sum(f["size"] for f in manifest["files"].values()) > 6 * 1024**3):
             raise ValueError("Invalid backup manifest")
         for name, metadata in manifest["files"].items():
+            if manifest["version"] == 1 and (name == "cloud.json" or name.startswith("control/")):
+                raise ValueError("Unexpected SQLite backup member")
+            if manifest["version"] == 2:
+                from app.cloud.pg_backup import CONTROL_TABLES
+                allowed = {"cloud.json", *(f"control/{t}.jsonl" for t in CONTROL_TABLES)}
+                if name not in allowed and not re.fullmatch(
+                    r"tenants/[0-9a-f]{32}/(objects/[0-9a-f]{64}|database/[a-z_]+\.jsonl)", name,
+                ):
+                    raise ValueError("Unexpected PostgreSQL backup member")
+                if name == "cloud.json" and metadata["size"] > 64 * 1024:
+                    raise ValueError("Backup tenant metadata is too large")
             path = target / relative_file(name)
             if not isinstance(metadata["size"], int) or not 0 <= metadata["size"] <= 1024**3:
                 raise ValueError("Invalid backup file size")
@@ -143,6 +160,9 @@ class S3Backups:
 
 def backup(settings: Settings, config: CloudSettings, receipts: ReceiptStore,
            destination: S3Backups, workspace: Path) -> str:
+    if config.database_url is not None:
+        from app.cloud.pg_backup import backup_postgres
+        return backup_postgres(settings, config, receipts, destination, workspace)
     root = config.root
     if not workspace.is_absolute() or workspace.resolve().is_relative_to(root):
         raise ValueError("Backup workspace must be outside the cloud root")
@@ -160,7 +180,13 @@ def backup(settings: Settings, config: CloudSettings, receipts: ReceiptStore,
 
 
 def restore(settings: Settings, config: CloudSettings, source: S3Backups, identity: str,
-            target: Path, receipts: ReceiptStore) -> dict[str, Any]:
+            target: Path, receipts: ReceiptStore, *,
+            target_url: str | None = None) -> dict[str, Any]:
+    if config.database_url is not None:
+        if target_url is None:
+            raise ValueError("PostgreSQL restore requires a separate empty target database")
+        from app.cloud.pg_backup import restore_postgres
+        return restore_postgres(settings, config, source, identity, target, receipts, target_url)
     if (not target.is_absolute() or target.exists() or target.is_symlink()
             or target.resolve().is_relative_to(config.root)
             or config.root.is_relative_to(target.resolve())):

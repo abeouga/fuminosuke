@@ -5,11 +5,11 @@ from contextlib import contextmanager
 from threading import RLock
 from typing import Any
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.db.models import TemplateVersion
+from app.db.session import begin_write
 
 LAYOUT_INPUT_REVISION_KEY = "layoutInputRevision"
 LAYOUT_VERIFICATION_FINGERPRINT_KEY = "layoutVerificationFingerprint"
@@ -58,9 +58,8 @@ def template_mutation_lock() -> Iterator[None]:
 
 
 def begin_immediate(session: Session) -> None:
-    """Take SQLite's write lock before reading state used by a mutation."""
-
-    session.execute(text("BEGIN IMMEDIATE"))
+    """Take the database's tenant write lock before reading mutation state."""
+    begin_write(session)
 
 
 def invalidated_layout_quality(

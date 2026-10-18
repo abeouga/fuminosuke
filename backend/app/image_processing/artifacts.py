@@ -98,6 +98,10 @@ class ArtifactWriter:
             token = base64.urlsafe_b64encode(key).decode("ascii").rstrip("=")
             file_name = f"p/{token}{PurePosixPath(file_name).suffix}"
         relative = f"artifacts/{job_id}/attempts/{attempt_number}/{file_name}"
+        if replace and self._storage.requires_immutable_paths:
+            path = PurePosixPath(relative)
+            content_sha = hashlib.sha256(content).hexdigest()
+            relative = str(path.with_name(f"{path.stem}-{content_sha}{path.suffix}"))
         stored = self._storage.write_bytes(relative, content)
         with self._database.session() as session:
             repository = ArtifactRepository(session)

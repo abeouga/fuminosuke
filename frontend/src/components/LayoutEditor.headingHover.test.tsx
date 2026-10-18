@@ -41,6 +41,22 @@ function canvas() {
   return element;
 }
 
+test("document identity selection references the compiled text mapping", () => {
+  const onDocumentIdentityFieldsChange = vi.fn();
+  const layout: LayoutDefinition = { ...initial,
+    cells: [{ ...initial.cells[1], id: "c_name", role: "input", parentLabelCellId: null, fieldLabel: "名号" }],
+    relations: [{ id: "r_name", inputCellId: "c_name", labelCellIds: [], axis: "horizontal", order: 0, targetPath: "fields.name" }],
+  };
+  render(<LayoutEditor source="preview.png" initialLayout={layout} targets={[]} onSave={vi.fn()}
+    onDetect={vi.fn()} workflowStep="identity" onDocumentIdentityFieldsChange={onDocumentIdentityFieldsChange} />);
+  const element = screen.getByLabelText("書類を見分ける欄を選択する帳票プレビュー");
+  fireEvent.keyDown(element, { key: "ArrowRight" });
+  fireEvent.keyDown(element, { key: "Enter" });
+  expect(onDocumentIdentityFieldsChange).toHaveBeenLastCalledWith([
+    expect.objectContaining({ mappingId: "layout_c_name", targetPath: "fields.name", label: "名号" }),
+  ]);
+});
+
 test("a captured hand-drawn draft accepts its AI proposal but rejects later drawing", () => {
   const ref = createRef<LayoutEditorHandle>(), onSave = vi.fn();
   render(<LayoutEditor ref={ref} source="preview.png" initialLayout={initial} targets={[]}

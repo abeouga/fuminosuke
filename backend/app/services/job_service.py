@@ -39,6 +39,8 @@ from app.layout_analysis.models import LayoutDefinition
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
 from app.repositories.template_repository import TemplateRepository
+from app.services.document_series import SNAPSHOT_KEY as SERIES_SNAPSHOT_KEY
+from app.services.document_series import DocumentSeries
 from app.services.review_display_structure import build_review_display_structure
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_candidate_service import TemplateCandidateService
@@ -131,6 +133,7 @@ class JobService:
         ocr_enabled: bool,
         send_full_document_to_openai: bool = False,
         idempotency_key: str | None,
+        predecessor_job_id: str | None = None,
     ) -> ProcessingJob:
         with self._database.session() as session:
             template_version = session.get(TemplateVersion, template_version_id)
@@ -278,6 +281,35 @@ class JobService:
                     "templateCandidatePoolsHash": None,
                 }
             )
+        series: dict[str, object] | None = None
+        if predecessor_job_id is not None:
+            # Explicit user choice only; validated again inside the job-creating transaction.
+            with self._database.session() as session:
+                replayed = (
+                    JobRepository(session).find_by_idempotency_key(idempotency_key)
+                    if idempotency_key
+                    else None
+                )
+                stored = (
+                    replayed.config_snapshot_json.get(SERIES_SNAPSHOT_KEY) if replayed else None
+                )
+                if (
+                    isinstance(stored, dict)
+                    and stored.get("predecessorJobId") == predecessor_job_id
+                ):
+                    # A resent request returns the job it already created (same snapshot).
+                    series = dict(stored)
+                else:
+                    series = DocumentSeries(session).snapshot_for(
+                        predecessor_job_id,
+                        template_version_id=template_version_id,
+                        field_mapping_hash=mapping_snapshot.get("fieldMappingHash"),
+                        field_mappings=mapping_snapshot.get("fieldMappings"),
+                        identity_fields=[
+                            (item.mapping_id, item.target_path, item.label)
+                            for item in template_config.document_identity_fields
+                        ],
+                    )
         xlsx_source = upload.content if upload.is_xlsx else None
         xlsx_metadata = None
         if xlsx_source is not None:
@@ -310,7 +342,7 @@ class JobService:
             ),
             **mapping_snapshot,
             **template_candidate_snapshot,
-
+            **({SERIES_SNAPSHOT_KEY: series} if series is not None else {}),
         }
         job, created = self._create_job_record(
             job_type=JobType.EXTRACT_DOCUMENT,
@@ -319,6 +351,7 @@ class JobService:
             config_snapshot=config_snapshot,
             idempotency_key=idempotency_key,
             template_version_id=template_version_id,
+            series=series,
         )
         if created:
             self._persist_template_snapshot(
@@ -650,6 +683,7 @@ class JobService:
                     ),
                     metadata={"templateVersionId": referenced_version_id},
                 )
+            DocumentSeries(session).release_for_delete(job)
             if self._database.before_delete is not None:
                 self._database.before_delete("job", job_id)
             repository.delete(job_id)
@@ -667,6 +701,7 @@ class JobService:
         config_snapshot: Mapping[str, object],
         idempotency_key: str | None,
         template_version_id: str | None = None,
+        series: Mapping[str, object] | None = None,
     ) -> tuple[ProcessingJob, bool]:
         request_hash = self._request_hash(job_type, loaded, config_snapshot)
         with self._database.session() as session:
@@ -692,6 +727,11 @@ class JobService:
                     idempotency_key=idempotency_key,
                     image_sha256=(loaded[0].metadata.sha256 if len(loaded) == 1 else None),
                     template_version_id=template_version_id,
+                    before_commit=(
+                        (lambda job: DocumentSeries(session).attach(job, dict(series)))
+                        if series is not None
+                        else None
+                    ),
                 )
             except IntegrityError:
                 session.rollback()

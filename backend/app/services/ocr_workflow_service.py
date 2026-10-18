@@ -23,6 +23,7 @@ from app.services.ocr_response_finalization_service import OcrResponseFinalizer
 from app.services.paged_crop_correspondence import reject, verify_before_provider
 from app.services.paged_ocr_budget import PagedCallBudget
 from app.services.paged_transcription_resources import accepted_transcription_prompt
+from app.services.series_carry import carried_plan, carried_readings, without_carried
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator
 
@@ -97,6 +98,27 @@ class OcrWorkflowService:
             provider_name=provider_name,
             should_cancel=lambda: self._cancel_requested(extraction.job_id),
         )
+        # Update of a confirmed document: previously filled fields keep the confirmed reading
+        # fixed at acceptance; only the rest is sent. Single-image jobs only.
+        plan = carried_plan(job_snapshot) if extraction.page_snapshot is None else {}
+        carried = None
+        if plan:
+            prepared = without_carried(prepared, set(plan))
+            carried = carried_readings(plan, extraction.config.field_mappings, extraction.crops)
+            writer.json(
+                job_id=extraction.job_id,
+                attempt_number=extraction.attempt_number,
+                name="incrementalPlan",
+                file_name="incremental_plan.json",
+                value={
+                    "carriedMappingIds": sorted(plan),
+                    "requestedMappingIds": [
+                        region.source_region_id or region.region_id
+                        for region in prepared.request.regions
+                    ],
+                },
+                replace=True,
+            )
         request = prepared.request
         if extraction.page_snapshot is not None and provider_name == "openai":
             budget = PagedCallBudget(
@@ -200,6 +222,7 @@ class OcrWorkflowService:
             extraction=extraction,
             job_snapshot=job_snapshot,
             provider_name=provider_name,
+            carried=carried,
         )
         response = finalized.response
         report = finalized.validation_report

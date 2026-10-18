@@ -5,6 +5,8 @@ import type { FieldReading, OcrFieldPreview, ReviewStructure } from "../types";
 export type ReadingEntry = { path: string; label: string; value: FieldReading };
 
 const InlineEditActivity = createContext<(path: string, dirty: boolean) => void>(() => undefined);
+/** Update of a confirmed document: newly filled cells and cells kept from the previous version. */
+export const ReviewSeriesMarks = createContext<{ added: ReadonlySet<string>; carried: ReadonlySet<string> } | null>(null);
 export function ReviewDraftBoundary({ children, onDirtyChange }: {
   children: ReactNode; onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -610,6 +612,8 @@ export function ReviewValueCell({
   onEdit: (entry: ReadingEntry, text: string) => void;
 }) {
   const value = entry.value.normalized ?? entry.value.raw;
+  const marks = useContext(ReviewSeriesMarks);
+  const added = marks?.added.has(entry.path) ?? false, carried = marks?.carried.has(entry.path) ?? false;
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
   const reportInlineEdit = useContext(InlineEditActivity);
@@ -627,7 +631,7 @@ export function ReviewValueCell({
   };
   return (
     <td
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}`}
+      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}`}
       data-review-path={entry.path}
     >
       {editing ? (
@@ -663,7 +667,7 @@ export function ReviewValueCell({
           }}
         >
           <span>{value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}</span>
-          <small>{warning ? "要確認" : "OK"}</small>
+          <small>{warning ? "要確認" : added ? "追加" : carried ? "前の版" : "OK"}</small>
         </button>
       )}
     </td>

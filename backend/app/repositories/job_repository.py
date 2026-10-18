@@ -26,6 +26,7 @@ class JobRepository:
         mode: TemplateMode | None = None,
         idempotency_key: str | None = None,
         image_sha256: str | None = None,
+        before_commit: Callable[[ProcessingJob], None] | None = None,
     ) -> ProcessingJob:
         job = ProcessingJob(
             job_type=job_type.value,
@@ -41,6 +42,10 @@ class JobRepository:
             config_snapshot_json=dict(config_snapshot),
         )
         self._session.add(job)
+        if before_commit is not None:
+            # Rows that must exist exactly when the job exists (same transaction).
+            self._session.flush()
+            before_commit(job)
         self._session.commit()
         self._session.refresh(job)
         return job

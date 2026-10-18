@@ -17,9 +17,9 @@ from starlette.types import Message, Receive, Scope, Send
 from app.cloud.cognito import Cognito
 from app.cloud.config import CloudSettings
 from app.cloud.journal import Journal, ReceiptStore, S3Receipts, s3_client
-from app.cloud.lease import runtime_lease
 from app.cloud.operations import Operations
 from app.cloud.registry import AccessDenied, Registry, request_credential
+from app.cloud.runtime import cloud_runtime
 from app.cloud.tenants import TenantApplications
 from app.core.config import Settings
 from app.core.errors import AppError
@@ -165,14 +165,14 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         configure_logging(settings.logging, bounded=True)
-        with runtime_lease(config.root):
-            registry = Registry(config.root, config.max_users)
+        with cloud_runtime(config, serving=True) as control:
+            registry = Registry(config.root, config.max_users, control=control)
             operations = None
             if config.journal_bucket:
                 store = receipt_store or S3Receipts(
                     s3_client(), config.journal_bucket, str(config.installation_id),
                 )
-                journal = Journal(config.root, str(config.installation_id), store)
+                journal = Journal(config.root, str(config.installation_id), store, control=control)
                 await asyncio.to_thread(journal.reconcile)
                 operations = Operations(settings, config, registry, journal)
                 await asyncio.to_thread(operations.replay_deletions)

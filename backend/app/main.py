@@ -7,6 +7,8 @@ from app.api.error_handlers import register_error_handlers
 from app.api.v1.router import router as v1_router
 from app.api.v2.editing import router as v2_editing_router
 from app.api.v2.editing import voice_router
+from app.api.v2.structured import router as structured_router
+from app.api.v2.structured import voice_router as structured_voice_router
 from app.api.v2.template_analysis import router as template_analysis_router
 from app.core.config import Settings, get_settings
 from app.core.lifecycle import application_lifespan
@@ -44,6 +46,8 @@ def create_business_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(v2_editing_router)
     app.include_router(voice_router)
     app.include_router(template_analysis_router)
+    app.include_router(structured_router)
+    app.include_router(structured_voice_router)
     if resolved_settings.app.environment != "cloud":
         @app.get("/api/auth/session")
         async def local_auth_session() -> dict[str, object]:

@@ -5,6 +5,19 @@ const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
 import type { PageFieldEdit, PagedReviewResult } from "./pagedReview";
 import type { DocumentIdentity } from "./types";
+/** A confirmed document (latest version) an upload can be read as an update of. */
+export type SeriesCandidate = {
+    jobId: string;
+    documentName: string | null;
+    templateName: string;
+    templateVersionId: string | null;
+    confirmedAt: string;
+    confirmedRevision: number;
+    seriesVersion: number;
+    identity: { label: string; value: string | null }[];
+    selectable: boolean;
+    reason: string | null;
+};
 export class ApiError extends Error {
     code: string;
     constructor(message: string, code = "API_ERROR") {
@@ -220,10 +233,11 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ corners }),
     }),
-    createOcr: async (templateVersionId: string, file: File, enabled: boolean, idempotencyKey: string) => {
+    createOcr: async (templateVersionId: string, file: File, enabled: boolean, idempotencyKey: string, predecessorJobId?: string) => {
         const body = new FormData();
         body.set("templateVersionId", templateVersionId);
         body.set("ocrEnabled", String(enabled));
+        if (predecessorJobId) body.set("predecessorJobId", predecessorJobId);
         body.set("file", file);
         return request<{
             jobId: string;
@@ -233,6 +247,9 @@ export const api = {
             body,
         });
     },
+    seriesCandidates: (templateVersionId: string, q?: string) => request<{
+        items: SeriesCandidate[];
+    }>(`/document-series/candidates?${new URLSearchParams({ templateVersionId, ...(q ? { q } : {}) }).toString()}`),
     approve: (id: string, expectedRevision: number, baseRevision?: string) => templateMutation<Template["versions"][number]>(`/template-versions/${id}/approve${baseRevision
         ? `?base_revision=${encodeURIComponent(baseRevision)}`
         : ""}`, expectedRevision, { method: "POST" }),
@@ -304,12 +321,13 @@ export const api = {
             reviewItems: value.reviewItems,
         }),
     }),
-    confirm: (id: string, revision: number, documentName?: string) => request<OcrResult>(`/ocr-jobs/${id}/confirm`, {
+    confirm: (id: string, revision: number, documentName?: string, acceptIdentityMismatch = false) => request<OcrResult>(`/ocr-jobs/${id}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             baseRevision: revision,
             ...(documentName ? { documentName } : {}),
+            ...(acceptIdentityMismatch ? { acceptIdentityMismatch: true } : {}),
         }),
     }),
     reopenResult: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),

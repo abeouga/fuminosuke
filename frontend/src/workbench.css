@@ -106,14 +106,6 @@
 .template-authoring-workspace .page-header { align-items: center; padding: 0 0 10px; }
 .template-authoring-workspace .page-header h1 { font-size: 24px; }
 .template-authoring-workspace .eyebrow { margin-bottom: 2px; }
-.template-authoring-workspace .template-lifecycle-status {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
-  padding: 0; border: 0; background: transparent;
-}
-.template-authoring-workspace .template-lifecycle-status > div {
-  display: flex; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent;
-}
-.template-authoring-workspace .template-lifecycle-status :is(span, strong) { font-size: 11px; }
 .template-authoring-workspace .mapping-warning-panel {
   position: static; width: auto; max-width: none; max-height: 160px;
   border-radius: 8px; box-shadow: none; overflow: auto;
@@ -144,7 +136,7 @@
   border: 1px solid var(--ui-border); background: #f8fafc;
 }
 .ux-shell .layout-commandbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 9px; }
-.ux-shell .layout-commandbar .layout-step-kicker, .ux-shell .layout-commandbar .command-separator { display: none; }
+.ux-shell .layout-commandbar .command-separator { display: none; }
 .ux-shell .layout-commandbar .label-ocr-command { order: 1; border-color: var(--ui-border); background: white; color: var(--ui-text-secondary); }
 .ux-shell .layout-commandbar .label-ocr-command:hover:not(:disabled) { background: var(--ui-primary-soft); border-color: #90abc0; }
 .ux-shell .layout-commandbar button.active { background: #dcecf7; border-color: var(--ui-primary); color: #173f5d; box-shadow: inset 0 -2px var(--ui-primary); }

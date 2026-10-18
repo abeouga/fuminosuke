@@ -1,5 +1,6 @@
 import type { Health, Job } from "../types";
 import { FiArrowRight, FiCheckSquare, FiDownload, FiFileText, FiGrid } from "react-icons/fi";
+import { usePhoneDevice } from "../hooks/usePhoneDevice";
 
 export function HomePage({
   health,
@@ -14,6 +15,7 @@ export function HomePage({
   onNavigate: (page: "templates" | "ocr") => void;
   onOpenJob: (job: Job) => void;
 }) {
+  const phoneDevice = usePhoneDevice();
   const attention = jobs.filter((job) => NEEDS_ATTENTION.has(job.status));
   const lastOutput = jobs.find((job) => job.jobType === "EXTRACT_DOCUMENT" && job.status === "CONFIRMED");
   return (
@@ -34,13 +36,13 @@ export function HomePage({
         </div>
       </section>
 
-      <section className="home-shortcuts" aria-label="テンプレートの準備">
+      {!phoneDevice && <section className="home-shortcuts" aria-label="テンプレートの準備">
         <div>
           <FiFileText aria-hidden="true" />
           <div><h2>初めて使う帳票</h2><p>空の帳票から、読み取る欄を設定します。</p></div>
           <button className="secondary" onClick={() => onNavigate("templates")}><FiGrid aria-hidden="true" />テンプレートを準備</button>
         </div>
-      </section>
+      </section>}
 
       {health?.ocrProvider === "mock" && (
         <aside className="notice"><strong>試運転モード</strong><span>OCRは固定のサンプル結果を返します。APIキーは不要です。</span></aside>

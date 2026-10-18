@@ -1,0 +1,68 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "draft-backend-real",
+      "runtimeExecutable": "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "C:/Users/hanam/AppData/Local/Temp/claude/C--Users-hanam-Desktop-llm-ocr-deploy/89ea8561-26cf-48a8-8550-631f29f80db2/scratchpad/serve_draft.py",
+        "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/data",
+        "real",
+        "8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "draft-backend-copy",
+      "runtimeExecutable": "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "C:/Users/hanam/AppData/Local/Temp/claude/C--Users-hanam-Desktop-llm-ocr-deploy/89ea8561-26cf-48a8-8550-631f29f80db2/scratchpad/serve_draft.py",
+        "D:/llm-ocr-archive/template-ai/20261017-generic/data",
+        "real",
+        "8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "identity-ui-backend-copy",
+      "runtimeExecutable": "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "C:/Users/hanam/AppData/Local/Temp/claude/C--Users-hanam-Desktop-llm-ocr-deploy/2dee7cae-af31-491f-9b9e-5ae83e4bc90d/scratchpad/serve_copy.py"
+      ],
+      "port": 8091
+    },
+    {
+      "name": "identity-ui-frontend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set LLM_OCR_BACKEND_URL=http://127.0.0.1:8091&& npm --prefix C:/Users/hanam/Desktop/llm-ocr-deploy/frontend run dev -- --port 5191 --strictPort"
+      ],
+      "port": 5191
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/hanam/Desktop/llm-ocr-deploy/frontend",
+        "run",
+        "dev"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "normal-llm-ocr",
+      "runtimeExecutable": "powershell.exe",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:/Users/hanam/Desktop/llm-ocr-deploy/sysover-ray/Start-LlmOcr.ps1",
+        "-NoBrowser"
+      ],
+      "port": 5180
+    }
+  ]
+}

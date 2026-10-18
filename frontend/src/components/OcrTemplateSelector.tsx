@@ -8,6 +8,7 @@ import {
 import type { Template } from "../types";
 import { templatePreviewKey, type useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
+import { usePhoneDevice } from "../hooks/usePhoneDevice";
 
 export type ReadingTemplateCard = {
   template: Template;
@@ -26,6 +27,8 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
   duplicateTemplate: (template: Template, version: Template["versions"][number]) => Promise<void>;
   openTemplateWorkspace: (workspace: "create" | "manage", editVersionId?: string) => void;
 }) {
+  // Template authoring is PC-only; phones keep reading with existing templates.
+  const phoneDevice = usePhoneDevice();
   return (<section className="ocr-step-panel" aria-labelledby="ocr-step-template">
                 <div className="ocr-step-heading">
                   <span className="ocr-template-heading-icon" aria-hidden="true">
@@ -94,7 +97,7 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                                 ? undefined : "印刷用ファイルを取得できるXLSX原本がありません。"} />
                           </div>
                         )}
-                        <span className="ocr-template-card-actions">
+                        {!phoneDevice && <span className="ocr-template-card-actions">
                           <button
                             type="button"
                             className="secondary compact"
@@ -126,20 +129,22 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                             {!deleting && <FiTrash2 aria-hidden="true" focusable="false" />}
                             {deleting ? "削除中…" : "削除"}
                           </button>
-                        </span>
+                        </span>}
                       </article>
                     );
                   })}
-                  <article className="ocr-template-card ocr-template-add-card">
+                  {!phoneDevice && <article className="ocr-template-card ocr-template-add-card">
                     <button type="button" className="ocr-template-add-trigger"
                       aria-label="テンプレートを追加" onClick={() => openTemplateWorkspace("create")}>
                       <FiPlus aria-hidden="true" focusable="false" />
                       <span>テンプレートを追加</span>
                     </button>
-                  </article>
+                  </article>}
                 </div>
                 {templateCards.length === 0 && (
-                  <p className="ocr-template-empty">有効化済みのテンプレートはありません。追加カードから新しく作成してください。</p>
+                  <p className="ocr-template-empty">{phoneDevice
+                    ? "有効化済みのテンプレートはありません。テンプレートはパソコンで作成してください。"
+                    : "有効化済みのテンプレートはありません。追加カードから新しく作成してください。"}</p>
                 )}
               </section>);
 }

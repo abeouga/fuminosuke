@@ -5,17 +5,17 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.db.models import ConfirmedResult, ProcessingJob
-from app.db.session import Database
+from app.db.session import Database, begin_write
 from app.domain.enums import JobStatus, JobType, RevisionSource
 from app.domain.field_targets import field_key
 from app.domain.ocr_models import OcrDocument, ReadingStatus
 from app.repositories.job_repository import JobRepository
 from app.repositories.ocr_result_repository import OcrResultRepository
+from app.services.document_series import DocumentSeries
 from app.services.excel_export_service import ExcelExportService
 from app.services.ocr_result_preview import _field_previews
 from app.services.ocr_result_types import CorrectionValues as CorrectionValues
@@ -52,8 +52,7 @@ class OcrResultService:
 
     @staticmethod
     def _begin_mutation(session: Session) -> None:
-        if session.get_bind().dialect.name == "sqlite":
-            session.execute(text("BEGIN IMMEDIATE"))
+        begin_write(session)
 
     def _response(self, session: Session, job: ProcessingJob, stored) -> dict[str, Any]:
         snapshot = job.config_snapshot_json
@@ -83,6 +82,7 @@ class OcrResultService:
             "documentName": confirmed.document_name
             if confirmed and confirmed.document_name
             else self._proposed_name(job, stored.current_corrected_json),
+            "series": DocumentSeries(session).review_info(job),
         }
 
     @staticmethod
@@ -185,6 +185,7 @@ class OcrResultService:
             confirmed = OcrResultRepository(session).get_confirmed(job.id)
             if confirmed is None or confirmed.ocr_result_revision != base_revision:
                 raise self._error("CONFIRMED_SNAPSHOT_INVALID", "確定結果の世代が一致しません。")
+            DocumentSeries(session).require_no_successor(job, "再編集")
             self._advance_lifecycle(session, stored, RevisionSource.REOPEN)
             job.status = JobStatus.REVIEW_REQUIRED.value
             job.confirmed_at = None
@@ -192,7 +193,12 @@ class OcrResultService:
             return self._response(session, job, stored)
 
     def confirm(
-        self, job_id: str, *, base_revision: int, document_name: str | None = None
+        self,
+        job_id: str,
+        *,
+        base_revision: int,
+        document_name: str | None = None,
+        accept_identity_mismatch: bool = False,
     ) -> dict[str, Any]:
         with self._database.session() as session:
             self._begin_mutation(session)
@@ -241,6 +247,15 @@ class OcrResultService:
             if not name or len(name) > 180:
                 raise self._error(
                     "DOCUMENT_NAME_INVALID", "書類名を1〜180文字で入力してください。", 422
+                )
+            DocumentSeries(session).require_predecessor_unchanged(job)
+            mismatched = DocumentSeries.identity_mismatches(job, stored.current_corrected_json)
+            if mismatched and not accept_identity_mismatch:
+                # An update whose identity differs must be continued explicitly by the user.
+                raise self._error(
+                    "SERIES_IDENTITY_MISMATCH",
+                    f"前の版と{'・'.join(mismatched)}が一致しません。"
+                    "同じ書類の更新として続けるか確認してください。",
                 )
             now = datetime.now(timezone.utc)
             # Prepare output before committing; failed generation leaves the result editable.
@@ -313,7 +328,10 @@ class OcrResultService:
                 confirmed.document_name or "読み取り結果",
                 confirmed.confirmed_at,
             )
-            self._storage.write_bytes(confirmed.export_relative_path, content)
+            if not self._storage.requires_immutable_paths or not self._storage.exists(
+                confirmed.export_relative_path
+            ):
+                self._storage.write_bytes(confirmed.export_relative_path, content)
             return (
                 self._storage.resolve(confirmed.export_relative_path),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -1,4 +1,4 @@
-"""Append-only remote receipts; SQLite is a recoverable index, never the authority."""
+"""Append-only remote receipts; the relational index is recoverable, never the authority."""
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from app.ai.api_budget import refused
+from app.cloud.relational import ControlDatabase
 
 
 class ReceiptStore(Protocol):
@@ -69,7 +70,7 @@ def s3_client() -> Any:
     from botocore.config import Config
 
     return boto3.client(
-        "s3", region_name="ap-northeast-1",
+        "s3", region_name="ap-northeast-1", endpoint_url="https://s3.ap-northeast-1.amazonaws.com",
         config=Config(retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=15),
     )
 
@@ -78,10 +79,12 @@ class Journal:
     def __init__(
         self, root: Path, installation: str, store: ReceiptStore,
         *, clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        control: ControlDatabase | None = None,
     ) -> None:
         if str(UUID(installation)) != installation:
             raise ValueError("Use a fixed installation UUID")
         self.installation, self.store, self.clock = installation, store, clock
+        self.control = control
         self.path = root / "operations.db"
         if self.path.is_symlink():
             raise ValueError("Operations DB cannot be a symlink")
@@ -92,7 +95,11 @@ class Journal:
                        "(seq INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self) -> Iterator[Any]:
+        if self.control is not None:
+            with self.control.connect("journal") as db:
+                yield db
+            return
         with sqlite3.connect(self.path, timeout=30) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
@@ -170,7 +177,7 @@ class Journal:
                                (record["seq"], encoded(record).decode()))
             self.healthy = True
 
-    def read(self, db: sqlite3.Connection) -> list[dict[str, Any]]:
+    def read(self, db: Any) -> list[dict[str, Any]]:
         if not self.healthy:
             raise refused("利用記録を確認できません。AI送信を停止しています。",
                           "BETA_JOURNAL_UNAVAILABLE", 503)
@@ -178,7 +185,7 @@ class Journal:
             "SELECT payload FROM receipts ORDER BY seq",
         )]
 
-    def append(self, db: sqlite3.Connection, records: list[dict[str, Any]],
+    def append(self, db: Any, records: list[dict[str, Any]],
                kind: str, tenant: str, purpose: str = "", resource_kind: str = "",
                resource_id: str = "") -> str:
         record = self.make(len(records) + 1, kind, tenant, purpose,

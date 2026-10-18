@@ -25,6 +25,10 @@ GRID_MIN_COLUMNS = 3
 INK_LEVEL = 140
 SPACE_RATIO = 0.35
 RUN_RATIO = 0.25
+# Printed cells side by side that look this alike (cosine of their darkness at a
+# coarse size) repeat one fill-in template per column, such as a date slash.
+REPEAT_MIN_CELLS = 3
+REPEAT_SIMILARITY = 0.85
 
 
 @dataclass(frozen=True)
@@ -118,11 +122,57 @@ def _writing_space(page: Image.Image, cell: dict[str, Any]) -> bool:
     )
 
 
+def _darkness(page: Image.Image, cell: dict[str, Any]) -> list[int]:
+    inset = max(3, round(0.08 * min(cell["width"], cell["height"])))
+    box = (
+        round(cell["x"]) + inset,
+        round(cell["y"]) + inset,
+        round(cell["x"] + cell["width"]) - inset,
+        round(cell["y"] + cell["height"]) - inset,
+    )
+    with page.crop(box) as inner, inner.resize((16, 8), Image.Resampling.BOX) as small:
+        return [255 - int(v) for v in small.getdata()]
+
+
+def _alike(a: list[int], b: list[int]) -> bool:
+    na, nb = math.hypot(*a), math.hypot(*b)
+    if not na or not nb:
+        return na == nb
+    return sum(x * y for x, y in zip(a, b, strict=True)) / (na * nb) >= REPEAT_SIMILARITY
+
+
+def _repeated_marks(page: Image.Image, printed: list[dict[str, Any]]) -> list[list[str]]:
+    """Rows of same-size printed cells side by side that all carry the same mark."""
+    rows: list[list[dict[str, Any]]] = []
+    for c in sorted(printed, key=lambda c: (c["y"], c["x"])):
+        for row in rows:
+            last = row[-1]
+            if (
+                abs(c["y"] - last["y"]) <= 0.3 * c["height"]
+                and abs(c["height"] - last["height"]) <= 0.3 * c["height"]
+                and abs(c["width"] - last["width"]) <= 0.3 * c["width"]
+                and abs(c["x"] - last["x"] - last["width"]) <= max(4, 0.2 * c["width"])
+            ):
+                row.append(c)
+                break
+        else:
+            rows.append([c])
+    found = []
+    for row in rows:
+        if len(row) < REPEAT_MIN_CELLS:
+            continue
+        marks = [_darkness(page, c) for c in row]
+        if all(_alike(a, b) for i, a in enumerate(marks) for b in marks[i + 1 :]):
+            found.append([c["ref"] for c in row])
+    return found
+
+
 def draft_hints(
     cells: list[dict[str, Any]], writable: set[str], image: bytes | None = None
-) -> tuple[list[str], list[list[str]], list[str]]:
-    """Inputs outside grids, the top row of each grid block, and printed cells that
-    may hold a caption and its writing space in one frame, as draft hints.
+) -> tuple[list[str], list[list[str]], list[str], list[list[str]]]:
+    """Inputs outside grids, the top row of each grid block, printed cells that
+    may hold a caption and its writing space in one frame, and rows of printed
+    cells repeating one fill-in mark, as draft hints.
 
     A grid cell sits in a two-by-two block: a same-height neighbour beside it, and
     stacked partners of both that are side by side too. Detected roles inside a
@@ -215,8 +265,37 @@ def draft_hints(
         if c["width"] >= CAPTION_ASPECT * c["height"]
         or (page is not None and _writing_space(page, c))
     ]
-    tops = [[c["ref"] for c in top_row(found)] for found in tables]
-    return single, sorted(tops, key=lambda t: t[0]), captioned
+    # A row of printed cells that all carry one mark (a date slash, empty brackets)
+    # is a fill-in template repeated per column, often inside a table header.
+    repeated = (
+        _repeated_marks(page, [c for c in pool if c["existingRole"] == "label"])
+        if page is not None
+        else []
+    )
+
+    def spanned(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Header cells beside the top row that span its height but not the grid's
+        # cell size (a tall "remarks" or row-label header) belong to the same row.
+        row = top_row(found)
+        top = row[0]["y"]
+        while True:
+            left, right = row[0], row[-1]
+            side = [
+                c
+                for c in printed
+                if c not in row
+                and abs(c["y"] - top) <= 0.4 * left["height"]
+                and (
+                    abs(c["x"] + c["width"] - left["x"]) <= max(4, 0.2 * left["width"])
+                    or abs(right["x"] + right["width"] - c["x"]) <= max(4, 0.2 * right["width"])
+                )
+            ]
+            if not side:
+                return row
+            row = sorted(row + side, key=lambda c: c["x"])
+
+    tops = [[c["ref"] for c in spanned(found)] for found in tables]
+    return single, sorted(tops, key=lambda t: t[0]), captioned, repeated
 
 
 def build_model_pack(evidence: VisualEvidence) -> ModelPack:
@@ -286,12 +365,13 @@ def build_model_pack(evidence: VisualEvidence) -> ModelPack:
         if meta.get("draft"):
             # An explicit list of the band's detected inputs outside repeated rows;
             # omissions vary otherwise. Table rows are covered through their headers.
-            single, tops, captioned = draft_hints(
+            single, tops, captioned, repeated = draft_hints(
                 visible, set(meta["writeRefs"]), evidence.full_image
             )
             compact["mustCover"] = single
             compact["tableCandidates"] = tops
             compact["captionCandidates"] = captioned
+            compact["repeatedMarks"] = repeated
     # Read-only references are useful context too. Very large pages keep the
     # untouched overview/crop and prioritise writable references for tile space.
     tile_cells = [c for c in visible if c["ref"] in meta["writeRefs"]]

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { usePhoneDevice } from "../hooks/usePhoneDevice";
+import { prepareUploadImage } from "./phonePhoto";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/tiff";
 const LABEL = "帳票画像を選択またはドロップ";
@@ -9,6 +11,9 @@ export function OcrImagePicker({ file, onChange, allowXlsx = false }: {
   allowXlsx?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const phoneDevice = usePhoneDevice();
+  const [preparing, setPreparing] = useState(false);
   const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +32,9 @@ export function OcrImagePicker({ file, onChange, allowXlsx = false }: {
       return;
     }
     setError("");
-    onChange(next);
+    if (allowXlsx && /.xlsx$/i.test(next.name)) { onChange(next); return; }
+    setPreparing(true);
+    void prepareUploadImage(next).then(onChange, () => onChange(next)).finally(() => setPreparing(false));
   };
   return (
     <div className="ocr-image-picker">
@@ -42,7 +49,7 @@ export function OcrImagePicker({ file, onChange, allowXlsx = false }: {
           select(Array.from(event.dataTransfer.files ?? []));
         }}>
         <label className="ocr-image-target">
-          <input ref={inputRef} type="file" accept={allowXlsx ? ACCEPT + ",.xlsx" : ACCEPT} capture="environment"
+          <input ref={inputRef} type="file" accept={allowXlsx ? ACCEPT + ",.xlsx" : ACCEPT}
             aria-label={file ? "帳票画像を置き換える" : LABEL}
             onChange={(event) => {
               select(Array.from(event.target.files ?? []));
@@ -60,6 +67,16 @@ export function OcrImagePicker({ file, onChange, allowXlsx = false }: {
             if (inputRef.current) { inputRef.current.value = ""; inputRef.current.focus(); }
           }}><span aria-hidden="true">×</span></button>}
       </div>
+      {phoneDevice && <label className="secondary ocr-camera-button">
+        <input ref={cameraRef} type="file" accept={ACCEPT} capture="environment" aria-label="カメラで撮影"
+          onChange={(event) => {
+            select(Array.from(event.target.files ?? []));
+            event.target.value = "";
+          }} />
+        カメラで撮影
+      </label>}
+      {phoneDevice && <p className="ocr-photo-tips">書類全体が写るように、なるべく真上から撮影してください。少し暗い・斜め・傾いた写真でも読み取れます。</p>}
+      {preparing && <p className="ocr-photo-tips" role="status">画像を準備しています…</p>}
       {file && <small className="ocr-image-name" title={file.name}>{file.name}</small>}
       {error && <p className="file-picker-error" role="alert">{error}</p>}
     </div>

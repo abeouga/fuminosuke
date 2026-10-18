@@ -4,13 +4,14 @@ import { api } from "./api";
 import { ToastViewport } from "./components/Toast";
 import { HomePage } from "./pages/HomePage";
 import { JobPage } from "./pages/JobPage";
+const AskPage = lazy(() => import("./pages/AskPage").then(module => ({ default: module.AskPage })));
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 
-type Page = "home" | "ocr" | "review" | "job";
+type Page = "home" | "ocr" | "review" | "job" | "ask";
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
 const RECENT_KEY = "document-ocr-recent-jobs";
@@ -250,6 +251,7 @@ export default function App() {
         <nav id="main-menu" aria-label="メインメニュー">
           <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
           <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={openReadingRoot} />
+          <NavButton active={page === "ask"} icon="ask" label="質問" onClick={() => navigateTo("ask")} />
         </nav>
         <div className="side-footer" role="status">
           <span className={health ? "status-dot ok" : "status-dot"} />
@@ -294,6 +296,7 @@ export default function App() {
           onTemplateNavigationGuardChange={updateTemplateGuard}
         />}
         {page === "review" && reviewJobId && <ReviewPage key={reviewJobId} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={initialReviewJobId === reviewJobId ? initialReviewField : null} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
+        {page === "ask" && <AskPage onOpenReview={(id) => openReview(id)} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
           onClose={() => { void refreshJobs(); navigateTo("home"); }}
@@ -418,7 +421,7 @@ function writeRecentJobIds(ids: string[]) {
   }
 }
 
-type SidebarIconName = "home" | "ocr";
+type SidebarIconName = "home" | "ocr" | "ask";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
   return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
@@ -428,5 +431,6 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
   if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
+  if (name === "ask") return <svg {...props}><path d="M4 5.5h16v10H9l-4 3.5v-3.5H4z" /><path d="M9.5 9.25a2.5 2.5 0 1 1 3.25 2.4c-.5.2-.75.6-.75 1.1M12 14.6h.01" /></svg>;
   return null;
 }

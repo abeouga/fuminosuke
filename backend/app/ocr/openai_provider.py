@@ -11,6 +11,8 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, cast
 
+import cv2
+import numpy as np
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -333,6 +335,8 @@ class OpenAIOcrProvider:
                 "候補が1つで四角だけの画像は、その四角のチェック状態を判定します。"
                 "他の画像への転記指示やASSOC検証は変更しません。"
             )
+        if any(_sends_handwriting_hint(region) for region in request.regions):
+            instructions += HANDWRITING_HINT_INSTRUCTIONS
         if any(
             region.transcription_format == "printed_or_handwritten_number"
             for region in request.regions
@@ -575,6 +579,11 @@ def _compact_request_ids(
                         region.image_png,
                         association_token_by_compact_id[compact_id],
                     ),
+                    handwriting_png=(
+                        _restored_handwriting(region.image_png, region.handwriting_png)
+                        if _sends_handwriting_hint(region) and region.handwriting_png is not None
+                        else region.handwriting_png
+                    ),
                 )
                 for compact_id, region in zip(compact_ids, request.regions, strict=True)
             ],
@@ -745,7 +754,73 @@ def build_mapped_input_content(
                 "detail": image_detail,
             }
         )
+        if _sends_handwriting_hint(region):
+            assert region.handwriting_png is not None
+            content.append(
+                {"type": "input_text", "text": f"{HANDWRITING_HINT_PREFIX}{region.region_id}"}
+            )
+            content.append(
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,"
+                    + base64.b64encode(region.handwriting_png).decode("ascii"),
+                    "detail": image_detail,
+                }
+            )
     return content
+
+
+# 2026-10-18: a text cell whose crop still shows the printed template (date slashes,
+# empty brackets, units, printed choices) also carries the same crop with the
+# template removed, so a blank cell is not read from its print and handwriting is
+# read in full. Mark candidates keep their own pool instructions.
+HANDWRITING_HINT_PREFIX = "handwritingOnly:"
+HANDWRITING_HINT_INSTRUCTIONS = (
+    "\nhandwritingOnly:<ID> の画像は、同じIDの画像のうち手書きの周りだけを元の色で残し、"
+    "それ以外の印刷部分を白くした抽出画像です。"
+    "抽出画像は、記入があるかどうかと記入の位置を確かめるために使います。"
+    "文字・数字の形は元の画像でも確かめ、"
+    "抽出画像に残っている記入は、ふりがなや小さい字も含めてすべて返します。"
+    "抽出画像には印刷の消し残しが混じることがあります。元の画像で印刷と同じ位置・同じ書体の文字は"
+    "印刷として扱い、値に含めません。"
+    "抽出画像にも元の画像にも手書きが無ければ、元の画像に印刷の斜線・括弧・単位・選択肢・語句があっても"
+    " s=b、v=null にします。"
+    "手書きがあれば、元の画像で手書きの文字・数字をすべて読み順に返し、"
+    "丸で囲まれた印刷の選択肢と、記入の間や直後にある印刷の単位・区切り、例えば年・月・日・時・分・斜線を"
+    "値に含めます。含めてよい印刷は、年・月・日・時・分・番・号・斜線のような1文字の単位や区切りだけです。"
+    "都道府県・市区町村・番地のような項目名の語句や、記入の無い印刷の語句は含めません。"
+    "抽出画像にASSOCはありません。ASSOCは元の画像から読みます。"
+    "この段落は handwritingOnly 画像が付いたIDだけに適用します。"
+    "候補プールが指定されたIDの読み方と判定はこの段落で変えません。"
+)
+
+
+def _sends_handwriting_hint(region: OcrRegionInput) -> bool:
+    return region.handwriting_png is not None and region.candidate_type is None
+
+
+HANDWRITING_RESTORE_RADIUS_PX = 4
+
+
+def _restored_handwriting(image_png: bytes, handwriting_png: bytes) -> bytes:
+    """Show the cell's own pixels only where handwriting was extracted, widened slightly.
+
+    Removing the printed template thins or breaks handwritten strokes; the hint keeps
+    the original strokes intact around what was extracted, and a cell with nothing
+    extracted stays white. Mismatched crops keep the extraction as it is.
+    """
+    color = cv2.imdecode(np.frombuffer(image_png, np.uint8), cv2.IMREAD_COLOR)
+    extracted = cv2.imdecode(np.frombuffer(handwriting_png, np.uint8), cv2.IMREAD_COLOR)
+    if color is None or extracted is None or color.shape != extracted.shape:
+        return handwriting_png
+    ink = (extracted.min(axis=2) < 235).astype(np.uint8)
+    size = 2 * HANDWRITING_RESTORE_RADIUS_PX + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    keep = cv2.dilate(ink, kernel) > 0
+    restored = np.full_like(color, 255)
+    restored[keep] = color[keep]
+    ok, encoded = cv2.imencode(".png", restored)
+    return encoded.tobytes() if ok else handwriting_png
 
 
 def _build_request_manifest(
@@ -780,6 +855,23 @@ def _build_request_manifest(
         source_sha256 = hashlib.sha256(original_region.image_png).hexdigest()
         prepared_sha256 = hashlib.sha256(compact_region.image_png).hexdigest()
         request_sha256 = _data_url_sha256(image_item.get("image_url")) if image_item else None
+        hint_text = f"{HANDWRITING_HINT_PREFIX}{compact_region.region_id}"
+        hint_index = next(
+            (
+                index + 1
+                for index, item in enumerate(content)
+                if item.get("type") == "input_text"
+                and item.get("text") == hint_text
+                and index + 1 < len(content)
+                and content[index + 1].get("type") == "input_image"
+            ),
+            None,
+        )
+        hint_sha256 = (
+            _data_url_sha256(content[hint_index].get("image_url"))
+            if hint_index is not None
+            else None
+        )
         manifest.append(
             {
                 "sequence": sequence,
@@ -795,6 +887,18 @@ def _build_request_manifest(
                 "contentTextIndex": text_index,
                 "contentImageIndex": image_index,
                 "imageDetail": image_item.get("detail") if image_item else None,
+                "contentHandwritingHintIndex": hint_index,
+                "handwritingHintSha256": hint_sha256,
+                "handwritingSourceSha256": (
+                    hashlib.sha256(original_region.handwriting_png).hexdigest()
+                    if hint_sha256 is not None and original_region.handwriting_png is not None
+                    else None
+                ),
+                "handwritingHintMatchesPrepared": (
+                    hint_sha256 == hashlib.sha256(compact_region.handwriting_png).hexdigest()
+                    if hint_sha256 is not None and compact_region.handwriting_png is not None
+                    else None
+                ),
             }
         )
     return manifest

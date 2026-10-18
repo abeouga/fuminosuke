@@ -10,6 +10,7 @@ import {
   FiX,
 } from "react-icons/fi";
 import { ApiError, api, createIdempotencyKey } from "../api";
+import { DocumentSeriesPicker, type SeriesSelection } from "../components/DocumentSeriesPicker";
 import { OcrPageBindings } from "../components/OcrPageBindings";
 import { TemplateNameEditor } from "../components/TemplateNameEditor";
 import { OcrImagePicker } from "../components/OcrImagePicker";
@@ -18,6 +19,7 @@ import { showToast } from "../components/Toast";
 
 
 import { useOcrJobProgress } from "../hooks/useOcrJobProgress";
+import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { usePreviewDialog } from "../hooks/usePreviewDialog";
 import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Template } from "../types";
@@ -110,6 +112,9 @@ export function OcrPage({
   const [step, setStep] = useState<OcrStep>(1);
   const [file, setFile] = useState<File | null>(null);
   const [enabled, setEnabled] = useState(true);
+  // Optional: read the upload as the next version of a confirmed document the user picks.
+  const [seriesOpen, setSeriesOpen] = useState(false);
+  const [predecessor, setPredecessor] = useState<SeriesSelection | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { mappingPreview, mappingValid, mappingError, mappingResolvedVersionId, reloadMappings } = useOcrMappingPreview(versionId);
@@ -120,6 +125,7 @@ export function OcrPage({
   const previewDialogRef = useRef<HTMLElement | null>(null);
   const [pageInputRisk, setPageInputRisk] = useState(false);
   const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
+  const phoneDevice = usePhoneDevice();
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [duplicateBusyTemplateId, setDuplicateBusyTemplateId] = useState<string | null>(null);
   const [recentCopies, setRecentCopies] = useState<Array<{
@@ -133,7 +139,18 @@ export function OcrPage({
   const templateWorkspaceIdRef = useRef(0);
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
-  const previewFor = useTemplatePreviews(activeVersion, step !== 1 && !templateWorkspace && !jobId);
+  useEffect(() => {
+    // A predecessor is chosen per template version; another version starts without one.
+    setSeriesOpen(false);
+    setPredecessor(null);
+  }, [versionId]);
+  // The template grid (step 1) shows every card's thumbnail; the selected version loads first.
+  const previewVersions = useMemo(
+    () => [...templateCards.map((card) => card.version)]
+      .sort((first, second) => Number(second.id === versionId) - Number(first.id === versionId)),
+    [templateCards, versionId],
+  );
+  const previewFor = useTemplatePreviews(previewVersions, !templateWorkspace && !jobId);
   const activePreviewState = activeVersion ? previewFor(activeVersion) : undefined;
   const activePreview = activePreviewState?.url;
   const detailLoading = activeVersion !== undefined && (
@@ -348,6 +365,17 @@ export function OcrPage({
     setStep(2);
   };
 
+  if (templateWorkspace && phoneDevice) {
+    return (
+      <div className="page-stack narrow">
+        <section className="form-card phone-template-notice" role="status">
+          <h1>テンプレートの作成・編集はパソコンで行ってください</h1>
+          <p>スマートフォンでは、作成済みのテンプレートを使った読み取り・確認・修正・確定・Excel取得・質問ができます。</p>
+          <button type="button" className="primary" onClick={() => setTemplateWorkspace(null)}>読み取りに戻る</button>
+        </section>
+      </div>
+    );
+  }
   if (templateWorkspace) {
     return (
       <TemplatePage
@@ -466,6 +494,21 @@ export function OcrPage({
                         setFile(nextFile);
                       }} />
                     </div>
+                    {versionId && (
+                      <DocumentSeriesPicker
+                        templateVersionId={versionId}
+                        open={seriesOpen}
+                        onOpenChange={(open) => {
+                          idempotencyKeyRef.current = null;
+                          setSeriesOpen(open);
+                        }}
+                        value={predecessor}
+                        onChange={(next) => {
+                          idempotencyKeyRef.current = null;
+                          setPredecessor(next);
+                        }}
+                      />
+                    )}
                     {textRecognitionToggleEnabled && <>
                       <label className="switch-row">
                         <span><strong>文字読み取りも実行する</strong><small>オフにすると画像処理と領域切り出しだけを行います。</small></span>
@@ -492,7 +535,7 @@ export function OcrPage({
                 </div>
                 <div className="ocr-step-actions ocr-step-actions-single">
                   <button type="button" className="primary"
-                    disabled={!file || mappingPreview === null || !mappedReadingReady || Boolean(mappingError)}
+                    disabled={!file || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
                     onClick={() => setStep(3)}>内容確認へ<FiArrowRight aria-hidden="true" /></button>
                 </div>
               </section>
@@ -527,6 +570,7 @@ export function OcrPage({
                 <dl className="ocr-reading-summary">
                   <div><dt>テンプレート</dt><dd>{activeSelection ? `${activeSelection.template.name} · v${activeSelection.version.versionNumber}` : "未選択"}</dd></div>
                   <div><dt>帳票画像</dt><dd>{file?.name ?? "未選択"}</dd></div>
+                  <div><dt>読み込み方</dt><dd>{predecessor ? `「${predecessor.label}」の更新（版${predecessor.seriesVersion + 1}として保存し、前の版は履歴に残します）` : "新しい書類として読み込む"}</dd></div>
                   <div><dt>処理内容</dt><dd>{ocrEnabledForSubmission ? "手書き文字を読み取る" : "画像処理のみ"}</dd></div>
                 </dl>
                 <div className="ocr-step-actions">
@@ -548,6 +592,7 @@ export function OcrPage({
                           file,
                           ocrEnabledForSubmission,
                           idempotencyKey,
+                          predecessor?.jobId,
                         );
                         rememberJob(created.jobId);
                         if (generation !== submissionGenerationRef.current) return;

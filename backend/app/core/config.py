@@ -20,6 +20,7 @@ class AppSettings(BaseModel):
     frontend_origins: tuple[str, ...]
     editing_api_enabled: bool = False
     template_analysis_enabled: bool = False
+    structured_data_enabled: bool = False
     print_pdf_renderer: Literal["appcontainer", "wsl", "linux"] = "appcontainer"
     print_wsl_distribution: str = Field(
         default="Ubuntu-22.04", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
@@ -64,7 +65,8 @@ class StorageSettings(BaseModel):
 
 
 class DatabaseSettings(BaseModel):
-    url: str
+    url: str = Field(repr=False)
+    schema_name: str | None = Field(default=None, pattern=r"^tenant_[0-9a-f]{32}$")
 
 
 class JobSettings(BaseModel):
@@ -152,6 +154,9 @@ class RawSettings(BaseSettings):
     template_analysis_enabled: bool = Field(
         default=False, validation_alias="TEMPLATE_ANALYSIS_ENABLED"
     )
+    structured_data_enabled: bool = Field(
+        default=False, validation_alias="STRUCTURED_DATA_ENABLED"
+    )
     print_pdf_renderer: Literal["appcontainer", "wsl", "linux"] = Field(
         default="appcontainer", validation_alias="PRINT_PDF_RENDERER"
     )
@@ -220,7 +225,7 @@ class RawSettings(BaseSettings):
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
-        default="mapped-compact-v1", validation_alias="OPENAI_PROMPT_VERSION"
+        default="mapped-compact-v2", validation_alias="OPENAI_PROMPT_VERSION"
     )
     openai_schema_version: Literal["2.0"] = Field(
         default="2.0", validation_alias="OPENAI_SCHEMA_VERSION"
@@ -302,6 +307,7 @@ class Settings:
                 frontend_origins=origins,
                 editing_api_enabled=raw.editing_api_enabled,
                 template_analysis_enabled=raw.template_analysis_enabled,
+                structured_data_enabled=raw.structured_data_enabled,
                 print_pdf_renderer=raw.print_pdf_renderer,
                 print_wsl_distribution=raw.print_wsl_distribution,
                 print_wsl_runtime_id=raw.print_wsl_runtime_id,

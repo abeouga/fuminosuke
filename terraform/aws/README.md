@@ -9,6 +9,12 @@ AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-nort
 | `bootstrap` | 適用済み。state用S3と暗号化・非公開・versioning・TLS制限の5資源。stateは同bucketの `bootstrap/terraform.tfstate` |
 | `beta` | 旧EC2を取り込む33資源の案。**未適用・現行Fargate構成ではない**。誤適用防止の入力検証あり。既存AWSはまだCloudFormation管理 |
 | `modules/runtime_hours` | FargateとRDSの夜間停止制御。検証済み定義、未配備、既定無効。実task/service/DBの受入後に接続する |
+| `renderer_probe` | 7-Bの実検証用13資源。独立state、専用cluster/ECR/S3/SG/task definition。service・繰返し起動・task IAM roleなし。製品API/DBの配備rootではない |
+
+[7-Bの検証記録](../../docs/web-beta-phase7b-fargate-2026-10-16.md)を参照してください。
+`renderer_probe` のstate keyは `probe/renderer/terraform.tfstate` です。
+taskの起動は短い試験runnerからのみ行い、終了後に所有task・ENIと試験objectを照合します。
+保存planは実資源の作成/変更を管理し、実行時の署名URLはstateへ保存しません。
 
 state bucketは `fuminosuke-tfstate-535562976288-ap-northeast-1`。S3 lockfileを使い、DynamoDBは追加しません。bootstrapは初回だけlocal stateでbucketを作り、その後 `backend.tf` のS3へstate移行済みです。以後backendを削除して新しいlocal stateを作り直さないでください。
 

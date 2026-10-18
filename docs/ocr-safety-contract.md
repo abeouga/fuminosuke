@@ -1,5 +1,11 @@
 # OCR Safety Contract
 
+2026-10-18：**意図的なOCR contract変更**（§4.5新設）。印刷の項目名を持たない記入欄（printedLabelTextが空で元の色の切り抜きを送る欄）だけ、同じ欄の手書き部分を元の色で残し印刷部分を白くした画像を、元の画像の直後に追加で送る。指示文に記入の有無の判定と読み方を追加し、prompt versionを`mapped-compact-v2`に上げた。記号・チェックリスト・印刷の項目名を除外済みの欄は変更しない。同じ画像の変更前後比較で、空欄の印字「／」「( )」「電話」が値にならず空欄になり、時刻欄は「午前10時30分」まで読めた。詳細は§4.5。
+
+2026-10-18：**意図的なOCR contract変更**（§3.6新設）。スマホ写真のため、暗い・影のある入力に限り紙の背景を平坦化して位置合わせし、横向きは90°/270°回転も試す。受入閾値・mapping・crop矩形・provider契約は不変、白い入力は画素まで従来と同一。合成写真40条件で位置合わせ成功20→39・欄四隅の最大誤差5.16→2.39px、実OCR3帳票で欄の取り違え0。記録は[スマホ写真・スマホ画面・文字拡大](phone-photo-and-mobile-2026-10-18.md)。以下は従前記録。
+
+2026-10-16：[7-Bの実Fargate試験](web-beta-phase7b-fargate-2026-10-16.md)は製品未接続の `fargate-renderer-feasibility-v1`。通信syscall拒否、権限分離、2GiB実OOM、timeout、取消、起動元喪失と再描画、固定3PNG/FODSの既存経路とのbytes一致を確認した。従来の `linux-container-renderer-v1` admission、v4 candidateや旧資格へ成功を後付けしない。RLIMITプロセス制限・task一時領域・壁時計期限は旧Docker条件と異なり、製品接続前に新実行/graph/candidate policyと所有bindingを明示検証する。本工程では業務backend/frontend、provider/prompt/schema、mapping/crop、snapshot、revision、確定/出力、通常DBを変更せず既存OCR contractを維持した。終了時に別途製品6ファイルの変更を検出して保持したが、固定imageの試験を現在のworktree全体の回帰保証にはしない。正式環境認定・実OCR品質・公開受入の証明ではない。以下は従前記録。
+
 2026-10-16 Fargate移行：[移行設計](web-beta-fargate-plan-2026-10-16.md)へ公開方式を変更し、Terraformと夜間停止の定義を準備した。今回の変更はinfra・運用文書に限定し、業務backend/frontendと通常データ、provider/model/prompt、mapping/crop、revision、確定・出力契約は変更していない。既存OCR contractを維持した。PostgreSQL/S3の保存境界とFargate描画隔離は後続の明示工程で検証し、EC2での成功をFargate受入へ流用しない。23:00〜7:00停止でも未保存値・受付snapshot・予約消費・削除記録を保護する。以下は従前記録。
 
 2026-10-16：[Webベータ修正6-Bの独立再審査](web-beta-phase6b-review-2026-10-16.md)でR1〜R3の解消を確認した。回収の再中断・対象外資源保持・親リンク拒否、復元失敗時の全利用者停止と未完成root起動拒否、管理CLIによる明示再承認・旧cookie拒否を実検証。修正37・独立15・Linux11条件、frontend176/buildが成功。製品コード/テストと通常データは変更せず、確定XLSX SHA・既存OCR contractを維持。次はフェーズ7の実環境受入で、公開判定は未完了。以下は従前記録。
@@ -906,6 +912,26 @@ Canvasのハンド操作による明示的な配置修正では、編集可能�
 
 再現・実装範囲・検証の限界は[位置合わせ失敗調査](registration-investigation-20260911.md)を参照する。
 
+### 3.6 スマホ撮影写真の明るさ補正と向き（2026-10-18・意図的な変更）
+
+利用者の要望（暗い・ゆがんだ写真への対応）と破壊的変更の許可による。旧契約は「位置合わせ・切り抜きは
+撮影した画素をそのまま使い、テンプレートの向きでだけ書類の輪郭を探す」、新契約は次のとおり。
+
+- 単一画像・ページ別の抽出は `image_processing/photo_registration.register_document` を通す。最初の候補は従来と同じ
+  向き・同じ輪郭正規化で、紙がテンプレートより暗い（中央値で20以上）か、むらが大きい（5〜95%点の差で20以上）
+  ときだけ紙の背景で割って平坦化した画像を使う。その候補が不合格なら撮影したままの画像、さらに縦横を入れ替えた
+  輪郭の90°・270°回転を試す。どの候補も既存の `TemplateAligner` の受入条件をそのまま通る必要があり、閾値は変えない。
+- 輪郭検出用の縮小画像だけ、95%点が190未満なら明るさを伸ばす。
+- 平坦化した候補で位置合わせできた場合に限り、位置合わせ済み画像へ雑音除去と輝度だけの濃度復元をかけ、
+  手書き分離・記号判定・切り抜きはその画像から作る。ペンの色は保持する。
+- テンプレートと同程度に白い入力は画素・変換・切り抜きとも従来と同一（複製DBの保存済み14ジョブで位置合わせ済み画像の
+  SHA-256一致を確認）。採用した回転・平坦化・試行の一覧は品質情報 `photoRegistration`、失敗時は
+  `registrationFailure.diagnostics.registrationAttempts` に記録する。
+- mappingId・targetPath・sourceRegionId・保存矩形・padding・provider・model・prompt・schema・association・受付snapshotは変更しない。
+
+合成スマホ写真40条件の前後比較（欄四隅の誤差）・実OCR・画面での確定/XLSXの記録は
+[スマホ写真・スマホ画面・文字拡大](phone-photo-and-mobile-2026-10-18.md)。
+
 ## 4. Provider request・association・mappedCells
 
 ### 4.1 Request manifest
@@ -939,6 +965,38 @@ request準備が初期 `mappedCells` payloadを生成し、response finalizerが
 model、fallback、prompt / prompt version、structured-output schema、association schema、request形式、image detail、前処理、batch size戦略、provider SDK利用方式の変更もOCR-sensitiveとする。
 
 provider・model・promptVersion・schemaVersion等、保持している識別子を記録し、コード未変更でも設定差分を追う。`associationVersion` 等を全jobで永続化済みとは仮定しない。
+
+### 4.5 手書き抽出画像の同時送信（2026-10-18・意図的な変更）
+
+利用者の明示要求（「手書きの時・分を読むこと」「空欄の印字を値にしないこと」）による変更。
+
+- 旧契約：印刷の項目名（`printedLabelText`）を持たない記入欄は、元の色の切り抜き1枚だけを送る。
+  受付時に `handwriting_png`（手書き抽出）を作り `openAiImageCount` には数えていたが、実際の送信内容には含めていなかった。
+  そのため印刷の斜線・括弧・項目語（日付欄の「／」、区分欄の「( )」、連絡先の「電話」）が値として返り、
+  丸で囲んだ選択肢と手書きの数字が同じ枠にある欄では選択肢だけが返った。
+- 新契約：上記の欄（`candidate_type` なし、`handwriting_png` あり）に限り、元の画像の直後に
+  `handwritingOnly:<compactId>` の文字と補助画像を1枚追加する。補助画像は、手書き抽出で墨のある画素を
+  半径4pxだけ広げた範囲に元の色の画素を置き、それ以外を白にしたもの（`_restored_handwriting`）。
+  抽出処理で欠けた線を元の画素で戻すため、記入の無い欄は真っ白になる。サイズが合わないときは抽出画像をそのまま使う。
+  ASSOCバナーは元の画像だけに付け、補助画像には付けない。
+- 指示文（`HANDWRITING_HINT_INSTRUCTIONS`）は補助画像を送る要求にだけ追加する。記入の有無は補助画像で判断し、
+  文字の形は元の画像でも確かめる。記入が無ければ印刷があっても `s=b`。記入があれば丸で囲んだ印刷の選択肢と、
+  年・月・日・時・分・番・号・斜線のような1文字の単位・区切りだけを値に含め、項目名の語句は含めない。
+  補助画像の印刷の消し残しは元の画像で印刷と同じ位置・書体なら印刷として扱う。候補プールのある欄の判定は変えない。
+- 記号（symbol_choice）・チェックリスト・管理値の欄、印刷の項目名を除外して手書き抽出を元の画像として送る欄は、
+  送信内容・指示とも従来どおり。mappingId、association token、compact ID、sourceRegionId、boundingBox、crop、
+  応答schema、受付snapshotは変更しない。request manifestには `contentHandwritingHintIndex`、
+  `handwritingHintSha256`（送信した補助画像）、`handwritingSourceSha256`（手書き抽出）、`handwritingHintMatchesPrepared` を追加した。
+- prompt versionは `mapped-compact-v2`（既定値と `.env`）。過去のjob・受付snapshotへは後付けしない。
+
+検証（データの複製、GPT系の既存OCR経路で実送信）：同じテンプレート・同じ画像の変更前のjob結果（attemptの `result.json`）と比較した。
+F06の日付欄で印字「／」6欄・「( )」1欄が空欄になり、記入した日付「4/1」「4/8」「4/15」と区分は維持。
+F02の時刻欄（文字の欄）は「午前」だけから「午前10時30分」へ（最終形の指示で2/2回）。F01の未記入の電話欄は「電話」から空欄へ。
+F08（191欄）は途中版で差分0。値の取り違え・欄の対応違いは0。表記の違い（全角空白・区切りの省略・単位の付加・✓とレ）は残る。
+途中版で見つかった後退（抽出画像の欠けた線による「4」→「1」、ふりがなの脱落、記号欄の「午前」が要確認になる、
+印刷の消し残しの読み込み、住所への項目名の混入）は、補助画像の作り方と指示の範囲指定で解消を確認してから最終形にした。
+既存の契約テスト（tests/ocr_contract、test_openai_cost）は17件成功、4件は本変更と無関係の既存失敗（廃止した業種引数 `mother_individual_id`）。
+詳細は [汎用化の記録](template-ai-generic-forms-2026-10-17.md) の「読み取り本体の変更」。
 
 ## 5. Review contractとUI / 業務状態
 
@@ -1089,6 +1147,38 @@ CSV設定、業種辞書・年号・単位の推測は廃止した。旧補正pa
 識別情報は `documentIdentityFields` の配列に明示設定する。番号・名称・日付・組合せを
 扱い、全帳票共通の番号・10桁・DB主キーの一意性を要求しない。明示されたdigits / exactLengthは守る。
 書類ライブラリの検索・自動統合は行わず、読み取り後に設定した値とcropを利用者が確認する。
+2026-10-16追記：確定済み結果だけを対象に、1利用者DB内で書類名・識別値による一覧と
+構造化投影（`structured-document.v1`、`/api/v2/structured`、既定無効）を読み取り専用で提供する。
+自動統合・推測値の保存は引き続き行わない。範囲は[設計](structured-qa-design-2026-10-16.md)§2。
+2026-10-17追記（書類の系列、段階2）：利用者が受付時に**明示的に選んだ**確定済みの単一画像jobを
+前の版として、新しいjobを `document_series_links` で結び付けられる（`predecessorJobId`、
+alembic `document_series_v1`）。条件は、前のjobが確定済み（CONFIRMED・確定revision一致）、
+同じ `templateVersionId` かつ同じ `fieldMappingHash`、paged以外、前のjobに取消以外の後継がないこと。
+前の版の確定revisionと確定snapshotのSHA-256を受付snapshot（`documentSeries`）とリンクに記録し、
+後継の確定時に一致しなければ409 `SERIES_PREDECESSOR_CHANGED`。後継のある版の再編集・削除は
+409 `SERIES_HAS_SUCCESSOR`。前のjobの値・確定snapshot・cropは変更しない。構造化一覧は確定済みの
+後継を持つjobを除き、版番号を付ける。段階2の後継（`mode=full`）は全欄を読み値を引き継がない。
+
+**2026-10-18 意図的なOCR contract変更（書類の系列、段階3、`mode=blank_only`、新規の更新の既定）**：
+§3.3「別jobの値を統合しない」・§6.2「新旧jobのID一致だけで値を移さない」の例外として、次の条件を
+すべて満たす場合に限り、前の版の確定値を新しいjobへ引き継ぐ。旧契約は「別jobの値は一切引き継がない」、
+新契約は「利用者が明示的に選んだ確定済みの前の版から、同一mappingの確定値だけを引き継ぐ」。
+- 上記の受付条件（明示選択・同じ版とfieldMappingHash・確定revisionとSHAの固定）を満たす。
+- 引き継ぐ欄は**受付時に固定**し、受付snapshot `documentSeries.carried`（mappingId→確定時の
+  raw/normalized/status/alternatives/reviewReason）に保存する。対象は、前の版の確定値が同じフィールドキーで
+  同じ `sourceRegionId`（=mappingId）に結び付き、statusが `readable` / `uncertain` の欄だけ。
+  空欄、識別欄（`documentIdentityFields`）、mapping外の値（旧形式の追加項目など）は引き継がない。
+- 位置合わせ・切り抜き・`mappedCells` の件数は全欄で従来どおり。providerへの要求からだけ引き継ぐ欄を除き、
+  要求する欄の manifest・compact ID・association token の検査は変えない。引き継いだ欄は `mappedCells` で
+  `sentToOpenAi=false`・`localResolution=carried_from_predecessor`、件数を `carriedFromPredecessorCount` に記録し、
+  artifact `incrementalPlan` に引き継ぎ・要求のmappingIdを保存する。
+- 引き継いだ読み取りの `sourceRegionId` は同じmappingId、`boundingBox` はこのjobの画像の切り抜きを使う
+  （前のjobのcropを移さない）。以後の補正・確定・出力は通常のjobと同じ経路・検査を通る。
+- 確定時、識別値が前の版の確定値・読み取り文字列のどちらとも一致しなければ、利用者の明示
+  （`acceptIdentityMismatch: true`）なしに確定しない（409 `SERIES_IDENTITY_MISMATCH`）。
+- 系列のないjob・pagedの結果は変わらない（保存済み画像の同一条件で変更前後を照合済み）。
+未移行DBではリンクを作れず（503 `SERIES_NOT_MIGRATED`）、既存の確定・再編集・削除は従来どおり。
+設計と検証は[追記分の取り込み](incremental-update-and-ask-gui-design-2026-10-17.md)§15。
 
 画像帳票は受付時の非空fieldMappingsと凍結reviewStructureから独立項目・見出し・明細表を
 出力する。列はcolumn ID、値はfield ID / mappingId / targetPathの一致で解決し、ラベルや
@@ -1382,6 +1472,8 @@ paged経路では確定・reopenもrevisionを増分する。単一OCRにも2026
 確定の成否が不明な通信失敗では再取得まで状態変更/編集を止めるが、通常の補正保存では追加編集を維持する。
 競合で保持した下書きは確定済み値として表示せず、明示reopen後に編集値として復元する。
 書類ライブラリは製品対象外。既存単一ページ用APIの拒否と本番受付gateは維持する。
+確定済みpaged結果の読み取り専用投影（2026-10-16、`/api/v2/structured`）は同じ確定判定
+（status・revision・snapshot・documentNameの一致）を使い、確定行の存在だけでは投影しない。
 意図的な新paged保存/確定契約の拡張と残る制限は[全ページ確定](paged-confirmation.md)に記録する。
 詳細とmigration適用状況は[ページ別レビュー](paged-review.md)を参照する。
 

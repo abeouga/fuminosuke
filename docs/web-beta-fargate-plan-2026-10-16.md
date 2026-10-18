@@ -1,5 +1,10 @@
 # 文之助ベータのFargate移行設計
 
+2026-10-16更新：[7-Bの実Fargate成立性検証](web-beta-phase7b-fargate-2026-10-16.md)を実施した。
+専用のTerraform13資源で固定帳票の3PNG/FODS一致、通信・資格情報分離、OOM/timeout/取消/起動元喪失と回収を確認した。
+このprobeは製品未接続であり、以下のAPI/RDS/S3業務保存・夜間制御の配備は未完了。
+次は7-Cの保存・再起動と実行境界の接続。旧EC2を再開せず、既存CloudFormation管理を保持する。
+
 2026-10-16。最新の指定はTerraformによる構成管理、APIのFargate実行、画面のS3配信、AWS月1万円以内、毎日23:00〜翌7:00の停止である。時刻は日本時間とする。旧EC2案による公開受入を中止し、この設計でフェーズ7を分割する。対象は `llm-ocr-deploy`、AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-northeast-1**。
 
 ## 構成
@@ -78,8 +83,8 @@ S3は単なるPath置換では足りない。取得・一時作業・確定保�
 
 | 工程 | モデルと強度 | 完了条件 |
 | --- | --- | --- |
-| 7-A 移行設計と費用 | Astra / High | 本設計、現状保持、停止制御定義、予算試算。今回の作業範囲 |
-| 7-B Fargate描画の成立性 | GPT-6.1 Sol / XHigh | 実Fargateで固定帳票描画、通信・資格情報・他jobアクセス拒否、timeout/OOM/終了時回収を検証。失敗ならここで方式を修正 |
+| 7-A 移行設計と費用 | Astra / High | 完了。本設計、現状保持、停止制御定義、予算試算 |
+| 7-B Fargate描画の成立性 | GPT-6.1 Sol / XHigh | 固定入力の実検証を完了。製品未接続のprobeで通信・資格情報・他job参照拒否、timeout/OOM/取消/起動元喪失を確認。正式資格と一般帳票の認定は別 |
 | 7-C 保存と再起動 | GPT-6.1 Sol / XHigh | PostgreSQL・S3への移植、利用者分離、revision、台帳、削除・復元・夜間中断の短い実API検証。OCR生成条件は変更しない |
 | 7-D Terraformと画面配信 | GPT-6.1 Sol / High | Fargate/RDS/内部ALB/S3/CloudFront/ACM/ECR/夜間制御の構成、既存資源の取込とCloudFormation二重管理の解消、旧資源の撤去計画 |
 | 7-E 独立工程審査 | Astra / XHigh | 保存・隔離・予算・停止復旧の審査、関連回帰。審査前に夜間制御やAIを有効にしない |
@@ -89,7 +94,7 @@ S3は単なるPath置換では足りない。取得・一時作業・確定保�
 
 旧CloudFormationの24資源は作成済み。既存 `app.herdio-system.com` の委任を残してルートAを旧EIPへ設定した。新規Cognito利用者の登録・招待メール送信は明示許可後に実施済みだが、製品ログイン受入は未完了。旧EC2に配布imageを導入した後、業務コンテナー0、registry/operations DBなしを確認して停止した。製品公開済みではない。
 
-Terraformはstate用S3の5資源だけを作成し、そのstateをS3へ移した。ベータ本体33資源の取込案はFargate指定前に生成したが**未適用**で、CloudFormation管理をまだ解除していない。`terraform/aws/beta` は誤適用防止付きのEC2移行案であり、Fargateの配備rootではない。`deploy/infra.yaml` も旧方式の記録として保持し、新しい環境の作成に使わない。
+Terraformはstate用S3の5資源を作成し、そのstateをS3へ移した。7-Bでは別stateの専用probe13資源を追加し、実Fargateで検証した。全16試験taskは停止済み、専用ENIと試験objectは回収済みであり、製品API/DBの配備ではない。ベータ本体33資源の取込案はFargate指定前に生成したが**未適用**で、CloudFormation管理をまだ解除していない。`terraform/aws/beta` は誤適用防止付きのEC2移行案であり、Fargateの配備rootではない。`deploy/infra.yaml` も旧方式の記録として保持し、新しい環境の作成に使わない。
 
 夜間制御は07:00／23:00境界、DB起動待ち、API終了待ち、renderer終了、重複、対象不存在・不一致、受入前停止の16条件を制御クライアントで検証した。Terraform validateと隔離fixtureのplanは成功し、11追加・変更0・削除0。**このplanは適用せず、実Fargate/RDSの停止再開は未検証**。Windowsの初回検証はtzdata不足で失敗し、日本向け固定UTC+9の標準ライブラリ実装にして16条件を再確認した。
 

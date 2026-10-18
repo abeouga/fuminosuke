@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import re
 import shutil
-import sqlite3
-from contextlib import closing
 from pathlib import Path
 from typing import cast
 
 from app.ai.api_budget import refused
 from app.cloud.config import CloudSettings
-from app.cloud.journal import Journal, TenantBudget
+from app.cloud.journal import Journal, TenantBudget, s3_client
 from app.cloud.registry import Registry
 from app.core.config import DatabaseSettings, Settings
 from app.db.models import ProcessingJob, Template
@@ -46,20 +44,57 @@ class Operations:
                  registry: Registry, journal: Journal) -> None:
         self.settings, self.config = settings, config
         self.registry, self.journal = registry, journal
+        self.storages: dict[str, LocalStorageService] = {}
 
     def budget(self, tenant: str) -> TenantBudget:
         return TenantBudget(self.journal, tenant, lambda: self.registry.require_access(tenant))
 
     def deletion(self, tenant: str, kind: str, identity: str) -> None:
         self.registry.require_access(tenant)
-        path = tenant_root(self.config.root, tenant) / "app.db"
-        with closing(sqlite3.connect(path)) as db:
-            busy = db.execute("SELECT 1 FROM processing_jobs WHERE status IN "
-                              "('CREATED','QUEUED','PROCESSING') LIMIT 1").fetchone()
+        database = self.database(tenant)
+        if database is None:
+            raise ValueError("Tenant database is missing")
+        try:
+            with database.session() as db:
+                from sqlalchemy import select
+                busy = db.scalar(select(ProcessingJob.id).where(
+                    ProcessingJob.status.in_(("CREATED", "QUEUED", "PROCESSING"))
+                ).limit(1))
+        finally:
+            database.dispose()
         if busy:
             raise refused("処理中・待機中の読み取りを停止してから削除してください。",
                           "BETA_DELETE_BUSY", 409)
         self.journal.delete(tenant, kind, identity)
+
+    def database(self, tenant: str) -> Database | None:
+        root = tenant_root(self.config.root, tenant)
+        if self.registry.control is not None:
+            from app.cloud.postgres import tenant_settings
+            with self.registry.control.connect("operations") as db:
+                exists = db.execute("SELECT 1 FROM pg_namespace WHERE nspname=?",
+                                    ("tenant_" + tenant,)).fetchone()
+            if not exists:
+                return None
+            return Database(tenant_settings(self.registry.control.url, tenant),
+                            transaction_fence=self.registry.control.fence)
+        if not (root / "app.db").exists():
+            return None
+        return Database(DatabaseSettings(url="sqlite+pysqlite:///" + (root / "app.db").as_posix()))
+
+    def storage(self, tenant: str) -> LocalStorageService:
+        root = tenant_root(self.config.root, tenant)
+        if tenant in self.storages:
+            return self.storages[tenant]
+        storage: LocalStorageService
+        if self.registry.control is not None:
+            from app.storage.s3_storage import S3StorageService
+            storage = S3StorageService(root, control=self.registry.control, client=s3_client(),
+                                       bucket=str(self.config.object_bucket), tenant=tenant)
+        else:
+            storage = LocalStorageService(root)
+        self.storages[tenant] = storage
+        return storage
 
     def delete_tenant(self, tenant: str) -> None:
         # Host-only, under the offline runtime lease; all workers have already stopped.
@@ -77,6 +112,13 @@ class Operations:
         for tenant in deleted:
             self.registry.mark_deleted(tenant)
             path = tenant_root(self.config.root, tenant)
+            if self.registry.control is not None:
+                storage = self.storage(tenant)
+                for directory in ("uploads", "artifacts", "exports", "templates"):
+                    storage.delete_tree(directory)
+                with self.registry.control.connect("operations") as db:
+                    # Identity was validated by tenant_root; never interpolate a browser schema.
+                    db.execute(f'DROP SCHEMA IF EXISTS "tenant_{tenant}" CASCADE')
             if path.exists():
                 # Reject every nested symlink before recursive removal.
                 if any(p.is_symlink() for p in path.rglob("*")):
@@ -89,15 +131,15 @@ class Operations:
                 if (record["kind"] != "delete" or tenant in deleted
                         or record["resourceKind"] == "tenant"):
                     continue
-                root = tenant_root(self.config.root, tenant)
-                if not (root / "app.db").exists():
-                    continue
                 if tenant not in databases:
-                    databases[tenant] = Database(DatabaseSettings(
-                        url="sqlite+pysqlite:///" + (root / "app.db").as_posix(),
-                    ))
+                    database = self.database(tenant)
+                    if database is None:
+                        self._remove_deleted_files(self.storage(tenant), record["resourceKind"],
+                                                   record["resourceId"])
+                        continue
+                    databases[tenant] = database
                 database = databases[tenant]
-                storage = LocalStorageService(root)
+                storage = self.storage(tenant)
                 kind, identity = record["resourceKind"], record["resourceId"]
                 with database.session() as db:
                     present = db.get(Template if kind == "template" else ProcessingJob, identity)
@@ -126,6 +168,9 @@ class Operations:
         directories = ("templates",) if kind == "template" else ("uploads", "artifacts", "exports")
         for directory in directories:
             relative = f"{directory}/{identity}"
+            if storage.requires_immutable_paths:
+                storage.delete_tree(relative)
+                continue
             if (storage.root / relative).is_symlink():
                 raise ValueError("Symlink in deleted resource path")
             path = storage.resolve(relative)
@@ -136,6 +181,18 @@ class Operations:
 
     def admission(self, tenant: str, upload_bytes: int = 0) -> None:
         root = tenant_root(self.config.root, tenant)
+        if self.registry.control is not None:
+            with self.registry.control.connect("objects") as db:
+                personal = db.execute(
+                    "SELECT COALESCE(sum(bytes),0) FROM objects "
+                    "WHERE tenant=? AND state!='DELETED'", (tenant,),
+                ).scalar_one()
+                total = db.execute("SELECT COALESCE(sum(bytes),0) FROM objects "
+                                   "WHERE state!='DELETED'").scalar_one()
+            if personal + upload_bytes > 500 * 1024**2 or total + upload_bytes > 5 * 1024**3:
+                raise refused("保存容量の上限に達しました。不要な帳票を削除してください。",
+                              "BETA_STORAGE_LIMIT", 413)
+            return
         total = 0
         personal = 0
         for path in (self.config.root / "tenants").rglob("*"):

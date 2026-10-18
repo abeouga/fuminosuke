@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import ConfigDict, Field
 
-from app.api.dependencies import get_job_service, get_ocr_result_service
+from app.api.dependencies import get_database, get_job_service, get_ocr_result_service
 from app.api.editing_cutover import legacy_edit_guard
 from app.api.v1.routes.shared import JobAccepted, job_accepted
 from app.api.v1.routes.uploads import read_upload
 from app.core.errors import ApiModel, AppError
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReviewItem
 from app.domain.template_config import DocumentIdentityConfig
+from app.services.document_series import series_candidates
 from app.services.ocr_result_service import CorrectionValues
 
 router = APIRouter(tags=["ocr"])
@@ -48,6 +51,8 @@ class OcrResultResponse(ApiModel):
     record_structure: dict[str, Any]
     review_structure: dict[str, Any]
     document_name: str
+    # Present when the job was read as an update of a confirmed document (document_series).
+    series: dict[str, Any] | None = None
 
 
 class OcrCorrectionRequest(ApiModel):
@@ -70,6 +75,49 @@ class OcrConfirmationRequest(ApiModel):
     model_config = ConfigDict(extra="forbid")
     base_revision: int = Field(ge=1)
     document_name: str | None = Field(default=None, min_length=1, max_length=180)
+    # Required only when an update's identity differs from its predecessor's.
+    accept_identity_mismatch: bool = Field(default=False, strict=True)
+
+
+class SeriesIdentity(ApiModel):
+    label: str
+    value: str | None = None
+
+
+class SeriesCandidate(ApiModel):
+    job_id: str
+    document_name: str | None
+    template_name: str
+    template_version_id: str | None
+    confirmed_at: datetime
+    confirmed_revision: int
+    series_version: int
+    identity: list[SeriesIdentity]
+    selectable: bool
+    reason: str | None
+
+
+class SeriesCandidateList(ApiModel):
+    items: list[SeriesCandidate]
+
+
+@router.get(
+    "/document-series/candidates",
+    response_model=SeriesCandidateList,
+    response_model_by_alias=True,
+)
+async def list_series_candidates(
+    request: Request,
+    template_version_id: Annotated[
+        str, Query(alias="templateVersionId", min_length=1, max_length=36)
+    ],
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> SeriesCandidateList:
+    """Confirmed documents (latest versions) that an upload can be read as an update of."""
+    items = await asyncio.to_thread(
+        series_candidates, get_database(request), template_version_id=template_version_id, query=q
+    )
+    return SeriesCandidateList.model_validate({"items": items})
 
 
 @router.post(
@@ -84,11 +132,15 @@ async def create_ocr_job(
     file: Annotated[UploadFile, File()],
     ocr_enabled: Annotated[bool, Form(alias="ocrEnabled")] = True,
     send_full_document_to_openai: Annotated[bool, Form(alias="sendFullDocumentToOpenAi")] = False,
+    predecessor_job_id: Annotated[
+        str | None, Form(alias="predecessorJobId", min_length=1, max_length=36)
+    ] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
     # Form fields from discontinued contracts must not be silently accepted.
     form = await request.form()
-    if set(form) - {"templateVersionId", "file", "ocrEnabled", "sendFullDocumentToOpenAi"}:
+    accepted = {"templateVersionId", "file", "ocrEnabled", "sendFullDocumentToOpenAi"}
+    if set(form) - (accepted | {"predecessorJobId"}):
         raise AppError(
             status=422,
             code="OCR_FORM_UNSUPPORTED",
@@ -105,6 +157,7 @@ async def create_ocr_job(
         ocr_enabled=ocr_enabled,
         send_full_document_to_openai=send_full_document_to_openai,
         idempotency_key=idempotency_key,
+        predecessor_job_id=predecessor_job_id,
     )
     return job_accepted(job)
 
@@ -155,7 +208,10 @@ def reopen_ocr_result(request: Request, job_id: str, body: OcrReopenRequest):
 )
 def confirm_ocr_result(request: Request, job_id: str, body: OcrConfirmationRequest):
     return get_ocr_result_service(request).confirm(
-        job_id, base_revision=body.base_revision, document_name=body.document_name
+        job_id,
+        base_revision=body.base_revision,
+        document_name=body.document_name,
+        accept_identity_mismatch=body.accept_identity_mismatch,
     )
 
 

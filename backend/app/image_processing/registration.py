@@ -34,6 +34,8 @@ class RegistrationFailure(AppError):
             metadata=diagnostics,
         )
         self.debug_rgb = debug_rgb
+        # The page image the failed candidate was aligned from (set by register_document).
+        self.normalized_rgb: NDArray[np.uint8] | None = None
 
 
 class TemplateAligner:

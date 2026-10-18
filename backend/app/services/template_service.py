@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, TypeVar
 
 import cv2
@@ -23,7 +22,7 @@ from app.domain.template_config import (
     load_template_config,
     parse_template_config,
 )
-from app.image_processing.artifacts import ArtifactWriter, encode_png
+from app.image_processing.artifacts import ArtifactWriter
 from app.image_processing.image_loader import ImageLoader
 from app.layout_analysis.detector import LayoutDetector
 from app.layout_analysis.models import LayoutDefinition, LayoutLabelPoolEntry
@@ -252,16 +251,6 @@ class TemplatePreparationService:
             file_name="quality.json",
             value=prepared.quality,
         )
-        base_path = f"templates/{template_id}/versions/{version_number}"
-        self._storage.write_bytes(
-            f"{base_path}/clean_template.png", encode_png(prepared.clean_template_rgb)
-        )
-        self._storage.write_bytes(f"{base_path}/preview.png", encode_png(prepared.preview_rgb))
-        if prepared.handwriting_mask is not None:
-            self._storage.write_bytes(
-                f"{base_path}/handwriting_mask.png",
-                encode_png(prepared.handwriting_mask, rgb=False),
-            )
         if previous is None:
             version_config = build_blank_template_config(
                 template_id=template_id, template_version=version_number, name=name,
@@ -291,10 +280,6 @@ class TemplatePreparationService:
             sort_keys=False,
         )
         config_relative_path = publish_config(self._storage, config_text)
-        self._storage.write_text(
-            f"{base_path}/quality.json",
-            json.dumps(prepared.quality, ensure_ascii=False, indent=2),
-        )
         with self._database.transaction() as session:
             job = JobRepository(session).get(job_id)
             if job is None or job.status != JobStatus.PROCESSING.value or job.attempt_number != attempt or job.cancel_requested:

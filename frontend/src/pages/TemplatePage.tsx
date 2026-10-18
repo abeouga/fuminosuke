@@ -51,7 +51,7 @@ const LAYOUT_WIZARD_STEPS: Array<{
   { id: "classify", shortTitle: "欄の種類", title: "検出された枠の種類を確認する", description: "書類から検出された枠を、項目名、見出し、記入欄、読み取らない欄に分けます。記入欄では文字・番号・記号・印刷された選択肢の読み取り方法を指定できます。" },
   { id: "meaning", shortTitle: "読み取る内容", title: "各欄で読み取る内容を決める", description: "記入欄と保存する情報を対応づけます。項目名のない記入欄には、保存する情報を直接指定できます。" },
   { id: "records", shortTitle: "繰り返し部分", title: "繰り返し部分をまとめる", description: "明細表など、同じ構造を繰り返す欄をひとまとまりとして設定します。" },
-  { id: "identity", shortTitle: "照合と書類名", title: "書類を見分ける情報と書類名を決める", description: "番号・名称・日付などの確認する欄と、保存するXLSXの書類名を設定します。" },
+  { id: "identity", shortTitle: "確認する欄とファイル名", title: "読み取り後に確認する欄とファイル名を決める", description: "氏名や番号など、読み取り後に「この書類で合っているか」を確かめる欄と、保存するファイル名を決めます。" },
   { id: "review", shortTitle: "確認・保存", title: "設定を確認して保存する", description: "未割当とレコード構造を確認し、テンプレート設定を保存します。" },
 ];
 
@@ -306,7 +306,7 @@ export function TemplatePage({
   return (
     <div className="page-stack narrow template-setup-workspace">
       <header className="page-header split">
-        <div><span className="eyebrow">READING / TEMPLATE MANAGEMENT</span><h1>テンプレート作成・編集</h1><p>新しい帳票のテンプレートを作成するか、既存のテンプレートを編集します。</p></div>
+        <div><h1>テンプレート作成・編集</h1><p>新しい帳票のテンプレートを作成するか、既存のテンプレートを編集します。</p></div>
         <div className="template-page-header-actions">
           {onClose && <button type="button" className="ghost" onClick={closeWorkspace}><FiArrowLeft aria-hidden="true" />読み取りへ戻る</button>}
         </div>
@@ -363,7 +363,7 @@ export function TemplatePage({
         hidden={selectedWorkspace !== "create"}
       >
         <div className="template-panel-heading">
-          <div><span className="eyebrow">NEW TEMPLATE</span><h2>新しいテンプレートを作成</h2></div>
+          <div><h2>新しいテンプレートを作成</h2></div>
           <p>原稿を選び、次の画面で読み取る欄を設定します。</p>
         </div>
         <section className="form-card template-create-form">
@@ -458,7 +458,7 @@ export function TemplatePage({
         hidden={selectedWorkspace !== "manage"}
       >
         <div className="template-panel-heading template-manage-heading">
-          <div><span className="eyebrow">EXISTING TEMPLATES</span><h2>確認・修正するテンプレートを選択</h2></div>
+          <div><h2>確認・修正するテンプレートを選択</h2></div>
           <p>{draftCount > 0 ? `${draftCount}件の作業途中テンプレートがあります。` : "作業途中のテンプレートはありません。"}</p>
         </div>
         <div className="template-list-toolbar">
@@ -492,12 +492,11 @@ export function TemplatePage({
                   )}
                 </div>
                 <div className="template-management-action">
-                  {printVersion?.mode === "SPREADSHEET_TEMPLATE" && <div>
+                  {printVersion?.mode === "SPREADSHEET_TEMPLATE" && printVersion.quality.printLayout ? <div>
                     <small>{printVersion.status === "ACTIVE" ? "使用中" : "下書き"} v{printVersion.versionNumber} の印刷用帳票</small>
                     <TemplatePrintFiles key={printVersion.id}
-                      versionId={printVersion.id} disabled={isDeletingCurrentTemplate || openingReview}
-                      disabledReason={printVersion.quality.printLayout ? undefined : "印刷ページ設定が保存されていません。"} />
-                  </div>}
+                      versionId={printVersion.id} disabled={isDeletingCurrentTemplate || openingReview} />
+                  </div> : null}
 
                   {primaryVersion && (
                     <button
@@ -1161,15 +1160,6 @@ function TemplateReview({
   return (
     <div className="page-stack template-authoring-workspace">
       <header className="page-header split"><div><span className="eyebrow">テンプレート設定 · V{version.versionNumber}</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1></div><button className="ghost" disabled={navigationBusy} onClick={closeReview}><FiArrowLeft aria-hidden="true" />{closeLabel.replace(/^←\s*/, "")}</button></header>
-      <div className="template-lifecycle-status" aria-label="テンプレート設定の状態">
-        <div className="done"><span>前処理</span><strong>画像準備済み</strong></div>
-        <div className={meaningSaved ? "done" : "current"}><span>現在</span><strong>{meaningSaved ? "テンプレート設定保存済み" : `テンプレート設定中 · ${activeLayoutStep.shortTitle}`}</strong></div>
-        <div className={printSaved ? "next" : effectiveLayoutVerified ? "done" : "next"}>
-          <span>{printSaved ? "ページ" : effectiveLayoutVerified ? "完了" : "次"}</span>
-          <strong>{printSaved ? `${printState?.saved?.pages.length ?? "—"}ページ・保存済み` : effectiveLayoutVerified ? "読み取り確認済み"
-            : isSpreadsheetTemplate ? "保存後にXLSX構造を確定" : "保存後に読み取り確認"}</strong>
-        </div>
-      </div>
       {loadFailed && (
         <div className="error-box action-message" role="alert">
           <span>テンプレート設定を最後まで読み込めませんでした。</span>
@@ -1238,13 +1228,12 @@ function TemplateReview({
           )}
         </aside>
       )}
-      {effectiveLayoutVerified && <div className="review-layout">
+      {effectiveLayoutVerified && <div className="template-verification-view">
         <section className="viewer-card">
           {before && after ? <ComparisonViewer before={before} after={after} /> : <div className="empty-state">画像を読み込んでいます…</div>}
           <div className="layer-tabs">{layers.map((name) => <button key={name} className={layer === name ? "active" : ""} onClick={() => setLayer(name)}>{layerLabel(name)}</button>)}</div>
           {byName.get(layer) && <div className="single-image-view"><img src={byName.get(layer)} alt={layerLabel(layer)} /></div>}
         </section>
-        <aside className="quality-card"><span className="panel-kicker">品質メモ</span><h3>自動点検の結果</h3>{Object.entries(version.quality).slice(0, 8).map(([key, value]) => <div className="metric" key={key}><span>{key}</span><strong>{typeof value === "number" ? value.toFixed(3) : String(value)}</strong></div>)}<p>数値は正解確率ではありません。比較画像を優先して確認してください。</p></aside>
       </div>}
       {isSpreadsheetTemplate && <PrintLayoutEditor
         key={`${version.id}:${recoveryDiscardEpoch}`} versionId={version.id}
@@ -1264,9 +1253,6 @@ function TemplateReview({
         <section className="form-card mapping-section">
           <div className="section-title">
             <div>
-              <span className="eyebrow">
-                STEP {layoutWorkflowIndex + 1}/{LAYOUT_WIZARD_STEPS.length}
-              </span>
               <h2 ref={mappingSectionHeadingRef} tabIndex={-1}>{activeLayoutStep.title}</h2>
               <p>{activeLayoutStep.description}</p>
             </div>
@@ -1348,7 +1334,6 @@ function TemplateReview({
             multiplePages={(printState?.saved?.pages.length ?? 0) > 1}
             blocked={layoutEditorDisabled || editorBusy || editorSaving || editingStatus.state !== "ready" || version.status !== "DRAFT" || activatedVersion?.status === "ACTIVE" || Boolean(assistantSelection?.draftReviewRequired)}
             saving={editorSaving} onSave={() => { void layoutEditorRef.current?.saveIfNeeded(); }} />}
-          {editingEnabled && !analysisEnabled && <p className="notice compact">AI解析は現在利用できません。枠と意味付けは手動で編集・保存できます。</p>}
           <LayoutEditor
             aiFocus={editingEnabled ? analysisStatus.held ? analysisStatus.focus : analysisStatus.focus ?? editingStatus.focus : null}
             aiContext={editingStatus.context}
@@ -1446,7 +1431,7 @@ function TemplateReview({
                   text: saved.mapping.fieldErrors?.length
                     ? `レイアウトを途中保存しました。${saved.mapping.warnings.join(" ")}`
                     : manualSaved ? manualSaved.result.notification
-                    : `レイアウト${saved.layout.cells.length}セル、意味づけ${saved.layout.relations.length}件と書類の見分け方を保存しました。`,
+                    : `レイアウト${saved.layout.cells.length}セル、意味づけ${saved.layout.relations.length}件と確認する欄・ファイル名を保存しました。`,
                 });
                 return saved.layout;
               } catch (error) {
@@ -1526,9 +1511,9 @@ function TemplateReview({
               {navigationPending
                 ? "変更を保存してから移動します。"
                 : layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady)
-                ? "照合グループと、保存するXLSXの書類名を指定してください。"
+                ? "確認する欄と、保存するファイル名を決めてください。"
                 : layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1
-                  ? "設定内容は工程を移動しても保持されます。"
+                  ? null
                   : "未割当と、書類を見分ける項目を確認して保存してください。"}
             </span>
             {layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1 && (
@@ -1544,7 +1529,7 @@ function TemplateReview({
           </div>
         </section>
       )}
-      {meaningSaved && !printSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><span className="eyebrow">LAYOUT VERIFICATION</span><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した読み取り範囲と帳票画像が対応しているか確認します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty || assistantApplying} onClick={async () => {
+      {meaningSaved && !printSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した読み取り範囲と帳票画像が対応しているか確認します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty || assistantApplying} onClick={async () => {
         if (verificationLockRef.current || editorDirty || editorBusy) return;
         verificationLockRef.current = true;
         setVerifying(true);
@@ -1567,7 +1552,7 @@ function TemplateReview({
           verificationLockRef.current = false;
         }
       }}>{verifying ? (isSpreadsheetTemplate ? "確定中…" : "再検出中…") : (isSpreadsheetTemplate ? "XLSX構造を確定" : "記入欄を再検出")}</button></section>}
-      {mask && layoutVerified && mappingFresh && <section className="form-card"><div className="section-title"><div><span className="eyebrow">DETECTION REVIEW</span><h2>再検出した文字候補の選別</h2><p>保存済みの記入欄内をOpenCVで再検証した候補です。任意の文字認識機能がある場合は候補を補助します。</p></div></div>{editorDirty && <p className="inline-warning">先にレイアウト変更を保存し、記入欄を再検出してください。</p>}<MaskEditor key={recoveryDiscardEpoch} source={mask} background={before} candidatesSource={byName.get("handwritingCandidates")} disabled={editorDirty || editorBusy || assistantApplying} onDirtyChange={setMaskDirty} onBusyChange={setMaskBusy} onSave={async (blob) => {
+      {mask && layoutVerified && mappingFresh && <section className="form-card"><div className="section-title"><div><h2>再検出した文字候補の選別</h2><p>保存済みの記入欄内をOpenCVで再検証した候補です。任意の文字認識機能がある場合は候補を補助します。</p></div></div>{editorDirty && <p className="inline-warning">先にレイアウト変更を保存し、記入欄を再検出してください。</p>}<MaskEditor key={recoveryDiscardEpoch} source={mask} background={before} candidatesSource={byName.get("handwritingCandidates")} disabled={editorDirty || editorBusy || assistantApplying} onDirtyChange={setMaskDirty} onBusyChange={setMaskBusy} onSave={async (blob) => {
         acceptRevision((await api.saveMask(version.id, revisionRef.current, blob)).resourceRevision);
         if (version.status === "DRAFT" && !version.quality.forkParentVersionId) {
           setMaskRequiresReprocess(true);
@@ -1581,7 +1566,7 @@ function TemplateReview({
       {approvalPendingConfirmation && <button type="button" className="secondary"
         disabled={assistantApplying || decisionBusy !== null} onClick={() => void recheckApproval()}>承認結果を再取得</button>}
       {activatedVersion && <div className="decision-bar">
-        <div><strong>このテンプレートは有効です</strong><span>サーバーからACTIVE状態を再取得済みです。</span></div>
+        <div><strong>このテンプレートは有効です</strong></div>
       </div>}
       {version.status === "DRAFT" && !activatedVersion && <div className="decision-bar">
         <div><strong>{printSaved

@@ -2,6 +2,8 @@ import { FiPlus, FiRefreshCw } from "react-icons/fi";
 import type { Job } from "../types";
 import { JobProgress } from "./JobProgress";
 
+const PHOTO_ERRORS = new Set(["LOW_REGISTRATION_CONFIDENCE", "DOCUMENT_BOUNDARY_NOT_FOUND"]);
+
 export function OcrJobProgressPanel({ job, connectionLost, canRetry, retryBusy, retryPending, retryBlocked, retryJob, startNewReading }: {
   job: Job | null; connectionLost: boolean; canRetry: boolean; retryBusy: boolean;
   retryPending: boolean; retryBlocked: boolean; retryJob: () => Promise<void>;
@@ -10,6 +12,19 @@ export function OcrJobProgressPanel({ job, connectionLost, canRetry, retryBusy, 
           {job ? (
             <>
               <JobProgress job={job} connectionLost={connectionLost} />
+              {job.status === "FAILED" && PHOTO_ERRORS.has(job.error?.code ?? "") && (
+                <div className="ocr-progress-actions ocr-retake-guide" role="status">
+                  <p>写真から書類の位置を合わせられませんでした。次の点を確かめて撮り直してください。</p>
+                  <ul>
+                    <li>書類の四隅がすべて写っている</li>
+                    <li>選んだテンプレートと同じ書類である</li>
+                    <li>手ぶれ・強い反射や影が少ない</li>
+                  </ul>
+                  <button className="primary" type="button" onClick={startNewReading}>
+                    <FiPlus aria-hidden="true" />画像を選び直す
+                  </button>
+                </div>
+              )}
               {canRetry && (
                 <div className="ocr-progress-actions">
                   <p role="status">

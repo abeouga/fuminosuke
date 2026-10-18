@@ -14,6 +14,8 @@ from app.storage.local_storage import LocalStorageService
 def publish_bytes(storage: LocalStorageService, namespace: str, content: bytes, suffix: str) -> str:
     digest = hashlib.sha256(content).hexdigest()
     relative = f"{namespace}/{digest}{suffix}"
+    if storage.requires_immutable_paths:
+        return storage.write_bytes(relative, content)
     # Establish the parent first. On Windows, resolving a missing file while
     # its parent is concurrently created can change ERROR_PATH_NOT_FOUND into
     # ERROR_FILE_NOT_FOUND and make pathlib retain its extended path prefix.

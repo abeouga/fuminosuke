@@ -589,3 +589,32 @@ class PagedOcrCall(Base):
     reserved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
+
+
+class DocumentSeriesLink(Base):
+    """A job read as the next version of an earlier confirmed job (same paper document).
+
+    Only the predecessor's confirmed snapshot it was based on is recorded; the predecessor
+    itself is never modified. One predecessor has at most one successor (no branching).
+    """
+
+    __tablename__ = "document_series_links"
+    __table_args__ = (
+        CheckConstraint("job_id <> predecessor_job_id"),
+        CheckConstraint("predecessor_revision > 0"),
+        CheckConstraint("mode IN ('full', 'blank_only', 'compare_all')"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    predecessor_job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id"), nullable=False, unique=True
+    )
+    series_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    predecessor_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    predecessor_confirmed_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )

@@ -193,7 +193,7 @@ export function TemplateCandidateSettingsEditor({
     <div className="page-stack candidate-settings-page">
       <header className="page-header split">
         <div>
-          <span className="eyebrow">READING CANDIDATES · {template.name} · V{version.versionNumber}</span>
+          <span className="eyebrow">{template.name} · V{version.versionNumber}</span>
           <h1>読み取り候補を設定</h1>
           <p>この書類で使われる文字を登録し、適用する記入欄を帳票上で指定します。候補外の結果は自動確定せず、確認対象になります。</p>
         </div>
@@ -206,7 +206,7 @@ export function TemplateCandidateSettingsEditor({
         <div className="candidate-settings-workspace">
           <section className="candidate-preview-panel" aria-label="読み取り候補を適用する帳票プレビュー">
             <div className="candidate-panel-heading">
-              <div><span className="eyebrow">DOCUMENT PREVIEW</span><h2>適用する記入欄を選択</h2></div>
+              <div><h2>適用する記入欄を選択</h2></div>
               <p>{activeSet ? `「${activeSet.name}」を適用する欄をクリックしてください。繰り返し行は同じ項目の全行へ適用されます。` : "右側で読み取り候補を選択してください。"}</p>
             </div>
             {preview ? (
@@ -249,7 +249,6 @@ export function TemplateCandidateSettingsEditor({
 
           <aside className="candidate-control-panel">
             <section className="candidate-add-card">
-              <span className="eyebrow">ADD CANDIDATES</span>
               <h2>新しい読み取り候補を追加</h2>
               <label className="field-label">候補の種類名<input value={newName} placeholder="例：担当者名、商品名、等級" maxLength={100} onChange={(event) => setNewName(event.target.value)} /></label>
               <label className="field-label">使われる文字<textarea value={newValues} placeholder={'1行に1件入力\n例：山田太郎\n佐藤花子'} rows={5} onChange={(event) => setNewValues(event.target.value)} /></label>
@@ -258,7 +257,7 @@ export function TemplateCandidateSettingsEditor({
 
             <section className="candidate-set-list" aria-label="登録する読み取り候補">
               <div className="candidate-panel-heading compact">
-                <div><span className="eyebrow">REGISTERED FOR TEMPLATE</span><h2>このテンプレートの候補</h2></div>
+                <div><h2>このテンプレートの候補</h2></div>
                 <strong>{sets.length}種類</strong>
               </div>
               {sets.map((candidateSet) => (

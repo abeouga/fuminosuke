@@ -10,6 +10,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from app.cloud.relational import ControlDatabase
 
 
 class AccessDenied(Exception):
@@ -39,7 +42,9 @@ class Identity:
 class Registry:
     """Only operator admission and verified Cognito subjects create tenant bindings."""
 
-    def __init__(self, root: Path, max_users: int) -> None:
+    def __init__(self, root: Path, max_users: int, *,
+                 control: ControlDatabase | None = None) -> None:
+        self.control = control
         if root.is_symlink() or (root / "app.db").exists():
             raise ValueError("Use a dedicated cloud directory, never a local business database")
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -72,10 +77,15 @@ class Registry:
                 db.execute("UPDATE registry_version SET version=2 WHERE version=1")
             elif versions != [(2,)]:
                 raise RuntimeError("Unsupported cloud registry schema")
-        self.path.chmod(0o600)
+        if control is None:
+            self.path.chmod(0o600)
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def connect(self) -> Iterator[Any]:
+        if self.control is not None:
+            with self.control.connect("registry") as db:
+                yield db
+            return
         with sqlite3.connect(self.path, timeout=10) as db:
             db.execute("PRAGMA foreign_keys=ON")
             db.execute("PRAGMA journal_mode=WAL")
@@ -119,7 +129,7 @@ class Registry:
     def mark_deleted(self, tenant: str) -> None:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            db.execute("INSERT OR IGNORE INTO deleted_tenants VALUES (?)", (tenant,))
+            db.execute("INSERT INTO deleted_tenants VALUES (?) ON CONFLICT DO NOTHING", (tenant,))
             db.execute("UPDATE users SET active=0 WHERE tenant_id=?", (tenant,))
             db.execute("DELETE FROM sessions WHERE subject IN "
                        "(SELECT subject FROM users WHERE tenant_id=?)", (tenant,))

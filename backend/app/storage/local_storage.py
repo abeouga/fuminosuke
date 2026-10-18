@@ -12,6 +12,7 @@ class StoragePathError(ValueError):
 
 
 class LocalStorageService:
+    requires_immutable_paths = False
     REQUIRED_DIRECTORIES = (
         "uploads",
         "artifacts",
@@ -81,6 +82,12 @@ class LocalStorageService:
         if target.is_dir():
             raise StoragePathError("delete_file cannot delete a directory")
         target.unlink(missing_ok=True)
+
+    def move_file(self, source: str, target: str) -> None:
+        import os
+        destination = self.resolve(target)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(self.resolve(source), destination)
 
     def delete_tree(self, relative_path: str | Path) -> None:
         supplied = Path(relative_path)

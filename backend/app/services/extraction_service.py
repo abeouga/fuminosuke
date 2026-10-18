@@ -22,8 +22,8 @@ from app.extraction.image_variants import create_variants
 from app.extraction.mark_detector import MarkDetector
 from app.extraction.region_cropper import RegionCropper, RegionCrops
 from app.image_processing.artifacts import ArtifactWriter
-from app.image_processing.document_boundary import DocumentNormalizer
 from app.image_processing.image_loader import ImageLoader
+from app.image_processing.photo_registration import register_document
 from app.image_processing.registration import RegistrationFailure, TemplateAligner
 from app.repositories.job_repository import JobRepository
 from app.storage.local_storage import LocalStorageService, StoragePathError
@@ -134,10 +134,6 @@ class ImageExtractionService:
                     "テンプレート画面で記入欄とJSON項目を設定してください。"
                 ),
             )
-        normalizer = DocumentNormalizer(
-            canonical_width=config.canonical_width,
-            canonical_height=config.canonical_height,
-        )
         crop_regions = (
             config.mapped_ocr_regions() if strict_mapped_ocr else config.ocr_regions()
         )
@@ -148,17 +144,19 @@ class ImageExtractionService:
         ).rgb
         template = template_snapshot.template_rgb
         self._progress(job_id, "NORMALIZING_DOCUMENT", 12)
-        normalized = normalizer.normalize(source)
         self._progress(job_id, "REGISTERING_TEMPLATE", 28)
         try:
-            registered = self._aligner.align(
-                normalized.image_rgb, template,
+            document = register_document(
+                source, template, aligner=self._aligner,
                 validation_regions=[(r.x, r.y, r.width, r.height) for r in crop_regions],
             )
         except RegistrationFailure as exc:
             writer = ArtifactWriter(self._database, self._storage, page_id=page_id)
+            normalized_failure = (
+                exc.normalized_rgb if exc.normalized_rgb is not None else exc.debug_rgb
+            )
             for name, pixels in (
-                ("registrationNormalized", normalized.image_rgb),
+                ("registrationNormalized", normalized_failure),
                 ("registrationReference", template),
                 ("registrationRejectedDebug", exc.debug_rgb),
             ):
@@ -174,11 +172,11 @@ class ImageExtractionService:
                     "templateSnapshotSha256": template_snapshot.clean_template_sha256,
                     "templateConfigSnapshotSha256": template_snapshot.config_sha256,
                     "registrationSettings": self._settings.registration.model_dump(mode="json"),
-                    "normalization": normalized.quality.to_dict(),
                     "diagnostics": exc.metadata,
                 },
             )
             raise
+        normalized, registered = document.normalized, document.registered
         self._progress(job_id, "ISOLATING_HANDWRITING", 48)
         handwriting = self._isolator.isolate(registered.aligned_rgb, template)
         variants = create_variants(
@@ -214,13 +212,14 @@ class ImageExtractionService:
         }
         if registered.diagnostics is not None:
             quality["registrationDiagnostics"] = registered.diagnostics
+        quality["photoRegistration"] = document.info
         unknown: list[dict[str, object]] = [
             dict(item.to_dict()) for item in handwriting.unknown_overlap_regions
         ]
         artifacts = self._write_artifacts(
             job_id=job_id,
             attempt=attempt,
-            normalized=normalized.image_rgb,
+            normalized=document.registration_input,
             registered=registered.aligned_rgb,
             template=template,
             handwriting_probability=handwriting.probability,

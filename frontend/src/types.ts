@@ -603,6 +603,19 @@ export type OcrResult = {
   recordStructure?: RecordStructure;
   reviewStructure?: ReviewStructure;
   documentName: string;
+  /** Present when the job was read as an update of a confirmed document. */
+  series?: OcrSeriesInfo | null;
+};
+
+export type OcrSeriesInfo = {
+  predecessorJobId: string;
+  predecessorDocumentName: string | null;
+  seriesVersion: number;
+  /** "blank_only": filled fields kept from the previous version; "full": every field read again. */
+  mode: "blank_only" | "full" | string;
+  carriedPaths: string[];
+  /** value: confirmed value; raw: the text read from the paper (the same paper reads the same). */
+  predecessorIdentity: { targetPath: string; label: string; value: string | null; raw: string | null }[];
 };
 
 export type Problem = { code?: string; detail?: string; message?: string };
