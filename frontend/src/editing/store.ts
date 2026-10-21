@@ -226,7 +226,7 @@ export class EditingStore {
   retainedOcrDraft(): ManualOcrEdit["draft"] | null { return this.journal?.kind === "ocr_manual" ? clone(this.journal.body.draft) : null; }
   async inspectLatest(): Promise<LoadedManualView> {
     await this.tail;
-    if (!this.owner) throw new EditingError("編集sessionがありません。", "EDITING_NOT_READY", 409);
+    if (!this.owner) throw new EditingError("編集の準備ができていません。画面を再読み込みしてください。", "EDITING_NOT_READY", 409);
     return this.loadView(this.owner); // Read-only. Never overwrite the retained input.
   }
   async resumeAfterReview(view: ManualView): Promise<void> {

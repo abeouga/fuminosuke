@@ -3,6 +3,7 @@ import { api } from "../api";
 import { nearestBreak, printDefaults, type PrintCell, type PrintPlan, type PrintRequest, type PrintState } from "../printLayout";
 import "./PrintLayoutEditor.css";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
+import { Spinner } from "./Spinner";
 
 function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boolean }) {
   return <>{cells.map((cell) => {
@@ -301,7 +302,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
             </div>)}</div>
           </div>
           <div><h3>用紙上の配置プレビュー</h3>
-            {pendingPreview && <p role="status">計算中…</p>}
+            {pendingPreview && <p role="status"><Spinner />計算中…</p>}
             {plan && <><p>{plan.pages.length}ページ / 共通縮小率 {(plan.commonScale * 100).toFixed(1)}%</p>
               <label>表示ページ<select value={selectedPage} onChange={e => setSelectedPage(Number(e.target.value))}>
                 {plan.pages.map((p, i) => <option key={p.page} value={i}>Page {p.page}: {p.range}</option>)}</select></label>
@@ -323,7 +324,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
         <div className="print-controls">
           {state.saved && <details><summary>旧方式への切り替え</summary><button type="button" disabled={disabled || busy || preparing || !state.editable} onClick={() => void save(true)}>印刷ページ設定を解除して旧方式を使う</button></details>}
           {state.saved && state.editable && <button type="button" disabled={blocked || dirty || pendingPreview}
-            onClick={() => void prepare()}>{preparing ? "印刷見本を作成中…" : "印刷見本を作る"}</button>}
+            onClick={() => void prepare()}>{preparing ? <><Spinner />印刷見本を作成中…</> : "印刷見本を作る"}</button>}
         </div>
         {state.saved && state.editable && <p>先に印刷を試す場合は、保存したページ範囲から印刷見本を作成できます。有効化時にも自動で準備します。</p>}
         {prepareMessage && <p role="status">{prepareMessage}</p>}

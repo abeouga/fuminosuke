@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { FiArrowRight, FiEdit2 } from "react-icons/fi";
 import type { FieldReading, OcrFieldPreview, ReviewStructure, ReviewStructureField } from "../types";
 import { displayName } from "../userMessages";
+import { ITEM_JOIN_EDITING_VISIBLE } from "./TemplateItemJoinEditor";
 import { joinedText, orderMark, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
 
 /** `writeIn`: the 「その他（　）」 text a symbol/check box's item owns, shown on the same row. */
@@ -15,9 +16,9 @@ export const ReviewSeriesMarks = createContext<{ added: ReadonlySet<string>; car
 /** Checklist fields (path → their check items): the result shows ☑/☐ boxes, not the stored text. */
 /**
  * Items shown as one value (path → its join; display only). `configure` opens the
- * template's 「項目のまとめ方・順番」 (given in the item-name mode).
+ * template's 「項目のまとめ方・順番」 for one heading (its items, in the order listed here).
  */
-export const ReviewJoins = createContext<{ byPath: ReadonlyMap<string, ItemJoin>; orders?: readonly ItemJoin[]; configure?: () => void }>({ byPath: new Map() });
+export const ReviewJoins = createContext<{ byPath: ReadonlyMap<string, ItemJoin>; orders?: readonly ItemJoin[]; configure?: (paths: string[], anchor: HTMLElement) => void }>({ byPath: new Map() });
 export const ReviewChecklists = createContext<ReadonlyMap<string, readonly string[]>>(new Map());
 export function checklistOptionsByPath(previews: readonly OcrFieldPreview[]): Map<string, string[]> {
   return new Map(previews
@@ -32,16 +33,15 @@ function checkedItems(value: FieldReading): Set<string> {
 }
 
 /** Check boxes toggled in place: a click checks or unchecks, no popover. */
-function ChecklistBoxes({ labels, entry, confirmed, onSelect, onEdit }: {
+/** Check boxes only toggle: the cell is never selected and no dialog or crop opens. */
+function ChecklistBoxes({ labels, entry, confirmed, onEdit }: {
   labels: readonly string[];
   entry: ReadingEntry;
   confirmed: boolean;
-  onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
 }) {
   const checked = checkedItems(entry.value);
   const toggle = (label: string) => {
-    onSelect(entry);
     if (confirmed) return;
     const next = new Set(checked);
     if (next.has(label)) next.delete(label); else next.add(label);
@@ -218,42 +218,29 @@ export function ReviewResultsToolbar({
         {!confirmed && <span><i className="legend-warning" />要確認</span>}
       </div>
       <div className="field-toolbar-actions">
-        <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
-          <button
-            type="button"
-            className={interactionMode === "edit" ? "active" : ""}
-            aria-label="結果編集モード"
-            aria-pressed={interactionMode === "edit"}
-            title="ペンでセルの内容を編集"
-            disabled={editingLocked && !confirmed}
-            onClick={() => onInteractionModeChange("edit")}
-          >
-            <PenModeIcon />
-            <span>編集</span>
-          </button>
-          <button
-            type="button"
-            className={interactionMode === "reorder" ? "active" : ""}
-            aria-label="行移動モード"
-            aria-pressed={interactionMode === "reorder"}
-            title="繰り返し表の行全体を移動"
-            disabled={editingLocked || confirmed}
-            onClick={() => onInteractionModeChange("reorder")}
-          >
-            <PointerModeIcon />
-            <span>移動</span>
-          </button>
-          <button
-            type="button"
-            className={interactionMode === "rename" ? "active" : ""}
-            aria-label="項目名の変更モード"
-            aria-pressed={interactionMode === "rename"}
-            title="項目名をクリックして表示名を変更（保存した値は変わりません）"
-            onClick={() => onInteractionModeChange("rename")}
-          >
-            <FiEdit2 aria-hidden="true" />
-            <span>項目</span>
-          </button>
+        {/* 編集: a segmented control of what is edited (the values in the cells, or the item names).
+            Row moving (「移動」) is no longer offered here; its mode stays for the record tables. */}
+        <div className="review-edit-group" role="group" aria-label="編集">
+          <span className="review-edit-label"><PenModeIcon />編集</span>
+          <div className="review-mode-switch" role="radiogroup" aria-label="編集する対象">
+            <button
+              type="button"
+              role="radio"
+              className={interactionMode === "edit" ? "active" : ""}
+              aria-checked={interactionMode === "edit"}
+              title="セルの内容を確認・修正"
+              disabled={editingLocked && !confirmed}
+              onClick={() => onInteractionModeChange("edit")}
+            >記入欄</button>
+            <button
+              type="button"
+              role="radio"
+              className={interactionMode === "rename" ? "active" : ""}
+              aria-checked={interactionMode === "rename"}
+              title="項目名をクリックして表示名を変更（保存した値は変わりません）"
+              onClick={() => onInteractionModeChange("rename")}
+            >項目</button>
+          </div>
         </div>
         {!confirmed && (
           <button
@@ -265,13 +252,12 @@ export function ReviewResultsToolbar({
             <FiArrowRight aria-hidden="true" />次の要確認（{warningCount}件）
           </button>
         )}
-        <span>{confirmed
+        {/* No 「nセルを編集中」 count; only a hint where clicking does something different. */}
+        {(confirmed || interactionMode !== "edit") && <span>{confirmed
           ? "セルを選ぶと画像を確認できます"
           : interactionMode === "reorder"
             ? "行移動モード"
-            : interactionMode === "rename"
-            ? "項目名をクリックして変更"
-            : `${cellCount}セルを編集中`}</span>
+            : "項目名をクリックして変更"}</span>}
       </div>
     </div>
   );
@@ -347,8 +333,21 @@ export function AnchoredReviewPopover({
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onCloseRef.current();
     };
+    // A press outside closes it. Result cells keep their own handling (selecting another cell
+    // moves the dialog there), and the voice controls act on the selected cell.
+    const handlePress = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || popoverRef.current?.contains(target)) return;
+      // Check boxes only toggle, so pressing one closes another cell's dialog.
+      if (!target.closest(".ocr-checkbox-cell") && target.closest("[data-review-path], .editing-controls, .voice-overlay")) return;
+      onCloseRef.current();
+    };
     window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
+    window.addEventListener("pointerdown", handlePress, true);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      window.removeEventListener("pointerdown", handlePress, true);
+    };
   }, []);
 
   return (
@@ -402,9 +401,9 @@ export function CellStatusPopover({
         <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
       </header>
       <div role="group" aria-label={`${entry.label}の判定`}>
+        {/* 「不確実」 is not offered: the person decides 読めた or 空欄 (OCR may still mark a cell uncertain). */}
         {([
           ["readable", "読めた"],
-          ["uncertain", "不確実"],
           ["blank", "空欄"],
         ] as const).map(([status, label]) => (
           <button
@@ -463,7 +462,8 @@ export function MarkStatusPopover({
   const toggle = (label: string) => apply(multiple
     ? (selected.includes(label) ? selected.filter((value) => value !== label) : [...selected, label])
     : [label]);
-  const statuses = [["readable", "読めた"], ["uncertain", "不確実"], ["blank", "空欄"]] as const;
+  // 「不確実」 is not offered here either (only 読めた / 空欄).
+  const statuses = [["readable", "読めた"], ["blank", "空欄"]] as const;
   const setStatus = (status: FieldReading["status"]) => onChange(
     status === "readable" ? { raw: current, normalized: current, status, reviewReason: null }
       : status === "uncertain" ? { raw: entry.value.raw ?? null, normalized: null, status, reviewReason: "MANUAL_CHOICE_UNRESOLVED" }
@@ -519,13 +519,21 @@ export function readingChoices(reading: FieldReading): string[] {
 /** Voice input target table: clicking a table name focuses voice instructions on it. */
 export const VoiceTableTarget = createContext<{ selected: string | null; select: (tableId: string | null) => void } | null>(null);
 
+/** A heading's items including the write-ins shown on their rows, in the listed order. */
+export function sectionItemPaths(entries: readonly ReadingEntry[]): string[] {
+  return entries.flatMap((entry) => entry.writeIn ? [entry.path, entry.writeIn.path] : [entry.path]);
+}
+
 export function ReviewTableSection({
   tableId,
   title,
+  joinPaths,
   children,
 }: {
   tableId?: string;
   title: string;
+  /** The heading's items as listed; given where 「まとめ方・順番」 can be set for it. */
+  joinPaths?: string[];
   children: ReactNode;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
@@ -553,7 +561,8 @@ export function ReviewTableSection({
         ? <h3><button type="button" className="voice-table-target" aria-pressed={voiceSelected}
             title={voiceSelected ? "音声の対象を自動に戻す" : "音声の指示をこの表に絞る"}
             onClick={() => voiceTarget.select(voiceSelected ? null : tableId)}>{title}{voiceSelected && <span className="voice-table-badge">音声の対象</span>}</button></h3>
-        : <h3>{title}</h3>}{!tableId && joinSettings.configure && <button type="button" className="ghost compact ocr-join-configure" onClick={joinSettings.configure}>まとめ方・順番</button>}{overflow && <div className="review-column-navigation"><span>横に続きます</span>
+        : <h3>{title}</h3>}{ITEM_JOIN_EDITING_VISIBLE && !tableId && joinPaths?.length && joinSettings.configure && <button type="button" className="ghost compact ocr-join-configure" aria-haspopup="dialog"
+          onClick={(event) => joinSettings.configure?.(joinPaths, event.currentTarget)}>まとめ方・順番</button>}{overflow && <div className="review-column-navigation"><span>横に続きます</span>
         <button type="button" aria-label={`${title}の左の列を表示`} onClick={() => scrollColumns(-1)}>←</button>
         <button type="button" aria-label={`${title}の右の列を表示`} onClick={() => scrollColumns(1)}>→</button>
       </div>}</header>
@@ -776,7 +785,7 @@ export function KeyValueReviewTable({
                     <button type="button" className="ocr-join-toggle" aria-expanded={open}
                       title={open ? "まとめた欄を閉じる" : "まとめた欄を開いて確認・修正"} onClick={toggle}>
                       <span className="ocr-join-text">{text || <em>空欄</em>}</span>
-                      <span className="ocr-join-count">{first.members.length}欄{open ? " ▲" : " ▼"}</span>
+                      <span className="ocr-join-count" aria-hidden="true">{open ? "▲" : "▼"}</span>
                     </button>
                   </td>
                 </tr>,
@@ -944,8 +953,9 @@ export function ReviewValueCell({
     >
       {checklistLabels ? (
         <div className="ocr-checkbox-cell">
-          <ChecklistBoxes labels={checklistLabels} entry={entry} confirmed={confirmed} onSelect={onSelect} onEdit={onEdit} />
-          <small>{warning ? "要確認" : added ? "追加" : carried ? "前の版" : "OK"}</small>
+          <ChecklistBoxes labels={checklistLabels} entry={entry} confirmed={confirmed} onEdit={onEdit} />
+          {/* No 「OK」 beside a check box; only a note that asks for attention. */}
+          {(warning || added || carried) && <small>{warning ? "要確認" : added ? "追加" : "前の版"}</small>}
         </div>
       ) : editing ? (
         <textarea
@@ -979,7 +989,8 @@ export function ReviewValueCell({
             setEditing(true);
           }}
         >
-          <span>{value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}</span>
+          {/* An unmarked symbol box reads 「-」 (screen readers still hear 「未選択」); a blank write-in stays 「空欄」. */}
+          <span>{value || (entry.value.status === "blank" ? (choice ? "-" : "空欄") : "未入力")}</span>
           <small>{warning ? "要確認" : hasChoices ? "候補あり" : added ? "追加" : carried ? "前の版" : "OK"}</small>
         </button>
       )}

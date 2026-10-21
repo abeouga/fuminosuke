@@ -80,16 +80,24 @@ class OcrResultService:
             "fieldPreviews": _field_previews(job, stored.current_corrected_json),
             "recordStructure": snapshot["recordStructure"],
             "reviewStructure": snapshot["reviewStructure"],
+            # The user types the name on the review screen; nothing is filled in automatically.
             "documentName": confirmed.document_name
             if confirmed and confirmed.document_name
-            else self._proposed_name(job, stored.current_corrected_json),
+            else "",
             "series": DocumentSeries(session).review_info(job),
         }
 
     @staticmethod
-    def _proposed_name(job: ProcessingJob, document: dict[str, Any]) -> str:
+    def _proposed_name(session: Session, job: ProcessingJob, document: dict[str, Any]) -> str:
+        from app.services.template_document_name_service import document_name_rule
+
         config = job.config_snapshot_json.get("templateSnapshot", {}).get("config", {})
-        spec = config.get("documentName") or {}
+        # A rule changed after the template was made wins over the one in the snapshot.
+        spec = (
+            document_name_rule(session, job.template_version_id)
+            or config.get("documentName")
+            or {}
+        )
         values = []
         for path in spec.get("fieldPaths", []):
             key = field_key(path)
@@ -248,7 +256,8 @@ class OcrResultService:
                 re.sub(
                     r'[\\/:*?"<>|\x00-\x1f]',
                     "_",
-                    document_name or self._proposed_name(job, stored.current_corrected_json),
+                    document_name
+                    or self._proposed_name(session, job, stored.current_corrected_json),
                 )
                 .strip()
                 .rstrip(".")

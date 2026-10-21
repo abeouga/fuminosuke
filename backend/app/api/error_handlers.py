@@ -61,7 +61,7 @@ def register_error_handlers(app: FastAPI) -> None:
                 title="Request validation failed",
                 status=422,
                 code="VALIDATION_FAILED",
-                detail="リクエストの形式を確認してください。",
+                detail="送った内容を受け付けられませんでした。画面を再読み込みしてから、もう一度操作してください。",
                 field_errors=errors,
             )
         )
@@ -74,7 +74,7 @@ def register_error_handlers(app: FastAPI) -> None:
                 title="Internal processing error",
                 status=500,
                 code="INTERNAL_PROCESSING_ERROR",
-                detail="内部処理に失敗しました。ログのエラーコードを確認してください。",
+                detail="処理中に問題が起きました。もう一度試してください。続く場合は管理者に連絡してください。",
             )
         )
 

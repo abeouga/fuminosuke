@@ -66,6 +66,11 @@ export function EditingControls(props: Props) {
   const remaining = capabilities?.voiceSecondsRemaining ?? null;
   const configured = capabilities?.enabled && capabilities.voiceConnected && (remaining === null || remaining >= 300);
   const plannerAvailable = capabilities?.enabled && capabilities.plannerConnected;
+  async function recover() {
+    const saved = await props.store.recoverResource();
+    // A plain re-read (nothing was waiting) must not displace input the editor still holds.
+    try { await latest.current.onSaved(saved); } catch (reason) { if (saved.result.operationId !== null) throw reason; }
+  }
   async function submit(value: string | { choiceId: string }) {
     if (!state.question) await props.store.prepareInstruction(props.pageScope, props.selectedEntities);
     await props.store.instruction(value); setText("");
@@ -102,7 +107,7 @@ export function EditingControls(props: Props) {
         onFocus={() => props.store.previewTarget(choice.handle ?? null)} onBlur={() => props.store.previewTarget(null)}
         onClick={() => { props.store.previewTarget(null); run(() => submit({ choiceId: choice.choiceId })); }}>{choiceLabel(choice.label)}</button>)}
         <button type="button" className="secondary" onClick={() => run(() => props.store.cancelPending())}>この指示を中止</button></div>
-        : halted ? <div className="voice-bubble-choices"><button type="button" className="secondary" onClick={() => run(async () => { const saved = await props.store.recoverResource(); await latest.current.onSaved(saved); })}>保存結果を再取得</button></div>
+        : halted ? <div className="voice-bubble-choices"><button type="button" className="secondary" onClick={() => run(recover)}>保存結果を再取得</button></div>
           : undefined} />;
   }
   return <section className="editing-controls" aria-label="音声による編集">
@@ -125,7 +130,7 @@ export function EditingControls(props: Props) {
       onMouseEnter={() => props.store.previewTarget(choice.handle ?? null)} onMouseLeave={() => props.store.previewTarget(null)}
       onFocus={() => props.store.previewTarget(choice.handle ?? null)} onBlur={() => props.store.previewTarget(null)}
       onClick={() => { props.store.previewTarget(null); run(() => submit({ choiceId: choice.choiceId })); }}>{choiceLabel(choice.label)}</button>)}<button className="secondary" onClick={() => run(() => props.store.cancelPending())}>この指示を中止</button></div></div>}
-    {halted && <button className="secondary" onClick={() => run(async () => { const saved = await props.store.recoverResource(); await latest.current.onSaved(saved); })}>保存結果を再取得</button>}
+    {halted && <button className="secondary" onClick={() => run(recover)}>保存結果を再取得</button>}
     {!props.voiceOnly && <details className="editing-text"><summary>文字で指示</summary>
       {capabilities && !plannerAvailable && <p>AIへの指示は現在利用できません。手動編集を続けてください。</p>}
       <form onSubmit={e => { e.preventDefault(); if (plannerAvailable && text.trim()) run(() => submit(text.trim())); }}>

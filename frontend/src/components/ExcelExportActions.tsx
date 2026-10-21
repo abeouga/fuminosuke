@@ -3,6 +3,7 @@ import { authenticatedFetch } from "../auth/transport";
 import { useRef, useState } from "react";
 import { FiDownload } from "react-icons/fi";
 import { exportUrl } from "../api";
+import { Spinner } from "./Spinner";
 
 export function ExcelExportActions({ jobId, documentName, compact = false }: {
   jobId: string;
@@ -45,7 +46,7 @@ export function ExcelExportActions({ jobId, documentName, compact = false }: {
   return (
     <div className={`excel-export-actions${compact ? " compact-export" : ""}`}>
       <button className={`primary${compact ? " compact" : ""}`} disabled={busy} onClick={() => void download()}>
-        <FiDownload aria-hidden="true" />{busy ? "XLSXを取得中…" : ".xlsxを保存"}
+        <FiDownload aria-hidden="true" />{busy ? <><Spinner />XLSXを取得中…</> : ".xlsxを保存"}
       </button>
       {error && <p className="error-box" role="alert">{error}</p>}
     </div>

@@ -41,7 +41,7 @@ def enabled(request: Request) -> None:
     if not get_app_settings(request).app.editing_api_enabled:
         raise reject("EDITING_API_DISABLED", "新しい編集APIは試験用環境だけで有効です。", 503)
     if "editing_command_requests" not in inspect(get_database(request).engine).get_table_names():
-        raise reject("EDITING_SCHEMA_REQUIRED", "v2のcommand DB移行が必要です。", 503)
+        raise reject("EDITING_SCHEMA_REQUIRED", "編集機能の準備ができていません。", 503)
     if "held" not in {
         c["name"]
         for c in inspect(get_database(request).engine).get_columns("editing_command_requests")

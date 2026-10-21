@@ -139,6 +139,26 @@ class TemplateDisplayName(Base):
     )
 
 
+class TemplateDocumentName(Base):
+    """How a document of a template series is named (changed after the template is made).
+
+    Only proposes the name typed on the review screen; it replaces the template's own
+    ``documentName`` without a new version, and readings and snapshots are unchanged.
+    ``rule_json``: ``{fieldPaths, separator, prefix, suffix}``.
+    """
+
+    __tablename__ = "template_document_names"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    rule_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
 class TemplateItemJoin(Base):
     """Items shown as one value on the result screen and the list XLSX (e.g. an address).
 

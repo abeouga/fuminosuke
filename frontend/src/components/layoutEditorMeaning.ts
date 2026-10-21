@@ -515,6 +515,66 @@ export function labelCellName(cell: Pick<LayoutCell, "text" | "printedLabelText"
     const named = (value?: string | null) => value && /[\p{L}\p{N}]/u.test(value) ? value.trim() : "";
     return named(cell.text) || named(cell.printedLabelText) || named(cell.fieldLabel);
 }
+/** 「備考 3行目」→「備考」: a row's meaning name without its row number. */
+export function meaningBaseName(label: string): string {
+    return label.replace(/\s*\d+行目$/, "").trim();
+}
+/** Names made up when an item name had no readable text (「項目」「項目2」「番号21」…). */
+export function isPlaceholderName(label: string): boolean {
+    return /^(項目|番号|見出し|名称未設定の欄)\d*$/.test(meaningBaseName(label));
+}
+/**
+ * Typing a name into an item-name cell renames the meanings that were only named after the old
+ * text (or made up because there was none), so the result shows the new name. Names the person
+ * chose elsewhere stay as they are.
+ */
+export function renameMeaningsThroughLabel(layout: LayoutDefinition, labelId: string, previousName: string, nextName: string): LayoutDefinition {
+    const next = nextName.normalize("NFKC").trim().slice(0, 90);
+    const previous = previousName.normalize("NFKC").trim();
+    if (!next || !/[\p{L}\p{N}]/u.test(next))
+        return layout;
+    const derived = (label?: string | null) => {
+        if (!label)
+            return true;
+        const base = meaningBaseName(label);
+        return isPlaceholderName(label) || (Boolean(previous) && (base === previous || base.replace(/\d+$/, "") === previous));
+    };
+    const cells = new Map(layout.cells.map(cell => [cell.id, cell]));
+    const relations = layout.relations
+        .filter(relation => relation.labelCellIds.includes(labelId))
+        .sort((a, b) => {
+        const first = cells.get(a.inputCellId), second = cells.get(b.inputCellId);
+        return (first?.y ?? 0) - (second?.y ?? 0) || (first?.x ?? 0) - (second?.x ?? 0);
+    });
+    if (!relations.length)
+        return layout;
+    const groupOf = new Map((layout.recordGroups ?? []).flatMap(group => group.inputCellIds.map(id => [id, group] as const)));
+    const poolByPath = new Map((layout.labelPool ?? []).map(entry => [entry.targetPath, entry]));
+    const renamed = new Map<string, string>();
+    const fieldLabels = new Map<string, { old: string | undefined; name: string }>();
+    relations.forEach((relation, index) => {
+        const entry = poolByPath.get(relation.targetPath);
+        if (!entry || !derived(entry.label))
+            return;
+        const group = groupOf.get(relation.inputCellId);
+        const label = relations.length > 1 ? `${next} ${group?.order ?? index + 1}行目` : next;
+        renamed.set(entry.targetPath, label);
+        fieldLabels.set(relation.inputCellId, { old: entry.label, name: group ? next : label });
+    });
+    if (!renamed.size)
+        return layout;
+    return {
+        ...layout,
+        labelPool: (layout.labelPool ?? []).map(entry => renamed.has(entry.targetPath)
+            ? { ...entry, label: renamed.get(entry.targetPath)!, aliases: [next] } : entry),
+        cells: layout.cells.map(cell => {
+            const change = fieldLabels.get(cell.id);
+            if (!change || (cell.fieldLabel && cell.fieldLabel !== change.old && !derived(cell.fieldLabel)))
+                return cell;
+            return { ...cell, fieldLabel: change.name };
+        }),
+    };
+}
 function stableMeaningKeyHash(value: string): string {
     return Array.from(value).reduce((hash, character) => ((hash * 31) + (character.codePointAt(0) ?? 0)) >>> 0, 2166136261).toString(36);
 }

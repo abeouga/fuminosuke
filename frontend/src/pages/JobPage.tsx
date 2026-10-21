@@ -3,6 +3,7 @@ import { ApiError, api } from "../api";
 import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
 import type { Job } from "../types";
+import { Spinner } from "../components/Spinner";
 
 const RETRYABLE = new Set(["FAILED", "INTERRUPTED"]);
 const CANCELLABLE = new Set(["QUEUED", "PROCESSING"]);
@@ -67,13 +68,13 @@ export function JobPage({
 
   return (
     <div className="page-stack narrow">
-      <header className="page-header split">
+      <header className="page-header split has-back">
+        <button className="ghost page-back" type="button" onClick={onClose}>← 読み取りへ</button>
         <div>
           <span className="eyebrow">PROCESS RECOVERY</span>
           <h1>処理状況を確認</h1>
           <p>保存された処理状況を確認し、再試行または新しい登録など必要な対応を選べます。</p>
         </div>
-        <button className="ghost" type="button" onClick={onClose}>← ホームへ</button>
       </header>
 
       <JobProgress job={job} connectionLost={connectionLost} />
@@ -127,7 +128,7 @@ export function JobPage({
             )}
             {RETRYABLE.has(job.status) && !requiresNewRegistration && (
               <button className="primary" type="button" disabled={busy} onClick={() => void retry()}>
-                {busy ? "再開中…" : "処理を再試行"}
+                {busy ? <><Spinner />再開中…</> : "処理を再試行"}
               </button>
             )}
             {CANCELLABLE.has(job.status) && (
@@ -135,7 +136,7 @@ export function JobPage({
                 処理を中止
               </button>
             )}
-            <button className="secondary" type="button" onClick={onClose}>ホームへ戻る</button>
+            <button className="secondary" type="button" onClick={onClose}>読み取りへ戻る</button>
           </div>
         </section>
       )}

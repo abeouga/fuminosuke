@@ -186,9 +186,6 @@ class OcrRequestPreparer:
             for mapping in mark_mappings:
                 state = mark_state_by_id[mapping.mapping_id]
                 mark_crop = extraction.crops.get(mapping.mapping_id)
-                if mapping.mark_recognition_mode == "manual":
-                    local_resolution_by_id[mapping.mapping_id] = "manual_choice_required"
-                    continue
                 if state[0] != ReadingStatus.UNCERTAIN or mark_crop is None:
                     local_resolution_by_id[mapping.mapping_id] = "mark_detector"
                     continue
@@ -263,11 +260,12 @@ class OcrRequestPreparer:
         mapping: FieldMappingConfig,
         results: list[dict[str, object]],
     ) -> MarkState:
-        if mapping.mark_recognition_mode == "manual":
-            return ReadingStatus.UNCERTAIN, None, "MANUAL_CHOICE_REQUIRED"
-        if mapping.mark_recognition_mode in {"symbol", "checklist"}:
-            # Visual symbols/checklists are read from the whole mapped crop.
-            # Even a blank crop needs a visual reading; never infer it from marks.
+        if mapping.mark_recognition_mode in {"symbol", "checklist", "automatic", "manual"}:
+            # 2026-10-21: printed choices (automatic/manual) are read like checklists, from the
+            # whole mapped crop by the provider, so a check, a line or a filled circle on a
+            # choice counts and handwriting that is not a choice is kept for review. The
+            # image-difference result stays diagnostic only. Even a blank crop needs a visual
+            # reading; never infer it from marks.
             return ReadingStatus.UNCERTAIN, None, "MARK_CHOICE_UNRESOLVED"
         result_by_value = {
             item.get("optionValue"): item

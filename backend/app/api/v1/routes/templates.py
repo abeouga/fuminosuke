@@ -565,6 +565,57 @@ def rename_template_item(
     )
 
 
+class TemplateDocumentNameRule(ApiModel):
+    field_paths: list[str] = Field(min_length=1, max_length=20)
+    separator: str = Field(default="", max_length=20)
+    prefix: str = Field(default="", max_length=100)
+    suffix: str = Field(default="", max_length=100)
+
+
+class TemplateDocumentNameCandidate(ApiModel):
+    target_path: str
+    label: str
+    identity: bool
+
+
+class TemplateDocumentNameView(ApiModel):
+    rule: TemplateDocumentNameRule | None
+    template_rule: TemplateDocumentNameRule | None
+    custom: bool
+    candidates: list[TemplateDocumentNameCandidate]
+
+
+class TemplateDocumentNameUpdate(ApiModel):
+    # null goes back to the name the template was made with.
+    rule: TemplateDocumentNameRule | None
+
+
+@router.get("/templates/{template_id}/document-name", response_model=TemplateDocumentNameView)
+def get_template_document_name(request: Request, template_id: str) -> TemplateDocumentNameView:
+    from app.services.template_document_name_service import TemplateDocumentNameService
+
+    return TemplateDocumentNameView.model_validate(
+        TemplateDocumentNameService(request.app.state.database, request.app.state.storage)
+        .settings(template_id)
+    )
+
+
+@router.put("/templates/{template_id}/document-name", response_model=TemplateDocumentNameView)
+def save_template_document_name(
+    request: Request, template_id: str, payload: TemplateDocumentNameUpdate
+) -> TemplateDocumentNameView:
+    """Only proposes the name typed on the review screen; versions and snapshots are unchanged."""
+    from app.services.template_document_name_service import TemplateDocumentNameService
+
+    return TemplateDocumentNameView.model_validate(
+        TemplateDocumentNameService(request.app.state.database, request.app.state.storage)
+        .replace(
+            template_id,
+            payload.rule.model_dump(by_alias=True) if payload.rule else None,
+        )
+    )
+
+
 class TemplateItemJoinMember(ApiModel):
     target_path: str = Field(min_length=1, max_length=200)
     label: str | None = Field(default=None, max_length=200)
@@ -1167,6 +1218,70 @@ def recognize_template_labels(
     ).recognize_labels(version_id, body)
 
 
+
+
+class MarkOptionSuggestionRequest(ApiModel):
+    layout: LayoutDefinition
+    cell_ids: list[str] = Field(min_length=1, max_length=50)
+    # The person's note on what to look for (how many choices, their names).
+    hint: str = Field(default="", max_length=200)
+
+
+class SuggestedMarkOption(ApiModel):
+    label: str
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class MarkOptionSuggestionCell(ApiModel):
+    cell_id: str
+    options: list[SuggestedMarkOption]
+
+
+class MarkOptionSuggestionGroup(ApiModel):
+    cell_id: str
+    cells: list[MarkOptionSuggestionCell]
+
+
+class MarkOptionSuggestionView(ApiModel):
+    cells: list[MarkOptionSuggestionCell]
+    similar: list[MarkOptionSuggestionGroup]
+
+
+@router.post(
+    "/template-versions/{version_id}/layout/mark-options/suggest",
+    response_model=MarkOptionSuggestionView,
+    response_model_by_alias=True,
+)
+async def suggest_template_mark_options(
+    request: Request, version_id: str, body: MarkOptionSuggestionRequest
+) -> MarkOptionSuggestionView:
+    """Printed choices of selection boxes, read from the template image (shared API budget).
+
+    Read-only: the draft sent with the request is what is read, so no revision is checked
+    (an autosave between typing a name and pressing the button must not refuse it).
+
+    One request per group of boxes that look the same; the screen applies the result
+    to its draft and offers it to the look-alike boxes. Nothing is saved here.
+    """
+    from app.ai.api_budget import ApiBudget
+    from app.api.dependencies import get_app_settings
+    from app.services.mark_option_suggestion_service import MarkOptionSuggestionService
+
+    service = MarkOptionSuggestionService(
+        get_app_settings(request), ApiBudget(request.app.state.database)
+    )
+    service.check_available()
+    layouts = LayoutService(
+        request.app.state.database,
+        request.app.state.storage,
+        handwriting_threshold=request.app.state.settings.segmentation.threshold,
+    )
+    image = await asyncio.to_thread(layouts.template_image_rgb, version_id, body.layout)
+    result = await service.suggest(image, body.layout, body.cell_ids, body.hint.strip())
+    return MarkOptionSuggestionView.model_validate(result)
 
 
 @router.post(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import re
 from collections import defaultdict
@@ -579,7 +579,7 @@ def _from_source_layout(cells: list[TemplateCell], layout: LayoutDefinition) -> 
                     if section.record_type == "generic"
                     else f"section_{index:03d}"
                 ),
-                name=section.resolved_display_name,
+                name=section.name_with_heading(cell_by_id),
                 parent_label_cell_id=section.parent_label_cell_id,
                 bbox=_union_box(boxes),
                 records=records,

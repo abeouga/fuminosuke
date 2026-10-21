@@ -255,7 +255,7 @@ class TemplateDefinitionService:
                 status=409,
                 code="TEMPLATE_DEFINITION_LAYOUT_STALE",
                 title="Template definition is stale",
-                detail="矩形またはセル種別の変更後に構造草案を再生成してください。",
+                detail="枠や区分を変更したため、もう一度下書きを作ってください。",
             )
         next_revision = (
             session.scalar(
@@ -351,7 +351,7 @@ class TemplateDefinitionService:
                 status=409,
                 code="TEMPLATE_LAYOUT_REQUIRED",
                 title="Template layout is required",
-                detail="先に帳票上の矩形を検出し、セル種別を確認してください。",
+                detail="先に書類の枠を検出し、枠の区分を確認してください。",
             )
         return LayoutDefinition.model_validate(version.layout_json)
 

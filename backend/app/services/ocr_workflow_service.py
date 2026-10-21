@@ -260,7 +260,7 @@ class OcrWorkflowService:
             job = session.get(ProcessingJob, extraction.job_id)
             if job is None or job.status != "PROCESSING" or job.attempt_number != extraction.attempt_number:
                 raise AppError(status=409, code="OCR_ATTEMPT_STALE", title="Stale OCR attempt",
-                               detail="実行中の読み取り世代が変わったため、古い結果は保存しません。")
+                               detail="読み取りがやり直されたため、前の結果は保存しませんでした。")
             stored = OcrResultRepository(session).save_provider_result(
                 job_id=extraction.job_id,
                 response=response,

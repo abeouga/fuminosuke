@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError, api } from "../api";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { isJoin, type ItemJoin, type ItemJoinMember, type ItemSection } from "../itemJoins";
 import type { FieldMapping } from "../types";
+import { showToast } from "./Toast";
+import { Spinner } from "./Spinner";
 
 type Draft = ItemJoin & { key: string; kind: "join" | "order"; separator: string };
 type Suggestion = ItemJoin & { ai?: boolean };
@@ -29,8 +31,14 @@ export function TemplateItemJoinEditor({
   onClose,
   onSaved,
   onNavigationGuardChange,
+  focus = null,
 }: {
   templateId: string;
+  /**
+   * Opened from one heading of the result screen: a small popup for that heading only. `paths`
+   * are its items as the result screen lists them, which is also the order shown here.
+   */
+  focus?: JoinFocus | null;
   /** Version whose form and headings are shown; the active (else latest) one when omitted. */
   versionId?: string | null;
   overlay?: boolean;
@@ -120,7 +128,24 @@ export function TemplateItemJoinEditor({
     const join = joinOf.get(key);
     return join && join.members[0]?.targetPath === key ? `${join.name}（まとめた値）` : labelOf(key);
   };
-  const sectionUnits = (section: ItemSection) => [...new Set(section.members.map((member) => unitKey(member.targetPath)))];
+  /** The heading the popup is for: the one holding most of the result screen's items. */
+  const focusSection = useMemo(() => {
+    if (!focus) return null;
+    const shown = new Set(focus.paths);
+    let best: ItemSection | null = null, bestCount = 0;
+    for (const section of sections) {
+      const count = section.members.filter((member) => shown.has(member.targetPath)).length;
+      if (count > bestCount) { best = section; bestCount = count; }
+    }
+    return best;
+  }, [focus, sections]);
+  /** A heading's items as the result screen lists them (the form's order for the others). */
+  const naturalMembers = (section: ItemSection) => {
+    if (!focus || section !== focusSection) return section.members;
+    const rank = new Map(focus.paths.map((path, index) => [path, index]));
+    return [...section.members].sort((a, b) => (rank.get(a.targetPath) ?? focus.paths.length) - (rank.get(b.targetPath) ?? focus.paths.length));
+  };
+  const sectionUnits = (section: ItemSection) => [...new Set(naturalMembers(section).map((member) => unitKey(member.targetPath)))];
   const joinOfSection = (section: ItemSection) => joins.find((draft) => draft.members.some((member) => section.members.some((item) => item.targetPath === member.targetPath)));
   const orderOfSection = (section: ItemSection) => drafts.find((draft) => draft.kind === "order" && draft.name === section.name);
   /** The heading's items (a join as one) in the saved order, else as on the form. */
@@ -146,12 +171,12 @@ export function TemplateItemJoinEditor({
   const joinSection = (section: ItemSection) => {
     const proposal = suggestions.find((item) => item.name === section.name && item.ai)
       ?? suggestions.find((item) => item.name === section.name);
-    const members = proposal?.members ?? section.members
+    const members = proposal?.members ?? naturalMembers(section)
       .filter((member) => member.kind === "text" && !joinOf.has(member.targetPath))
       .map((member) => ({ targetPath: member.targetPath, before: "", after: "" }));
     const draft = toDraft({ name: section.name, kind: "join", separator: proposal?.separator ?? "", members });
     setDrafts((all) => [...all, draft]);
-    setFeedback(members.length < 2 ? { kind: "error", text: "まとめる欄を帳票で押して選んでください。" } : null);
+    setFeedback(members.length < 2 ? { kind: "error", text: focus ? "まとめる欄を下の「＋」から選んでください。" : "まとめる欄を帳票で押して選んでください。" } : null);
     setPicking(members.length < 2);
   };
   const unjoin = (draft: Draft) => { setDrafts((all) => all.filter((item) => item.key !== draft.key)); setPicking(false); };
@@ -233,8 +258,13 @@ export function TemplateItemJoinEditor({
       setDrafts(next);
       setSaved(signature(next));
       setPicking(false);
-      setFeedback({ kind: "success", text: "保存しました。読み取り済みの書類にも、この形で表示されます。" });
       onSaved?.(result.items);
+      if (focus) {
+        showToast({ tone: "success", quiet: true, title: "まとめ方・順番を保存しました" });
+        onClose();
+        return;
+      }
+      setFeedback({ kind: "success", text: "保存しました。読み取り済みの書類にも、この形で表示されます。" });
     } catch (error) {
       setFeedback({ kind: "error", text: errorText(error, "保存できませんでした。") });
     } finally {
@@ -283,13 +313,27 @@ export function TemplateItemJoinEditor({
         </label>
       )}
       <p className="item-join-preview"><small>表示</small>{preview(draft)}</p>
-      <p className="item-join-note">ドラッグで並べ替え。帳票の欄を押すと加えたり外したりできます。</p>
+      <p className="item-join-note">{focus ? "ドラッグで並べ替え。×で外し、＋で加えます。" : "ドラッグで並べ替え。帳票の欄を押すと加えたり外したりできます。"}</p>
       <SortableList
         items={draft.members.map((member) => member.targetPath)}
         label={(path) => labelOf(path)}
         onReorder={(keys) => reorderJoin(draft, keys)}
         onRemove={(path) => change(draft.key, (item) => ({ ...item, members: item.members.filter((member) => member.targetPath !== path) }))}
       />
+      {focus && section && (() => {
+        // Without the form, the heading's other text items are added from here.
+        const rest = naturalMembers(section).filter((member) => member.kind === "text" && !joinOf.has(member.targetPath));
+        return rest.length > 0 && (
+          <div className="item-join-addable" role="group" aria-label="まとめる欄を加える">
+            {rest.map((member) => (
+              <button key={member.targetPath} type="button" className="ghost compact" onClick={() => {
+                const glue = glueOf.get(member.targetPath);
+                change(draft.key, (item) => ({ ...item, members: [...item.members, { targetPath: member.targetPath, before: glue?.before ?? "", after: glue?.after ?? "" }] }));
+              }}>＋ {labelOf(member.targetPath)}</button>
+            ))}
+          </div>
+        );
+      })()}
       {needsSeparator(draft) && (
         <div className="item-join-separator" role="group" aria-label="区切り">
           <span>欄と欄の間</span>
@@ -327,7 +371,6 @@ export function TemplateItemJoinEditor({
     const join = joinOfSection(section);
     const order = orderOfSection(section);
     const proposal = !join ? suggestions.find((item) => item.name === section.name && item.ai) ?? suggestions.find((item) => item.name === section.name) : undefined;
-    const units = unitsInOrder(section);
     return (
       <li key={key} className={`item-join-heading${open ? " open" : ""}`}>
         <button type="button" className="item-join-heading-toggle" aria-expanded={open} onClick={() => toggle(key)}>
@@ -337,7 +380,16 @@ export function TemplateItemJoinEditor({
           {order && <span className="item-join-tag">順番を変更</span>}
           {!join && proposal && <span className={`item-join-tag suggest${proposal.ai ? " ai" : ""}`}>{proposal.ai ? "AIのおすすめ" : "まとめられます"}</span>}
         </button>
-        {open && (
+        {open && headingBody(section)}
+      </li>
+    );
+  };
+  /** A heading's settings: 「1つの値にまとめる」 and the order of its items. */
+  const headingBody = (section: ItemSection) => {
+    const join = joinOfSection(section);
+    const proposal = !join ? suggestions.find((item) => item.name === section.name && item.ai) ?? suggestions.find((item) => item.name === section.name) : undefined;
+    const units = unitsInOrder(section);
+    return (
           join ? (
             <>
               {joinEditor(join, section)}
@@ -360,20 +412,37 @@ export function TemplateItemJoinEditor({
               <SortableList items={units} label={unitLabel} onReorder={(keys) => reorderSection(section, keys)} />
             </div>
           )
-        )}
-      </li>
     );
   };
 
+  if (focus) {
+    return (
+      <JoinPopover anchor={focus.anchor} title={focusSection?.name ?? ""} onClose={close}>
+        {feedback && <p className={feedback.kind === "error" ? "item-join-popover-error" : "item-join-note"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</p>}
+        {feedback?.kind === "error" && !mappings.length && !loading && <button type="button" className="secondary compact" onClick={() => setAttempt((n) => n + 1)}>もう一度読み込む</button>}
+        {loading ? <p className="item-join-note">読み込んでいます…</p>
+          : focusSection ? <div className="item-join-popover-body">{headingBody(focusSection)}</div>
+          : mappings.length > 0 && <p className="item-join-note">この見出しは設定できません。</p>}
+        {!loading && focusSection && (
+          <footer className="item-join-popover-actions">
+            <button type="button" className="ghost compact" disabled={saving} onClick={close}>閉じる</button>
+            <button type="button" className="primary compact" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
+          </footer>
+        )}
+      </JoinPopover>
+    );
+  }
+
   const body = (
     <div className={`page-stack candidate-settings-page item-join-page${overlay ? " overlay" : ""}`}>
-      <header className="page-header split">
+      <header className={`page-header split${overlay ? "" : " has-back"}`}>
+        {!overlay && <button type="button" className="ghost page-back" disabled={saving} onClick={close}>← テンプレート一覧へ</button>}
         <div>
           <span className="eyebrow">{templateName}</span>
           <h1>項目のまとめ方・順番</h1>
           <p>見出しを選ぶと、中の欄の並び順を変えたり、1つの値にまとめたりできます。読み取りと修正は欄ごとのままです。</p>
         </div>
-        <button type="button" className="ghost" disabled={saving} onClick={close}>{overlay ? "閉じる" : "← テンプレート一覧へ"}</button>
+        {overlay && <button type="button" className="ghost" disabled={saving} onClick={close}>閉じる</button>}
       </header>
 
       {feedback && <div className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</div>}
@@ -413,7 +482,7 @@ export function TemplateItemJoinEditor({
               <div className="candidate-panel-heading compact">
                 <div><h2>見出し</h2></div>
                 <button type="button" className="ghost compact" disabled={asking || !shownVersionId} title="見出しと欄の名前だけを外部AIに送ります（1回）"
-                  onClick={() => void askAi()}>{asking ? "AIが考えています…" : "AIにおすすめを聞く"}</button>
+                  onClick={() => void askAi()}>{asking ? <><Spinner />AIが考えています…</> : "AIにおすすめを聞く"}</button>
               </div>
               <ul>
                 {sections.map(headingRow)}
@@ -442,7 +511,7 @@ export function TemplateItemJoinEditor({
       {!loading && mappings.length > 0 && (
         <div className="decision-bar sticky candidate-save-bar">
           <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>確認画面・書類棚・一覧のXLSX・質問に使います。読み取り済みの書類にも反映されます。</p></div>
-          <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button>
+          <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
         </div>
       )}
     </div>
@@ -450,6 +519,50 @@ export function TemplateItemJoinEditor({
   return overlay
     ? <div className="item-join-overlay" role="dialog" aria-modal="true" aria-label="項目のまとめ方・順番">{body}</div>
     : body;
+}
+
+type JoinFocus = { paths: string[]; anchor: HTMLElement | null };
+
+/** A small dialog next to the heading's button; it follows the button while the page scrolls. */
+function JoinPopover({ anchor, title, onClose, children }: { anchor: HTMLElement | null; title: string; onClose: () => void; children: ReactNode }) {
+  const card = useRef<HTMLElement>(null);
+  const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
+  useLayoutEffect(() => {
+    const place = () => {
+      const width = Math.min(400, window.innerWidth - 16);
+      const rect = anchor?.isConnected ? anchor.getBoundingClientRect() : null;
+      if (!rect) { setStyle({ width, left: (window.innerWidth - width) / 2, top: 80, maxHeight: window.innerHeight - 96 }); return; }
+      const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+      const below = window.innerHeight - rect.bottom - 14, above = rect.top - 14;
+      setStyle(below >= 280 || below >= above
+        ? { width, left, top: rect.bottom + 6, maxHeight: below }
+        : { width, left, bottom: window.innerHeight - rect.top + 6, maxHeight: above });
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [anchor]);
+  const latestClose = useRef(onClose);
+  latestClose.current = onClose;
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") latestClose.current(); };
+    // A press outside closes it (the button that opened it toggles it instead).
+    const press = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!card.current?.contains(target) && !anchor?.contains(target)) latestClose.current();
+    };
+    window.addEventListener("keydown", key);
+    window.addEventListener("pointerdown", press, true);
+    return () => { window.removeEventListener("keydown", key); window.removeEventListener("pointerdown", press, true); };
+  }, [anchor]);
+  return (
+    <section ref={card} className="item-join-popover" style={style} role="dialog" aria-label={`${title}のまとめ方・順番`}>
+      <header>{title && <strong>{title}</strong>}<span>まとめ方・順番</span>
+        <button type="button" className="item-join-popover-close" aria-label="閉じる" onClick={onClose}>×</button></header>
+      {children}
+    </section>
+  );
 }
 
 /** A vertical list reordered by dragging (dnd-kit); the handle is the whole row. */
@@ -524,13 +637,24 @@ function errorText(error: unknown, fallback: string) {
   return error instanceof ApiError || error instanceof Error ? error.message : fallback;
 }
 
+/**
+ * Whether 「項目のまとめ方・順番」 can be opened from the screens (2026-10-21: hidden, then shown again by request).
+ * Controls only the entry points (result headings, the reading screen's edit menu, the
+ * activation notification); saved joins and orders are applied to the result screen, the
+ * shelf and the list XLSX either way. Set to false to hide them again.
+ */
+export const ITEM_JOIN_EDITING_VISIBLE = true;
+
 const OPEN_EVENT = "ledger-open-item-joins";
 const SAVED_EVENT = "ledger-item-joins-saved";
-type OpenRequest = { templateId: string; versionId?: string | null };
+type OpenRequest = { templateId: string; versionId?: string | null; focus?: JoinFocus | null };
 
-/** Opens 「項目のまとめ方・順番」 over the current screen (from a toast or the result screen). */
-export function openItemJoinEditor(templateId: string, versionId?: string | null) {
-  window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { templateId, versionId } }));
+/**
+ * Opens 「項目のまとめ方・順番」 over the current screen. With `focus` (a heading of the result
+ * screen) only that heading is shown, in a small popup next to its button.
+ */
+export function openItemJoinEditor(templateId: string, versionId?: string | null, focus?: JoinFocus | null) {
+  window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { templateId, versionId, focus } }));
 }
 
 /** Calls `listener` with the saved joins of a template, wherever they were saved from. */
@@ -552,9 +676,10 @@ export function ItemJoinEditorHost() {
   }, []);
   if (!request) return null;
   return <TemplateItemJoinEditor
-    key={`${request.templateId}:${request.versionId ?? ""}`}
+    key={`${request.templateId}:${request.versionId ?? ""}:${request.focus?.paths.join("|") ?? ""}`}
     templateId={request.templateId}
     versionId={request.versionId}
+    focus={request.focus ?? null}
     overlay
     onClose={() => setRequest(null)}
     onSaved={(items) => window.dispatchEvent(new CustomEvent(SAVED_EVENT, { detail: { templateId: request.templateId, items } }))}

@@ -39,6 +39,8 @@ from app.services.ocr_result_service import OcrResultService
 from app.services.template_authoring_service import TemplateAuthoringService
 from app.storage.local_storage import LocalStorageService
 
+STALE_VIEW = "編集状態が古くなりました。画面を再読み込みしてください。"
+
 
 def aware(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
@@ -64,7 +66,7 @@ class EditingService:
         ):
             raise reject("EDITING_SESSION_INVALID", "編集sessionの所有者が一致しません。", 403)
         if owner.context_json.get("contractVersion") == "editing.v2":
-            raise reject("EDITING_CONTRACT_MISMATCH", "このsessionはv2専用です。", 409)
+            raise reject("EDITING_CONTRACT_MISMATCH", STALE_VIEW, 409)
         if not recover and (owner.closed_at is not None or aware(owner.expires_at) <= utc_now()):
             raise reject(
                 "EDITING_SESSION_EXPIRED",

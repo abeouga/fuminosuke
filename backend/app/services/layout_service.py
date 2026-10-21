@@ -239,11 +239,8 @@ class LayoutService:
         raw, _ = fork_layout(layout.model_dump(mode="json", by_alias=True))
         return LayoutDefinition.model_validate(raw)
 
-    def recognize_labels(
-        self,
-        version_id: str,
-        layout: LayoutDefinition,
-    ) -> LayoutDefinition:
+    def template_image_rgb(self, version_id: str, layout: LayoutDefinition) -> NDArray[np.uint8]:
+        """The clean template image a draft layout was drawn on (RGB, canonical size)."""
         with self._database.session() as session:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:
@@ -292,13 +289,25 @@ class LayoutService:
                 title="Invalid template image",
                 detail="ラベルOCR用の帳票画像を読み込めませんでした。",
             )
-        image_rgb = np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
+        return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
+
+    def recognize_labels(
+        self,
+        version_id: str,
+        layout: LayoutDefinition,
+    ) -> LayoutDefinition:
+        image_rgb = self.template_image_rgb(version_id, layout)
         result = recognize_label_cells(
             image_rgb,
             layout.cells,
             excluded_cell_ids=protected_label_cell_ids(layout),
         )
-        warnings = [warning for warning in layout.warnings if not warning.startswith("LABEL_OCR_")]
+        warnings = [
+            warning
+            for warning in layout.warnings
+            # Internal detection notes saved by older layouts are not shown to the user.
+            if not warning.startswith(("LABEL_OCR_", "PADDLEOCR_NOT_AVAILABLE"))
+        ]
         warnings.extend(result.warnings)
         return layout.model_copy(
             update={
@@ -547,7 +556,7 @@ class LayoutService:
                 status=422,
                 code="LAYOUT_MEANING_REQUIRED",
                 title="Layout meaning is required",
-                detail="矩形の区分と保存先を意味づけしてから再検出してください。",
+                detail="枠の区分と項目のつながりを設定してから、もう一度検出してください。",
             )
         self._require_verified_record_structure(layout)
         finalization = (
@@ -1273,24 +1282,75 @@ class LayoutService:
                 raise error
 
     @staticmethod
+    def _sequence_numbers(layout: LayoutDefinition) -> dict[str, int]:
+        """Automatic numbers. A repeated table counts its own rows from 1; tables under one
+        heading continue (繁殖関係: the left table 1〜10, the right one 11〜20). Other number
+        boxes count top to bottom, then left to right."""
+        number_cells = {
+            cell.id: cell
+            for cell in layout.cells
+            if cell.role == "input" and cell.reading_mode == "number"
+        }
+        sections = {section.id: section for section in layout.record_sections}
+        row_of: dict[str, tuple[str, int]] = {
+            cell_id: (group.section_id, group.order)
+            for group in layout.record_groups
+            if group.section_id in sections
+            for cell_id in group.input_cell_ids
+            if cell_id in number_cells
+        }
+        rows = {
+            section_id: max(
+                (g.order for g in layout.record_groups if g.section_id == section_id),
+                default=0,
+            )
+            for section_id in {section_id for section_id, _ in row_of.values()}
+        }
+
+        def extent(section_id: str) -> tuple[int, int, int]:
+            boxes = [number_cells[c] for c, (s, _) in row_of.items() if s == section_id]
+            return (
+                min(box.y for box in boxes),
+                max(box.y + box.height for box in boxes),
+                min(box.x for box in boxes),
+            )
+
+        chains: dict[str, list[str]] = {}
+        for section_id in rows:
+            heading = sections[section_id].parent_label_cell_id
+            chains.setdefault(heading or section_id, []).append(section_id)
+        offsets: dict[str, int] = {}
+        for members in chains.values():
+            # Side by side (their rows overlap in height) goes left to right, else top to bottom.
+            ordered: list[tuple[int, int, str]] = []
+            band, bottom = -1, -1
+            for section_id in sorted(members, key=lambda s: (extent(s)[0], extent(s)[2], s)):
+                top, end, left = extent(section_id)
+                if top >= bottom:
+                    band += 1
+                bottom = max(bottom, end)
+                ordered.append((band, left, section_id))
+            total = 0
+            for _, _, section_id in sorted(ordered):
+                offsets[section_id] = total
+                total += rows[section_id]
+        numbers = {
+            cell_id: offsets[section_id] + order
+            for cell_id, (section_id, order) in row_of.items()
+        }
+        loose = sorted(
+            (cell for cell_id, cell in number_cells.items() if cell_id not in row_of),
+            key=lambda cell: (cell.y, cell.x, cell.id),
+        )
+        numbers.update({cell.id: index for index, cell in enumerate(loose, start=1)})
+        return numbers
+
+    @staticmethod
     def _as_field_mappings(layout: LayoutDefinition) -> list[FieldMappingConfig]:
         cell_by_id = {cell.id: cell for cell in layout.cells}
         pool_labels = {entry.target_path: entry.label for entry in layout.label_pool}
         # Freeze the physical order at template save, before page/request filtering.
-        sequence_numbers = {
-            cell.id: index
-            for index, cell in enumerate(
-                sorted(
-                    (
-                        cell
-                        for cell in layout.cells
-                        if cell.role == "input" and cell.reading_mode == "number"
-                    ),
-                    key=lambda cell: (cell.y, cell.x, cell.id),
-                ),
-                start=1,
-            )
-        }
+        sequence_numbers = LayoutService._sequence_numbers(layout)
         relations_by_input: dict[str, list[LayoutRelation]] = {}
         for relation in layout.relations:
             relations_by_input.setdefault(relation.input_cell_id, []).append(relation)
@@ -1475,10 +1535,12 @@ class LayoutService:
                     FieldMappingConfig(
                         mapping_id=mapping_id,
                         target_path=target_path,
+                        # The box's own name first, as for text fields: several boxes
+                        # under one item name (父 → 名号・登録…) are not all 「父」.
                         label=_visible_name(
+                            cell.field_label if len(cell.mark_sets) == 1 else None,
                             " / ".join(mark_label_texts),
                             pool_labels.get(target_path),
-                            cell.field_label if len(cell.mark_sets) == 1 else None,
                             field_key(target_path),
                         ),
                         x=cell.x,

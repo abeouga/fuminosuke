@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FiArrowLeft, FiCheck, FiEdit3, FiSave } from "react-icons/fi";
+import { FiArrowLeft, FiArrowRight, FiCheck, FiEdit2, FiEdit3, FiFileText, FiSave } from "react-icons/fi";
 import { ApiError, api } from "../api";
 import { AssistantPanel } from "../assistant/AssistantPanel";
 import { EditingControls } from "../editing/EditingControls";
@@ -10,15 +10,18 @@ import { useInteractionContext } from "../assistant/useInteractionContext";
 import type { AssistantSnapshot } from "../assistant/contracts";
 import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
-import { AnchoredReviewPopover, ReviewChecklists, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
+import { AnchoredReviewPopover, ReviewChecklists, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, sectionItemPaths, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
 import type { Artifact, DocumentIdentity, FieldReading, OcrDocument, OcrResult } from "../types";
 import { displayName } from "../userMessages";
 import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
+import { showToast } from "../components/Toast";
 export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
-export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, closeLabel = "ホームへ", }: {
+export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, closeLabel = "ホームへ", }: {
     jobId: string;
     onClose: () => void;
+    /** After 「内容を確定する」 succeeds (the app then shows the document shelf). */
+    onConfirmed?: (confirmed: { templateId: string; documentName: string }) => void;
     /** Label of the back button (the page it returns to). */
     closeLabel?: string;
     onNavigationGuardChange?: (warn: boolean) => void;
@@ -37,6 +40,22 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
     const [acceptMismatch, setAcceptMismatch] = useState(false), [addedOnly, setAddedOnly] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState(false), [paged, setPaged] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
+    // An automatic save runs while the person keeps typing; only other work locks the inputs.
+    const [saving, setSaving] = useState(false);
+    // 「この読み取りはあっていますか？」: 「次へ」 waits for the check.
+    const [identityAgreed, setIdentityAgreed] = useState(false);
+    // The whole form over the screen (opened by pressing the preview).
+    const [zoomed, setZoomed] = useState(false);
+    // Pressing 「内容を確定する」 without a name: the count restarts the name field's glow.
+    const [nameWanted, setNameWanted] = useState(0);
+    const nameInput = useRef<HTMLInputElement>(null);
+    useEffect(() => { if (nameWanted) nameInput.current?.focus(); }, [nameWanted]);
+    useEffect(() => {
+        if (!zoomed) return;
+        const key = (event: KeyboardEvent) => { if (event.key === "Escape") setZoomed(false); };
+        window.addEventListener("keydown", key);
+        return () => window.removeEventListener("keydown", key);
+    }, [zoomed]);
     // Names given to items on this screen (display only; per template).
     const [itemNames, setItemNames] = useState<Record<string, string>>({});
     const [conflict, setConflict] = useState<{
@@ -55,6 +74,18 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
       ? { selected: voiceTableId, select: (tableId: string | null) => { void editingStore.changeScope(tableId).catch(e => setError(e instanceof Error ? e.message : "対象の表を切り替えられませんでした。")); } }
       : null, [editingEnabled, editingStatus.context, editingStatus.state, editingStatus.pending, voiceTableId, editingStore]);
     const reviewRoot = useRef<HTMLDivElement>(null);
+    // Saved / failed notes are small corner notifications; they never push the page down.
+    useEffect(() => {
+        if (!message) return;
+        showToast({ tone: "success", quiet: true, title: message });
+        setMessage(null);
+    }, [message]);
+    const showsPage = Boolean(result && draft);
+    useEffect(() => {
+        if (!error || !showsPage) return;
+        showToast({ tone: "error", quiet: true, title: error });
+        setError(null);
+    }, [error, showsPage]);
     useEffect(() => {
         if (!result || paged) return;
         let active = true;
@@ -73,10 +104,11 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
     const dirty = Boolean(result && draft && !result.confirmed && (JSON.stringify(draft) !== JSON.stringify(result.result) || name !== result.documentName));
     const locked = Boolean(result?.confirmed || busy || assistantApplying || conflict);
     useEffect(() => {
-        if (!editingEnabled || !result || !draft || result.confirmed || locked || inlineDirty || assistantSaveError || JSON.stringify(draft) === JSON.stringify(result.result)) return;
-        const timer = setTimeout(() => { void save(); }, 50);
+        if (!editingEnabled || !result || !draft || result.confirmed || locked || saving || inlineDirty || assistantSaveError || JSON.stringify(draft) === JSON.stringify(result.result)) return;
+        // A short pause after the last key, so a save does not run for every letter.
+        const timer = setTimeout(() => { void save(); }, 500);
         return () => clearTimeout(timer);
-    }, [editingEnabled, result, draft, locked, inlineDirty, assistantSaveError]);
+    }, [editingEnabled, result, draft, locked, saving, inlineDirty, assistantSaveError]);
     const accept = (next: OcrResult) => { setResult(next); setDraft(next.result); setName(next.documentName); setAssistantSaveError(null); };
     useEffect(() => {
         let active = true;
@@ -106,7 +138,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
         return () => { active = false; };
     }, [jobId, autoReopenConfirmed, loadAttempt]);
     useEffect(() => {
-        const guarded = dirty || inlineDirty || busy || assistantApplying || Boolean(conflict);
+        const guarded = dirty || inlineDirty || busy || saving || assistantApplying || Boolean(conflict);
         onNavigationGuardChange?.(guarded);
         const guard = (event: BeforeUnloadEvent) => {
             if (guarded) {
@@ -116,7 +148,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
         };
         window.addEventListener("beforeunload", guard);
         return () => { onNavigationGuardChange?.(false); window.removeEventListener("beforeunload", guard); };
-    }, [dirty, inlineDirty, busy, assistantApplying, conflict, onNavigationGuardChange]);
+    }, [dirty, inlineDirty, busy, saving, assistantApplying, conflict, onNavigationGuardChange]);
     const entries = useMemo<ReadingEntry[]>(() => draft ? Object.entries(draft.fields).map(([key, value]) => ({ path: `fields.${key}`, value,
         label: displayName(result?.reviewStructure?.fields.find(field => field.targetPath === `fields.${key}`)?.label ?? draft.fieldLabels[key] ?? key) })) : [], [draft, result?.reviewStructure]);
     const previews = result?.fieldPreviews ?? [];
@@ -155,7 +187,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
     const joinContext = useMemo(() => ({
         byPath: joinByPath(itemJoins),
         orders: displayOrders(itemJoins),
-        configure: templateId ? () => openItemJoinEditor(templateId, templateVersion) : undefined,
+        configure: templateId ? (paths: string[], anchor: HTMLElement) => openItemJoinEditor(templateId, templateVersion, { paths, anchor }) : undefined,
     }), [itemJoins, templateId, templateVersion]);
     const renameItem = async (entry: ReadingEntry, name: string) => {
         if (!templateId) return;
@@ -194,10 +226,10 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
             setError(reason instanceof Error ? reason.message : "保存できませんでした。");
     };
     async function save() {
-        if (!result || !draft || locked || inlineDirty)
+        if (!result || !draft || locked || saving || inlineDirty)
             return false;
         const sent = draft;
-        setBusy(true);
+        setSaving(true);
         setError(null);
         setAssistantSaveError(null);
         try {
@@ -207,7 +239,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
             setName(current => current === result.documentName ? saved.documentName : current);
             if (draftRef.current === sent)
                 setDraft(saved.result);
-            setMessage("修正を保存しました。");
+            setMessage("保存しました");
             return true;
         }
         catch (reason) {
@@ -216,7 +248,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
             return false;
         }
         finally {
-            setBusy(false);
+            setSaving(false);
         }
     }
     async function confirm() {
@@ -238,13 +270,15 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
             const confirmed = await api.confirm(jobId, latest.revision, name.trim(), acceptMismatch);
             if (editingEnabled) await editingStore.acceptOwnRevision(confirmed.revision);
             accept(confirmed);
-            setMessage("結果と書類名を確定しました。");
+            if (onConfirmed) onConfirmed({ templateId: confirmed.result.templateId, documentName: confirmed.documentName });
+            else setMessage("結果と書類名を確定しました。");
         }
         catch (reason) {
             const server = requested ? await api.result(jobId).catch(() => null) : null;
             if (server?.confirmed && server.revision === latest.revision && JSON.stringify(server.result) === JSON.stringify(latest.result) && server.documentName === name.trim()) {
                 accept(server);
-                setMessage("保存状態を確認しました。確定済みです。");
+                if (onConfirmed) onConfirmed({ templateId: server.result.templateId, documentName: server.documentName });
+                else setMessage("保存状態を確認しました。確定済みです。");
             }
             else
                 await failure(reason, sent);
@@ -311,15 +345,18 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
         saveError: assistantSaveError,
     };
     if (paged)
-        return <PagedReviewPage jobId={jobId} templateNames={templateNames} onClose={onClose} closeLabel={closeLabel} onNavigationGuardChange={onNavigationGuardChange}/>;
+        return <PagedReviewPage jobId={jobId} templateNames={templateNames} onClose={onClose} onConfirmed={onConfirmed} closeLabel={closeLabel} onNavigationGuardChange={onNavigationGuardChange}/>;
     if (!result || !draft)
         return <section className="empty-state large"><p role={error ? "alert" : "status"}>{error ?? "結果を読み込んでいます…"}</p>
             {error && <button className="secondary" onClick={() => setLoadAttempt(value => value + 1)}>結果を再取得</button>}
             <button className="ghost" onClick={onClose}><FiArrowLeft />{closeLabel}</button></section>;
     if (!identityChecked && !result.confirmed)
         return <div className="page-stack identity-confirm-page">
-    <header className="page-header split"><div><span className="eyebrow">書類の確認</span><h1>この書類で間違いありませんか？</h1><p>書類を見分ける情報を画像と照合し、必要な修正を行ってください。</p></div><button className="ghost" onClick={onClose}><FiArrowLeft />{closeLabel}</button></header>
-    <aside className="notice compact"><strong>使用テンプレート</strong><span>{templateNames[result.result.templateId] ?? "読み取り時のテンプレート"}</span></aside>
+    <header className="page-header split has-back"><button className="ghost page-back" onClick={onClose}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">書類の確認</span><h1>この読み取りはあっていますか？</h1></div></header>
+    <aside className="identity-template-card">
+      <span className="identity-template-thumb">{fullImage ? <img src={fullImage.replace(/(\/artifacts\/[^/?]+)/, "$1/thumbnail")} alt="" decoding="async" onError={event => { event.currentTarget.hidden = true; }}/> : null}<FiFileText aria-hidden="true"/></span>
+      <span className="identity-template-text"><small>使用テンプレート</small><strong>{templateNames[result.result.templateId] ?? "読み取り時のテンプレート"}</strong></span>
+    </aside>
     {contextError ? <aside className="error-box">識別設定を取得できませんでした。<button className="secondary" onClick={async () => {
                     try {
                         const context = await api.reviewContext(jobId);
@@ -330,7 +367,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
                         setContextError(true);
                     }
                 }}>再取得</button></aside> : <section className="identity-confirm-grid">
-      {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><span>{field.label}</span><h2>「{field.label}」はこの内容ですか？</h2></header>
+      {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><h2>「{field.label}」はこの内容ですか？</h2></header>
         <div className="identity-confirm-preview"><img src={previews.find(preview => preview.mappingId === field.mappingId)?.artifactUrl} alt={`${field.label}の読み取り範囲`}/></div>
         {series && (() => {
             const previous = series.predecessorIdentity.find(item => item.targetPath === field.targetPath);
@@ -341,7 +378,7 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
               {previous?.value && entry && !locked && (entry.value.normalized ?? entry.value.raw) !== previous.value
                 && <button type="button" className="ghost compact" onClick={() => editText(entry, previous.value!)}>前の版の値にする</button>}</p>;
         })()}
-        <label className="field-label">検出結果<input aria-label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} disabled={locked || !readingFor(field)} inputMode={field.valueType === "digits" ? "numeric" : "text"} aria-invalid={identityInvalid(field)} onChange={event => editText(entries.find(entry => entry.path === field.targetPath)!, event.target.value)}/><small>{field.valueType === "digits" ? `数字${field.exactLength ? `${field.exactLength}桁` : ""}で確認してください。` : "書類に記載された内容を確認してください。"}</small></label></article>)}
+        <label className="field-label"><span className="identity-result-label"><FiEdit2 aria-hidden="true"/>検出結果</span><input aria-label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} disabled={locked || !readingFor(field)} inputMode={field.valueType === "digits" ? "numeric" : "text"} aria-invalid={identityInvalid(field)} onChange={event => editText(entries.find(entry => entry.path === field.targetPath)!, event.target.value)}/><small>{field.valueType === "digits" ? `数字${field.exactLength ? `${field.exactLength}桁` : ""}で確認してください。` : "書類に記載された内容を確認してください。"}</small></label></article>)}
       {!identities.length && <article className="identity-confirm-card"><h2>読み取り対象の書類</h2><p>識別項目は設定されていません。帳票全体を確認してください。</p>{fullImage && <img className="identity-full-image" src={fullImage} alt="読み取った帳票全体"/>}</article>}
     </section>}
     {series && <aside className={`notice compact series-identity-notice${identityMismatches.length ? " warn" : ""}`}>
@@ -362,13 +399,19 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
             </span>)}
     </aside>}
     {error && <p className="error-box" role="alert">{error}</p>}
-    <div className="page-actions"><button className="primary" disabled={busy || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}><FiCheck />この書類を確認して結果へ</button></div>
+    <div className="page-actions identity-next">
+      <label className="identity-agree"><input type="checkbox" checked={identityAgreed} onChange={event => setIdentityAgreed(event.target.checked)}/><FiCheck aria-hidden="true"/>確認しました</label>
+      <button className="primary" disabled={!identityAgreed || busy || saving || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}>次へ<FiArrowRight /></button>
+    </div>
   </div>;
     return <ReviewDraftBoundary key={recoveryDiscardEpoch} onDirtyChange={setInlineDirty}><div ref={reviewRoot} className="page-stack review-page">
-    <header className="page-header split"><div><span className="eyebrow">{result.confirmed ? "確定済み" : "読み取り結果の確認"}</span><h1>{name || "読み取り結果"}</h1><p>{entries.length}項目 · {result.confirmed ? "XLSXを取得できます" : "画像と照合して修正し、確定してください"}</p></div><div className="page-actions">
-      <button className="ghost" disabled={assistantApplying} onClick={onClose}><FiArrowLeft />{closeLabel}</button>{result.confirmed ? <><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
-      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button><button className="primary" disabled={locked || inlineDirty || !name.trim() || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setConfirmDialog(true)}><FiCheck />確認して確定</button></>}</div></header>
-    {error && <p className="error-box" role="alert">{error}</p>}{message && <aside className="notice compact">{message}</aside>}
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={assistantApplying} onClick={onClose}><FiArrowLeft />{closeLabel}</button><div><h1>{result.confirmed ? "確定済みの読み取り結果" : "読み取り結果の確認・修正"}</h1></div><div className="page-actions">
+      {result.confirmed ? <><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
+      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => {
+        // Without a name the name field glows and takes the focus instead of opening the dialog.
+        if (!name.trim()) { setNameWanted(value => value + 1); return; }
+        setConfirmDialog(true);
+      }}><FiCheck />内容を確定する</button></>}</div></header>
     {conflict && <aside className="error-box"><strong>入力を保持しています</strong><p>最新結果を確認してから、退避した入力を復元できます。</p>
       <button className="secondary" onClick={async () => { const latest = await api.result(jobId); setConflict(current => current ? { ...current, latest } : current); accept(latest); }}>最新結果を表示</button>
       <button className="secondary" disabled={!conflict.latest || conflict.latest.confirmed || busy} onClick={async () => {
@@ -407,15 +450,17 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
         }}>次の追加欄へ</button>
       </span>}
     </aside>}
-    <label className="field-label document-name-field">書類名<input value={name} maxLength={180} disabled={locked} onChange={event => setName(event.target.value)}/></label>
-    <div className="review-assistant-workspace"><div className="generic-review-workspace"><section className="generic-review-source"><header><h2>帳票と読み取り範囲</h2><span>{reviewEntryContext(display, selectedEntry)}</span></header>
-      {selectedPreview && <figure className="ocr-region-preview"><img src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}/><figcaption>{reviewEntryContext(display, selectedEntry)}</figcaption></figure>}{fullImage && <div className="ocr-page-preview"><img src={fullImage} alt="読み取った帳票全体"/></div>}
+    <div className="review-assistant-workspace"><div className="generic-review-workspace"><section className="generic-review-source">
+      <label className={`field-label document-name-field${nameWanted && !name.trim() ? " is-wanted" : ""}`}>書類名<input key={nameWanted} ref={nameInput} value={name} maxLength={180} disabled={locked} placeholder="書類名を入力してください" onChange={event => setName(event.target.value)}/></label>
+      {/* The selected cell's crop floats over the page image, so the image itself never moves. */}
+      <div className="ocr-page-preview-frame">{fullImage && <div className="ocr-page-preview"><button type="button" className="ocr-page-preview-open" title="押すと画面いっぱいに表示" onClick={() => setZoomed(true)}><img src={fullImage} alt="読み取った帳票全体"/></button></div>}
+        {selectedPreview && <figure className="ocr-region-preview"><img src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}/><figcaption>{reviewEntryContext(display, selectedEntry)}</figcaption></figure>}</div>
     </section><section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} onNextWarning={() => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); }}/>
       <VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{display.recordSections.map(section => <GenericRecordReviewTable key={section.id} section={section} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
                 if (!locked)
                     setDraft(current => current ? swapGenericRecordRowsAtFixedRegions(current, section, from, to) : current);
             }}/>)}
-        {display.parentSections.map(section => <ReviewTableSection key={section.id} title={section.title}><KeyValueReviewTable entries={section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
+        {display.parentSections.map(section => <ReviewTableSection key={section.id} title={section.title} joinPaths={sectionItemPaths(section.entries)}><KeyValueReviewTable entries={section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
         {display.independentEntries.length > 0 && <ReviewTableSection title="独立項目"><IndependentReviewGroups groups={display.independentGroups} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>}
       </div></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>{!result.confirmed && selectedEntry && mode === "edit" && selectedPreview?.markRecognitionMode !== "checklist" && <AnchoredReviewPopover path={selectedEntry.path} wide={selectedPreview?.mappingType === "mark" && markPopoverIsWide(selectedPreview)} onClose={() => setSelected(null)}>
         {selectedPreview?.mappingType === "mark"
@@ -423,20 +468,22 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
           : <CellStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)} onClose={() => setSelected(null)}/>}</AnchoredReviewPopover>}
     </section></div>
     {editingEnabled && <ReviewAiFocus rootRef={reviewRoot} focus={editingStatus.focus} context={editingStatus.context} viewRevision={result.revision} />}
+    {/* Voice input and undo float over the form image like on the template screen; results speak in its bubble. */}
     {editingEnabled ? <EditingControls store={editingStore} pageScope={{ mode: "all", pageId: null }} tableSelector={false}
+      voiceOnly floatingAnchor=".generic-review-source .ocr-page-preview"
       selectedEntities={selected?.startsWith("fields.") ? [selected.slice(7)] : []} selectionEpoch={assistantInteraction.selectionEpoch}
       manualActive={dirty || inlineDirty || busy || Boolean(conflict)}
       disabled={result.confirmed ? "確定済みです。再編集で音声入力を使用できます。" : contextError ? "帳票との対応情報を取得できません。" : null}
       onSaved={saved => {
         if (!saved.ocr) throw new Error("保存済みの読み取り結果を取得できません。");
         if (dirty || inlineDirty || busy || conflict) throw new Error("保存済み・表示更新待ちです。未保存の入力を保持しています。");
-        accept(saved.ocr); setMessage(saved.result.notification);
+        accept(saved.ocr);
       }} /> : <AssistantPanel snapshot={assistantSnapshot} adapter={{ begin: () => undefined, end: () => undefined,
       setApplying: setAssistantApplying,
       saved: async (receipt, discardDraft = false) => {
         try {
           const next = await api.result(jobId);
-          if (next.revision < receipt.revision) throw new Error("保存済みの世代をまだ取得できません。");
+          if (next.revision < receipt.revision) throw new Error("保存した内容をまだ読み込めません。少し待ってから画面を再読み込みしてください。");
           if ((dirty || conflict || inlineDirty) && !discardDraft) throw new Error("未保存の入力を保持しています。");
           if (busy) throw new Error("保存中の処理を先に完了してください。");
           if (discardDraft && inlineDirty) { setRecoveryDiscardEpoch(current => current + 1); setInlineDirty(false); }
@@ -460,7 +507,11 @@ export function ReviewPage({ jobId, onClose, onNavigationGuardChange, requireIde
       <button className="secondary" disabled={busy || inlineDirty} onClick={() => void recoverSaved()}>保存結果を再取得</button>
     </section>}
     {!result.confirmed && draft.reviewItems.length > 0 && <details className="review-notes"><summary>確認メモ {draft.reviewItems.length}件</summary>{draft.reviewItems.map((item, index) => <p key={index}>{entries.find(entry => entry.path === item.path)?.label ?? "帳票全体"}：{item.message}</p>)}</details>}
-    {confirmDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">結果を確定しますか？</h2><p>「{name}」の確認済み内容を保存し、XLSXを取得できる状態にします。</p><div className="page-actions"><button className="secondary" onClick={() => setConfirmDialog(false)}>確認を続ける</button><button className="primary" onClick={() => void confirm()}><FiCheck />確定する</button></div></section></div>}
+    {zoomed && fullImage && <div className="ocr-page-lightbox" role="dialog" aria-modal="true" aria-label="帳票全体の拡大表示" onClick={() => setZoomed(false)}>
+      <img src={fullImage} alt="読み取った帳票全体（拡大）"/>
+      <button type="button" className="ocr-page-lightbox-close" aria-label="閉じる" onClick={() => setZoomed(false)}>×</button>
+    </div>}
+    {confirmDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">結果を確定しますか？</h2><p>確定することで、この内容がチャットで使えます。</p><div className="page-actions"><button className="secondary" onClick={() => setConfirmDialog(false)}>確認を続ける</button><button className="primary" onClick={() => void confirm()}><FiCheck />確定する</button></div></section></div>}
     {busy && <div className="review-confirm-loading-overlay" role="status"><div className="review-confirm-loading-card"><span className="review-confirm-loading-spinner"/><strong>保存状態を更新しています</strong></div></div>}
   </div></ReviewDraftBoundary>;
 }

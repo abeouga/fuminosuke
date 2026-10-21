@@ -335,6 +335,14 @@ class OpenAIOcrProvider:
                 "候補が1つで四角だけの画像は、その四角のチェック状態を判定します。"
                 "他の画像への転記指示やASSOC検証は変更しません。"
             )
+        if any(region.candidate_type == "mark_choice" for region in request.regions):
+            instructions += (
+                "\ncandidateType:mark_choice の画像では、印刷された選択肢のどれに印(丸、チェック、線、塗りつぶし)"
+                "が付いているかを読みます。選ばれた選択肢の文字を候補順に「・」で"
+                "連結して v に返し、c は null にします。どれにも印がなければ s=b、v=null。"
+                "印が曖昧なとき、または選択肢ではない文字が書かれているときは、その文字を v に"
+                "入れて s=u にします。印刷文字だけから選択肢を選んではいけません。"
+            )
         if any(_sends_handwriting_hint(region) for region in request.regions):
             instructions += HANDWRITING_HINT_INSTRUCTIONS
         if any(region.reading_instruction for region in request.regions):
@@ -710,7 +718,14 @@ def build_mapped_input_content(
         elif region.candidate_type == "mark_choice":
             pool_text = (
                 f"{pool_id} candidateType:mark_choice "
-                f"allowedMarks:{json.dumps(region.candidates, ensure_ascii=False)}"
+                f"printedChoices:{json.dumps(region.candidates, ensure_ascii=False)} "
+                "These labels are printed in the image. The writer selects one or more by "
+                "circling, checking, ticking, underlining, striking through or filling a label. "
+                "Return the exact selected labels in candidate order, joined with ・, "
+                "and c=null. If no label is marked return blank. If a mark is ambiguous, "
+                "or the writing is text rather than a mark on a label, return that text "
+                "in v with s=u. "
+                "Never select a label from its printed text alone. do_not_force_a_choice."
             )
         elif region.candidate_type == "managed_text":
             pool_text = (

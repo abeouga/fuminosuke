@@ -58,19 +58,17 @@ def page_config(config: TemplateConfig, page: dict[str, Any]) -> TemplateConfig:
             if (
                 mapping is None
                 or mapping.target_path != binding["targetPath"]
-                or (mapping.mapping_type != "text"
-                    and mapping.mark_recognition_mode not in {"checklist", "symbol"})
                 or mapping.composite_subfields
             ):
                 fail(
-                    "ページ別では文字・番号・チェックリスト・記号に対応しています。"
-                    "複合項目と印刷された選択肢の判定は未対応です。",
+                    "ページ別では文字・番号・チェックリスト・記号・印刷された選択肢に対応しています。"
+                    "複合項目は未対応です。",
                     "PRINT_PAGE_CONFIG_UNSUPPORTED",
                 )
             page_mapping = mapping.model_copy(update=field["rectangle"], deep=True)
-            if mapping.mark_recognition_mode in {"checklist", "symbol"}:
-                # Checklist and symbol OCR read the validated page crop as a whole. Option
-                # rectangles are metadata, not separate image-difference regions.
+            if mapping.mapping_type == "mark":
+                # Checklist, symbol and printed-choice OCR read the validated page crop as a
+                # whole. Option rectangles are metadata, not separate image-difference regions.
                 page_mapping.mark_options = [option.model_copy(update={
                     "x": 0, "y": 0,
                     "width": page_mapping.width, "height": page_mapping.height,

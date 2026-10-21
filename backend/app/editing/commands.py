@@ -264,9 +264,24 @@ class CommandCompiler:
                     )
                     existing = [r for r in layout["relations"] if r["inputCellId"] == cell["id"]]
                     if any(r["targetPath"] != entry["targetPath"] for r in existing):
-                        raise reject(
-                            "DEPENDENCY_CONFLICT", "既存の意味を同じ操作群で解除してください。"
-                        )
+                        if in_table or len(sets) > 1:
+                            raise reject(
+                                "DEPENDENCY_CONFLICT",
+                                "この欄はすでに別の項目名につながっています。"
+                                "前の線を外してから、もう一度つないでください。",
+                            )
+                        # A new line from an item name replaces the field's earlier meaning.
+                        replaced = {r["id"] for r in existing}
+                        layout["relations"] = [
+                            r for r in layout["relations"] if r["id"] not in replaced
+                        ]
+                        if cell.get("fieldLabel") in {
+                            item["label"]
+                            for item in layout["labelPool"]
+                            if item["targetPath"] in {r["targetPath"] for r in existing}
+                        }:
+                            cell.pop("fieldLabel", None)
+                        existing = []
                     if in_table and existing:
                         # Relabeling a bound column never changes row membership,
                         # field paths or relation identities.

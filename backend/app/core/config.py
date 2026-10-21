@@ -231,7 +231,7 @@ class RawSettings(BaseSettings):
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
-        default="mapped-compact-v3", validation_alias="OPENAI_PROMPT_VERSION"
+        default="mapped-compact-v4", validation_alias="OPENAI_PROMPT_VERSION"
     )
     openai_schema_version: Literal["2.0"] = Field(
         default="2.0", validation_alias="OPENAI_SCHEMA_VERSION"

@@ -4,7 +4,10 @@ export function recordSectionDisplayName(section: LayoutRecordSection, cellsById
     const displayName = section.displayName?.trim();
     if (displayName)
         return displayName;
-    const headingText = cellsById?.get(section.parentLabelCellId ?? "")?.text.trim();
+    // The heading's name, the same order the result screen uses (printed text, then a typed name).
+    const heading = cellsById?.get(section.parentLabelCellId ?? "");
+    const named = (value?: string | null) => value && /[\p{L}\p{N}]/u.test(value) ? value.trim() : "";
+    const headingText = heading ? named(heading.text) || named(heading.printedLabelText) || named(heading.fieldLabel) : "";
     if (headingText)
         return headingText;
     return section.title?.trim() || "明細";

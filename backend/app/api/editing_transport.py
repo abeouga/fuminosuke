@@ -49,7 +49,7 @@ class EditingRoute(APIRoute):
                     status=422,
                     code="INVALID_ARGUMENT",
                     title="Invalid editing request",
-                    detail="編集要求の形式が不正です。",
+                    detail="この変更は保存できませんでした。画面を再読み込みしてから、もう一度操作してください。",
                     field_errors=[
                         FieldError(
                             field=".".join(str(part) for part in item["loc"]),

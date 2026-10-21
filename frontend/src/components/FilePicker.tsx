@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function FilePicker({
   multiple,
@@ -7,6 +7,7 @@ export function FilePicker({
   accept = "image/png,image/jpeg,image/webp,image/tiff",
   help = "PNG / JPEG / WebP / TIFF・最大20 MB",
   enableDrop = false,
+  hideWhenChosen = false,
 }: {
   multiple: boolean;
   onChange: (files: File[]) => void;
@@ -14,7 +15,10 @@ export function FilePicker({
   accept?: string;
   help?: string;
   enableDrop?: boolean;
+  /** Once a file is chosen the picking area goes away; 「選び直す」 opens the file dialog again. */
+  hideWhenChosen?: boolean;
 }) {
+  const input = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<Array<{ index: number; url: string }>>([]);
   const [dragging, setDragging] = useState(false);
@@ -67,6 +71,7 @@ export function FilePicker({
     <div>
       <label
         className={`drop-zone${dragging ? " dragging" : ""}`}
+        hidden={hideWhenChosen && files.length > 0}
         onDragEnter={enableDrop ? (event) => {
           event.preventDefault();
           setDragging(true);
@@ -81,6 +86,7 @@ export function FilePicker({
         onDrop={enableDrop ? handleDrop : undefined}
       >
         <input
+          ref={input}
           type="file"
           accept={accept}
           capture={!multiple && accept.startsWith("image/") ? "environment" : undefined}
@@ -109,6 +115,11 @@ export function FilePicker({
             </figure>
           ))}
         </div>
+      )}
+      {hideWhenChosen && files.length > 0 && (
+        <button type="button" className="secondary compact file-picker-again" onClick={() => input.current?.click()}>
+          {multiple ? "選び直す" : "別のファイルを選ぶ"}
+        </button>
       )}
     </div>
   );

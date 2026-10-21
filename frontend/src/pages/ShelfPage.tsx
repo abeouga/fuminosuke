@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { displayOrders, joinByPath, joinedText, sortByOrder, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved } from "../components/TemplateItemJoinEditor";
-import { FiArrowLeft, FiDownload, FiEdit3, FiExternalLink, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiX } from "react-icons/fi";
+import { FiArrowLeft, FiCheck, FiCheckSquare, FiDownload, FiEdit3, FiExternalLink, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiX } from "react-icons/fi";
+import { showToast } from "../components/Toast";
 import { api } from "../api";
 import { ExcelExportActions } from "../components/ExcelExportActions";
 import { EditingError } from "../editing/client";
@@ -12,6 +13,7 @@ import {
   type StructuredDocument,
   type StructuredReading,
 } from "../structured/client";
+import { Spinner } from "../components/Spinner";
 
 /** What the shelf shows; kept by the app so a review opened from here can come back to it. */
 export type ShelfSelection = { templateId: string | null; jobId: string | null; query: string };
@@ -73,7 +75,8 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
 
   const query = selection.query.trim();
   const selected = documents?.find((doc) => doc.jobId === selection.jobId) ?? null;
-  const folder = folders.find((item) => item.templateId === (selected?.templateId ?? selection.templateId)) ?? folders[0] ?? null;
+  // No template chosen: the shelf shows its templates as cards (like the reading screen).
+  const folder = folders.find((item) => item.templateId === (selected?.templateId ?? selection.templateId)) ?? null;
   const listed = useMemo(() => {
     if (!query) return folder?.documents ?? [];
     const needle = fold(query);
@@ -102,6 +105,45 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
     return () => { stopped = true; };
   }, [selectedId, retry]);
 
+  // Choosing documents to delete: the cards get check marks and an action bar appears.
+  const [choosing, setChoosing] = useState(false);
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  const [askDelete, setAskDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const listKey = `${folder?.templateId ?? ""}|${query}`;
+  useEffect(() => { setChoosing(false); setChosen(new Set()); }, [listKey]);
+  const toggleChosen = (jobId: string) => setChosen((current) => {
+    const next = new Set(current);
+    if (next.has(jobId)) next.delete(jobId); else next.add(jobId);
+    return next;
+  });
+  const chosenDocs = listed.filter((doc) => chosen.has(doc.jobId));
+  const olderVersions = chosenDocs.some((doc) => doc.seriesVersion > 1);
+  async function deleteChosen() {
+    setDeleting(true);
+    const failed: string[] = [];
+    let deleted = 0;
+    for (const doc of chosenDocs) {
+      try {
+        await api.deleteJob(doc.jobId, true);
+        // The shelf shows only a document's newest version; the earlier ones go with it.
+        for (let left = doc.seriesId ? 50 : 0; left > 0; left--) {
+          const earlier = (await structuredClient.allDocuments()).items.find((item) => item.seriesId === doc.seriesId);
+          if (!earlier) break;
+          await api.deleteJob(earlier.jobId, true);
+        }
+        deleted++;
+      } catch (reason) {
+        failed.push(`${documentTitle(doc)}：${errorText(reason, "削除できませんでした。")}`);
+      }
+    }
+    cache.current.clear();
+    setAskDelete(false); setDeleting(false); setChosen(new Set()); setChoosing(false);
+    await load();
+    if (deleted) showToast({ tone: "success", quiet: true, title: `${deleted}件の書類を削除しました` });
+    if (failed.length) showToast({ tone: "error", title: "削除できなかった書類があります", message: failed.join(" / "), duration: 12000 });
+  }
+
   const mainRef = useRef<HTMLElement>(null);
   const show = (next: ShelfSelection) => {
     onSelectionChange(next);
@@ -110,6 +152,7 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
       if (top < 0 || top > window.innerHeight * 0.6) mainRef.current?.scrollIntoView({ block: "start" });
     });
   };
+  const listing = Boolean(query || folder);
 
   return <div className="page-stack shelf-page">
     <header className="shelf-header">
@@ -123,7 +166,7 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
             onClick={() => onSelectionChange({ ...selection, query: "" })}><FiX aria-hidden="true" /></button>}
         </label>
         <button type="button" className="secondary compact" disabled={loading} onClick={() => { cache.current.clear(); void load(); setRetry((n) => n + 1); }}>
-          <FiRefreshCw aria-hidden="true" />{loading ? "更新中…" : "更新"}
+          <FiRefreshCw aria-hidden="true" />{loading ? <><Spinner />更新中…</> : "更新"}
         </button>
       </div>
     </header>
@@ -133,50 +176,98 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
       <FiFolder aria-hidden="true" />
       <div><strong>確定済みの書類はまだありません</strong><p>読み取り結果を確認して確定すると、ここにテンプレートごとに並びます。</p></div>
     </section>}
-    {documents && documents.length > 0 && <div className={`shelf-layout${selected ? " reading" : ""}`}>
-      {/* An open document takes the full width; its back button returns to the folder. */}
-      {!selected && <nav className="shelf-folders" aria-label="テンプレート">
-        {folders.map((item) => {
-          const active = !query && item.templateId === folder?.templateId;
-          return <button key={item.templateId} type="button" className={active ? "active" : ""} aria-current={active ? "true" : undefined}
-            onClick={() => show({ templateId: item.templateId, jobId: null, query: "" })}>
-            <FiFolder aria-hidden="true" /><span>{item.name}</span><small>{item.documents.length}</small>
-          </button>;
-        })}
-      </nav>}
-      <main ref={mainRef} className="shelf-main">
-        {selected
-          ? <DocumentView key={selected.jobId} summary={selected} folderName={folderName(selected)}
-            detail={detail?.jobId === selected.jobId ? detail : { jobId: selected.jobId }}
-            backLabel={query ? "検索結果" : folderName(selected)}
-            onBack={() => show({ ...selection, jobId: null })}
-            onRetry={() => setRetry((n) => n + 1)} onOpenReview={onOpenReview} />
+    {documents && documents.length > 0 && <main ref={mainRef} className="shelf-main">
+      {selected
+        ? <DocumentView key={selected.jobId} summary={selected} folderName={folderName(selected)}
+          detail={detail?.jobId === selected.jobId ? detail : { jobId: selected.jobId }}
+          backLabel={query ? "検索結果" : folderName(selected)}
+          onBack={() => show({ ...selection, jobId: null })}
+          onRetry={() => setRetry((n) => n + 1)} onOpenReview={onOpenReview} />
+        : !listing
+          ? <section aria-label="テンプレート">
+            <div className="shelf-main-head"><h2>テンプレート</h2><span>{folders.length}種類・{documents.length}件</span></div>
+            <ul className="shelf-folder-grid">
+              {folders.map((item) => <li key={item.templateId}>
+                <FolderCard folder={item} onOpen={() => show({ templateId: item.templateId, jobId: null, query: "" })} />
+              </li>)}
+            </ul>
+          </section>
           : <section aria-label="書類">
             <div className="shelf-main-head">
+              {!query && <button type="button" className="ghost compact shelf-up" onClick={() => show({ templateId: null, jobId: null, query: "" })}>
+                <FiArrowLeft aria-hidden="true" />テンプレート</button>}
               <h2>{query ? `「${query}」の検索結果` : folder?.name}</h2>
               <span>{listed.length}件</span>
+              {listed.length > 0 && <div className="shelf-choose-actions">
+                {choosing
+                  ? <>
+                    <span className="shelf-chosen-count">{chosen.size}件を選択中</span>
+                    <button type="button" className="ghost compact" onClick={() => setChosen(chosen.size === listed.length ? new Set() : new Set(listed.map((doc) => doc.jobId)))}>
+                      {chosen.size === listed.length ? "選択を解除" : "すべて選択"}</button>
+                    <button type="button" className="danger-button compact" disabled={chosen.size === 0} onClick={() => setAskDelete(true)}>
+                      <FiTrash2 aria-hidden="true" />削除</button>
+                    <button type="button" className="secondary compact" onClick={() => { setChoosing(false); setChosen(new Set()); }}>キャンセル</button>
+                  </>
+                  : <button type="button" className="secondary compact" onClick={() => setChoosing(true)}><FiCheckSquare aria-hidden="true" />選択</button>}
+              </div>}
             </div>
             {listed.length === 0 && <p className="shelf-empty">一致する書類はありません。</p>}
             <ul className="shelf-grid">
               {listed.map((doc) => <li key={doc.jobId}>
                 <DocumentCard doc={doc} caption={query ? folderName(doc) : identityLine(doc)}
-                  onOpen={() => show({ ...selection, templateId: doc.templateId, jobId: doc.jobId })} />
+                  choosing={choosing} chosen={chosen.has(doc.jobId)}
+                  onOpen={() => choosing ? toggleChosen(doc.jobId) : show({ ...selection, templateId: doc.templateId, jobId: doc.jobId })} />
               </li>)}
             </ul>
           </section>}
-      </main>
-    </div>}
+    </main>}
+    {askDelete && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="shelf-delete-title">
+      <h2 id="shelf-delete-title">{chosenDocs.length}件の書類を削除しますか？</h2>
+      <p>読み取り結果・元の画像・保存したXLSXも削除され、元に戻せません。{olderVersions ? "前の版がある書類は、前の版も削除します。" : ""}</p>
+      <ul className="shelf-delete-list">{chosenDocs.slice(0, 8).map((doc) => <li key={doc.jobId}>{documentTitle(doc)}</li>)}
+        {chosenDocs.length > 8 && <li>ほか{chosenDocs.length - 8}件</li>}</ul>
+      <div className="page-actions">
+        <button type="button" className="secondary" disabled={deleting} onClick={() => setAskDelete(false)}>やめる</button>
+        <button type="button" className="danger-button" disabled={deleting} onClick={() => void deleteChosen()}><FiTrash2 aria-hidden="true" />{deleting ? <><Spinner />削除しています…</> : "削除する"}</button>
+      </div>
+    </section></div>}
   </div>;
 }
 
-function DocumentCard({ doc, caption, onOpen }: { doc: DocumentSummary; caption: string; onOpen: () => void }) {
+/** A template on the shelf: its newest document as a small stack of paper, the name and the count. */
+function FolderCard({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
   const [failed, setFailed] = useState(false);
-  return <button type="button" className="shelf-card" onClick={onOpen}>
+  const newest = folder.documents[0];
+  return <button type="button" className="shelf-folder-card" onClick={onOpen}>
+    <span className="shelf-folder-thumb" aria-hidden="true">
+      {folder.documents.length > 2 && <span className="shelf-folder-sheet backmost" />}
+      {folder.documents.length > 1 && <span className="shelf-folder-sheet back" />}
+      <span className="shelf-folder-sheet front">
+        {newest?.thumbnailUrl && !failed
+          ? <img src={newest.thumbnailUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
+          : <FiFileText />}
+      </span>
+    </span>
+    <span className="shelf-folder-body">
+      <strong>{folder.name}</strong>
+      <span className="shelf-folder-meta">
+        <span className="shelf-folder-count"><FiFolder aria-hidden="true" />{folder.documents.length}件</span>
+        {newest && <time dateTime={newest.confirmedAt}>最終 {dayFormat.format(new Date(newest.confirmedAt))}</time>}
+      </span>
+    </span>
+  </button>;
+}
+
+function DocumentCard({ doc, caption, choosing, chosen, onOpen }: { doc: DocumentSummary; caption: string; choosing: boolean; chosen: boolean; onOpen: () => void }) {
+  const [failed, setFailed] = useState(false);
+  return <button type="button" className={`shelf-card${choosing ? " choosing" : ""}${chosen ? " chosen" : ""}`} onClick={onOpen}
+    {...(choosing ? { role: "checkbox", "aria-checked": chosen } : {})}>
     <span className="shelf-card-thumb">
       {doc.thumbnailUrl && !failed
         ? <img src={doc.thumbnailUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
         : <FiFileText aria-hidden="true" />}
       {doc.kind === "paged" && <span className="shelf-card-badge">複数ページ</span>}
+      {choosing && <span className="shelf-card-check" aria-hidden="true">{chosen && <FiCheck />}</span>}
     </span>
     <span className="shelf-card-body">
       <strong>{documentTitle(doc)}</strong>
@@ -429,7 +520,7 @@ function PagedXlsxButton({ jobId, revision, documentName }: { jobId: string; rev
     } finally { setBusy(false); }
   }
   return <div className="excel-export-actions compact-export">
-    <button type="button" className="primary compact" disabled={busy} onClick={() => void download()}><FiDownload aria-hidden="true" />{busy ? "XLSXを取得中…" : ".xlsxを保存"}</button>
+    <button type="button" className="primary compact" disabled={busy} onClick={() => void download()}><FiDownload aria-hidden="true" />{busy ? <><Spinner />XLSXを取得中…</> : ".xlsxを保存"}</button>
     {error && <p className="error-box" role="alert">{error}</p>}
   </div>;
 }

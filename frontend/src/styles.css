@@ -359,8 +359,8 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
 .mark-cell-editor>label{display:grid;gap:3px;font-size:10px;font-weight:700}
 .mark-cell-editor select{width:100%;border:1px solid #8b7ab8;background:#fff;padding:7px;font:inherit}
 .mark-cell-editor>p{margin:0;color:#5d5375;font-size:9px;line-height:1.55}
-.mark-option-canvas{display:block;width:100%;min-height:150px;max-height:280px;border:2px solid #6d5a91;background:#fff;box-shadow:inset 0 0 0 1px #fff;touch-action:none;user-select:none}
-.mark-option-region{fill:#7c3aed38;stroke:#6d28d9;stroke-width:2;vector-effect:non-scaling-stroke;cursor:grab}.mark-option-region:active{cursor:grabbing}.mark-option-region.active{fill:#f59e0b4d;stroke:#d97706;stroke-width:3}
+.mark-option-canvas{display:block;width:100%;min-height:60px;max-height:320px;border:2px solid #6d5a91;background:#fff;box-shadow:inset 0 0 0 1px #fff;touch-action:none;user-select:none;cursor:crosshair}
+.mark-option-region rect{fill:#7c3aed14;stroke:#6d28d9;stroke-width:2;vector-effect:non-scaling-stroke;cursor:pointer}.mark-option-region.active rect{fill:#f59e0b4d;stroke:#d97706;stroke-width:3}.mark-option-region text{fill:#5b21b6;font-weight:800;opacity:.85;dominant-baseline:hanging;pointer-events:none;paint-order:stroke;stroke:#fff;stroke-width:3px}.mark-option-draft{fill:#0ea5e92e;stroke:#0284c7;stroke-width:2;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
 .mark-option-canvas-label{fill:#fff;stroke:#3b176b;stroke-width:2px;paint-order:stroke;pointer-events:none;text-anchor:middle;dominant-baseline:central;font-size:16px;font-weight:900;vector-effect:non-scaling-stroke}
 .mark-option-resize-handle{fill:#fff;stroke:#4c1d95;stroke-width:2;vector-effect:non-scaling-stroke;cursor:nwse-resize}
 .mark-auto-actions{display:grid;gap:5px}.mark-auto-actions button{width:100%;justify-content:center}.mark-auto-message{border:1px solid #b9a6e8;background:#fff;padding:6px!important;color:#4c1d95!important}.mark-numeric-editor{border-top:1px solid #d8ccf7;padding-top:7px}.mark-numeric-editor>summary{cursor:pointer;color:#5b21b6;font-size:9px;font-weight:800}.mark-numeric-editor[open]>summary{margin-bottom:7px}
@@ -516,7 +516,7 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
 .camera-status{display:flex;align-items:center;gap:9px;padding:8px;background:#e9ecef;border-top:1px solid #8e99a4}
 .camera-status p{margin:0 auto 0 0;font-size:11px}.camera-ready-light{width:10px;height:10px;border-radius:50%;background:#b94439}.camera-ready-light.ready{background:#1aa04b}
 
-.ocr-cell-legend{display:flex;align-items:center;gap:14px}.ocr-cell-legend span{display:flex;align-items:center;gap:5px;color:#53636e;font-size:10px;font-weight:700}.ocr-cell-legend i{display:block;width:14px;height:14px;border:1px solid}.legend-ok{border-color:#60b878!important;background:#c9f5d4}.legend-warning{border-color:#d2a42a!important;background:#fff0a8}
+.ocr-cell-legend{display:flex;align-items:center;gap:14px}.ocr-cell-legend span{display:flex;align-items:center;gap:5px;color:#53636e;font-size:10px;font-weight:700}.ocr-cell-legend i{display:block;width:14px;height:14px;border:1px solid}.legend-ok{border-color:#60b878!important;background:#dff0e6}.legend-warning{border-color:#d2a42a!important;background:#fff0a8}
 .field-toolbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.review-mode-switch{display:inline-flex;padding:2px;border:1px solid #9dabb4;border-radius:4px;background:#e7ecef}.review-mode-switch button{display:flex;align-items:center;gap:5px;border:0;border-radius:2px;padding:5px 8px;background:transparent;color:#5e6e78;font-size:9px;font-weight:800}.review-mode-switch button:hover:not(:disabled){background:#fff}.review-mode-switch button.active{background:#2468a2;color:#fff;box-shadow:0 1px 3px #173f5d33}.review-mode-switch button:focus-visible{outline:2px solid #2468a2;outline-offset:2px}.review-mode-switch button:disabled{cursor:not-allowed;opacity:.55}.review-mode-switch svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.review-mode-switch button:nth-child(2) svg{fill:currentColor;stroke:currentColor;stroke-width:1}
 .ocr-edit-tables{display:grid;gap:12px;padding:12px;background:#dfe4e8}.ocr-edit-section{overflow:hidden;border:1px solid #9faab3;background:#fff}.ocr-edit-section>header{display:flex;align-items:center;min-height:38px;padding:8px 11px;border-bottom:1px solid #aeb8c0;background:#f2f4f6}.ocr-edit-section>header h3{margin:0;color:#173f5d;font-size:13px}.ocr-edit-table-wrap{overflow:auto}.ocr-edit-table{width:100%;border-collapse:separate;border-spacing:0;font-size:10px}.ocr-edit-table th{padding:8px 9px;border-right:1px solid #c5cdd3;border-bottom:1px solid #c5cdd3;background:#e9edf0;color:#4d5e69;text-align:left;white-space:nowrap}.ocr-edit-table td{min-width:100px;padding:0;border-right:1px solid #b8c2c9;border-bottom:1px solid #b8c2c9}.ocr-edit-table tr:last-child>th,.ocr-edit-table tr:last-child>td{border-bottom:0}.ocr-edit-table tr>*:last-child{border-right:0}.ocr-key-value-table th{width:104px}.ocr-key-value-table td{width:calc(50% - 104px)}.ocr-collection-table{min-width:680px}.ocr-collection-table thead th{position:sticky;top:0;z-index:1;background:#dce3e8}.ocr-collection-table tbody>tr>th{width:36px;text-align:center}.ocr-column-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.ocr-column-shift-controls{display:inline-flex;gap:3px}.ocr-column-shift-controls button{display:grid;place-items:center;width:24px;height:24px;border:1px solid #8c9ba5;border-radius:2px;background:#fff;color:#174d74;font-weight:900;line-height:1}.ocr-column-shift-controls button:hover:not(:disabled){border-color:#2468a2;background:#e6f2fa}.ocr-column-shift-controls button:focus-visible{outline:2px solid #2468a2;outline-offset:1px}.ocr-column-shift-controls button:disabled{cursor:not-allowed;color:#a6afb5;background:#edf0f2}.ocr-edit-table td>button{display:grid;width:100%;min-height:48px;gap:3px;padding:8px 9px;border:0;border-radius:0;background:transparent;color:#1f2b32;text-align:left}.ocr-edit-table td>button:hover{box-shadow:inset 0 0 0 2px #2468a2}.ocr-edit-table td>button:focus-visible{outline:3px solid #2468a2;outline-offset:-3px}.ocr-edit-table td>button span{overflow-wrap:anywhere;font-weight:700}.ocr-edit-table td>button small{font-size:7px;font-weight:800;letter-spacing:.06em}.ocr-cell-ok{background:#c9f5d4}.ocr-cell-ok button small{color:#1f7040}.ocr-cell-warning{background:#fff0a8}.ocr-cell-warning button small{color:#8b6500}.ocr-cell-selected{position:relative;box-shadow:inset 0 0 0 3px #2468a2}.ocr-cell-selected:after{position:absolute;right:3px;top:3px;content:"選択中";padding:2px 4px;background:#2468a2;color:#fff;font-size:7px;font-weight:800}.ocr-unmapped-cell,.ocr-empty-cell{background:#eef1f3!important;color:#9ca7ae;text-align:center}
 .paged-document-name-field{display:grid;gap:7px}.paged-document-name-field>.secondary{justify-self:end}.paged-review-layout{margin-top:0}.paged-review-source-image{position:relative;padding:0 42px;background:#dfe5e1}.paged-review-source-image>img{display:block;width:100%;height:100%;object-fit:contain;background:#fff}.paged-review-page-arrow{position:absolute;top:min(50%,180px);z-index:3;display:grid;place-items:center;width:34px;height:52px;transform:translateY(-50%);border:1px solid #9aa8b2;border-radius:7px;background:#fffffff2;color:#2468a2;font-size:25px;font-weight:800;box-shadow:0 3px 10px #173f5d2e}.paged-review-page-arrow.previous{left:5px}.paged-review-page-arrow.next{right:5px}.paged-review-page-arrow:hover:not(:disabled){border-color:#2468a2;background:#e6f2fa}.paged-review-page-arrow:disabled{color:#8e9aa3;background:#f2f4f5}.paged-review-results{min-height:360px}.paged-review-results .ocr-key-value-table th small{display:block;margin-top:4px;color:#6d7e88;font-size:9px}.paged-review-validation{padding:10px 14px;color:#8f5d22}.paged-review-validation p{margin:4px 0}.paged-review-acknowledgement{display:flex;align-items:center;gap:8px;margin:14px;padding:12px;border:1px solid #b4c2ba;border-radius:7px;background:#f7faf8;font-weight:700}.paged-review-library-note{margin:0;color:#71837e;font-size:10px}
@@ -2320,7 +2320,7 @@ small{font-size:12px;line-height:1.5}
 
 /* Items shown as one value (「項目のまとめ方・順番」, display only). */
 .ocr-key-value-table tr.ocr-join-row>th{color:#173f5d}
-.ocr-edit-table td.ocr-join-value>button.ocr-join-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:44px;background:#eef6f2}
+.ocr-edit-table td.ocr-join-value>button.ocr-join-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:44px;background:#dff0e6}
 .ocr-edit-table td.ocr-join-value.warning>button.ocr-join-toggle{background:#fff0a8}
 .ocr-join-toggle .ocr-join-text{font-size:12px;letter-spacing:.02em;overflow-wrap:anywhere}
 .ocr-join-toggle .ocr-join-text em{color:#8a979f;font-style:normal;font-weight:600}
@@ -2426,3 +2426,149 @@ small{font-size:12px;line-height:1.5}
 .item-join-grip b{display:inline-grid;place-items:center;min-width:18px;height:18px;border-radius:9px;background:#2d746c;color:#fff;font-size:11px}
 .item-join-sortable-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item-join-sortable-row>button{margin-right:4px}
+
+/* Quiet notifications: a small note in the app header's empty band (saved, a failed save…). */
+.toast-viewport.quiet{top:12px;right:120px;left:auto;width:min(420px,calc(100vw - 140px));gap:6px;transform:none;justify-items:end}
+.toast-card.quiet{grid-template-columns:4px minmax(0,1fr) auto;gap:9px;min-height:0;border-radius:8px;padding:0 4px 0 0;box-shadow:0 4px 14px #17344a1f;animation:toast-quiet-enter .16s ease-out}
+.toast-card.quiet .toast-copy{padding:7px 0}.toast-card.quiet .toast-copy strong{font-size:12px;font-weight:700}.toast-card.quiet .toast-copy span{font-size:11px}
+.toast-card.quiet .toast-close{width:24px;height:24px;font-size:16px}
+.toast-card.quiet.success{border-color:#c4dccf}
+@keyframes toast-quiet-enter{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.toast-card.quiet{animation:none}}
+@media (max-width:620px){.toast-viewport.quiet{top:auto;right:8px;bottom:12px;width:calc(100vw - 16px)}}
+
+/* 「まとめ方・順番」 of one heading, next to its button on the result screen. */
+.item-join-popover{position:fixed;z-index:70;display:grid;align-content:start;gap:8px;overflow:auto;border:1px solid #b8c7c1;border-radius:10px;background:#fff;padding:10px 12px 12px;box-shadow:0 12px 32px #17344a33}
+.item-join-popover>header{display:flex;align-items:baseline;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.item-join-popover>header strong{font-size:14px;color:#173a37}.item-join-popover>header span{color:#6d817b;font-size:11px}
+.item-join-popover-close{margin-left:auto;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:#687783;font-size:18px;line-height:1}
+.item-join-popover-close:hover{background:#edf1f4;color:#263744}
+.item-join-popover-body .item-join-panel{padding:4px 0 6px}
+.item-join-popover-error{margin:0;color:#b53a32;font-size:12px}
+.item-join-popover-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:6px;border-top:1px solid var(--line)}
+.item-join-addable{display:flex;flex-wrap:wrap;gap:4px}.item-join-addable>button{padding:3px 8px;font-size:11px}
+
+/* 「編集」 with its segmented control (記入欄 / 項目) on the result toolbar. */
+.review-edit-group{display:inline-flex;align-items:center;gap:8px}
+.review-edit-label{display:inline-flex;align-items:center;gap:5px;color:#24475f;font-size:12px;font-weight:800}
+.review-edit-label svg{width:15px;height:15px}
+.review-edit-group .review-mode-switch button{min-width:64px;justify-content:center}
+
+/* The template list's box does not cut off a card's 「編集」 menu (bottom-row cards open it past the box). */
+.ocr-step-card.ocr-template-select-card{overflow:visible}
+
+/* A chosen file replaces the picking area (template creation); 「別のファイルを選ぶ」 sits under the preview. */
+.drop-zone[hidden]{display:none}
+.file-picker-again{margin-top:10px}
+
+/* Choice box settings: segmented choices, one-line options, numbers only on request. */
+.choice-segments{display:grid;gap:4px}
+.choice-segments>span{color:#5d5375;font-size:10px;font-weight:700}
+.choice-segments>div{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid #8b7ab8;border-radius:6px;overflow:hidden;background:#fff}
+.choice-segments button{border:0;border-left:1px solid #d8cff0;background:transparent;padding:6px 4px;font:inherit;font-size:11px;color:#3b3156;cursor:pointer}
+.choice-segments button:first-child{border-left:0}
+.choice-segments button[aria-pressed=true]{background:#6d28d9;color:#fff;font-weight:700}
+.choice-list{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.choice-list li{display:flex;gap:4px;align-items:center}
+.choice-list li.active input{border-color:#6d28d9;box-shadow:0 0 0 2px #ddd6fe}
+.choice-list input,.choice-list select{flex:1 1 auto;min-width:0;border:1px solid #c7bce5;background:#fff;padding:5px 6px;font:inherit;font-size:12px}
+.choice-list select{flex:0 1 45%}
+.choice-remove{flex:none;width:26px;height:26px;border:1px solid transparent;background:transparent;color:#8b7ab8;font-size:15px;line-height:1;cursor:pointer;border-radius:5px}
+.choice-remove:hover{border-color:#fecaca;background:#fef2f2;color:#b91c1c}
+.choice-list .choice-add input{border-style:dashed}
+.choice-list .choice-add button{flex:none;white-space:nowrap}
+.choice-advanced summary{cursor:pointer;color:#5d5375;font-size:10px;font-weight:700}
+.choice-position{display:grid;grid-template-columns:1fr repeat(4,48px);gap:4px;align-items:end;margin-top:5px;font-size:10px}
+.choice-position label{display:grid;gap:2px;color:#5d5375}
+.choice-position input{width:100%;min-width:0;border:1px solid #c7bce5;padding:3px;font:inherit}
+.meaning-direct{margin:12px 12px 0}
+.bulk-choice-names{display:grid;gap:3px;color:#5d5375;font-size:10px;font-weight:700}
+.bulk-choice-names>span{display:flex;gap:4px}
+.bulk-choice-names input{flex:1;min-width:0;border:1px solid #8b7ab8;background:#fff;padding:6px;font:inherit;font-size:12px}
+.bulk-choice-names button{flex:none;white-space:nowrap}
+.choice-number{flex:none;width:20px;color:#5b21b6;font-weight:800;font-size:14px;text-align:center}
+.choice-hint{margin:0;color:#5d5375;font-size:10px;line-height:1.5}
+.similar-offer{display:grid;gap:5px;border:1px solid #c4b5fd;background:#ede9fe;border-radius:6px;padding:7px;font-size:11px;color:#3b176b}
+.choice-suggest{display:flex;gap:4px}
+.choice-suggest input{flex:1;min-width:0;border:1px solid #c7bce5;background:#fff;padding:5px 6px;font:inherit;font-size:11px}
+.choice-suggest button{flex:none;white-space:nowrap}
+.mark-option-frame{position:relative}
+.mark-option-zoom-open{display:block;margin:4px 0 0 auto;border:1px solid #8b7ab8;background:#fff;color:#3b176b;border-radius:5px;padding:2px 8px;font:inherit;font-size:10px;font-weight:700;cursor:pointer}
+.mark-option-thumb{height:8px}
+.mark-option-zoom{position:fixed;left:24px;right:340px;top:110px;z-index:2000;display:grid;gap:8px;background:#fff;border:2px solid #6d28d9;border-radius:10px;box-shadow:0 18px 50px #1e1b4b40;padding:12px}
+.mark-option-canvas.zoomed{max-height:min(60vh,520px);min-height:120px}
+@media (max-width:900px){.mark-option-zoom{left:8px;right:8px;top:70px}}
+.mark-option-zoom-close{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid #d4d4d8;background:#fff;border-radius:6px;cursor:pointer;font-size:16px}
+/* The enlarged choice panel: the form's floating tool column on the left, the image beside it. */
+.mark-option-zoom-stage{display:grid;grid-template-columns:max-content minmax(0,1fr) auto;align-items:start;gap:10px}
+.mark-option-zoom-stage>.mark-option-floating{grid-column:1;grid-row:1;max-width:190px}
+.mark-option-zoom-canvas{grid-column:2;grid-row:1;position:relative;min-width:0}
+.mark-option-zoom-stage>.mark-option-zoom-close{grid-column:3;grid-row:1}
+.mark-option-floating .layout-commandbar{display:flex}
+.mark-option-floating .layout-commandbar button{gap:6px}
+.mark-option-floating .layout-commandbar button.mark-option-delete:not(:disabled){border-color:#fecaca;color:#b91c1c}
+.mark-option-floating .layout-commandbar button.mark-option-ai{border-color:#c4b5fd;color:#4c1d95}
+.mark-option-floating .layout-commandbar button.mark-option-ai.is-thinking{background:#f5f3ff;opacity:1}
+.mark-option-tools-rule{display:block;height:1px;margin:2px 0;background:#e3e9ef}
+.mark-option-zoom-hint{margin:0;color:#5d5375;font-size:12px}
+/* The model is reading the box: a spinner over its image. */
+.ai-spinner{display:inline-block;flex:none;width:14px;height:14px;border:2px solid #ddd6fe;border-top-color:#6d28d9;border-radius:50%;animation:layout-spin .8s linear infinite}
+.mark-option-thinking{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;background:#ffffffb8;color:#4c1d95;font-size:12px;font-weight:700;pointer-events:none}
+.mark-option-thinking .ai-spinner{width:18px;height:18px}
+@media (prefers-reduced-motion:reduce){.ai-spinner{animation-duration:2.4s}}
+.mark-option-canvas.tool-move{cursor:move}.mark-option-canvas.tool-erase{cursor:not-allowed}
+.mark-option-canvas.tool-erase .mark-option-region:hover rect{fill:#ef444433;stroke:#dc2626}
+.mark-option-handle{fill:#6d28d9;stroke:#fff;stroke-width:1.5;vector-effect:non-scaling-stroke;pointer-events:none}
+.mark-option-frame .mark-option-canvas:not(.zoomed){cursor:zoom-in}
+.mark-option-frame .mark-option-canvas:not(.zoomed):hover{border-color:#6d28d9;box-shadow:0 0 0 2px #ddd6fe}
+.choice-grip{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;color:#8b7ab8;cursor:grab;touch-action:none;user-select:none}
+.choice-grip:active{cursor:grabbing}
+.choice-list li.dragging{position:relative;z-index:2;background:#fff;box-shadow:0 6px 16px #3b176b33;border-radius:6px}
+.choice-suggest button{display:inline-flex;align-items:center;gap:4px}
+/* 「ファイル名の付け方」: opened from the reading screen's edit menu after the template is made. */
+.document-name-dialog{display:grid;gap:12px;width:min(560px,100%)}
+.document-name-dialog header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.document-name-dialog header h2{margin:0}
+.document-name-close{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:#4a5d6b;cursor:pointer}
+.document-name-close:hover{background:#eef2f5}
+.document-name-subtitle,.document-name-heading{margin:0;color:#4a5d6b;font-size:13px}
+.document-name-heading{font-weight:700;color:#263c4a}
+.document-name-dialog .document-name-field-options{max-height:220px;overflow:auto}
+.document-name-dialog .document-name-field-options label{border-radius:8px;cursor:pointer}
+.document-name-order{display:inline-grid;place-items:center;min-width:18px;height:18px;border-radius:9px;background:#246b84;color:#fff;font-size:11px}
+.document-name-dialog .document-name-format-grid label{display:grid;gap:4px;font-size:13px}
+.document-name-dialog .page-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin:0}
+@media (max-width:560px){.document-name-dialog .document-name-field-options{grid-template-columns:1fr}}
+/* Step 4: the top three fields, more on request. */
+.identity-more,.document-name-dialog>.secondary.compact{justify-self:start}
+/* A turning ring while a button or a status waits; the button's own icon steps aside. */
+.busy-spinner{display:inline-block;flex:none;width:1em;height:1em;margin-right:.4em;vertical-align:-.15em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;opacity:.85;animation:busy-spin .7s linear infinite}
+svg:has(+ .busy-spinner){display:none}
+@keyframes busy-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.busy-spinner{animation-duration:2.4s}}
+/* 「この読み取りはあっていますか？」 */
+.identity-template-card{display:flex;align-items:center;gap:14px;padding:10px 14px;border:1px solid #d5dee5;border-radius:14px;background:linear-gradient(135deg,#fff,#f4f8fb);box-shadow:0 6px 18px #1f394810}
+.identity-template-thumb{position:relative;display:grid;place-items:center;flex:none;width:56px;height:72px;overflow:hidden;border:1px solid #cdd7de;border-radius:8px;background:#eef3f6;color:#7c8f9b;box-shadow:0 2px 6px #1f394818}
+.identity-template-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top}
+.identity-template-thumb svg{width:22px;height:22px}
+.identity-template-text{display:grid;gap:2px;min-width:0}
+.identity-template-text small{color:#61737d;font-size:11px;font-weight:700;letter-spacing:.04em}
+.identity-template-text strong{overflow:hidden;color:#172f3e;font-size:16px;text-overflow:ellipsis;white-space:nowrap}
+.identity-result-label{display:inline-flex;align-items:center;gap:6px}
+.identity-result-label svg{width:14px;height:14px;color:#2468a2}
+.page-actions.identity-next{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+/* 「確認しました」 looks like the buttons beside it (same height, corners and type). */
+.identity-agree{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:40px;padding:9px 14px;border:1px solid #b9c7d1;border-radius:8px;background:#fff;color:#334b5c;font-size:14px;font-weight:800;line-height:1;cursor:pointer;user-select:none;transition:background .15s,border-color .15s}
+.identity-agree:hover{border-color:#245b84;background:#f4f8fb}
+.identity-agree input{width:16px;height:16px;margin:0;accent-color:#245b84}
+.identity-agree svg{display:none}
+.identity-agree:has(input:checked){border-color:#245b84;background:#eaf1f7;color:#194666}
+.identity-agree:has(input:focus-visible){outline:2px solid #245b84;outline-offset:2px}
+.identity-next button{display:inline-flex;align-items:center;gap:6px}
+/* Back buttons sit at the left of a header; the title follows and other actions stay right. */
+.page-header.split.has-back{display:flex;align-items:center;justify-content:flex-start;gap:16px}
+.page-header.split.has-back>.page-back{order:-1;flex:none}
+.page-header.split.has-back>div:not(.page-actions):not([class*="actions"]){flex:1;min-width:0}
+.page-header.split.has-back>.page-actions,.page-header.split.has-back>[class*="actions"]{margin-left:auto}
+@media (max-width:620px){.page-header.split.has-back{flex-wrap:wrap}.page-header.split.has-back>div:not(.page-actions):not([class*="actions"]){flex-basis:100%;order:0}}
+.page-header .page-title-end{text-align:right}

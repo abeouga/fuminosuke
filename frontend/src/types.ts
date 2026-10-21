@@ -228,6 +228,15 @@ export type DocumentNameRule = {
   suffix: string;
 };
 
+export type TemplateDocumentNameSettings = {
+  rule: DocumentNameRule | null;
+  /** The rule the template was made with. */
+  templateRule: DocumentNameRule | null;
+  /** True when the rule was changed after the template was made. */
+  custom: boolean;
+  candidates: { targetPath: string; label: string; identity: boolean }[];
+};
+
 export type FieldMappingsResponse = {
   fieldErrors?: { field: string; message: string }[];
   canonicalWidth: number;
@@ -408,6 +417,12 @@ export type ReviewStructure = {
     fieldIds: string[];
   }>;
   independentFieldIds: string[];
+};
+
+/** Printed choices read from the template image for selection boxes (not saved by itself). */
+export type MarkOptionSuggestion = {
+    cells: Array<{ cellId: string; options: Array<{ label: string; x: number; y: number; width: number; height: number }> }>;
+    similar: Array<{ cellId: string; cells: Array<{ cellId: string; options: Array<{ label: string; x: number; y: number; width: number; height: number }> }> }>;
 };
 
 export type LayoutDefinition = {

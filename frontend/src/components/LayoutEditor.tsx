@@ -35,6 +35,7 @@ import type {
   LayoutRecordGroup,
   LayoutRecordSection,
   LayoutRelation,
+  MarkOptionSuggestion,
 } from "../types";
 import { showToast } from "./Toast";
 import "./LayoutEditor.move.css";
@@ -81,7 +82,11 @@ import {
   attachParentLabelToMeaningRelations,
   resolveLabelPoolTargetPath,
   labelCellName,
+  meaningBaseName,
+  isPlaceholderName,
+  renameMeaningsThroughLabel,
 } from "./layoutEditorMeaning";
+import { Spinner } from "./Spinner";
 import {
   type OcrLabelAlignment,
   type OcrLabelVerticalAlignment,
@@ -113,7 +118,9 @@ import {
   genericManualChoicePreset,
   newMarkOptionId,
   newMarkSetId,
+  MarkBulkEditor,
   MarkCellEditor,
+  uniqueChoiceLabels,
 } from "./LayoutMarkEditors";
 
 type VirtualHeadingEditorState = { id: string | null; rect: Rect; value: string };
@@ -135,10 +142,19 @@ export type LayoutEditorHandle = {
 export type LayoutEditorFocusRequest = {
   requestId: number;
   cellId: string;
+  /** Several boxes of one notice are selected together, so they can be set at once. */
+  cellIds?: string[];
 } & (
   { purpose: "meaning-cell" | "mark-cell" }
   | { purpose: "mark-options"; markSetId: string }
 );
+/** A pending item of the editor, listed in the page's 要対応 menu instead of below the form. */
+export type LayoutEditorNotice = {
+  key: string;
+  text: string;
+  step: "classify" | "meaning" | "records" | "identity" | null;
+  cellIds?: string[];
+};
 export type LayoutEditorFocusResult = {
   requestId: number;
   focused: boolean;
@@ -172,6 +188,8 @@ type LayoutEditorProps = {
   targets: FieldMappingTarget[];
   onDetect: () => Promise<LayoutDefinition>;
   onRecognizeLabels?: (layout: LayoutDefinition) => Promise<LayoutDefinition>;
+  /** Printed choices of selection boxes, read from the template image by the model. */
+  onSuggestMarkOptions?: (layout: LayoutDefinition, cellIds: string[], hint: string) => Promise<MarkOptionSuggestion>;
   onSave: (layout: LayoutDefinition) => Promise<LayoutDefinition>;
   operationEndSave?: boolean;
   autoSaveUnchanged?: boolean;
@@ -195,6 +213,7 @@ type LayoutEditorProps = {
   onBusyChange?: (busy: boolean) => void;
   onSavingChange?: (saving: boolean) => void;
   onMeaningStateChange?: (state: LayoutEditorMeaningState) => void;
+  onNoticesChange?: (notices: LayoutEditorNotice[]) => void;
   onAssistantSelectionChange?: (state: LayoutAssistantSelection) => void;
   onManualFacets?: (touches: FacetTouch[]) => void;
   draftStorageKey?: string;
@@ -209,6 +228,11 @@ const sameStringList = (left: readonly string[], right: readonly string[]) => (
 );
 const DEFAULT_MAGNIFIER_SCALE = 2.5;
 const DEFAULT_MAGNIFIER_SIZE = 220;
+/**
+ * Choosing a storage item directly (the list under the preview, the sidebar and 選択欄 dropdowns)
+ * repeats what linking an item name with a line does, so it is hidden. The logic stays; true shows it.
+ */
+const DIRECT_TARGET_EDITING_VISIBLE = false;
 const HIDDEN_REVIEW_INFORMATION_MESSAGES = new Set([
   "XLSXのセル構造から自動作成した案です。区分、意味、繰り返し構造を確認してください。",
   "LibreOfficeの印刷プレビュー上の罫線へXLSXセル座標を補正しました。",
@@ -224,6 +248,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   targets,
   onDetect,
   onRecognizeLabels,
+  onSuggestMarkOptions,
   onSave,
   operationEndSave = false,
   autoSaveUnchanged = false,
@@ -246,6 +271,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   onBusyChange,
   onSavingChange,
   onMeaningStateChange,
+  onNoticesChange,
   onAssistantSelectionChange,
   onManualFacets,
   draftStorageKey,
@@ -267,6 +293,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const eraserPathRef = useRef<Point[] | null>(null);
   const additiveSelection = useRef(false);
   const linkLabelId = useRef<string | null>(null);
+  const lastLabelName = useRef(new Map<string, string>());
   const wirePointer = useRef<{ clientX: number; clientY: number } | null>(null);
   const wireOrigin = useRef<{ clientX: number; clientY: number } | null>(null);
   const relationHistory = useRef<Array<{ relations: LayoutRelation[];
@@ -275,6 +302,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     allowCrossAxisLabels: LayoutDefinition["allowCrossAxisLabels"];
     sectionParents: Map<string, string | null | undefined> }>>([]);
   const copiedCellMergeRef = useRef<LayoutCellMerge | null>(null);
+  // Choices (names and positions) of one selection box, pasted onto other selection boxes.
+  const copiedMarkRef = useRef<{ cell: LayoutCell; sets: LayoutMarkSet[] } | null>(null);
   const operationLockRef = useRef(false);
   const assistantPausedRef = useRef(false);
   const [assistantPaused, setAssistantPaused] = useState(false);
@@ -304,13 +333,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assistantChoice, setAssistantChoice] = useState<{ cellId: string; markSetId: string; choiceId: string } | null>(null);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
-  const [restoredLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
+  const [restoredLayout] = useState(() => uniqueLabelPoolIds(restoreLayoutDraft(initialLayout, draftStorageKey)));
   const [layout, setLayoutState] = useState(restoredLayout);
   const layoutRef = useRef(layout);
   const facetsCallbackRef = useRef(onManualFacets);
   facetsCallbackRef.current = onManualFacets;
   const setLayoutSystem = useCallback((update: React.SetStateAction<LayoutDefinition>) => {
-    const next = typeof update === "function" ? update(layoutRef.current) : update;
+    const next = uniqueLabelPoolIds(typeof update === "function" ? update(layoutRef.current) : update);
     layoutRef.current = next; setLayoutState(next);
   }, []);
   const setLayout = useCallback((update: React.SetStateAction<LayoutDefinition>) => {
@@ -373,6 +402,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const flushNeedsSaveRef = useRef(false);
   const [detecting, setDetecting] = useState(false);
   const [recognizingLabels, setRecognizingLabels] = useState(false);
+  const [suggestingMarkIds, setSuggestingMarkIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Look-alike boxes the last reading can also fill; offered in the panel until used or stale.
+  const [similarOffer, setSimilarOffer] = useState<{ cellIds: ReadonlySet<string>; cells: MarkOptionSuggestion["cells"] } | null>(null);
   const [ocrLabelAlignment, setOcrLabelAlignment] = useState<OcrLabelAlignment>("auto");
   const [ocrLabelVerticalAlignment, setOcrLabelVerticalAlignment] = useState<OcrLabelVerticalAlignment>("auto");
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
@@ -543,8 +575,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (relationHistory.current.length > 50) relationHistory.current.shift();
     setHistoryDepth(relationHistory.current.length);
   };
+  const canUndoSavedRef = useRef(canUndoSaved);
+  canUndoSavedRef.current = canUndoSaved;
   const undoMeaning = useCallback(() => {
     if (onUndoSaved) {
+      // Ctrl+Z follows the undo button: nothing is sent when the server has nothing to undo.
+      if (!canUndoSavedRef.current) { setMessage("取り消せる変更がありません。"); return; }
       if (dirtyRef.current || operationLockRef.current || interactionRef.current.text || interactionRef.current.composing) {
         setMessage("未保存の入力を先に終了してください。"); return;
       }
@@ -751,7 +787,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       return;
     }
     setSelectedId(focusRequest.cellId);
-    setSelectedIds(new Set([focusRequest.cellId]));
+    setSelectedIds(new Set([focusRequest.cellId, ...(focusRequest.cellIds ?? []).filter(id => displayCellById.has(id))]));
     setWarningFocusRequest(focusRequest);
   }, [busy, disabled, displayCellById, focusRequest, layout.cells, onFocusRequestResult, saving, workflowStep]);
   useEffect(() => {
@@ -759,8 +795,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (
       workflowStep !== "meaning"
       || selectedId !== warningFocusRequest.cellId
-      || selectedIds.size !== 1
       || !selectedIds.has(warningFocusRequest.cellId)
+      || (selectedIds.size !== 1 && !(warningFocusRequest.cellIds ?? []).length)
     ) {
       setWarningFocusRequest(null);
     }
@@ -841,6 +877,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedPath(selectedRelationPath);
   }, [mode, selectedId, selected?.role, selectedRelationPath]);
   const selectedCells = layout.cells.filter((cell) => selectedIds.has(cell.id));
+  const selectedMarkCells = selectedCells.filter((cell) => cell.role === "mark");
   const cellMerges = layout.cellMerges ?? [];
   const cellMergeByParentId = useMemo(
     () => new Map(cellMerges.map((merge) => [merge.parentCellId, merge])),
@@ -1003,6 +1040,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     (candidate) => IDENTITY_HINT_PATTERN.test(candidate.label) && !/ふりがな|フリガナ|郵便/.test(candidate.label),
   ).slice(0, 3);
   const recommendedIdentityPaths = new Set(recommendedIdentityCandidates.map((candidate) => candidate.targetPath));
+  // Step 4 lists the top three fields (suggested ones first), up to five on request; a field
+  // chosen on the form stays listed. Any other field can still be picked on the form.
+  const [moreIdentityCandidates, setMoreIdentityCandidates] = useState(false);
+  const rankedIdentityCandidates = [
+    ...recommendedIdentityCandidates,
+    ...identityCandidates.filter((candidate) => !recommendedIdentityPaths.has(candidate.targetPath)),
+  ];
+  const topIdentityCandidates = rankedIdentityCandidates.slice(0, moreIdentityCandidates ? 5 : 3);
+  const listedIdentityCandidates = [
+    ...topIdentityCandidates,
+    ...rankedIdentityCandidates.slice(topIdentityCandidates.length)
+      .filter((candidate) => selectedIdentityByPath.has(candidate.targetPath)),
+  ];
+  const hiddenIdentityCount = Math.min(5, rankedIdentityCandidates.length) - topIdentityCandidates.length;
   const identityFieldFor = (candidate: (typeof identityCandidates)[number]): DocumentIdentity => ({
     mappingId: `layout_${candidate.cell.id}`,
     targetPath: candidate.targetPath,
@@ -1016,10 +1067,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       || DEFAULT_IDENTITY_GROUP_LABEL,
     componentOrder: 0,
   });
-  // 確認する欄の並びから作るファイル名の提案。利用者が欄を手で変えていなければ選択に追従させる。
-  const suggestedDocumentNameRule: DocumentNameRule | null = documentIdentityFields.length > 0
-    ? { fieldPaths: documentIdentityFields.map((field) => field.targetPath), separator: "_", prefix: "", suffix: "" }
-    : null;
   const commitIdentityFields = (next: DocumentIdentity[]) => {
     const normalized = normalizedIdentityFields(next);
     onDocumentIdentityFieldsChange?.(normalized);
@@ -1033,6 +1080,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
     return normalized;
   };
+  // The file name follows the fields to check; it is changed later from the reading screen.
+  useEffect(() => {
+    if (workflowStep === undefined || documentNameRule?.fieldPaths.length || documentIdentityFields.length === 0) return;
+    onDocumentNameRuleChange?.({ prefix: "", suffix: "", separator: "_", fieldPaths: documentIdentityFields.map((field) => field.targetPath) });
+  }, [workflowStep, documentNameRule, documentIdentityFields, onDocumentNameRuleChange]);
   const selectRecommendedIdentityCandidates = () => {
     const additions = recommendedIdentityCandidates
       .filter((candidate) => !selectedIdentityByPath.has(candidate.targetPath))
@@ -1055,17 +1107,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setMessage(existing
       ? `「${candidate.label}」を確認する欄から外しました。`
       : `「${candidate.label}」を確認する欄に追加しました。`);
-  };
-  const toggleDocumentNamePath = (targetPath: string) => {
-    const current = documentNameRule ?? { fieldPaths: [], separator: "", prefix: "", suffix: "" };
-    const fieldPaths = current.fieldPaths.includes(targetPath)
-      ? current.fieldPaths.filter((path) => path !== targetPath)
-      : [...current.fieldPaths, targetPath];
-    onDocumentNameRuleChange?.(fieldPaths.length > 0 ? { ...current, fieldPaths } : null);
-  };
-  const updateDocumentNameRule = (patch: Partial<DocumentNameRule>) => {
-    const current = documentNameRule ?? { fieldPaths: [], separator: "", prefix: "", suffix: "" };
-    onDocumentNameRuleChange?.({ ...current, ...patch });
   };
   useEffect(() => {
     const configured = documentIdentityFields.flatMap((field) => (
@@ -1263,7 +1304,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         : reconcileSaved ? reconcileSaved(current, layout, saved) : current);
       setBaselineSignature(layoutSignature(saved));
       // An automatic save leaves the current notice (e.g. what was just painted) in place.
-      if (!automatic) setMessage(`テンプレートへ${saved.cells.length}個の矩形を保存しました。`);
+      if (!automatic) setMessage(`テンプレートへ${saved.cells.length}個の枠を保存しました。`);
       // The draft effect clears browser storage only when the current edit,
       // rather than merely this request's snapshot, has been persisted.
       return true;
@@ -2273,6 +2314,21 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     cells: current.cells.map((cell) => cell.id === id ? { ...cell, ...patch } : cell),
     }));
   };
+  /** An item name or heading typed by hand; the meanings named only after it follow as it is typed. */
+  const renameLabelCell = (cell: LayoutCell, text: string) => {
+    const previous = labelCellName(cell) || lastLabelName.current.get(cell.id) || "";
+    if (previous) lastLabelName.current.set(cell.id, previous);
+    facetsCallbackRef.current?.(patchedCellFacets(cell.id, { text }));
+    setLayout(current => renameMeaningsThroughLabel({
+      ...current, cells: current.cells.map(item => item.id === cell.id ? { ...item, text } : item),
+    }, cell.id, previous, text));
+  };
+  /** Several boxes' choice settings in one change (one save, one undo). */
+  const patchCellMarkSets = (updates: Map<string, LayoutMarkSet[]>) => {
+    updates.forEach((markSets, id) => facetsCallbackRef.current?.(patchedCellFacets(id, { markSets })));
+    setLayout((current) => ({ ...current,
+      cells: current.cells.map((cell) => updates.has(cell.id) ? { ...cell, markSets: updates.get(cell.id) } : cell) }));
+  };
   const deleteCells = (ids: Iterable<string>) => {
     const removedIds = new Set(ids);
     if (removedIds.size === 0) return;
@@ -2333,9 +2389,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     // The same notice twice in a row is shown again.
     if (notes.length) { setMessage(notes.join(" ")); setMessageRepeat(count => count + 1); }
   };
+  /** Any other tool ends drawing, so the next click does not add another box. */
+  const leaveDraw = () => {
+    if (mode !== "draw") return;
+    setPolygonPoints([]); setDraft(null); dragStart.current = null; setMode("select");
+  };
   const pickPaletteRole = (role: PaintRole, force: boolean) => {
     if (busy || disabled || rectanglesHidden) return;
-    if (mode !== "paint" && selectedCells.length > 0) { applyPaint(selectedCells.map(cell => cell.id), role, force); return; }
+    if (mode !== "paint" && selectedCells.length > 0) { applyPaint(selectedCells.map(cell => cell.id), role, force); leaveDraw(); return; }
     if (mode === "paint" && paintRole === role) { setMode("select"); return; }
     setPaintRole(role); setMode("paint");
     setSelectedId(null); setSelectedIds(new Set()); setDraft(null); dragStart.current = null;
@@ -2493,7 +2554,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           if (reading === "selection" && cell.markSets?.some(set => ["symbol", "checklist"].includes(set.recognitionMode ?? ""))) {
             // A write-in link only exists on checklists and symbol boxes.
             return { ...cell, role,
-              markSets: cell.markSets.map(set => ({ ...set, recognitionMode: "manual" as const,
+              markSets: cell.markSets.map(set => ({ ...set, recognitionMode: "automatic" as const,
                 options: set.options.map(({ writeInTargetPath: _writeIn, ...option }) => option) })),
             };
           }
@@ -2520,6 +2581,87 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           : current.recordStructureVerified,
       };
     });
+    // A box that became a printed-choice box has its choices read from the image.
+    if (reading === "selection") queueMicrotask(() => void suggestMarkOptions([...idSet].filter(isEmptyChoiceBox)));
+  };
+  // The choices each box had before the last AI reading, for 「元に戻す」.
+  const [suggestUndo, setSuggestUndo] = useState<ReadonlyMap<string, LayoutMarkSet[]> | null>(null);
+  const undoSuggestion = (ids: string[]) => {
+    if (!suggestUndo) return;
+    const restore = new Map([...suggestUndo].filter(([id]) => ids.includes(id)));
+    if (!restore.size) return;
+    patchCellMarkSets(restore);
+    const rest = new Map([...suggestUndo].filter(([id]) => !restore.has(id)));
+    setSuggestUndo(rest.size ? rest : null);
+    setMessage(`${restore.size}件の選択欄をAIで読む前に戻しました。`); setMessageRepeat(count => count + 1);
+  };
+  const similarOfferRef = useRef(similarOffer);
+  similarOfferRef.current = similarOffer;
+  const isChoiceBox = (cell: LayoutCell | undefined) => cell?.role === "mark"
+    && (cell.markSets ?? []).every(set => set.recognitionMode === "automatic" || set.recognitionMode === "manual");
+  const isEmptyChoiceBox = (id: string) => {
+    const cell = layoutRef.current.cells.find(item => item.id === id);
+    return isChoiceBox(cell) && (cell!.markSets ?? []).every(set => set.options.length === 0);
+  };
+  /** The suggested choices become the boxes' choices; a choice with the same name keeps its ID. */
+  const applySuggestedOptions = (items: MarkOptionSuggestion["cells"], keepUndo = false) => {
+    const updates = new Map<string, LayoutMarkSet[]>();
+    const before = new Map<string, LayoutMarkSet[]>();
+    for (const item of items) {
+      const cell = layoutRef.current.cells.find(candidate => candidate.id === item.cellId);
+      if (!cell || !isChoiceBox(cell) || !item.options.length) continue;
+      const sets = cell.markSets?.length ? cell.markSets : genericManualChoicePreset(cell);
+      before.set(cell.id, structuredClone(sets));
+      const kept = new Map(sets[0].options.map(option => [option.label, option]));
+      updates.set(cell.id, [{ ...sets[0], options: item.options.map(option => ({
+        id: kept.get(option.label)?.id ?? newMarkOptionId(), label: option.label, value: kept.get(option.label)?.value ?? option.label,
+        x: option.x, y: option.y, width: option.width, height: option.height,
+      })) }, ...sets.slice(1)]);
+    }
+    patchCellMarkSets(updates);
+    if (before.size) setSuggestUndo(current => keepUndo && current ? new Map([...current, ...before]) : before);
+    return updates.size;
+  };
+  const applySimilarOffer = () => {
+    const offer = similarOfferRef.current;
+    if (!offer) return;
+    const count = applySuggestedOptions(offer.cells.filter(item => isEmptyChoiceBox(item.cellId)), true);
+    setSimilarOffer(null);
+    setMessage(`${count}件の選択欄に同じ選択肢を入れました。`); setMessageRepeat(value => value + 1);
+  };
+  /** Printed choices of selection boxes, read once from the template image; nothing is typed. */
+  const suggestMarkOptions = async (ids: string[], hint = "") => {
+    if (!onSuggestMarkOptions || disabled) return;
+    const targets = ids.filter(id => isChoiceBox(layoutRef.current.cells.find(item => item.id === id)));
+    if (!targets.length) return;
+    // A repeated choice name anywhere makes the server refuse the whole draft; number it first.
+    const repaired = new Map<string, LayoutMarkSet[]>();
+    for (const cell of layoutRef.current.cells) {
+      const fixed = cell.markSets?.length ? uniqueChoiceLabels(cell.markSets) : null;
+      if (fixed) repaired.set(cell.id, fixed);
+    }
+    const sent = repaired.size
+      ? { ...layoutRef.current, cells: layoutRef.current.cells.map(cell => repaired.has(cell.id) ? { ...cell, markSets: repaired.get(cell.id) } : cell) }
+      : layoutRef.current;
+    if (repaired.size) patchCellMarkSets(repaired);
+    setSuggestingMarkIds(current => new Set([...current, ...targets]));
+    setMessage(`AIが選択欄${targets.length}件の印字を読んでいます…`); setMessageRepeat(count => count + 1);
+    try {
+      const result = await onSuggestMarkOptions(sent, targets, hint);
+      const applied = applySuggestedOptions(result.cells);
+      const rest = result.similar.flatMap(group => group.cells).filter(item => item.options.length && isEmptyChoiceBox(item.cellId));
+      setMessage(applied === 0
+        ? "印刷された選択肢を読み取れませんでした。画像の上をドラッグして選択肢を囲んでください。"
+        : `${applied}件の選択欄に選択肢を入れました。右側で確認してください。`);
+      setMessageRepeat(count => count + 1);
+      setSimilarOffer(rest.length ? { cellIds: new Set(targets), cells: rest } : null);
+      if (rest.length) showToast({ tone: "info", title: `同じ選択肢の欄があと${rest.length}件あります`, message: "同じ選択肢を設定しますか？",
+        duration: 60000, actionLabel: `${rest.length}件に設定`, onAction: applySimilarOffer });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "選択肢を読み取れませんでした。"); setMessageRepeat(count => count + 1);
+    } finally {
+      setSuggestingMarkIds(current => { const next = new Set(current); targets.forEach(id => next.delete(id)); return next; });
+    }
   };
   const showMergeError = (message: string) => {
     showToast({ tone: "warning", title: "セルを結合できません", message });
@@ -2766,6 +2908,57 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       mergeSelectedCells(targetCells, copiedMerge);
       return true;
     };
+    const markCells = selectedCells.filter(cell => cell.role === "mark");
+    const copyMarkSettings = () => {
+      const source = selectedCells.length === 1 ? markCells[0] : undefined;
+      if (!source?.markSets?.length || !source.markSets.some(set => set.options.length)) return false;
+      copiedMarkRef.current = { cell: source, sets: structuredClone(source.markSets) };
+      const count = source.markSets.reduce((total, set) => total + set.options.length, 0);
+      showToast({ tone: "success", title: "選択肢をコピーしました", quiet: true,
+        message: `${count}件の選択肢と位置。貼り付ける選択欄を選んでCtrl+Vを押してください（複数選択可）。` });
+      return true;
+    };
+    const pasteMarkSettings = () => {
+      const copied = copiedMarkRef.current;
+      if (!copied || !markCells.length || markCells.length !== selectedCells.length) return false;
+      const targets = markCells.filter(cell => cell.id !== copied.cell.id);
+      if (!targets.length) return true;
+      const updates = new Map<string, LayoutMarkSet[]>();
+      for (const target of targets) {
+        const fx = target.width / Math.max(1, copied.cell.width), fy = target.height / Math.max(1, copied.cell.height);
+        const relationPath = layout.relations.find(relation => relation.inputCellId === target.id)?.targetPath ?? "";
+        updates.set(target.id, copied.sets.map((set, index) => {
+          const own = target.markSets?.[index];
+          const kept = new Map((own?.options ?? []).map(option => [option.label, option.id]));
+          return {
+            id: own?.id ?? newMarkSetId(),
+            // The box keeps where its value is saved; only the choices and reading are copied.
+            targetPath: own?.targetPath || relationPath,
+            recognitionMode: set.recognitionMode,
+            selectionMode: set.selectionMode,
+            options: set.options.map(({ writeInTargetPath: _writeIn, ...option }) => {
+              const x = Math.min(target.width - 1, Math.max(0, Math.round(option.x * fx)));
+              const y = Math.min(target.height - 1, Math.max(0, Math.round(option.y * fy)));
+              return { ...option, id: kept.get(option.label) ?? newMarkOptionId(), x, y,
+                width: Math.max(1, Math.min(target.width - x, Math.round(option.width * fx))),
+                height: Math.max(1, Math.min(target.height - y, Math.round(option.height * fy))) };
+            }),
+          };
+        }));
+      }
+      patchCellMarkSets(updates);
+      showToast({ tone: "success", title: `${updates.size}件の選択欄に貼り付けました`, quiet: true });
+      return true;
+    };
+    const handleMarkClipboard = (event: KeyboardEvent) => {
+      if (busy || disabled || (!event.ctrlKey && !event.metaKey) || event.altKey || isEditableKeyboardTarget(event.target)) return;
+      if (!markCells.length || markCells.length !== selectedCells.length) return;
+      const key = event.key.toLowerCase();
+      if ((key === "c" && copyMarkSettings()) || (key === "v" && pasteMarkSettings())) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
     const handleMergeClipboard = (event: KeyboardEvent) => {
       if (
         !showClassificationStep
@@ -2790,10 +2983,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     const handleNativePaste = (event: ClipboardEvent) => {
       if (clipboardShortcutAvailable(event.target) && pasteMergePattern()) event.preventDefault();
     };
+    window.addEventListener("keydown", handleMarkClipboard, true);
     window.addEventListener("keydown", handleMergeClipboard);
     window.addEventListener("copy", handleNativeCopy);
     window.addEventListener("paste", handleNativePaste);
     return () => {
+      window.removeEventListener("keydown", handleMarkClipboard, true);
       window.removeEventListener("keydown", handleMergeClipboard);
       window.removeEventListener("copy", handleNativeCopy);
       window.removeEventListener("paste", handleNativePaste);
@@ -2948,7 +3143,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             <small>
               {placement === "sidebar"
                 ? "追加した項目を、選択中の記入欄へ設定します。"
-                : "内部の識別子はシステムが自動生成します。"}
+                : ""}
             </small>
             {similarLabelPoolEntries.length > 0 && (
               <p className="meaning-target-similar" role="status">
@@ -2978,9 +3173,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     // A name made only of symbols (a misread "(") or holding a leaked cell ID does not name anything.
     const named = (value?: string | null) => value && /[\p{L}\p{N}]/u.test(value) && displayName(value) === value ? value.trim() : "";
     // The printed name (kept as printed text in a merged cell) before any saved meaning's name.
+    // A saved meaning names the column without its row number; a made-up 「項目」 names nothing.
     const labelName = labelCellName(label)
-      || linkedRelations.map(relation => named((layout.labelPool ?? []).find(entry => entry.targetPath === relation.targetPath)?.label
-        ?? availableTargets.find(target => target.path === relation.targetPath)?.label)).find(Boolean)
+      || linkedRelations.map(relation => {
+        const saved = named((layout.labelPool ?? []).find(entry => entry.targetPath === relation.targetPath)?.label
+          ?? availableTargets.find(target => target.path === relation.targetPath)?.label);
+        return saved && !isPlaceholderName(saved) ? meaningBaseName(saved) : "";
+      }).find(Boolean)
       || "";
     // 「□ その他（　）」「○× その他（　）」: an item name already tied to a check box or a
     // symbol box, dragged onto a write-in box, gets its own write-in field. A checklist option
@@ -3219,7 +3418,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedRecordSectionId(section.id);
     setSelectedId(labelIds[0] ?? null);
     setSelectedIds(new Set(labelIds));
-    const labelNames = labels.map((label) => label.text.trim() || label.id).join(" / ");
+    const labelNames = labels.map((label) => labelCellName(label) || "名称未設定").join(" / ");
     setMessage(
       `${labelNames}を「${recordSectionDisplayName(nextSection)}」の列として指定し、${groups.length}行・`
       + `${groups.reduce((total, group) => total + group.inputCellIds.length, 0)}個の記入欄を自動編成しました。`
@@ -3257,15 +3456,33 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     if (!labelId) return;
     const headingChild = [...displayCells].reverse().find(cell => pointInCell(end, cell));
     const headingParent = cellById.get(labelId);
-    const section = recordSections.find(item => item.recordLabelCellIds.includes(headingChild?.id ?? ""))
+    const sectionOf = (cellId: string) => recordSections.find(item => item.recordLabelCellIds.includes(cellId)
+      || recordGroups.some(group => group.sectionId === item.id && group.inputCellIds.includes(cellId)));
+    // 「見出しへ接続」 drags from the repeated part to its heading, so the end is the heading there.
+    const startSection = sectionOf(labelId);
+    const reversed = Boolean(startSection && headingChild && headingChild.id !== labelId
+      && !sectionOf(headingChild.id)
+      && (headingChild.role === "parent_label" || (mode === "record-parent" && headingChild.role === "label")));
+    const headingId = reversed ? headingChild!.id : labelId;
+    const heading = cellById.get(headingId);
+    const section = reversed ? startSection : sectionOf(headingChild?.id ?? "")
       ?? recordSectionAtPoint(end, recordSections, displayCells, 10);
     if (section) {
       try {
-        const next = attachHeading(layout, labelId, section.recordLabelCellIds);
+        // A heading wrongly hung under one of the table's own cells (an earlier reversed drag) is freed first.
+        const tableCells = new Set([...section.recordLabelCellIds,
+          ...recordGroups.filter(group => group.sectionId === section.id).flatMap(group => group.inputCellIds)]);
+        const freed = heading?.parentLabelCellId && tableCells.has(heading.parentLabelCellId)
+          ? { ...layout, cells: layout.cells.map(cell => cell.id === headingId ? { ...cell, parentLabelCellId: null } : cell) }
+          : layout;
+        const next = attachHeading(freed, headingId, section.recordLabelCellIds);
         rememberRelations(layout.relations);
         setLayout({ ...next, recordStructureVerified: recordStructureIsLinked(next.recordSections ?? [], next.recordGroups ?? []) });
         setSelectedRecordSectionId(section.id);
-        setMessage(`${headingParent?.text || labelId}を${recordSectionDisplayName(section)}の帳票上の見出しに設定しました。`);
+        const headingName = heading ? labelCellName(heading) : "";
+        setMessage(headingName
+          ? `「${headingName}」を繰り返し部分の見出しにしました。結果ではこの名前で表示します。`
+          : "繰り返し部分の見出しにしました。見出しに文字がないため、見出しを選んで名前を入力してください。");
       } catch (error) { setMessage((error as Error).message); }
       return;
     }
@@ -3274,9 +3491,25 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       || headingChild.role === "input" || headingChild.role === "mark"
     )) {
       try {
-        const next = attachHeading(layout, labelId, [headingChild.id]);
+        let next = attachHeading(layout, labelId, [headingChild.id]);
+        // A heading drawn straight onto a field with no item name (「統一耳標」→ its write-in box)
+        // also names it: otherwise the field stays without a reading and blocks the template.
+        const headingName = headingParent.role === "parent_label" ? labelCellName(headingParent) : "";
+        const namesField = headingName && headingChild.role === "input"
+          && !next.relations.some(relation => relation.inputCellId === headingChild.id);
+        if (namesField) {
+          const entry = uniqueMeaningEntry(headingName, next, availableTargets);
+          next = {
+            ...next,
+            labelPool: [...(next.labelPool ?? []), entry],
+            relations: [...next.relations, { id: `relation_${crypto.randomUUID()}`, inputCellId: headingChild.id,
+              labelCellIds: [], parentLabelCellId: labelId, axis: "horizontal", order: 1, targetPath: entry.targetPath }],
+          };
+        }
         rememberRelations(layout.relations); setLayout(next);
-        setMessage(`${cellName(headingParent)} → ${cellName(headingChild)} に接続しました。`);
+        setMessage(namesField
+          ? `「${headingName}」を見出しにし、この記入欄を「${headingName}」として読み取ります。`
+          : `${cellName(headingParent)} → ${cellName(headingChild)} に接続しました。`);
       } catch (error) { setMessage((error as Error).message); }
       return;
     }
@@ -3420,6 +3653,51 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       `読み取る内容が未設定の記入欄を${unassignedMeaningCount}件強調しています。`,
     );
   };
+  const notices = useMemo(() => {
+    const list: LayoutEditorNotice[] = [];
+    // Boxes with the same name are one item: twenty "分娩状況" boxes are one line, not twenty.
+    const incomplete = new Map<string, LayoutCell[]>();
+    layout.cells.filter(cell => incompleteMeaningIds.has(cell.id)).forEach(cell => {
+      const name = cellName(cell);
+      incomplete.set(name, [...(incomplete.get(name) ?? []), cell]);
+    });
+    incomplete.forEach((cells, name) => {
+      const missing = cells.every(cell => (cell.markSets ?? []).every(set => set.options.length === 0)) ? "選択肢" : "保存先か選択肢";
+      list.push({ key: `incomplete:${name}`, step: "meaning", cellIds: cells.map(cell => cell.id),
+        text: cells.length > 1 ? `選択欄「${name}」${cells.length}件に${missing}がありません。` : `選択欄「${name}」に${missing}がありません。` });
+    });
+    // Printed text is not read on this machine, so a heading or item name may have no name at
+    // all; the result then shows 「明細」 or made-up 「項目2」. Each is one line here.
+    const cellsById = new Map(layout.cells.map(cell => [cell.id, cell]));
+    const unnamedTables = (layout.recordSections ?? []).filter(section => {
+      if (section.displayName?.trim()) return false;
+      const heading = cellsById.get(section.parentLabelCellId ?? "");
+      return heading ? !labelCellName(heading) : !section.title?.trim() || section.title.trim() === "明細";
+    });
+    const headings = [...new Set(unnamedTables.map(section => section.parentLabelCellId ?? "").filter(id => cellsById.has(id)))];
+    const headless = unnamedTables.filter(section => !cellsById.has(section.parentLabelCellId ?? ""));
+    if (headings.length) list.push({ key: "unnamed-headings", step: "records", cellIds: headings,
+      text: `繰り返し部分の見出し${headings.length}件に名前がありません。見出しを選んで名前を入力すると、結果の表の名前になります。` });
+    if (headless.length) list.push({ key: "headless-tables", step: "records", cellIds: headless.flatMap(section => section.recordLabelCellIds),
+      text: `繰り返し部分${headless.length}件が見出しにつながっていないため、結果で「明細」と表示されます。「見出しへ接続」で見出しにつないでください。` });
+    const unnamedLabels = layout.cells.filter(cell => cell.role === "label" && !cell.virtual && !labelCellName(cell)
+      && layout.relations.some(relation => relation.labelCellIds.includes(cell.id)
+        && isPlaceholderName((layout.labelPool ?? []).find(entry => entry.targetPath === relation.targetPath)?.label ?? "項目")));
+    if (unnamedLabels.length) list.push({ key: "unnamed-labels", step: "meaning", cellIds: unnamedLabels.map(cell => cell.id),
+      text: `印字の文字を読めていない項目名が${unnamedLabels.length}件あり、結果で「項目」などと表示されます。選んで名前を入力してください。` });
+    if (!hasMeaningAssignments) list.push({ key: "no-meaning", step: "meaning", text: "記入欄または選択欄に、読み取る内容を設定してください。" });
+    if (!recordStructureReady) list.push({ key: "records", step: "records", text: "繰り返し部分：複数の列見出しをまたいで各行をまとめてください。" });
+    if (!identityConfigurationReady) list.push({ key: "identity", step: "identity", text: "確認する欄を1つ以上選んでください。" });
+    if (!documentNameReady) list.push({ key: "document-name", step: "identity", text: "ファイル名に入れる欄を1つ以上選んでください。" });
+    layout.warnings
+      .filter((warning) => !HIDDEN_REVIEW_INFORMATION_MESSAGES.has(warning) && !warning.startsWith("PADDLEOCR_NOT_AVAILABLE"))
+      .forEach((warning) => list.push({ key: `layout:${warning}`, step: null, text: userText(warning, "レイアウトの注意") }));
+    return list;
+  // cellName reads the same layout.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, incompleteMeaningIds.size, hasMeaningAssignments, recordStructureReady, identityConfigurationReady, documentNameReady]);
+  const noticesSignature = JSON.stringify(notices);
+  useEffect(() => { onNoticesChange?.(notices); }, [noticesSignature, onNoticesChange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="layout-editor" aria-busy={busy}
@@ -3435,7 +3713,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       onKeyDownCapture={operationEndSave ? event => {
         if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target instanceof HTMLInputElement) event.target.blur();
       } : undefined}>
-      <fieldset className="layout-editor-fields" disabled={busy || disabled}>
+      <fieldset className="layout-editor-fields" disabled={busy || disabled} onClickCapture={mode === "draw" ? event => {
+        const target = event.target as HTMLElement;
+        if (target.closest("button, select") && !target.closest("[data-draw-control], #layout-mapping-canvas")) leaveDraw();
+      } : undefined}>
       <FloatingTools anchor={canvasAnchor} disabled={busy || disabled} header={stepNavigation && (
         <div className="layout-step-nav" role="group" aria-label="工程の移動">
           <button type="button" aria-label="前の工程" data-tip="前の工程へ" disabled={!stepNavigation.previous}
@@ -3457,26 +3738,26 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             {mode !== "paint" && selectedCells.length > 0 ? `選択中の${selectedCells.length}枠に適用`
               : mode === "paint" && paintRole ? `塗る：${PAINT_ROLE_LABEL[paintRole]}` : "区分を選んで塗る"}
           </span>
-          {PAINT_ROLES.map(([role, label, tip], index) => (
+          {PAINT_ROLES.map(([role, label, tip]) => (
             <button type="button" key={role}
               className={`role-swatch${mode === "paint" && paintRole === role ? " active" : ""}`}
               aria-pressed={mode === "paint" && paintRole === role}
-              data-tip={`${tip}（キー ${index + 1}）`}
+              data-tip={tip}
               style={{ "--swatch": LAYOUT_ROLE_STYLE[role].stroke } as CSSProperties}
               onClick={event => pickPaletteRole(role, event.altKey)}>
-              <i aria-hidden="true" />{label}<kbd>{index + 1}</kbd>
+              <i aria-hidden="true" />{label}
             </button>
           ))}
         </div>}
         {showClassificationStep && !pageView && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
         {mode === "draw" && !pageView && <>
-          <label>形状 <select aria-label="追加する枠の形状" value={drawShape}
+          <label data-draw-control>形状 <select aria-label="追加する枠の形状" value={drawShape}
             onChange={event => { setDrawShape(event.target.value as "rectangle" | "polygon"); setPolygonPoints([]); }}>
             <option value="rectangle">四角形</option><option value="polygon">多角形</option>
           </select></label>
           {drawShape === "polygon" && <>
-            <button type="button" disabled={polygonPoints.length < 3} onClick={finishPolygon}>多角形を確定</button>
-            <button type="button" disabled={!polygonPoints.length} onClick={() => setPolygonPoints(points => points.slice(0, -1))}>最後の頂点を取り消す</button>
+            <button type="button" data-draw-control disabled={polygonPoints.length < 3} onClick={finishPolygon}>多角形を確定</button>
+            <button type="button" data-draw-control disabled={!polygonPoints.length} onClick={() => setPolygonPoints(points => points.slice(0, -1))}>最後の頂点を取り消す</button>
           </>}
           <button type="button" onClick={() => { setPolygonPoints([]); setMode("select"); }}>作図をキャンセル</button>
         </>}
@@ -3543,7 +3824,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               data-tip={rectanglesHidden ? "枠を表示に戻します。" : "枠を隠して帳票の画像だけを確認します。"}
               aria-pressed={rectanglesHidden}
               aria-controls="layout-mapping-canvas"
-              aria-label={rectanglesHidden ? "すべての矩形を表示" : "すべての矩形を非表示"}
+              aria-label={rectanglesHidden ? "すべての枠を表示" : "すべての枠を非表示"}
               onClick={() => {
                 if (!rectanglesHidden) {
                   dragStart.current = null;
@@ -3558,7 +3839,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 setRectanglesHidden(current => !current);
               }}
             >
-              <FiEye aria-hidden="true" />{rectanglesHidden ? "矩形を表示" : "矩形を非表示"}
+              <FiEye aria-hidden="true" />{rectanglesHidden ? "枠を表示" : "枠を非表示"}
             </button>
           </>
         )}
@@ -3580,7 +3861,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         {showDetectAction && (
           <button type="button" onClick={() => void detect()} disabled={busy || saving}>
             <FiGrid aria-hidden="true" />
-            {detecting ? "処理中…" : detectLabel}
+            {detecting ? <><Spinner />処理中…</> : detectLabel}
           </button>
         )}
         {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <button
@@ -3589,11 +3870,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           onClick={() => void recognizeLabels()}
           disabled={busy || saving || !onRecognizeLabels}
         >
-          <FiType aria-hidden="true" />{recognizingLabels ? "文字候補を取得中…" : "項目名の文字候補を取得"}
+          <FiType aria-hidden="true" />{recognizingLabels ? <><Spinner />文字候補を取得中…</> : "項目名の文字候補を取得"}
         </button>}
         {(showClassificationStep || showMeaningStep || showRecordStep) && (
           <button type="button" className={`layout-move-button ${mode === "move" ? "active" : ""}`}
-            aria-label="矩形を移動" aria-pressed={mode === "move"}
+            aria-label="枠を移動" aria-pressed={mode === "move"}
             disabled={!!pageView && !displayCells.some(cell => cell.virtual && cell.pageRange === pageView.range)}
             onClick={() => setMode(mode === "move" ? "select" : "move")}>
             <svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none"
@@ -3737,7 +4018,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             aria-label={showIdentityStep ? "書類を見分ける欄を選択する帳票プレビュー" : "帳票レイアウト編集キャンバス"}
             aria-describedby="layout-keyboard-help"
             className={`layout-mode-${mode}`}
-            style={rectanglesHidden ? { pointerEvents: "none" } : mode === "paint" ? { cursor: "crosshair" } : mode === "link"
+            style={rectanglesHidden ? { pointerEvents: "none" } : mode === "paint" ? { cursor: paintRole ? penCursor(LAYOUT_ROLE_STYLE[paintRole].stroke) : "crosshair" } : mode === "link"
               ? { cursor: wireDragging ? "grabbing" : wireHoverId ? "grab" : "default" } : undefined}
             onContextMenu={(event) => {
               if (mode !== "paint") return;
@@ -3757,7 +4038,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               const hit = cellAt(point(event));
               const candidate = hit ? identityCandidateByCellId.get(hit.id) : null;
               if (!candidate) {
-                setMessage("この矩形は書類を見分ける欄には使用できません。単独の文字項目を選択してください。");
+                setMessage("この枠は書類を見分ける欄には使用できません。単独の文字項目を選択してください。");
                 return;
               }
               setSelectedId(candidate.cell.id);
@@ -4253,7 +4534,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
         <aside className="layout-properties">
           <h3>{workflowStep
-            ? { classify: "欄の種類", meaning: "読み取る内容", records: "繰り返し部分", identity: "確認する欄とファイル名", review: "確認・保存" }[workflowStep]
+            ? { classify: "欄の種類", meaning: "読み取る内容", records: "繰り返し部分", identity: "確認する欄", review: "確認・保存" }[workflowStep]
             : "選択セル"}</h3>
           {!showIdentityStep && (
             <label className="accessible-cell-select sr-only">
@@ -4289,20 +4570,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               </select>
             </label>
           )}
-          {!selected && workflowStep !== "identity" && !showMeaningStep && <p className="empty-property">帳票上の矩形を選択してください。</p>}
-          {showMeaningStep && (
-            <section className="meaning-context" aria-label="意味づけの次の操作">
-              <span className="selection-caption">{selected ? "選択中の欄" : "まず帳票の欄を選択"}</span>
-              {selected && <strong>{LAYOUT_ROLE_LABEL[selected.role]} · {selected.fieldLabel?.trim() || selected.text.trim() || `欄 ${displayCells.findIndex(cell => cell.id === selected.id) + 1}`}</strong>}
-              <p>{selected?.role === "input"
-                  ? "下の「保存する情報」を選ぶと、この記入欄に割り当てます。"
-                  : selected?.role === "mark"
-                    ? singleCheckbox
-                      ? "チェック枠1つの欄です。線でつないだ項目に、チェックの有無を保存します。"
-                      : "この欄の選択肢と保存する値を設定してください。"
-                    : "記入欄を選んで保存先を指定します。項目名と線でつなぐ場合は「意味付け」を選びます。"}</p>
-              {mode === "link" && selected?.role === "input" && <button type="button" className="secondary compact" onClick={() => setMode("select")}><FiEdit3 aria-hidden="true" />保存先を直接指定</button>}
-            </section>
+          {!selected && workflowStep !== "identity" && !showMeaningStep && <p className="empty-property">帳票上の枠を選択してください。</p>}
+          {/* The selected box is outlined on the form; the panel shows only what can be set. */}
+          {showMeaningStep && DIRECT_TARGET_EDITING_VISIBLE && mode === "link" && selected?.role === "input" && (
+            <button type="button" className="secondary compact meaning-direct" onClick={() => setMode("select")}><FiEdit3 aria-hidden="true" />保存先を直接指定</button>
+          )}
+          {showMeaningStep && selectedMarkCells.length > 1 && (
+            <MarkBulkEditor cells={selectedMarkCells} onApply={(updates, note) => { patchCellMarkSets(updates); setMessage(note); setMessageRepeat(count => count + 1); }}
+              onSuggest={onSuggestMarkOptions ? (ids, hint) => void suggestMarkOptions(ids, hint) : undefined}
+              suggesting={selectedMarkCells.some(cell => suggestingMarkIds.has(cell.id))}
+              onUndoSuggest={selectedMarkCells.some(cell => suggestUndo?.has(cell.id)) ? () => undoSuggestion(selectedMarkCells.map(cell => cell.id)) : undefined}
+              similarOffer={similarOffer && selectedMarkCells.some(cell => similarOffer.cellIds.has(cell.id))
+                ? { count: similarOffer.cells.filter(item => isEmptyChoiceBox(item.cellId)).length, apply: applySimilarOffer } : null} />
           )}
           {showClassificationStep && selectedCells.length > 1 && (
             <section className="bulk-selection">
@@ -4319,7 +4598,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 className="danger-button compact full"
                 onClick={() => deleteCells(selectedIds)}
               >
-                選択した矩形を完全に削除
+                選択した枠を完全に削除
               </button>
               <button
                 type="button"
@@ -4380,18 +4659,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       disabled={selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)}
                       onClick={() => setRoles(selectedIds, "mark", "checklist")}><FiCheckSquare aria-hidden="true" /> チェックリストを読む</button>
                   </div>
-                  {selectedCells.some(cell => cell.readingMode === "number") && <small>番号欄には上から順に1、2、3…を自動で入れます。同じ高さの欄は左から順に数えます。番号の画像はOCRしません。保存先がない欄には「番号」を追加します。</small>}
+                  {selectedCells.some(cell => cell.readingMode === "number") && <small>番号欄には上から順に1、2、3…を自動で入れます。繰り返し部分では表ごとに1から数え、同じ見出しにつないだ表は左の表から続けて数えます。表の外の欄は上から、同じ高さなら左から数えます。番号の画像はOCRしません。保存先がない欄には「番号」を追加します。</small>}
                   {selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)
                     && <small>記号の判定には、複合項目や複数の選択グループを含まない欄を使用してください。</small>}
                 </fieldset>
               )}
-              {showLabelStep && !selected.virtual && (selected.role === "label" || selected.role === "parent_label") && (
-                <label>項目名の文字候補
+              {(showLabelStep || showMeaningStep) && !selected.virtual && (selected.role === "label" || selected.role === "parent_label") && (
+                <label>{selected.role === "parent_label" ? "見出しの名前" : "項目名の文字候補"}
                   <input
                     value={selected.text}
                     // A merged item name keeps its printed name, which names the item until replaced here.
                     placeholder={selected.printedLabelText?.trim() || "未認識の場合は入力"}
-                    onChange={(event) => patchCell(selected.id, { text: event.target.value })}
+                    onChange={(event) => renameLabelCell(selected, event.target.value)}
                     onBlur={() => {
                       if (findLabelPoolMatch(selected.text, labelPoolEntries)) return;
                       const entry = ensureAutoLabelPoolEntry(selected.text);
@@ -4404,9 +4683,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               )}
               {showClassificationStep && selected.role === "input" && (
                 <label>
-                  矩形内の印刷ラベル（読み取りから除外）
+                  枠内の印刷ラベル（読み取りから除外）
                   <input
-                    aria-label="矩形内の印刷ラベル（読み取りから除外）"
+                    aria-label="枠内の印刷ラベル（読み取りから除外）"
                     value={selected.printedLabelText ?? ""}
                     placeholder="例: 名号（印刷ラベルがない欄は空欄）"
                     onChange={(event) => patchCell(selected.id, {
@@ -4425,7 +4704,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     onChange={event => patchCell(selected.id, { fieldLabel: event.target.value || null })} />
                 </label>
               )}
-              {showMeaningStep && selected.role === "mark" && !singleCheckbox && (
+              {showMeaningStep && selected.role === "mark" && !singleCheckbox && selectedMarkCells.length <= 1 && (
                 <div
                   ref={markWarningEditorRef}
                   className={warningFocusRequest?.purpose === "mark-options" && warningFocusRequest.cellId === selected.id
@@ -4447,9 +4726,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     canonicalHeight={layout.canonicalHeight}
                     onChange={(markSets) => patchCell(selected.id, { markSets })}
                     selectedChoiceId={assistantChoice?.cellId === selected.id ? assistantChoice.choiceId : null}
-                    onChoiceSelect={(markSetId, choiceId) => setAssistantChoice({ cellId: selected.id, markSetId, choiceId })}
-                    hideTarget={Boolean(selectedChecklist?.targetPath)
+                    onChoiceSelect={operationEndSave ? undefined : (markSetId, choiceId) => setAssistantChoice({ cellId: selected.id, markSetId, choiceId })}
+                    hideTarget={!DIRECT_TARGET_EDITING_VISIBLE || Boolean(selectedChecklist?.targetPath)
                       && layout.relations.some(relation => relation.inputCellId === selected.id)}
+                    onSuggest={onSuggestMarkOptions ? hint => void suggestMarkOptions([selected.id], hint) : undefined}
+                    suggesting={suggestingMarkIds.has(selected.id)}
+                    onUndoSuggest={suggestUndo?.has(selected.id) ? () => undoSuggestion([selected.id]) : undefined}
+                    similarOffer={similarOffer && similarOffer.cellIds.has(selected.id)
+                      ? { count: similarOffer.cells.filter(item => isEmptyChoiceBox(item.cellId)).length, apply: applySimilarOffer } : null}
                   />
                 </div>
               )}
@@ -4458,13 +4742,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 type="button"
                 onClick={() => deleteCells([selected.id])}
               >
-                矩形を完全に削除
+                枠を完全に削除
               </button>}
             </div>
           )}
 
           {showMeaningStep && <>
-          <h3>読み取る内容の保存先</h3>
           {selectedMeaningParent && selectedMeaningChild && (
             <div className="meaning-parent-context" aria-label="設定済みの親項目">
               <span>親項目で区別</span>
@@ -4476,6 +4759,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               <small>同名の項目は、この親項目ごとに別の情報として保存されます。</small>
             </div>
           )}
+          {DIRECT_TARGET_EDITING_VISIBLE && <>
+          <h3>読み取る内容の保存先</h3>
           <label className="property-select">
             保存する情報
             <select
@@ -4514,7 +4799,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           </p>
           {selected?.role === "input" && customTargetAddition("sidebar", "新しい保存項目を追加")}
           </>}
+          </>}
 
+          {workflowStep === "records" && selected && !selected.virtual && (selected.role === "label" || selected.role === "parent_label") && (
+            <div className="property-form">
+              <label>{selected.role === "parent_label" ? "見出しの名前" : "列の名前"}
+                <input
+                  value={selected.text}
+                  placeholder={selected.printedLabelText?.trim() || "例: 売却子牛一覧"}
+                  onChange={(event) => renameLabelCell(selected, event.target.value)}
+                />
+                <small>{selected.role === "parent_label" ? "つないだ繰り返し部分は、読み取り結果でこの名前になります。" : "この列の各行の項目名になります。"}</small>
+              </label>
+            </div>
+          )}
           {workflowStep === "records" && (
             <div className="wizard-side-summary">
               <strong>列ラベルをまとめる</strong>
@@ -4524,7 +4822,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           )}
           {showIdentityStep && (
             <div className="document-identity-canvas-setting">
-              <strong>① 読み取り後に確認する欄</strong>
+              <strong>読み取り後に確認する欄</strong>
               <p>
                 読み取りが終わると、ここで選んだ欄の画像と読み取り結果を最初に表示し、
                 「この書類で合っているか」を確認します。氏名や番号など、書類ごとに中身が変わる欄を1〜3個選んでください。
@@ -4537,7 +4835,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     </button>
                   )}
                   <div className="identity-checklist" aria-label="確認する欄">
-                    {identityCandidates.map((candidate) => (
+                    {listedIdentityCandidates.map((candidate) => (
                       <label
                         key={candidate.targetPath}
                         className={selectedIdentityByPath.has(candidate.targetPath) ? "checked" : undefined}
@@ -4553,6 +4851,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       </label>
                     ))}
                   </div>
+                  {rankedIdentityCandidates.length > 3 && (
+                    <button type="button" className="secondary compact identity-more" aria-expanded={moreIdentityCandidates}
+                      onClick={() => setMoreIdentityCandidates((value) => !value)}>
+                      {moreIdentityCandidates ? "▲ 候補を減らす" : `▼ ほかの候補（${hiddenIdentityCount}件）`}
+                    </button>
+                  )}
                   <small className="identity-checklist-hint">左の帳票で枠をクリックしても選べます。</small>
                 </>
               ) : (
@@ -4560,60 +4864,12 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   選べる欄がありません。前の工程で、繰り返し行ではない記入欄に項目名を付けてください。
                 </p>
               )}
-              {selectedIdentityCandidates.length > 0 ? (
-                <div className="identity-rule-summary" aria-live="polite">
-                  <strong>読み取り後に {selectedIdentityCandidates.map((candidate) => `「${candidate.label}」`).join("")} を確認します。</strong>
-                </div>
-              ) : identityCandidates.length > 0 && (
-                <p className="inline-warning">確認する欄を1つ以上選んでください。</p>
-              )}
-              <div className="document-name-rule-setting">
-                <strong>② 保存するファイル名</strong>
-                <div className="identity-card-preview" aria-label="書類名の生成プレビュー">
-                  <span>ファイル名の例</span>
-                  <strong>{documentNameRule
-                    ? `${documentNameRule.prefix}${documentNameRule.fieldPaths.map((path) => `〈${identityCandidates.find((candidate) => candidate.targetPath === path)?.label ?? path}〉`).join(documentNameRule.separator)}${documentNameRule.suffix}.xlsx`
-                    : "まだ決まっていません"}</strong>
-                  <small>〈 〉の部分は、読み取った内容に置き換わります。読み取り後にも変更できます。</small>
-                </div>
-                {suggestedDocumentNameRule && !sameStringList(suggestedDocumentNameRule.fieldPaths, documentNameRule?.fieldPaths ?? []) && (
-                  <button type="button" className="secondary" onClick={() => onDocumentNameRuleChange?.({
-                    ...(documentNameRule ?? suggestedDocumentNameRule),
-                    fieldPaths: suggestedDocumentNameRule.fieldPaths,
-                    separator: documentNameRule?.separator || suggestedDocumentNameRule.separator,
-                  })}>
-                    確認する欄からファイル名を作る
-                  </button>
-                )}
-                <details className="document-name-details">
-                  <summary>ファイル名を細かく変える</summary>
-                  <p>ファイル名に入れる欄</p>
-                  <div className="document-name-field-options">
-                    {identityCandidates.map((candidate) => (
-                      <label key={candidate.targetPath}>
-                        <input
-                          type="checkbox"
-                          checked={documentNameRule?.fieldPaths.includes(candidate.targetPath) ?? false}
-                          onChange={() => toggleDocumentNamePath(candidate.targetPath)}
-                        />
-                        {candidate.label}
-                      </label>
-                    ))}
-                  </div>
-                  <div className="document-name-format-grid">
-                    <label>前に付ける文字<input value={documentNameRule?.prefix ?? ""} maxLength={100} onChange={(event) => updateDocumentNameRule({ prefix: event.target.value })} placeholder="例: 面接カード_" /></label>
-                    <label>欄と欄の間の文字<input value={documentNameRule?.separator ?? ""} maxLength={20} onChange={(event) => updateDocumentNameRule({ separator: event.target.value })} placeholder="例: _（空欄でも可）" /></label>
-                    <label>後ろに付ける文字<input value={documentNameRule?.suffix ?? ""} maxLength={100} onChange={(event) => updateDocumentNameRule({ suffix: event.target.value })} placeholder="空欄でも可" /></label>
-                  </div>
-                </details>
-                {!documentNameReady && <p className="inline-warning">ファイル名に入れる欄を1つ以上選んでください。</p>}
-              </div>
             </div>
           )}
         </aside>
       </div>
 
-      {showMeaningStep && (
+      {showMeaningStep && DIRECT_TARGET_EDITING_VISIBLE && (
         <details className="meaning-target-manager" aria-label="保存する情報を直接指定">
           <summary>
             <div>
@@ -4941,7 +5197,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   <span>
                     {section.recordLabelCellIds.length > 0
                       ? section.recordLabelCellIds
-                        .map((labelId) => cellById.get(labelId)?.text.trim() || labelId)
+                        .map((labelId) => { const cell = cellById.get(labelId); return (cell && labelCellName(cell)) || "名称未設定"; })
                         .join(" / ")
                       : "未指定"}
                   </span>
@@ -5025,7 +5281,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       )}
                       {relation.labelCellIds.length > 0
                         ? relation.labelCellIds.map(cellNameById).join(" / ")
-                        : cellById.get(relation.inputCellId)?.printedLabelText || "矩形へ直接設定"}
+                        : cellById.get(relation.inputCellId)?.printedLabelText || "枠へ直接設定"}
                     </td>
                     <td>{displayName(targetByPath.get(relation.targetPath)?.label ?? "一覧にない保存先")}</td>
                     <td><button className="danger-button compact" onClick={() => {
@@ -5048,37 +5304,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       )}
 
       {showFinalChecks && <>
-      {layout.cells.filter((cell) => incompleteMeaningIds.has(cell.id)).map((cell) => (
-        <p className="inline-warning" key={`incomplete-${cell.id}`}>
-          設定不完全: {cellName(cell)} — 各選択欄に保存先と1件以上の選択肢を設定してください。
-        </p>
-      ))}
-      {layout.warnings
-        .filter((warning) => !HIDDEN_REVIEW_INFORMATION_MESSAGES.has(warning))
-        .map((warning) => <p className="inline-warning" key={warning}>{userText(warning, "レイアウトの注意")}</p>)}
-      {!recordStructureReady && (
-        <p className="inline-warning">
-          途中保存できます。OCRへ進むには、複数の列見出しを横断して各行を自動編成してください。旧形式の表では親見出しへの接続も必要です。
-        </p>
-      )}
-      {!hasMeaningAssignments && (
-        <p className="inline-warning">
-          途中保存できます。OCRへ進むには、手書き文字欄または選択マーク欄を保存先へ意味づけしてください。
-        </p>
-      )}
-      {hasMeaningAssignments && hasUnassignedFields && (
-        <p className="inline-warning">
-          途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。
-        </p>
-      )}
-      {!showIdentityStep && (!identityConfigurationReady || !documentNameReady) && (
-        <p className="inline-warning">
-          途中保存できます。OCRへ進むには、「確認する欄とファイル名」で、確認する欄とファイル名を決めてください。
-        </p>
-      )}
       {/* Saving runs in the background; a line that appears and disappears with every
           autosave shifts the page, so only lasting states are shown. */}
-      {((dirty && !operationEndSave) || (!dirty && allowUnchangedSave)) && <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
+      {((dirty && !operationEndSave) || (!dirty && allowUnchangedSave && !operationEndSave)) && <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
         {dirty
           ? "保存していないレイアウト変更があります。"
           : "検出内容を確認し、意味づけを保存してください。"}
@@ -5095,7 +5323,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         onClick={() => void flushLatest()}
       >
         {busy
-          ? "処理中…"
+          ? <><Spinner />処理中…</>
           : dirty || allowUnchangedSave
           ? templateReadyForOcr
             ? "テンプレート設定を保存"
@@ -5133,6 +5361,32 @@ const PAINT_ROLES: readonly (readonly [PaintRole, string, string])[] = [
 const PAINT_ROLE_LABEL: Record<PaintRole, string> = {
   label: "項目名", parent_label: "見出し", input: "記入欄", mark: "選択・記号", ignored: "読み取らない",
 };
+/**
+ * Meaning list IDs are only keys (nothing refers to them), but the server requires them unique.
+ * Several ways of adding a meaning check only the save path, so a renamed entry that kept its old
+ * ID could collide with a new one and every later save was refused. Later duplicates get a new ID.
+ */
+function uniqueLabelPoolIds(layout: LayoutDefinition): LayoutDefinition {
+  const pool = layout.labelPool ?? [];
+  const seen = new Set<string>();
+  if (pool.every(entry => !seen.has(entry.id) && seen.add(entry.id))) return layout;
+  const taken = new Set(pool.map(entry => entry.id)), used = new Set<string>();
+  return { ...layout, labelPool: pool.map(entry => {
+    if (!used.has(entry.id)) { used.add(entry.id); return entry; }
+    let number = 2, id = entry.id;
+    while (taken.has(id) || used.has(id)) { const suffix = `_${number++}`; id = entry.id.slice(0, 120 - suffix.length) + suffix; }
+    used.add(id); return { ...entry, id };
+  }) };
+}
+
+/** Pen-shaped mouse cursor in the painted area's colour; the hotspot is the pen tip (bottom left). */
+function penCursor(color: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">`
+    + `<path d="M3 21l1.2-4.8L16.6 3.8a2 2 0 0 1 2.8 0l.8.8a2 2 0 0 1 0 2.8L7.8 19.8z" fill="${color}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>`
+    + `<path d="M3 21l1.2-4.8 3.6 3.6z" fill="#1f2933" stroke="#fff" stroke-width="1" stroke-linejoin="round"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 3 21, crosshair`;
+}
+
 function paintRoleOf(cell: LayoutCell): PaintRole {
   return cell.role === "record_key_cell" || cell.role === "column_key_cell" ? "input" : cell.role;
 }

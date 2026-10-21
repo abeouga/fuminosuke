@@ -99,7 +99,7 @@ export function planManualCellMerge(
     return overlap >= Math.min(cell.width, previous.width) * 0.25 && gap <= gapLimit;
   });
   if (!horizontal && !vertical) {
-    return "離れているセル、または読み取り順序を一意に決められないセルは結合できません。";
+    return "離れているセル、または読み取る順番を決められないセルは結合できません。";
   }
   const direction = horizontal && vertical
     ? (bounds.width >= bounds.height ? "horizontal" : "vertical")

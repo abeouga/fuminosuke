@@ -38,14 +38,16 @@ def edit_marks(ctx: SemanticCommands, op: MarkConfigure | MarkClear) -> None:
     if isinstance(op, MarkClear):
         if len(old_sets) > 1:
             ctx.required_bindings.add(cell["id"])
-        if len(old_sets) > 1 and relations:
+        if len(old_sets) > 1 and len(relations) > 1:
             raise reject(
-                "DEPENDENCY_CONFLICT", "複数の意味があるため接続解除と再割当を明示してください。"
+                "DEPENDENCY_CONFLICT",
+                "この選択欄は複数の項目名につながっています。項目名からの線を1本にしてから、"
+                "読み取り方法を変えてください。",
             )
+        # The drawn connection (if any) stays as the box's meaning; otherwise the
+        # choice's own storage becomes the connection of the plain field.
         if len(old_sets) == 1:
             path = next(iter(old_sets.values()))["targetPath"]
-            if relations and any(r["targetPath"] != path for r in relations):
-                raise reject("DEPENDENCY_CONFLICT", "既存接続とマークの意味が異なります。")
             if not relations and path:
                 ctx.layout["relations"].append(
                     CommandCompiler._relation(cell["id"], path, [], "horizontal")
@@ -143,9 +145,37 @@ def edit_marks(ctx: SemanticCommands, op: MarkConfigure | MarkClear) -> None:
                 "options": options,
             }
         )
+    if len({s["id"] for s in result}) != len(result):
+        raise reject("INVALID_GRAPH", "同じ選択欄の設定が重複しています。", 422)
+    _follow_connections(ctx, cell["id"], relations, result)
     paths = [s["targetPath"] for s in result if s["targetPath"]]
-    if len({s["id"] for s in result}) != len(result) or len(set(paths)) != len(paths):
-        raise reject("INVALID_GRAPH", "選択肢群または保存先が重複しています。", 422)
-    if any(r["targetPath"] not in {s["targetPath"] for s in result} for r in relations):
-        raise reject("DEPENDENCY_CONFLICT", "既存の意味との接続を同じ操作群で解除してください。")
+    if len(set(paths)) != len(paths):
+        raise reject("INVALID_GRAPH", "1つの選択欄に同じ保存先が2つあります。", 422)
     cell["role"], cell["markSets"] = "mark", result
+
+
+def _follow_connections(
+    ctx: SemanticCommands, cell_id: str, relations: list[dict[str, Any]], sets: list[dict[str, Any]]
+) -> None:
+    """The line drawn from an item name decides where a box's choice is stored.
+
+    The screen no longer shows a storage picker for choice boxes, so a set's own
+    path can be empty or stale (a pasted or newly configured set). Each connection
+    not yet stored by a set takes a set without a connected path, in order; a
+    connection left over (more lines than sets) is removed with the old setting.
+    """
+    connected = {r["targetPath"] for r in relations}
+    unmatched = [r for r in relations if r["targetPath"] not in {s["targetPath"] for s in sets}]
+    if not unmatched:
+        return
+    free = [s for s in sets if not s["targetPath"] or s["targetPath"] not in connected]
+    for relation, mark_set in zip(unmatched, free, strict=False):
+        mark_set["targetPath"] = relation["targetPath"]
+    stored = {s["targetPath"] for s in sets}
+    leftover = {id(r) for r in unmatched if r["targetPath"] not in stored}
+    if leftover:
+        ctx.layout["relations"] = [
+            r
+            for r in ctx.layout["relations"]
+            if not (r["inputCellId"] == cell_id and id(r) in leftover)
+        ]

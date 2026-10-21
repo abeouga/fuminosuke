@@ -328,7 +328,7 @@ class CatalogService:
                     "record_section",
                     section.id,
                     page_id,
-                    section.resolved_display_name,
+                    section.name_with_heading(cells),
                     (
                         "records.replace_rows",
                         "records.configure",

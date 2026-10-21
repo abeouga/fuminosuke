@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -185,7 +186,12 @@ def replace_rows(
                 # Preserve the physical field path and relation IDs while defining its column.
                 for relation in relations:
                     relation["labelCellIds"] = labels[:]
-            cells[cell_id]["fieldLabel"] = meaning["label"]
+            # Every row shows the column's name, not the first row's 「備考 1行目」. A name
+            # typed for one box stays unless it was only the old made-up row name.
+            column_name = re.sub(r"\s*\d+行目$", "", meaning["label"]).strip() or meaning["label"]
+            current = cells[cell_id].get("fieldLabel")
+            if not current or re.search(r"\d+行目$", current) or current == meaning["label"]:
+                cells[cell_id]["fieldLabel"] = column_name
         group = LayoutRecordGroup(
             id=group_id,
             section_id=section["id"],

@@ -243,10 +243,11 @@
 .ux-shell .ocr-cell-ok.ocr-cell-has-choices button > small { display: block; color: #2468a2; }
 .ux-shell .ocr-cell-ok button > span, .ux-shell .ocr-cell-warning button > span { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ux-shell textarea.ocr-inline-cell-input { min-width: 100%; width: 100%; min-height: 42px; resize: vertical; line-height: 1.6; padding: 8px; font: inherit; }
-.ux-shell .ocr-edit-table-wrap { max-height: 480px; scrollbar-gutter: stable; }
+/* No space is kept for a scrollbar: a table that does not scroll fills its box to the right edge. */
+.ux-shell .ocr-edit-table-wrap { max-height: 480px; }
 .ux-shell .ocr-single-field-table { min-width: 0; }
 .ux-shell .ocr-single-field-table td { width: auto; }
-.ux-shell .ocr-cell-ok { background: #f1f7f6; }
+.ux-shell .ocr-cell-ok { background: #dff0e6; }
 .ux-shell .ocr-edit-section > header { justify-content: space-between; gap: 8px; }
 .ux-shell .review-column-navigation { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #617284; }
 .ux-shell .review-column-navigation button { padding: 4px 9px; border: 1px solid #b4c9d7; border-radius: 4px; background: white; }
@@ -274,19 +275,25 @@
 }
 .generic-review-source, .generic-review-results { min-width: 0; }
 .generic-review-source { position: sticky; top: 16px; }
-.generic-review-source header { margin-bottom: 12px; }
-.generic-review-source header h2 { margin: 0 0 4px; font-size: 17px; }
-.generic-review-source header span { color: var(--text-muted, #667085); font-size: 13px; }
-.generic-review-source .ocr-page-preview { max-height: 66vh; overflow: auto; border: 1px solid #dce4e7; background: #fff; border-radius: 12px; }
-.generic-review-source .ocr-page-preview img { display: block; width: 100%; height: auto; }
-.generic-review-source .ocr-region-preview { margin: 0 0 12px; padding: 12px; background: white; border: 1px solid #dce4e7; border-radius: 10px; }
-.generic-review-source .ocr-region-preview img { display: block; width: 100%; max-height: 150px; object-fit: contain; }
-.generic-review-source figcaption { margin-top: 8px; font-size: 13px; }
-.document-name-field { max-width: 560px; }
+/* The document name sits on the image's column, level with the results' toolbar. */
+.generic-review-source .document-name-field { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; margin-bottom: 12px; }
+.generic-review-source .document-name-field input { min-width: 0; padding: 9px 12px; }
+.generic-review-source .ocr-page-preview-frame { position: relative; }
+/* The whole page fits in the column without scrolling; pressing it opens it over the screen. */
+.generic-review-source .ocr-page-preview { display: flex; justify-content: center; overflow: hidden; border: 1px solid #dce4e7; background: #fff; border-radius: 12px; }
+.generic-review-source .ocr-page-preview-open { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.generic-review-source .ocr-page-preview img { display: block; width: auto; max-width: 100%; height: auto; max-height: calc(100vh - 236px); } /* fits below the title and the name field */
+.ocr-page-lightbox { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: #0f1d27d9; cursor: zoom-out; }
+.ocr-page-lightbox img { max-width: 100%; max-height: calc(100vh - 48px); object-fit: contain; background: #fff; box-shadow: 0 12px 40px #0006; }
+.ocr-page-lightbox-close { position: fixed; top: 14px; right: 16px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: #fffffff0; color: #263744; font-size: 24px; line-height: 1; cursor: pointer; }
+/* The selected cell's crop floats over the page image; nothing below it moves. */
+.generic-review-source .ocr-region-preview { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; margin: 0; padding: 8px 10px; background: #fffffff5; border: 1px solid #b9c8d0; border-radius: 10px; box-shadow: 0 6px 20px #17344a2e; pointer-events: none; }
+.generic-review-source .ocr-region-preview img { display: block; width: 100%; max-height: 130px; object-fit: contain; }
+.generic-review-source figcaption { margin-top: 6px; font-size: 12px; color: #4d6070; }
 @media (max-width: 1050px) {
   .generic-review-workspace { grid-template-columns: 1fr; }
   .generic-review-source { position: static; }
-  .generic-review-source .ocr-page-preview { max-height: 52vh; }
+  .generic-review-source .ocr-page-preview img { max-height: 70vh; }
 }
 
 /* Keep the direct drag-to-connect workflow; only its wire feedback changes. */
@@ -377,7 +384,6 @@
   border: 1px solid #d5dde5; border-radius: 8px; background: #fff; font-size: 12px;
 }
 .role-swatch i { flex: 0 0 auto; width: 13px; height: 13px; border-radius: 4px; border: 2px solid var(--swatch); background: color-mix(in srgb, var(--swatch) 22%, white); }
-.role-swatch kbd { margin-left: auto; padding: 0 4px; border: 1px solid #d5dde5; border-radius: 4px; background: #f6f8fa; color: #6b7785; font: 600 10px/1.5 inherit; }
 .layout-floating-tools .layout-commandbar .role-swatch:hover { border-color: var(--swatch); background: color-mix(in srgb, var(--swatch) 7%, white); }
 .layout-floating-tools .layout-commandbar .role-swatch.active {
   border-color: var(--swatch); background: color-mix(in srgb, var(--swatch) 14%, white);
@@ -391,3 +397,10 @@
 .layout-step-nav button:disabled { opacity: .35; }
 .layout-step-nav span { overflow: hidden; color: #33475b; font-size: 11px; font-weight: 700; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .layout-step-nav span b { margin-right: 4px; color: #6b7785; font-weight: 600; }
+/* 「内容を確定する」 without a name: the name field softly glows yellow (restarts on each press). */
+.ux-shell .generic-review-source .document-name-field.is-wanted input { border-color: #e0b400; outline: 2px solid #f2c200; outline-offset: 1px; animation: document-name-glow 1.4s ease-in-out 4; }
+@keyframes document-name-glow {
+  0%, 100% { box-shadow: 0 0 0 2px #ffd84d55; }
+  50% { box-shadow: 0 0 0 6px #ffd84daa, 0 0 22px 6px #ffe27acc; }
+}
+@media (prefers-reduced-motion: reduce) { .ux-shell .generic-review-source .document-name-field.is-wanted input { animation: none; box-shadow: 0 0 0 4px #ffd84d99; } }

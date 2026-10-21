@@ -200,7 +200,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
     <div className="ask-page" ref={pageRef}>
       <header className="ask-header">
         <div>
-          <h1>質問</h1>
+          <h1>チャット</h1>
           <p>確定した書類の内容を、ふだんの言葉で聞けます。答えには根拠の欄の画像が付きます。</p>
         </div>
         <div className="ask-header-actions">
@@ -251,7 +251,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
           )}
           {enabled && documents === null && !documentsError && <p className="ask-panel-lead">書類を読み込んでいます…</p>}
           {enabled && documents !== null && visible.length === 0 && (
-            <p className="ask-panel-lead">{allDocuments.length === 0 ? "確定済みの書類はまだありません。読み取り結果を確定すると質問できます。" : "条件に合う書類はありません。"}</p>
+            <p className="ask-panel-lead">{allDocuments.length === 0 ? "確定済みの書類はまだありません。読み取り結果を確定するとチャットで聞けます。" : "条件に合う書類はありません。"}</p>
           )}
           <ul className="ask-document-list">
             {visible.map((document) => {
@@ -290,7 +290,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
           )}
         </aside>
 
-        <section className="ask-chat" aria-label="質問と回答">
+        <section className="ask-chat" aria-label="チャット">
           <div className="ask-messages" ref={listRef} role="log" aria-live="polite">
             {turns.length === 0
               ? (

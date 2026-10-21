@@ -4,6 +4,7 @@ import { api, createIdempotencyKey } from "../api";
 import { TemplateNameEditor } from "./TemplateNameEditor";
 import { TemplateLoading } from "./TemplateLoading";
 import { usePreviewDialog } from "../hooks/usePreviewDialog";
+import { Spinner } from "./Spinner";
 
 const PAGE_IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/tiff";
 const PAGE_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
@@ -265,7 +266,7 @@ export function OcrPageBindings({ versionId, templateId, templateName, onRenameT
       <footer className="ocr-page-submit-bar" ref={submitBarRef}>
         <div><strong>{selectedCount === pageCount ? "全ページの画像を確認してください" : `残り ${pageCount - selectedCount} ページです`}</strong></div>
         <button type="button" className="primary" disabled={busy || accepted || !canSubmit}
-          onClick={() => void submit()}><FiPlay aria-hidden="true" />{accepted ? "全ページの読み取りを受け付けました" : busy ? "全ページを送信中…" : "全ページを読み取る"}</button>
+          onClick={() => void submit()}><FiPlay aria-hidden="true" />{accepted ? "全ページの読み取りを受け付けました" : busy ? <><Spinner />全ページを送信中…</> : "全ページを読み取る"}</button>
       </footer>
     </>}
     {referencePreview && (

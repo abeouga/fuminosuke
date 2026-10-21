@@ -1,5 +1,7 @@
 # OCR Safety Contract
 
+2026-10-21：**意図的なOCR contract変更**（§13.2新設）。印刷された選択肢の欄（`markRecognitionMode=automatic`/`manual`）を、チェックリスト・記号と同じく欄全体の切り抜きをproviderで読む方式に変えた。選択肢の文字を候補として渡し（`candidateType=mark_choice`）、丸・チェック・線・塗りつぶしのどれでも印の付いた選択肢を候補順に「・」で返す。候補に一致しない記入（例：選択肢の横に書いた文字）は値をそのまま `raw` に残して `uncertain`（`MARK_CHOICE_UNRESOLVED`）にし、人が確認する。選択肢ごとの画像差分（`mark_detector`）は送信の判断に使わず診断のみ、`manual` の「送らず人が選ぶ」は廃止。ページ別でも同じ扱いで受け付ける。prompt version `mapped-compact-v4`。mapping・crop・association・revision・確定・出力は不変。あわせてテンプレート作成時に、選択欄の印字をモデルで読んで選択肢を作る `POST …/layout/mark-options/suggest`（テンプレート画像だけを送る、保存しない）を追加。詳細は§13.2。
+
 2026-10-20：**意図的なOCR contract変更**（§12.4の対応範囲）。ページ別（印刷ページあり）のテンプレートで、記号の欄（`markRecognitionMode=symbol`、○◎×△等の候補から1つ）を受け付ける。チェックリストと同じく受付時の検証済みページ切り抜き全体を読み、候補の矩形は切り抜き全体（`job_page_service.page_config`）。従来は受付時に `PRINT_PAGE_CONFIG_UNSUPPORTED` で拒否していた設定だけが対象で、既存の文字・番号・チェックリストの対応関係・crop・mappingは不変。印刷された選択肢の画像差分判定（automatic/manual）と複合項目は引き続きページ別では未対応。あわせて、選択肢0件のチェック欄は枠全体の1つのチェック枠（`<markSetId>_box`）として読み取り設定を組み立てる（従来は有効化できなかった設定のみ）。記入欄のひも付け（writeInTargetPath）はチェックリスト以外では読み込み時に外す（同日、記号の欄も対象に追加：§13.1.1）。
 
 2026-10-19：**意図的なOCR contract変更**（§4.6新設）。テンプレートの欄・表の列ごとの読み取り設定（候補語・読み取り指示）。読み取り指示はその欄の要求に付けて送り、指示された整形を許す。候補語はモデルへ送らず、読み取った文字をサーバーが照合する（参考：同じ語なら表記をそろえる／寄せる：一番近い候補語にして確認の印、決まらなければ要確認）。受付snapshot `templateFieldHints` に固定し、受付済みjobは変えない。prompt version `mapped-compact-v3`。mapping・crop・association・revision・確定・出力は不変。詳細は§4.6。
@@ -1300,6 +1302,8 @@ metadataを追加しない。保存先がない場合だけ、重複しない「
 既存対応を保持し、mappedCellsに`automatic_sequence_number`と送信対象外を記録する。
 番号欄だけならprovider呼出しは0回。番号を含む要求では帳票全体画像もproviderへ送らない。
 ①や先頭ゼロ等の印刷表記は転記しない。レビュー・手動補正・確定は既存経路を使用する。
+
+2026-10-22：**意図的なOCR contract変更**（番号の数え方）。従来はテンプレート全体の番号欄をy、x順に数えていたため、左右に並ぶ2つの表の行が交互に番号付けされていた（繁殖台帳1021：左12,14…30、右11,13…29）。繰り返し部分の番号欄は表ごとに行順（recordGroupのorder）で1から数え、同じ見出し（parentLabelCellId）につないだ表は左の表から（高さが重ならなければ上の表から）続けて数える。表の外の番号欄は従来どおりy、x、cell ID順で別に数える（`LayoutService._sequence_numbers`）。番号は保存時にfield mappingへ固定し受付snapshotにも保持するため、受付済みjob・保存し直していない版は従来の番号のまま（「変更を反映する」だけでは数え直さない）。provider送信・crop・mappingId・targetPathは不変。
 旧行番号roleへ変換しない。model・応答schema・association・crop・出力先の対応は変更しない。
 以前保存したsequenceNumberのない番号OCR版・受付済みjobは従来の転記動作を保持する。
 新方式を適用するには編集用の版でレイアウトを保存し有効化する。既存jobへ後付けしない。
@@ -2011,6 +2015,19 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
 - 規則（`domain/checklist.flag_symbol_write_ins`）：OCR直後だけ、記入欄に文字があり記号が空欄（blank）なら、記号の欄を不確実（`WRITE_IN_WITHOUT_MARK`）にして確認メモを付ける。どの記号かは推測せず値は入れない。記号が読めている・記入欄が空のときは変更しない。補正保存では適用しない（人が空欄にした値を保持）。記入欄自体の値・crop・mapping・状態は変更しない。
 - 確認画面では、記号・チェック欄と記入欄が同じ項目名につながっていれば（保存した結び付け、又は旧テンプレートでは同じ項目名セルにつながる記号欄1つと文字の欄1つ）同じ行に「記号｜記入」として並べる。表示だけの変更で、保存値・確定・XLSX出力の位置は不変。
 - あわせて欄の出力名（mappingの `label`、OCR要求の `displayLabel` にも使う）は、つないだ項目名セルの文字→印字（結合した項目名）→表示名の順に取り、記号だけの名前とセルID等の内部IDを使わない（なければ「名称未設定の欄」）。出力名は下書きの保存時に作るため、受付済みjobと保存済みの有効版の設定は変わらない。確認画面のグループは、接続に見出しがなければ項目名セルの見出し（逆向きに引いた見出し線を含む）を使う（受付時の `reviewStructure` を作るときだけ、受付済みjobは不変）。
+
+### 13.2 印刷された選択肢の読み取り（2026-10-21・意図的な契約変更）
+
+利用者の要求「選択肢の設定が使いにくい」「選択肢なのに丸以外の記入がある場合も扱う」による変更。
+
+- 旧契約：`automatic` は選択肢ごとの矩形の画像差分（`mark_detector`）で判定し、判定できない欄だけ欄全体を `mark_choice` として送る。`manual` は送らず `MANUAL_CHOICE_REQUIRED` で人が選ぶ。
+- 新契約：`automatic`/`manual` とも、チェックリストと同じく欄全体の `alignedColor` crop を `candidateType=mark_choice`・候補＝選択肢の文字で必ず送る（`OcrRequestPreparer._mark_state` が UNCERTAIN を返し送信対象にする）。選択肢ごとの矩形は設定画面の表示とページ別の互換保存用で、画像差分の結果は `extraction.marks` の診断に残るだけで値に使わない。
+  - 指示（pool文と要求全体の追加文）：印刷された選択肢に丸・チェック・線・塗りつぶしのどれで印が付いていても選択とし、選ばれた文字を候補順に「・」で連結して `v` に返す。印がなければ `s=b`。印が曖昧、または選択肢ではない文字が書かれているときはその文字を `v` に入れて `s=u`。印刷文字だけから選ばない。
+  - 応答の扱いは従来の `mark_choice` と同じ（`deterministic_mapper._reading`）：候補に全部一致すれば候補順の「・」連結を値にし、一致しなければ `uncertain`・`MARK_CHOICE_UNRESOLVED` で `raw` に読んだ文字を残す。単一選択で2つ以上返れば `uncertain`（`ocr_response_finalization_service`）。
+  - ページ別（`job_page_service.page_config`）でも `automatic`/`manual` を受け付け、選択肢の矩形は切り抜き全体にする（従来は `PRINT_PAGE_CONFIG_UNSUPPORTED`）。
+- 変えないもの：mappingId・targetPath・sourceRegionId・boundingBox・crop、compact ID・association token・応答schema、記号（symbol）・チェックリストの扱い、補正・revision・確定・出力。prompt versionは `mapped-compact-v4`。受付済みjobは受付時のsnapshotで従来どおり。
+- テンプレート作成側（契約外・保存しない）：`POST /api/v1/template-versions/{id}/layout/mark-options/suggest`（`mark_option_suggestion_service`）が、選択欄の切り抜き（テンプレート画像のみ、記入済み書類は送らない）を GPT-6 Luna の Responses（json schema、reasoning low、`template.mark_options` で台帳予約）で読み、印字の選択肢の文字と位置を返す。見た目が同じ欄（内側の濃淡32×16のコサイン類似度0.85以上・寸法差25%以内）は1回の要求にまとめ、他の同じ欄へ同じ選択肢を提案する。画面がその結果を下書きに入れ、通常の保存経路で保存する。
+- 検証（複製 D:\llm-ocr-archive\mark-choice-20261021、繁殖台帳1021を有効化し元画像を実OCR、API 5回）：印刷された選択肢の欄20件（manual 15・automatic 5）が全件providerへ送られ、空欄10件は `blank`、印の付いた3件は候補と一致して `readable`（「双胎」）、選択肢の横に文字を書いた欄（「死亡」「ET」）と候補の表記違い（「流产」）は `uncertain` で文字を `raw` に残した。prompt version `mapped-compact-v4` を記録。画面での確認・XLSX出力は未確認。
 
 ## 14. テンプレートの線接続操作（2026-10-05・範囲訂正）
 

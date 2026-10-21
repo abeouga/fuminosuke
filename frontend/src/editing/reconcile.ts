@@ -19,6 +19,21 @@ export function substituteOwnReferences<T>(value: T, substitutions: Record<strin
   };
   return walk(value) as T;
 }
+/**
+ * Substitutions whose server ID is not already in the value. Once a save is reconciled the editor
+ * holds the server ID, so a local ID seen again (a new meaning or box that happens to get the same
+ * local ID) is a new entity; mapping it to the old server ID would duplicate that entity.
+ */
+export function liveSubstitutions(value: unknown, substitutions: Record<string, string>): Record<string, string> {
+  const present = new Set<string>();
+  const walk = (node: unknown, key = ""): void => {
+    if (typeof node === "string") { if (referenceKeys.has(key)) present.add(node); return; }
+    if (Array.isArray(node)) { node.forEach(item => walk(item, key)); return; }
+    if (isObject(node)) Object.entries(node).forEach(([k, v]) => walk(v, k));
+  };
+  walk(value);
+  return Object.fromEntries(Object.entries(substitutions).filter(([from, to]) => from === to || !present.has(to)));
+}
 export function reconcileOwnSave<T>(current: T, submitted: T, saved: T, substitutions: Record<string, string>): T {
   const ours = substituteOwnReferences(current, substitutions);
   const base = substituteOwnReferences(submitted, substitutions);

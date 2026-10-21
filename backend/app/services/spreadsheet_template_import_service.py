@@ -102,7 +102,7 @@ class SpreadsheetTemplateImportService:
                             status=409,
                             code="IDEMPOTENCY_KEY_REUSED",
                             title="Idempotency key was reused",
-                            detail="同じ送信識別子で異なるファイルは取り込めません。",
+                            detail="取り込みが重なりました。画面を再読み込みしてから、もう一度ファイルを選んでください。",
                         )
                     session.expunge(existing)
                     return existing
@@ -537,7 +537,7 @@ class SpreadsheetTemplateImportService:
             if paged.get("layoutSha256") != digest(version.layout_json):
                 raise AppError(status=409, code="PRINT_LAYOUT_STALE",
                                title="Print layout is stale",
-                               detail="矩形の編集後は印刷ページ設定を再計算・保存してください。")
+                               detail="枠を変更したため、印刷ページの設定を保存し直してください。")
             pages = "".join(
                 f'<section><p>Page {p["page"]}: {html.escape(p["range"])}</p>'
                 f'<img src="/api/v1/template-versions/{html.escape(version.id, quote=True)}'

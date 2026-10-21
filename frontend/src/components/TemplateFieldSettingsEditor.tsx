@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api";
 import type { Artifact, FieldMapping, LayoutDefinition, Template, TemplateFieldSetting, TemplateVersion } from "../types";
+import { Spinner } from "./Spinner";
 
 type FieldDraft = {
   keywordsText: string;
@@ -259,7 +260,7 @@ export function TemplateFieldSettingsEditor({
       {!loading && !loadFailed && (
         <div className="decision-bar sticky candidate-save-bar">
           <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>次に読み取る書類から使います。読み取り済みの書類は変わりません。</p></div>
-          <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button>
+          <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
         </div>
       )}
     </div>

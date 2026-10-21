@@ -111,7 +111,7 @@ class TemplateAuthoringService:
             except ValueError as error:
                 raise AppError(
                     status=422, code=str(error), title="Invalid physical row key",
-                    detail="行番号セルは対応する同じ行に一意に指定してください。",
+                    detail="行番号の枠は、各行に1つずつ設定してください。",
                 ) from error
             previous_path = version.config_relative_path
             previous_bytes = self.storage.read_bytes(previous_path)

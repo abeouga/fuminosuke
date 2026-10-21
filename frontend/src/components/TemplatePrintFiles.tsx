@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { FaFileExcel, FaFilePdf } from "react-icons/fa";
 import { api } from "../api";
+import { Spinner } from "./Spinner";
 
 export function TemplatePrintFiles({ versionId, revision, sourceImport = false, disabled = false, disabledReason }: {
   versionId: string; revision?: string; sourceImport?: boolean; disabled?: boolean; disabledReason?: string;
@@ -38,7 +39,7 @@ export function TemplatePrintFiles({ versionId, revision, sourceImport = false, 
         : "保存済みのページ境界を反映したPDF。変換環境によっては取得できません。")}
       onClick={() => void download("pdf")}><FaFilePdf aria-hidden="true" className="template-print-icon-pdf" />印刷用PDF</button>
     {disabledReason && <p className="muted">{disabledReason}</p>}
-    {busy && <span role="status">印刷用{busy.toUpperCase()}を生成中…</span>}
+    {busy && <span role="status"><Spinner />印刷用{busy.toUpperCase()}を生成中…</span>}
     {success && <p role="status">{success}</p>}
     {error && <p role="alert" className="error-box">{error}</p>}
   </div>;

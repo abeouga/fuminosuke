@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { ApiError, api } from "../api";
 import type { Job } from "../types";
+import { Spinner } from "./Spinner";
 
 type BoundaryPoint = { x: number; y: number };
 
@@ -123,7 +124,7 @@ export function DocumentBoundaryEditor({
       <p className="document-boundary-help">角の印はドラッグできます。選択中は矢印キー、Shift＋矢印キーでも調整できます。</p>
       {message && <p className="error-box" role="alert">{message}</p>}
       <button type="button" className="primary full" disabled={saving || submitted} onClick={() => void submit()}>
-        {submitted ? "再処理を開始しました" : saving ? "四隅を保存中…" : "この範囲で再処理する"}
+        {submitted ? "再処理を開始しました" : saving ? <><Spinner />四隅を保存中…</> : "この範囲で再処理する"}
       </button>
     </section>
   );

@@ -1,22 +1,24 @@
 import { privateLocalStorage } from "./auth/transport";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
-import { ToastViewport } from "./components/Toast";
+import { ToastViewport, showToast } from "./components/Toast";
 import { PendingJobs } from "./components/PendingJobs";
 import { JobPage } from "./pages/JobPage";
 const AskPage = lazy(() => import("./pages/AskPage").then(module => ({ default: module.AskPage })));
 const ShelfPage = lazy(() => import("./pages/ShelfPage").then(module => ({ default: module.ShelfPage })));
 import type { ShelfSelection } from "./pages/ShelfPage";
 import { ItemJoinEditorHost } from "./components/TemplateItemJoinEditor";
+import { DocumentNameEditorHost } from "./components/TemplateDocumentNameEditor";
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
+import { Spinner } from "./components/Spinner";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 
 type Page = "ocr" | "review" | "job" | "ask" | "shelf";
 type ReviewReturn = "ocr" | "ask" | "shelf";
-const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "質問へ戻る", shelf: "書類棚へ戻る" };
+const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "チャットへ戻る", shelf: "書類棚へ戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
 const RECENT_KEY = "document-ocr-recent-jobs";
@@ -36,7 +38,7 @@ export default function App() {
   const initialReviewEdit = initialSearchParams.get("edit") === "1";
   const initialView = initialSearchParams.get("view");
   const [page, setPage] = useState<Page>(
-    initialReviewJobId ? "review" : initialView === "ask" ? "ask" : initialView === "shelf" ? "shelf" : "ocr",
+    initialReviewJobId ? "review" : initialView === "ocr" ? "ocr" : initialView === "shelf" ? "shelf" : "ask",
   );
   const [health, setHealth] = useState<Health | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -194,8 +196,8 @@ export default function App() {
       url.searchParams.delete("job");
       url.searchParams.delete("field");
       url.searchParams.delete("edit");
-      // The question page and the shelf are kept in the address so a reload comes back to them.
-      if (nextPage === "ask" || nextPage === "shelf") url.searchParams.set("view", nextPage);
+      // The chat is the landing page (no `view`); the reading page and the shelf are kept in the address so a reload comes back to them.
+      if (nextPage === "ocr" || nextPage === "shelf") url.searchParams.set("view", nextPage);
       else url.searchParams.delete("view");
       if (nextPage === "shelf" && shelfSelection.jobId) url.searchParams.set("doc", shelfSelection.jobId);
       else url.searchParams.delete("doc");
@@ -280,14 +282,14 @@ export default function App() {
   return (
     <div className="app-shell ux-shell deploy-shell">
       <aside className="side-nav">
-        <button className="brand" onClick={openReadingRoot} aria-label="読み取り">
+        <button className="brand" onClick={() => navigateTo("ask")} aria-label="チャット">
           <span aria-hidden="true"><img src="/favicon.svg" alt="" /></span><div><strong>文之助</strong></div>
         </button>
         <span className="beta-badge">ベータ</span>
         <nav id="main-menu" aria-label="メインメニュー">
+          <NavButton active={page === "ask" || (page === "review" && reviewReturn === "ask")} icon="ask" label="チャット" onClick={() => navigateTo("ask")} />
           <NavButton active={page === "ocr" || (page === "review" && reviewReturn === "ocr")} icon="ocr" label="読み取り" onClick={openReadingRoot} />
           <NavButton active={page === "shelf" || (page === "review" && reviewReturn === "shelf")} icon="shelf" label="書類棚" onClick={() => navigateTo("shelf")} />
-          <NavButton active={page === "ask" || (page === "review" && reviewReturn === "ask")} icon="ask" label="質問" onClick={() => navigateTo("ask")} />
         </nav>
         <div className="side-footer" role="status">
           <span className={health ? "status-dot ok" : "status-dot"} />
@@ -308,7 +310,7 @@ export default function App() {
               disabled={templatesLoading}
               onClick={retryTemplates}
             >
-              {templatesLoading ? "再取得中…" : "テンプレートを再取得"}
+              {templatesLoading ? <><Spinner />再取得中…</> : "テンプレートを再取得"}
             </button>
           </aside>
         )}
@@ -325,7 +327,14 @@ export default function App() {
           onTemplateNavigationGuardChange={updateTemplateGuard}
           templateSelectionFooter={<PendingJobs health={health} jobs={jobs} onOpenJob={openJob} />}
         />}
-        {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={() => { void refreshJobs(); navigateTo(reviewReturn); }} />}
+        {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={() => { void refreshJobs(); navigateTo(reviewReturn); }}
+          onConfirmed={({ templateId, documentName }) => {
+            // A confirmed document goes on the shelf: show its template's documents (newest first).
+            void refreshJobs();
+            updateShelfSelection({ templateId: templateId || null, jobId: null, query: "" });
+            applyNavigation("shelf");
+            showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました` });
+          }} />}
         {page === "shelf" && <ShelfPage templateNames={templateNames} selection={shelfSelection} onSelectionChange={updateShelfSelection} onOpenReview={(id, field) => openReview(id, true, { returnTo: "shelf", field })} />}
         {page === "ask" && <AskPage onOpenReview={(id, field) => openReview(id, true, { returnTo: "ask", field })} />}
         {page === "job" && monitoredJobId && <JobPage
@@ -339,6 +348,7 @@ export default function App() {
       </main>
       <ToastViewport />
       <ItemJoinEditorHost />
+      <DocumentNameEditorHost />
       {pendingNavigation && (
         <NavigationConfirmDialog
           guard={pendingNavigation.guard}

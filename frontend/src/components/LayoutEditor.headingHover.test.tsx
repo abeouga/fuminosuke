@@ -133,7 +133,7 @@ test("hides every canvas rectangle while using the auxiliary eraser without chan
     onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="classify" />);
   fireEvent.click(screen.getByText("補助操作"));
   const erase = screen.getByRole("button", { name: "消しゴム" });
-  const hide = screen.getByRole("button", { name: "すべての矩形を非表示" });
+  const hide = screen.getByRole("button", { name: "すべての枠を非表示" });
   const element = canvas();
   expect(erase.closest("details")).toHaveAttribute("open");
   expect(strokes).toHaveBeenCalled();
@@ -151,12 +151,12 @@ test("hides every canvas rectangle while using the auxiliary eraser without chan
   expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   expect(onSave).not.toHaveBeenCalled();
 
-  fireEvent.click(screen.getByRole("button", { name: "すべての矩形を表示" }));
+  fireEvent.click(screen.getByRole("button", { name: "すべての枠を表示" }));
   expect(strokes).toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "すべての矩形を非表示" }))
+  expect(screen.getByRole("button", { name: "すべての枠を非表示" }))
     .toHaveAttribute("aria-pressed", "false");
 
-  fireEvent.click(screen.getByRole("button", { name: "すべての矩形を非表示" }));
+  fireEvent.click(screen.getByRole("button", { name: "すべての枠を非表示" }));
   strokes.mockClear();
   view.rerender(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
     onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="records" />);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -44,6 +45,9 @@ def build_review_display_structure(
     }
 
     relations_by_input: dict[str, list[Any]] = {}
+    pool_labels = (
+        {entry.target_path: entry.label for entry in layout.label_pool} if layout else {}
+    )
     if layout is not None:
         for relation in layout.relations:
             relations_by_input.setdefault(relation.input_cell_id, []).append(relation)
@@ -131,9 +135,26 @@ def build_review_display_structure(
                             else f"{base_column_id}:field:{mapping_index + 1}"
                         ),
                         "label": (
-                            _cell_label(cells.get(label_cell_id or ""))
+                            (
+                                _cell_label(cells.get(label_cell_id or ""))
+                                or _non_empty_text(
+                                    cells[label_cell_id].field_label
+                                    if label_cell_id in cells
+                                    else None
+                                )
+                            )
                             if mapping_index == 0
                             else None
+                        )
+                        or _column_name(
+                            [
+                                pool_labels.get(relation.target_path, "")
+                                for group in groups
+                                if index < len(group.input_cell_ids)
+                                for relation in relations_by_input.get(
+                                    group.input_cell_ids[index], []
+                                )[:1]
+                            ]
                         )
                         or _mapping_label(mappings, first_field_id)
                         or f"列 {index + 1}",
@@ -169,7 +190,7 @@ def build_review_display_structure(
             record_sections.append(
                 {
                     "id": section.id,
-                    "title": section.resolved_display_name,
+                    "title": section.name_with_heading(cells),
                     "collectionPath": section.collection_path,
                     "columns": columns,
                     "rows": rows,
@@ -317,6 +338,17 @@ def _mapping_label(mappings: list[dict[str, Any]], mapping_id: str | None) -> st
         return None
     mapping = next((item for item in mappings if item.get("mappingId") == mapping_id), None)
     return _non_empty_text(mapping.get("label")) if mapping else None
+
+
+def _column_name(names: list[str]) -> str | None:
+    """A column named by its rows' meanings: 「備考 1行目」…→「備考」, 「番号2」…→「番号」."""
+    names = [name.strip() for name in names if name and name.strip()]
+    rows = {re.sub(r"\s*\d+行目$", "", name).strip() for name in names}
+    # Trailing numbers only tell rows apart when the rows differ (「番号」「番号2」…).
+    bases = rows if len(rows) <= 1 else {re.sub(r"\d+$", "", name).strip() for name in rows}
+    if len(bases) == 1 and (base := next(iter(bases))) and any(ch.isalnum() for ch in base):
+        return base
+    return None
 
 
 def _cell_label(cell: LayoutCell | None) -> str | None:

@@ -18,22 +18,44 @@
 .shelf-empty-card>svg{flex:none;width:28px;height:28px;color:var(--ui-primary)}
 .shelf-empty-card p{margin:4px 0 0;color:var(--ui-text-secondary);font-size:13px}
 
-.shelf-layout{display:grid;grid-template-columns:minmax(190px,230px) minmax(0,1fr);gap:18px;align-items:start}
 .shelf-main{min-width:0;scroll-margin-top:12px}
-.shelf-layout.reading{grid-template-columns:minmax(0,1fr)}
 
-/* フォルダ */
-.shelf-folders{position:sticky;top:16px;max-height:calc(100dvh - 32px);overflow-y:auto;display:grid;gap:2px;padding:8px;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface)}
-.shelf-folders button{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:9px;min-height:40px;padding:8px 10px;border:0;border-radius:9px;background:transparent;color:var(--ui-text);font-size:13px;text-align:left;cursor:pointer}
-.shelf-folders button>svg{color:#c08a2e}
-.shelf-folders button span{overflow-wrap:anywhere;line-height:1.4}
-.shelf-folders button small{min-width:22px;padding:1px 6px;border-radius:999px;background:var(--ui-surface-muted);color:var(--ui-text-muted);font-size:12px;text-align:center}
-.shelf-folders button:hover{background:var(--ui-surface-muted)}
-.shelf-folders button.active{background:var(--ui-primary-soft);color:var(--ui-primary-dark);font-weight:700}
-.shelf-folders button.active small{background:#fff;color:var(--ui-primary-dark)}
+/* テンプレート（フォルダ）のカード：最新の書類を紙の束のように見せる */
+.shelf-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px;margin:0;padding:0;list-style:none}
+.shelf-folder-card{display:flex;flex-direction:column;width:100%;height:100%;padding:0;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface);color:var(--ui-text);text-align:left;overflow:hidden;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
+.shelf-folder-card:hover{border-color:var(--ui-primary);box-shadow:0 12px 28px #1d35451f;transform:translateY(-2px)}
+.shelf-folder-card:focus-visible{outline:3px solid var(--ui-primary-soft);border-color:var(--ui-primary)}
+.shelf-folder-thumb{position:relative;display:block;height:190px;background:linear-gradient(160deg,#eef3f6,#dfe7ec);overflow:hidden}
+.shelf-folder-sheet{position:absolute;left:50%;top:18px;width:58%;height:200px;border-radius:4px;background:#fff;box-shadow:0 2px 8px #1d354533;transform:translateX(-50%)}
+.shelf-folder-sheet.back{transform:translateX(-50%) translate(9px,-5px) rotate(4deg);background:#f7f9fa}
+.shelf-folder-sheet.backmost{transform:translateX(-50%) translate(-9px,-3px) rotate(-5deg);background:#f1f4f6}
+.shelf-folder-sheet.front{display:grid;place-items:center;overflow:hidden}
+.shelf-folder-sheet.front img{width:100%;height:100%;object-fit:cover;object-position:top center}
+.shelf-folder-sheet.front>svg{width:36px;height:36px;color:var(--ui-text-muted)}
+.shelf-folder-card:hover .shelf-folder-sheet.back{transform:translateX(-50%) translate(14px,-7px) rotate(6deg)}
+.shelf-folder-card:hover .shelf-folder-sheet.backmost{transform:translateX(-50%) translate(-14px,-4px) rotate(-7deg)}
+.shelf-folder-sheet{transition:transform .2s}
+.shelf-folder-body{display:grid;gap:6px;padding:12px 14px 14px;border-top:1px solid var(--ui-border)}
+.shelf-folder-body strong{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.shelf-folder-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--ui-text-muted);font-size:12px}
+.shelf-folder-count{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;background:var(--ui-primary-soft);color:var(--ui-primary-dark);font-weight:700}
+.shelf-folder-count svg{width:13px;height:13px}
+@media (prefers-reduced-motion:reduce){.shelf-folder-card,.shelf-folder-sheet{transition:none}}
+
+/* 選んで削除 */
+.shelf-up{gap:6px;margin-left:-8px}
+.shelf-choose-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+.shelf-choose-actions .compact{gap:6px}
+.shelf-chosen-count{color:var(--ui-text);font-size:13px;font-weight:700}
+.shelf-card.choosing:hover{transform:none}
+.shelf-card.chosen{border-color:var(--ui-primary);box-shadow:0 0 0 2px var(--ui-primary)}
+.shelf-card-check{position:absolute;top:8px;left:8px;display:grid;place-items:center;width:24px;height:24px;border:2px solid #fff;border-radius:6px;background:#17243166;color:#fff;box-shadow:0 1px 4px #0005}
+.shelf-card.chosen .shelf-card-check{background:var(--ui-primary)}
+.shelf-card-check svg{width:16px;height:16px}
+.shelf-delete-list{margin:0 0 14px;padding-left:20px;color:var(--ui-text-secondary);font-size:13px;line-height:1.7}
 
 /* 書類カード */
-.shelf-main-head{display:flex;align-items:baseline;gap:10px;margin:2px 0 12px}
+.shelf-main-head{display:flex;align-items:center;gap:10px;margin:2px 0 12px;flex-wrap:wrap}
 .shelf-main-head h2{margin:0;color:var(--ui-text);font-size:18px;font-weight:800;overflow-wrap:anywhere}
 .shelf-main-head span{color:var(--ui-text-muted);font-size:13px}
 .shelf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;margin:0;padding:0;list-style:none}
@@ -125,15 +147,13 @@
   .shelf-viewer-note{padding:6px 10px;font-size:12px}
   .shelf-value{scroll-margin-top:calc(40dvh + 150px)}
 }
-@media (max-width:860px){
-  .shelf-layout{grid-template-columns:minmax(0,1fr)}
-  .shelf-folders{position:static;max-height:none;display:flex;gap:6px;overflow-x:auto;padding:8px}
-  .shelf-folders button{flex:none;grid-template-columns:18px auto auto;max-width:78vw;border:1px solid var(--ui-border)}
-}
 @media (max-width:640px){
   .shelf-header-actions,.shelf-search{width:100%}
   .shelf-header-actions .shelf-search{flex:1;width:auto}
   .shelf-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .shelf-folder-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .shelf-folder-thumb{height:140px}
+  .shelf-folder-sheet{top:12px;height:150px}
   .shelf-card-thumb{padding:8px 8px 0}
   .shelf-card-body{padding:8px 10px 10px}
   .shelf-document-head{grid-template-columns:minmax(0,1fr);padding:12px 14px}

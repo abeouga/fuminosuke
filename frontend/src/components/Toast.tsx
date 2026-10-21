@@ -10,6 +10,8 @@ type ToastInput = {
   duration?: number;
   actionLabel?: string;
   onAction?: () => void;
+  /** A small note in the corner that does not cover the work (saved, a failed save…). */
+  quiet?: boolean;
 };
 
 type ToastItem = ToastInput & { id: string };
@@ -25,10 +27,13 @@ export function ToastViewport() {
   const [items, setItems] = useState<ToastItem[]>([]);
   const timers = useRef(new Map<string, number>());
 
-  const dismiss = (id: string) => {
+  const dismissTimer = (id: string) => {
     const timer = timers.current.get(id);
     if (timer !== undefined) window.clearTimeout(timer);
     timers.current.delete(id);
+  };
+  const dismiss = (id: string) => {
+    dismissTimer(id);
     setItems((current) => current.filter((item) => item.id !== id));
   };
 
@@ -39,8 +44,13 @@ export function ToastViewport() {
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random()}`;
       const item = { ...detail, id };
-      setItems((current) => [...current.slice(-2), item]);
-      const timer = window.setTimeout(() => dismiss(id), detail.duration ?? 5200);
+      // The same quiet note again (each autosave) replaces the previous one instead of stacking.
+      const repeated = (other: ToastItem) => Boolean(detail.quiet && other.quiet && other.title === detail.title && other.message === detail.message);
+      setItems((current) => {
+        for (const other of current) if (repeated(other)) dismissTimer(other.id);
+        return [...current.filter((other) => !repeated(other)).slice(-2), item];
+      });
+      const timer = window.setTimeout(() => dismiss(id), detail.duration ?? (detail.quiet ? (detail.tone === "error" ? 8000 : 2400) : 5200));
       timers.current.set(id, timer);
     };
     window.addEventListener(TOAST_EVENT, receive);
@@ -51,13 +61,11 @@ export function ToastViewport() {
     };
   }, []);
 
-  return (
-    <div className="toast-viewport">
-      {items.map((item) => (
+  const card = (item: ToastItem) => (
         <section
           aria-atomic="true"
           aria-live={item.tone === "error" ? "assertive" : "polite"}
-          className={`toast-card ${item.tone ?? "info"}`}
+          className={`toast-card ${item.tone ?? "info"}${item.quiet ? " quiet" : ""}`}
           key={item.id}
           role={item.tone === "error" ? "alert" : "status"}
         >
@@ -87,7 +95,11 @@ export function ToastViewport() {
             ×
           </button>
         </section>
-      ))}
-    </div>
+  );
+  return (
+    <>
+      <div className="toast-viewport">{items.filter((item) => !item.quiet).map(card)}</div>
+      <div className="toast-viewport quiet">{items.filter((item) => item.quiet).map(card)}</div>
+    </>
   );
 }

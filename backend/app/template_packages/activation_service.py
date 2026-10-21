@@ -67,7 +67,7 @@ class TemplatePackageActivationService:
                         status=409,
                         code="TEMPLATE_PACKAGE_INSTALLATION_DAMAGED",
                         title="Template package installation is damaged",
-                        detail="取り込み済みtemplateのlocal mappingが壊れています。",
+                        detail="取り込んだテンプレートの設定が壊れています。テンプレートを取り込み直してください。",
                     )
                 require_revision(version, expected_revision)
                 if version.template_id != template.id:
@@ -463,7 +463,7 @@ class TemplatePackageActivationService:
             status=409,
             code="TEMPLATE_PACKAGE_INSTALLATION_DAMAGED",
             title="Template package installation is damaged",
-            detail="取り込み済みtemplateのcandidate mappingが不正です。",
+            detail="取り込んだテンプレートの設定が壊れています。テンプレートを取り込み直してください。",
         )
 
     @staticmethod

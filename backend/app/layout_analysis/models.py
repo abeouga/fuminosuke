@@ -302,6 +302,17 @@ class LayoutRecordSection(LayoutModel):
     def resolved_display_name(self) -> str:
         return (self.display_name or "").strip() or self.title.strip() or "名称未設定の繰り返し表"
 
+    def name_with_heading(self, cells: dict[str, LayoutCell]) -> str:
+        """The table's name: one typed for it, else the heading it is connected to (売却子牛一覧),
+        else the title given when it was made (often the placeholder 「明細」)."""
+        heading = cells.get(self.parent_label_cell_id or "")
+        if not (self.display_name or "").strip() and heading is not None:
+            for value in (heading.text, heading.printed_label_text, heading.field_label):
+                text = (value or "").strip()
+                if any(ch.isalnum() for ch in text):
+                    return text[:100]
+        return self.resolved_display_name
+
 
 class LayoutRecordGroup(LayoutModel):
     id: str = Field(min_length=1, max_length=120)

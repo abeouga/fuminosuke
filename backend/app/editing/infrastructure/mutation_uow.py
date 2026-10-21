@@ -143,7 +143,7 @@ class BusinessMutationUnitOfWork:
                     or (record.inverse_json or {}).get("contractVersion") != "editing.v2"
                 ):
                     raise reject(
-                        "UNDO_UNAVAILABLE", "現在の保存世代で直前のv2変更だけを取り消せます。", 409
+                        "UNDO_UNAVAILABLE", "取り消せる変更がありません。", 409
                     )
                 assert record.inverse_json is not None
                 plan = Plan(

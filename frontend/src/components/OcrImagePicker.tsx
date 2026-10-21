@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { prepareUploadImage } from "./phonePhoto";
+import { Spinner } from "./Spinner";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/tiff";
 const LABEL = "帳票画像を選択またはドロップ";
@@ -76,7 +77,7 @@ export function OcrImagePicker({ file, onChange, allowXlsx = false }: {
         カメラで撮影
       </label>}
       {phoneDevice && <p className="ocr-photo-tips">書類全体が写るように、なるべく真上から撮影してください。少し暗い・斜め・傾いた写真でも読み取れます。</p>}
-      {preparing && <p className="ocr-photo-tips" role="status">画像を準備しています…</p>}
+      {preparing && <p className="ocr-photo-tips" role="status"><Spinner />画像を準備しています…</p>}
       {file && <small className="ocr-image-name" title={file.name}>{file.name}</small>}
       {error && <p className="file-picker-error" role="alert">{error}</p>}
     </div>

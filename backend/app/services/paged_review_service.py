@@ -17,7 +17,7 @@ from app.domain.paged_document_metadata import proposed_name
 from app.domain.paged_review import PageConfirmation, PageCorrection, PageReopen
 from app.domain.print_layout import print_error
 from app.domain.spreadsheet_output_name import normalize_spreadsheet_output_name
-from app.domain.template_config import TemplateConfig
+from app.domain.template_config import DocumentNameConfig, TemplateConfig
 from app.ocr.deterministic_mapper import assign_mapped_reading, get_mapped_reading
 from app.services.paged_document_snapshot import load_document_snapshot
 from app.services.paged_workbook import ADAPTER as OUTPUT_ADAPTER
@@ -184,7 +184,8 @@ class PagedReviewService:
 
     @staticmethod
     def _response(
-        job: ProcessingJob, pages: list[dict[str, Any]], stored: PagedReview
+        job: ProcessingJob, pages: list[dict[str, Any]], stored: PagedReview,
+        session: Session | None = None,
     ) -> dict[str, Any]:
         result_pages = []
         readings_by_path = {}
@@ -242,6 +243,14 @@ class PagedReviewService:
         metadata = {}
         if snapshot.get("documentMetadataAdapter"):
             config = TemplateConfig.model_validate(snapshot["config"])
+            # A rule changed after the template was made wins; unknown paths give no proposal.
+            from app.services.template_document_name_service import document_name_rule
+
+            changed = document_name_rule(session, job.template_version_id) if session else None
+            if changed:
+                config = config.model_copy(
+                    update={"document_name": DocumentNameConfig.model_validate(changed)}
+                )
             metadata = {
                 "documentMetadata": {
                     "identityFields": identity_fields,
@@ -267,7 +276,7 @@ class PagedReviewService:
 
     def get(self, job_id: str) -> dict[str, Any]:
         with self.database.session() as session:
-            return self._response(*self._load(session, job_id))
+            return self._response(*self._load(session, job_id), session)
 
     def correct(self, job_id: str, page_id: str, correction: PageCorrection) -> dict[str, Any]:
         with self.database.session() as session:
@@ -345,7 +354,7 @@ class PagedReviewService:
             )
             session.commit()
             session.refresh(stored)
-            return self._response(job, pages, stored)
+            return self._response(job, pages, stored, session)
 
     def confirm(self, job_id: str, body: PageConfirmation) -> dict[str, Any]:
         with self.database.session() as session:
@@ -395,7 +404,7 @@ class PagedReviewService:
             job.status = "CONFIRMED"
             job.confirmed_at = now
             session.commit()
-            return self._response(job, pages, stored)
+            return self._response(job, pages, stored, session)
 
     def reopen(self, job_id: str, body: PageReopen) -> dict[str, Any]:
         with self.database.session() as session:
@@ -410,7 +419,7 @@ class PagedReviewService:
             job.status = "REVIEW_REQUIRED"
             job.confirmed_at = None
             session.commit()
-            return self._response(job, pages, stored)
+            return self._response(job, pages, stored, session)
 
     @staticmethod
     def _require_revision(stored: PagedReview, base_revision: int) -> None:

@@ -8,7 +8,9 @@ import type { Template } from "../types";
 import { templatePreviewKey, type useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
-import { openItemJoinEditor } from "./TemplateItemJoinEditor";
+import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "./TemplateItemJoinEditor";
+import { openDocumentNameEditor } from "./TemplateDocumentNameEditor";
+import { Spinner } from "./Spinner";
 
 export type ReadingTemplateCard = {
   template: Template;
@@ -103,6 +105,7 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                             onStructure={() => openTemplateWorkspace("manage", editVersion.id)}
                             onFields={() => openTemplateWorkspace("manage", version.id, "fields")}
                             onJoins={() => openItemJoinEditor(template.id, version.id)}
+                            onDocumentName={() => openDocumentNameEditor(template.id, template.name)}
                           />
                           <button
                             type="button"
@@ -112,7 +115,7 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                             onClick={() => void deleteTemplate(template)}
                           >
                             {!deleting && <FiTrash2 aria-hidden="true" focusable="false" />}
-                            {deleting ? "削除中…" : "削除"}
+                            {deleting ? <><Spinner />削除中…</> : "削除"}
                           </button>
                         </span>}
                       </article>
@@ -135,12 +138,13 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
 }
 
 /** 「編集」: what to edit — the form's structure, the reading settings, or how items are shown. */
-function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins }: {
+function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins, onDocumentName }: {
   templateName: string;
   disabled: boolean;
   onStructure: () => void;
   onFields: () => void;
   onJoins: () => void;
+  onDocumentName: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -182,10 +186,14 @@ function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoin
             <strong>項目の読み取り設定</strong>
             <small>欄ごとに候補語や読み方の指示を付けます。</small>
           </button>
-          <button type="button" role="menuitem" onClick={choose(onJoins)}>
+          <button type="button" role="menuitem" onClick={choose(onDocumentName)}>
+            <strong>ファイル名の付け方</strong>
+            <small>書類名に入れる欄と、前後に付ける文字を変えます。</small>
+          </button>
+          {ITEM_JOIN_EDITING_VISIBLE && <button type="button" role="menuitem" onClick={choose(onJoins)}>
             <strong>項目のまとめ方・順番</strong>
             <small>住所や日付など、ばらばらの欄を1つの値として表示します。</small>
-          </button>
+          </button>}
         </div>
       )}
     </div>

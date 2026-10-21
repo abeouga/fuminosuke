@@ -215,11 +215,9 @@ class LayoutDetector:
             self._cell(index, rectangle, gray, line_mask, text_regions)
             for index, rectangle in enumerate(rectangles, start=1)
         ]
+        # Without PaddleOCR the label candidates come from text density; this is recorded in
+        # detector/ocr_available, not shown to the user as a warning.
         warnings: list[str] = []
-        if not ocr_available:
-            warnings.append(
-                "PADDLEOCR_NOT_AVAILABLE: ラベル候補はOpenCV文字密度で仮判定しています。"
-            )
         if not cells:
             warnings.append("NO_RULED_CELLS_DETECTED")
         return (

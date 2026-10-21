@@ -1,6 +1,7 @@
 import { FiPlus, FiRefreshCw } from "react-icons/fi";
 import type { Job } from "../types";
 import { JobProgress } from "./JobProgress";
+import { Spinner } from "./Spinner";
 
 const PHOTO_ERRORS = new Set(["LOW_REGISTRATION_CONFIDENCE", "DOCUMENT_BOUNDARY_NOT_FOUND"]);
 
@@ -33,7 +34,7 @@ export function OcrJobProgressPanel({ job, connectionLost, canRetry, retryBusy, 
                       : "受付時の画像と設定を使って、処理を再試行します。"}
                   </p>
                   <button className="primary" type="button" disabled={retryBusy || retryPending} onClick={() => void retryJob()}>
-                    <FiRefreshCw aria-hidden="true" />{retryBusy || retryPending ? "再試行を開始中…" : job.error?.code === "MULTI_PAGE_PARTIAL_FAILURE"
+                    <FiRefreshCw aria-hidden="true" />{retryBusy || retryPending ? <><Spinner />再試行を開始中…</> : job.error?.code === "MULTI_PAGE_PARTIAL_FAILURE"
                       ? "失敗したページを再試行"
                       : "処理を再試行"}
                   </button>

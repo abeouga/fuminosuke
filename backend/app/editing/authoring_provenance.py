@@ -99,7 +99,9 @@ def touches(
                 or any(t.entity_id == entity and t.kind == "cell" for t in catalog.targets.values())
             )
         ):
-            raise reject("INVALID_ARGUMENT", "手動変更の項目が下書きにありません。", 422)
+            # An entity drawn or joined and then removed before this save has nothing left to
+            # protect; refusing it would stop every later save of the editor.
+            continue
         result.add(item)
     return result
 

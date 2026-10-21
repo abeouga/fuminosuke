@@ -21,6 +21,7 @@ import {
   ReviewDraftBoundary,
   ReviewTableSection,
   reviewEntryContext,
+  sectionItemPaths,
   type ReadingEntry,
   type ReviewDisplayModel,
   type ReviewDisplayRecordSection,
@@ -29,13 +30,17 @@ import {
 import type { PageFieldEdit, PagedReviewResult } from "../pagedReview";
 import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
+import { showToast } from "../components/Toast";
 import type { FieldReading, OcrFieldPreview } from "../types";
+import { Spinner } from "../components/Spinner";
 
 type Drafts = Record<string, Record<string, PageFieldEdit>>;
 
-export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templateNames = {}, closeLabel = "ホームへ" }: {
+export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, templateNames = {}, closeLabel = "ホームへ" }: {
   jobId: string;
   onClose: () => void;
+  /** After all pages are confirmed (the app then shows the document shelf). */
+  onConfirmed?: (confirmed: { templateId: string; documentName: string }) => void;
   closeLabel?: string;
   onNavigationGuardChange?: (dirty: boolean) => void;
   templateNames?: Record<string, string>;
@@ -63,6 +68,13 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
   const inFlight = useRef(false);
   const downloading = useRef(false);
   const dirty = Object.values(drafts).some((fields) => Object.keys(fields).length > 0);
+  // Once the pages are shown, a failure is a small corner notification instead of a box above them.
+  const shown = Boolean(result);
+  useEffect(() => {
+    if (!error || !shown) return;
+    showToast({ tone: "error", quiet: true, title: error });
+    setError(null);
+  }, [error, shown]);
   const unsaved = dirty || Boolean(result && !result.confirmed && documentName !== (result.documentName ?? ""));
   useEffect(() => {
     const current = ++generation.current;
@@ -74,7 +86,8 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
     void api.pageReview(jobId).then((next) => {
       if (generation.current === current) {
         setResult(next); setPageId(next.pages[0]?.pageId ?? null);
-        setDocumentName(next.documentName ?? next.documentMetadata?.proposedName ?? "");
+        // Starts empty; the name is typed (or taken from the set items with the button below).
+        setDocumentName(next.documentName ?? "");
       }
     }).catch((reason) => {
       if (generation.current === current) setError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
@@ -152,7 +165,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
   const joinContext = useMemo(() => ({
     byPath: joinByPath(itemJoins),
         orders: displayOrders(itemJoins),
-    configure: templateId ? () => openItemJoinEditor(templateId) : undefined,
+    configure: templateId ? (paths: string[], anchor: HTMLElement) => openItemJoinEditor(templateId, null, { paths, anchor }) : undefined,
   }), [itemJoins, templateId]);
   const renameItem = async (entry: ReadingEntry, name: string) => {
     if (!templateId) return;
@@ -302,6 +315,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
         : await api.reopenPages(jobId, result.revision);
       if (generation.current !== current) return;
       setResult(next); setDocumentName(next.documentName ?? ""); setReviewed({});
+      if (action === "confirm" && next.confirmed && onConfirmed) onConfirmed({ templateId: next.pages[0]?.result.templateId ?? "", documentName: next.documentName ?? documentName });
     } catch (reason) {
       if (generation.current !== current) return;
       setError(reason instanceof Error ? reason.message : "状態を変更できませんでした。");
@@ -335,15 +349,15 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
     }
   }
   return <ReviewDraftBoundary onDirtyChange={setInlineDirty}><div className="page-stack review-page">
-    <header className="page-header split">
-      <div><span className="eyebrow">OCR REVIEW · REVISION {result?.revision ?? "-"}</span><h1>読み取り結果を確認</h1>
+    <header className="page-header split has-back">
+      <button className="ghost page-back" onClick={onClose}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
+      <div><h1>読み取り結果を確認</h1>
         <p>全ページの画像と読み取り結果を確認・修正してから確定します。確定後にXLSXを取得できます。</p></div>
-      <button className="ghost" onClick={onClose}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
     </header>
     {error && <p className="error-box" role="alert">{error}</p>}
     {(needsRefresh || (!result && error)) && <button className="secondary" disabled={busy}
       onClick={() => void refresh()}><FiRefreshCw aria-hidden="true" />編集内容を保持して最新結果を取得</button>}
-    {!result && !error && <p role="status">読み込み中…</p>}
+    {!result && !error && <p role="status"><Spinner />読み込み中…</p>}
     {result && <>
       <aside className="notice compact"><strong>使用テンプレート</strong><span>
         {templateNames[result.pages[0]?.result.templateId ?? ""] ?? "読み取り時のテンプレート"} · 全{result.pages.length}ページ
@@ -418,7 +432,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
               />
             ))}
             {displayModel.parentSections.map((section) => (
-              <ReviewTableSection key={section.id} title={section.title}>
+              <ReviewTableSection key={section.id} title={section.title} joinPaths={sectionItemPaths(section.entries)}>
                 <KeyValueReviewTable
                   entries={section.entries}
                   selectedPath={selectedEntry?.path ?? null}
@@ -496,10 +510,10 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
           <button className="secondary" disabled={busy || downloadBusy || needsRefresh}
             onClick={() => void changeState("reopen")}><FiEdit3 aria-hidden="true" />再編集する</button>
           {result.outputAvailable && <button className="primary" disabled={busy || downloadBusy || needsRefresh}
-            onClick={() => void download()}><FiDownload aria-hidden="true" />{downloadBusy ? "XLSXを取得中…" : "全ページの記入済みXLSXを取得"}</button>}
+            onClick={() => void download()}><FiDownload aria-hidden="true" />{downloadBusy ? <><Spinner />XLSXを取得中…</> : "全ページの記入済みXLSXを取得"}</button>}
         </div> : <>
           <button className="secondary" disabled={busy || needsRefresh || !page || !Object.keys(drafts[page.pageId] ?? {}).length}
-            onClick={() => void save()}><FiSave aria-hidden="true" />{busy ? "保存処理中…" : "修正を保存"}</button>
+            onClick={() => void save()}><FiSave aria-hidden="true" />{busy ? <><Spinner />保存処理中…</> : "修正を保存"}</button>
           <button className="primary" disabled={busy || needsRefresh || dirty || !documentName.trim() || !result.confirmAvailable ||
             !result.pages.every((item) => reviewed[item.pageId])} onClick={() => void changeState("confirm")}><FiCheck aria-hidden="true" />全ページを確定</button>
         </>}

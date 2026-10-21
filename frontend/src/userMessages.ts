@@ -8,13 +8,15 @@ const ID = String.raw`(?:xlsx_[A-Z]{1,3}\d+(?:_[\w-]+)?|(?:manual|merged|preview
 const BRACKETED_IDS = new RegExp(String.raw`\s*[（(]\s*${ID}(?:\s*[/／,、]\s*${ID})*\s*[)）]`, "g");
 const IDS = new RegExp(String.raw`\b${ID}\b`, "g");
 const JAPANESE = /[぀-ヿ一-鿿]/;
+// Internal words people cannot act on (the server words its refusals plainly; this catches the rest).
+const JARGON = /session|turn|context|revision|digest|cursor|localRef|requestId|eventId|handle|\bmode\b|DRAFT|ACTIVE|\bDB\b|\bID\b|\bAPI\b|schema|mapping|snapshot|payload|Traceback|Error:|世代|物理|操作群|選択肢群|矩形|依存関係|一意|正本|由来|所有者|単一値|識別子|形式が不正|ログのエラーコード/;
 
-export function userText(raw: string | null | undefined, context = "メッセージ", fallback = "処理を完了できませんでした。"): string {
+export function userText(raw: string | null | undefined, context = "メッセージ", fallback = "処理を完了できませんでした。画面を再読み込みしてから、もう一度試してください。"): string {
   const text = (raw ?? "").trim();
   if (!text) return text;
   let clean = text.replace(CODE, " ").replace(BRACKETED_IDS, "").replace(IDS, "該当の欄").replace(/\s{2,}/g, " ").trim();
   // A purely technical (non-Japanese) message is replaced by a plain one.
-  if (!JAPANESE.test(clean)) clean = fallback;
+  if (!JAPANESE.test(clean) || JARGON.test(clean)) clean = fallback;
   if (clean !== text) console.warn(`[文之助] ${context}の詳細:`, text);
   return clean;
 }

@@ -4,7 +4,13 @@ from app.core.errors import AppError
 
 
 def reject(code: str, message: str, status: int = 409, **metadata: Any) -> AppError:
-    return AppError(status=status, code=code, title=code, detail=message, metadata=metadata)
+    from app.editing.plain_messages import plain
+
+    shown = plain(code, message)
+    if shown != message:
+        # The check's own wording stays in the log for diagnosis.
+        metadata = {**metadata, "internalMessage": message}
+    return AppError(status=status, code=code, title=code, detail=shown, metadata=metadata)
 
 
 def problem(error: AppError) -> dict[str, Any]:

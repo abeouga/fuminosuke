@@ -24,6 +24,7 @@ import { usePreviewDialog } from "../hooks/usePreviewDialog";
 import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Template } from "../types";
 import { isEditingDraft } from "../templateEditing";
+import { Spinner } from "../components/Spinner";
 
 type OcrStep = 1 | 2;
 const TemplatePage = lazy(() => import("./TemplatePage").then(module => ({ default: module.TemplatePage })));
@@ -320,7 +321,7 @@ export function OcrPage({
       <div className="page-stack narrow">
         <section className="form-card phone-template-notice" role="status">
           <h1>テンプレートの作成・編集はパソコンで行ってください</h1>
-          <p>スマートフォンでは、作成済みのテンプレートを使った読み取り・確認・修正・確定・Excel取得・質問ができます。</p>
+          <p>スマートフォンでは、作成済みのテンプレートを使った読み取り・確認・修正・確定・Excel取得・チャットができます。</p>
           <button type="button" className="primary" onClick={() => setTemplateWorkspace(null)}>読み取りに戻る</button>
         </section>
       </div>
@@ -478,7 +479,7 @@ export function OcrPage({
                   <button type="button" className="primary"
                     disabled={!file || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
                     onClick={() => void startReading()}>
-                    <FiPlay aria-hidden="true" />{busy ? "送信中…" : ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}</button>
+                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}</button>
                 </div>
               </section>
             )}

@@ -6,7 +6,7 @@ import type { ItemJoin, ItemJoinSettings } from "./itemJoins";
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
 import type { PageFieldEdit, PagedReviewResult } from "./pagedReview";
-import type { DocumentIdentity } from "./types";
+import type { DocumentIdentity, DocumentNameRule, MarkOptionSuggestion, TemplateDocumentNameSettings } from "./types";
 /** A confirmed document (latest version) an upload can be read as an update of. */
 export type SeriesCandidate = {
     jobId: string;
@@ -56,7 +56,7 @@ async function templateMutation<T>(path: string, expectedRevision: number, init:
     const response = await requestResponse(`${path}${path.includes("?") ? "&" : "?"}expectedRevision=${expectedRevision}`, init);
     const resourceRevision = Number(response.headers.get("X-Template-Revision"));
     if (!Number.isSafeInteger(resourceRevision) || resourceRevision < 1) {
-        throw new ApiError("保存後の世代を確認できません。入力を保持して状態を再取得してください。", "REVISION_RESPONSE_MISSING");
+        throw new ApiError("保存されたか確認できませんでした。入力はそのまま残っています。少し待ってから画面を再読み込みしてください。", "REVISION_RESPONSE_MISSING");
     }
     return { ...(await response.json() as T), resourceRevision };
 }
@@ -285,6 +285,11 @@ export const api = {
     renameItem: (templateId: string, targetPath: string, displayName: string | null) => request<{ names: Record<string, string> }>(`/templates/${encodeURIComponent(templateId)}/display-names`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targetPath, displayName }),
     }),
+    /** How documents of a template are named; changeable after it is made (no new version). */
+    templateDocumentName: (templateId: string) => request<TemplateDocumentNameSettings>(`/templates/${encodeURIComponent(templateId)}/document-name`),
+    saveTemplateDocumentName: (templateId: string, rule: DocumentNameRule | null) => request<TemplateDocumentNameSettings>(`/templates/${encodeURIComponent(templateId)}/document-name`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rule }),
+    }),
     /** Items shown as one value (display only); suggestions come from the given version. */
     itemJoins: (templateId: string, templateVersionId?: string) => request<ItemJoinSettings>(`/templates/${encodeURIComponent(templateId)}/item-joins${templateVersionId ? `?templateVersionId=${encodeURIComponent(templateVersionId)}` : ""}`),
     /** One GPT-6 Luna request (shared API budget); proposes joins, saves nothing. */
@@ -306,6 +311,11 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(layout),
+    }),
+    suggestMarkOptions: (id: string, _expectedRevision: number, layout: LayoutDefinition, cellIds: string[], hint = "") => request<MarkOptionSuggestion>(`/template-versions/${id}/layout/mark-options/suggest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout, cellIds, hint }),
     }),
     verifyLayout: (id: string, expectedRevision: number) => templateMutation<LayoutDefinition>(`/template-versions/${id}/layout/verify`, expectedRevision, {
         method: "POST",
@@ -346,6 +356,8 @@ export const api = {
     reopenResult: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),
     retry: (id: string, revision: number | null | undefined) => request<Job>(`/jobs/${id}/retry${revision == null ? "" : `?expectedRevision=${revision}`}`, { method: "POST" }),
     cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
+    /** Deletes a read document (a confirmed one only with `confirm`); its files go too. */
+    deleteJob: (id: string, confirm = false) => request<void>(`/jobs/${encodeURIComponent(id)}${confirm ? "?confirm=true" : ""}`, { method: "DELETE" }),
 };
 export const absoluteArtifactUrl = (path: string) => path;
 export const exportUrl = (jobId: string, format: "xlsx") => `${API}/ocr-jobs/${jobId}/export?format=${format}`;

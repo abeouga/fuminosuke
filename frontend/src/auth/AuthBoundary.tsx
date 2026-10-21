@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { authenticatedFetch, endBrowserSession, loadSession } from "./transport";
 import type { AuthSession } from "./transport";
+import { Spinner } from "../components/Spinner";
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -55,7 +56,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
         const event = new Event("fuminosuke-before-logout", { cancelable: true });
         if (!window.dispatchEvent(event)) setConfirmLogout(true);
         else void logout();
-      }}>{loggingOut ? "ログアウト中…" : "ログアウト"}</button>
+      }}>{loggingOut ? <><Spinner />ログアウト中…</> : "ログアウト"}</button>
       {message && <span role="alert">{message}</span>}
     </div>}
     {ready && <div hidden={!session?.authenticated}>{children}</div>}
