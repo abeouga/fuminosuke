@@ -59,15 +59,17 @@ def page_config(config: TemplateConfig, page: dict[str, Any]) -> TemplateConfig:
                 mapping is None
                 or mapping.target_path != binding["targetPath"]
                 or (mapping.mapping_type != "text"
-                    and mapping.mark_recognition_mode != "checklist")
+                    and mapping.mark_recognition_mode not in {"checklist", "symbol"})
                 or mapping.composite_subfields
             ):
                 fail(
-                    "ページ別では文字・番号・チェックリストに対応しています。複合項目とその他のマーク設定は未対応です。", "PRINT_PAGE_CONFIG_UNSUPPORTED"
+                    "ページ別では文字・番号・チェックリスト・記号に対応しています。"
+                    "複合項目と印刷された選択肢の判定は未対応です。",
+                    "PRINT_PAGE_CONFIG_UNSUPPORTED",
                 )
             page_mapping = mapping.model_copy(update=field["rectangle"], deep=True)
-            if mapping.mark_recognition_mode == "checklist":
-                # Checklist OCR reads the validated page crop as a whole. Option
+            if mapping.mark_recognition_mode in {"checklist", "symbol"}:
+                # Checklist and symbol OCR read the validated page crop as a whole. Option
                 # rectangles are metadata, not separate image-difference regions.
                 page_mapping.mark_options = [option.model_copy(update={
                     "x": 0, "y": 0,
@@ -129,7 +131,7 @@ class JobPageService:
         with self.database.session() as session:
             version = session.get(TemplateVersion, version_id)
             if version is None:
-                fail("テンプレート版がありません。", "TEMPLATE_NOT_FOUND")
+                fail("テンプレートがありません。", "TEMPLATE_NOT_FOUND")
             revision = self.revision(version)
             plan = copy.deepcopy(version.quality_json.get("printLayout"))
             reason = ""
@@ -196,10 +198,10 @@ class JobPageService:
                     return existing
             version = session.get(TemplateVersion, request.template_version_id)
             if version is None:
-                fail("テンプレート版がありません。", "TEMPLATE_NOT_FOUND")
+                fail("テンプレートがありません。", "TEMPLATE_NOT_FOUND")
             if self.revision(version) != request.template_revision:
                 fail(
-                    "受付前にテンプレート版が変更されています。",
+                    "受付前にテンプレートが変更されています。",
                     "TEMPLATE_CHANGED_DURING_ACCEPTANCE",
                 )
             plan = copy.deepcopy(version.quality_json.get("printLayout"))
@@ -369,7 +371,7 @@ class JobPageService:
     ) -> dict[str, Any]:
         """Admit review candidates, never certify submitted handwriting as correct."""
         if version.status != "ACTIVE":
-            fail("正式資格のあるACTIVE版が必要です。", "TEMPLATE_LAYOUT_NOT_VERIFIED")
+            fail("使用中のテンプレートの準備が完了していません。", "TEMPLATE_LAYOUT_NOT_VERIFIED")
         plan = version.quality_json.get("printLayout")
         if not plan or plan.get("layoutSha256") != digest(version.layout_json):
             fail("印刷ページ設定と矩形が一致しません。", "PRINT_LAYOUT_STALE")
@@ -430,7 +432,7 @@ class JobPageService:
             item = inputs[page["inputId"]]
             snapshot = page["templateSnapshot"]
             if page["templateVersionId"] != job.template_version_id:
-                fail("受付ページの版が一致しません。")
+                fail("受付ページの内容が一致しません。")
             for path, sha in (
                 (item.relative_path, page["inputSha256"]),
                 (snapshot["cleanTemplatePath"], snapshot["cleanTemplateSha256"]),

@@ -31,6 +31,7 @@ export class WorkbenchStore {
   private listeners = new Set<() => void>();
   private savedListeners = new Set<(saved: SavedResource) => Promise<void> | void>();
   private interactionListeners = new Set<() => void>();
+  private scopeListeners = new Set<(phase: "before" | "after") => void | Promise<void>>();
   private initialization: Promise<void> | null = null;
   private tail: Promise<unknown> = Promise.resolve();
   private previewTail: Promise<unknown> = Promise.resolve();
@@ -48,17 +49,21 @@ export class WorkbenchStore {
     this.key = `editing-v2:${resourceKind}:${resourceId}`;
     const raw = privateSessionStorage.getItem(this.key);
     if (raw) try {
-      const saved = JSON.parse(raw) as { owner: Owner; cursor: string | null; sequence: number; journals: Journal[] };
+      const saved = JSON.parse(raw) as { owner: Owner; cursor: string | null; sequence: number; journals: Journal[]; open?: { question: Question; commandId: string | null } };
       if (!saved.owner?.sessionId || !saved.owner.token) throw new Error();
       this.owner = saved.owner; this.cursor = saved.cursor; this.sequence = saved.sequence;
-      this.journals = new Map(saved.journals.map(j => [j.requestId, j]));
+      // A template save the server refused for its content is not resent or waited on;
+      // the editor keeps the unsaved input in its own draft.
+      this.journals = new Map(saved.journals.filter(j => !refusedTemplateSave(j)).map(j => [j.requestId, j]));
+      // An open question survives a reload; otherwise the server waits for an answer the page cannot show.
+      if (saved.open && Date.parse(saved.open.question.expiresAt) > Date.now()) this.state = { ...this.state, question: saved.open.question, commandId: saved.open.commandId, message: saved.open.question.message };
       if (this.journals.size) this.state = { ...this.state, state: "recovering", message: "前の保存結果を確認してください。入力は保持しています。" };
     } catch { this.state = { ...this.state, state: "failed", message: "保存記録を読み取れません。入力は保持されています。" }; }
   }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   getSnapshot = () => this.state;
-  private publish(patch: Partial<WorkbenchState>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(fn => fn()); }
-  private remember() { if (this.owner) privateSessionStorage.setItem(this.key, JSON.stringify({ owner: this.owner, cursor: this.cursor, sequence: this.sequence, journals: [...this.journals.values()] })); }
+  private publish(patch: Partial<WorkbenchState>) { const asked = "question" in patch && patch.question !== this.state.question; this.state = { ...this.state, ...patch }; if (asked) this.remember(); this.listeners.forEach(fn => fn()); }
+  private remember() { if (this.owner) privateSessionStorage.setItem(this.key, JSON.stringify({ owner: this.owner, cursor: this.cursor, sequence: this.sequence, journals: [...this.journals.values()], open: this.state.question ? { question: this.state.question, commandId: this.state.commandId } : undefined })); }
   private publishCompletion(patch: Partial<WorkbenchState>) {
     const displayPending = [...this.journals.values()].some(journal => journal.displayPending);
     this.publish({ state: "ready", pending: this.journals.size, ...patch,
@@ -68,6 +73,8 @@ export class WorkbenchStore {
   getOwner(): Owner { if (!this.owner) throw new Error("編集状態を取得してください。"); return this.owner; }
   getContext(): ContextResult { if (!this.state.context) throw new Error("編集状態を取得してください。"); return this.state.context; }
   onSaved(fn: (saved: SavedResource) => Promise<void> | void) { this.savedListeners.add(fn); return () => { this.savedListeners.delete(fn); }; }
+  /** Table focus changes keep voice input running: it is paused before and resumed after. */
+  subscribeScope(fn: (phase: "before" | "after") => void | Promise<void>) { this.scopeListeners.add(fn); return () => { this.scopeListeners.delete(fn); }; }
   subscribeInteraction(fn: () => void) { this.interactionListeners.add(fn); return () => { this.interactionListeners.delete(fn); }; }
   setInteraction(active: boolean) {
     if (active === this.manualActive) return;
@@ -121,15 +128,18 @@ export class WorkbenchStore {
   }
   async changeScope(table: string | null) {
     return this.enqueue(async () => {
-      this.requireReady(); this.interactionListeners.forEach(fn => fn());
-      const question = this.state.question;
-      if (question?.missingKind === "scope") {
-        const requestId = crypto.randomUUID();
-        const result = await v2client.scopeAnswer(this.getOwner(), { contractVersion: "editing.v2", requestId, replyTo: { questionId: question.questionId, version: question.version }, context: this.contextBody({ selectedTableId: table }) });
-        await this.refreshContext(); this.acceptCommand(result); return;
-      }
-      await this.updateContext({ selectedTableId: table });
+      this.requireReady(); await Promise.all([...this.scopeListeners].map(fn => fn("before")));
+      try { await this.changeScopeNow(table); } finally { this.scopeListeners.forEach(fn => void fn("after")); }
     });
+  }
+  private async changeScopeNow(table: string | null) {
+    const question = this.state.question;
+    if (question?.missingKind === "scope") {
+      const requestId = crypto.randomUUID();
+      const result = await v2client.scopeAnswer(this.getOwner(), { contractVersion: "editing.v2", requestId, replyTo: { questionId: question.questionId, version: question.version }, context: this.contextBody({ selectedTableId: table }) });
+      await this.refreshContext(); this.acceptCommand(result); return;
+    }
+    await this.updateContext({ selectedTableId: table });
   }
   connectEvents() {
     this.streamUsers++; if (!this.stream) { this.stream = new AbortController(); void this.eventLoop(this.stream); }
@@ -175,7 +185,8 @@ export class WorkbenchStore {
   }
   private failureUnlessSaved(error: unknown) {
     if (["saved_display_pending", "recovering"].includes(this.state.state)) return;
-    if (error instanceof EditingError && this.journals.size === 0 && (error.status === 422 || ["TABLE_SCOPE_MISMATCH", "LOCAL_SCOPE_MISMATCH"].includes(error.code))) this.publish({ state: "ready", message: error.message });
+    // A refused change (not a stale version) leaves nothing waiting, so later saves continue.
+    if (error instanceof EditingError && this.journals.size === 0 && (error.status === 422 || contentRefusal(error.code) || ["TABLE_SCOPE_MISMATCH", "LOCAL_SCOPE_MISMATCH"].includes(error.code))) this.publish({ state: "ready", message: error.message });
     else this.failure(error);
   }
   private final(id: string): Promise<SavedResource | null> {
@@ -225,7 +236,7 @@ export class WorkbenchStore {
       } catch (error) { journal.displayPending = true; this.remember(); this.publish({ state: "saved_display_pending", message: displayPendingMessage }); throw error; }
       finally { release(); }
     }
-    if (!(journal.origin === "manual" && (payload.type === "failed" || payload.type === "conflict"))) this.journals.delete(id);
+    if (!(journal.origin === "manual" && (payload.type === "failed" || payload.type === "conflict")) || refusedTemplateSave(journal)) this.journals.delete(id);
     this.remember();
     this.publish({ pending: this.journals.size, commandId });
     if (payload.type === "clarification_required") this.publishCompletion({ question: payload.question, message: payload.question.message });
@@ -261,7 +272,12 @@ export class WorkbenchStore {
       }
       throw new Error("手動編集を完了できません。");
     } catch (error) {
-      if (this.state.state !== "saved_display_pending") this.publish({ state: error instanceof EditingError && error.status < 500 ? "conflict" : "recovering", message: error instanceof Error ? error.message : "保存結果を確認してください。" });
+      // A refused template save does not stop later saves; only a stale version or an
+      // unknown outcome holds the queue until the saved state is checked.
+      if (endpoint === "authoring" && error instanceof EditingError && contentRefusal(error.code)) {
+        this.journals.delete(body.requestId); this.remember();
+        this.publish({ state: "ready", pending: this.journals.size, message: error.message });
+      } else if (this.state.state !== "saved_display_pending") this.publish({ state: error instanceof EditingError && error.status < 500 ? "conflict" : "recovering", message: error instanceof Error ? error.message : "保存結果を確認してください。" });
       throw error;
     }
   }
@@ -329,14 +345,20 @@ export class WorkbenchStore {
         const b = journal.body; journal.result = journal.endpoint === "authoring" ? await v2client.authoring(journal.owner, b as ManualAuthoring) : journal.endpoint === "ocr" ? await v2client.ocr(journal.owner, b as ManualOcr) : await v2client.command(journal.owner, b as CommandRequest);
       }
     }
+    if (refusedTemplateSave(journal)) {
+      const payload = (journal.finalEvent ?? journal.result?.finalEvent)!.payload as { error: { message: string } };
+      this.journals.delete(journal.requestId); this.remember();
+      this.publish({ state: "ready", pending: this.journals.size, message: payload.error.message });
+      throw new EditingError(`${payload.error.message} この変更は保存されていません。編集を続けると保存し直します。`, "SAVE_REFUSED", 422);
+    }
     this.completed.delete(journal.requestId); const result = await this.final(journal.requestId); if (!result) throw new Error("変更の保存は行われていません。保持した入力を確認してください。"); return result;
   }
   async recover() { const saved = await this.recoverResource(); return { view: saved.template!, result: saved.result }; }
   retainedDraft(): TemplateAuthoringUpdate | null { const j = [...this.journals.values()].find(v => v.endpoint === "authoring"); return j?.body && "draft" in j.body ? j.body.draft as TemplateAuthoringUpdate : null; }
   retainedOcrDraft(): Pick<OcrDocument, "fields" | "reviewItems"> | null { const j = [...this.journals.values()].find(v => v.endpoint === "ocr"); return j?.body && "draft" in j.body ? j.body.draft as Pick<OcrDocument, "fields" | "reviewItems"> : null; }
   async inspectLatest(): Promise<LoadedManualView> { const context = await this.refreshContext(), authoring = await api.authoring(this.resourceId); if (authoring.revision !== context.scopeContext.resourceRevision) throw new Error("表示取得中に別の編集が入りました。"); return { context, authoring }; }
-  async resumeAfterReview(view: LoadedManualView) { if (["recovering", "saved_display_pending"].includes(this.state.state)) throw new Error("先に保存結果を確認してください。"); this.setContext(view.context); this.journals.clear(); this.remember(); this.publish({ state: "ready", message: "確認した保存版から再開しました。", question: null }); }
-  async resumeOcrAfterReview(reviewed: OcrResult) { const current = await api.result(this.resourceId); if (JSON.stringify(current) !== JSON.stringify(reviewed)) throw new Error("確認後に別の編集が入りました。"); await this.acceptOwnRevision(reviewed.revision); this.journals.clear(); this.remember(); this.publish({ state: "ready", message: "確認した保存版から再開しました。" }); }
+  async resumeAfterReview(view: LoadedManualView) { if (["recovering", "saved_display_pending"].includes(this.state.state)) throw new Error("先に保存結果を確認してください。"); this.setContext(view.context); this.journals.clear(); this.remember(); this.publish({ state: "ready", message: "確認した保存内容から再開しました。", question: null }); }
+  async resumeOcrAfterReview(reviewed: OcrResult) { const current = await api.result(this.resourceId); if (JSON.stringify(current) !== JSON.stringify(reviewed)) throw new Error("確認後に別の編集が入りました。"); await this.acceptOwnRevision(reviewed.revision); this.journals.clear(); this.remember(); this.publish({ state: "ready", message: "確認した保存内容から再開しました。" }); }
   async acceptOwnRevision(revision: number) { const context = await this.refreshContext(); if (context.scopeContext.resourceRevision !== revision) throw new EditingError("別の編集が入りました。", "REVISION_CONFLICT", 409); this.clearFocus(); }
   private showFocus(value: AiFocusState) {
     const context = this.state.context; if (!context || this.manualActive || !validFocus(value.focus, context, context.scopeContext.resourceRevision)) return;
@@ -345,8 +367,30 @@ export class WorkbenchStore {
     if (wait) this.focusTimer = setTimeout(() => this.showFocus(value), wait);
     else this.publish({ focus: value });
   }
+  private beforePreview: AiFocusState | null = null;
+  /** Hovering a question choice outlines its target; leaving restores the previous outline. */
+  previewTarget(handle: string | null) {
+    const context = this.state.context, previewing = this.state.focus?.commandId === "choice-preview";
+    const binding = handle && context ? context.uiBindings.find(b => b.handle === handle && (b.kind === "field" || b.kind === "cell")) : null;
+    if (!binding || !context) { if (previewing) this.publish({ focus: this.beforePreview }); this.beforePreview = null; return; }
+    if (!previewing) this.beforePreview = this.state.focus;
+    const scope = context.scopeContext, field = this.resourceKind === "ocr";
+    const anchor = { anchorId: `preview_${binding.entityId}`, kind: field ? "review_field" as const : "template_cell" as const, resourceId: scope.resource.id, pageId: binding.pageId,
+      tableId: null, fieldId: field ? binding.entityId : null, cellId: field ? null : binding.entityId, rowId: null, columnId: null, label: "" };
+    this.publish({ focus: { commandId: "choice-preview", phase: "preview", receivedAt: performance.now(),
+      focus: { viewRevision: scope.resourceRevision, contextRevision: scope.contextRevision, interactionEpoch: scope.interactionEpoch, anchors: [anchor], primaryAnchorId: anchor.anchorId } } });
+  }
   clearFocus(commandId?: string) { if (this.focusTimer) clearTimeout(this.focusTimer); this.focusTimer = null; if (!commandId || this.state.focus?.commandId === commandId) this.publish({ focus: null }); }
 }
 const stores = new Map<string, WorkbenchStore>();
 export function resourceEditingStore(kind: "template" | "ocr", id: string) { const key = `${kind}:${id}`; if (!stores.has(key)) stores.set(key, new WorkbenchStore(id, kind)); return stores.get(key)!; }
 export const templateEditingStore = (id: string) => resourceEditingStore("template", id);
+
+/** Codes meaning the save was built on an outdated version, not that its content was refused. */
+function contentRefusal(code: string) { return !/REVISION|STALE|SESSION|CONTEXT|BINDING_CHANGED/.test(code); }
+function refusedTemplateSave(journal: Journal) {
+  const payload = (journal.finalEvent ?? journal.result?.finalEvent)?.payload;
+  return journal.origin === "manual" && journal.endpoint === "authoring" && Boolean(payload)
+    && (payload!.type === "failed" || payload!.type === "conflict")
+    && contentRefusal((payload as { error: { code: string } }).error.code);
+}

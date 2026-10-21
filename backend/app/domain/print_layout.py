@@ -5,7 +5,9 @@ This module does not mutate workbooks or legacy OCR rectangles.
 
 from __future__ import annotations
 
+import logging
 import math
+import re
 from typing import Any, Literal
 
 from pydantic import Field
@@ -50,7 +52,52 @@ class PrintLayoutRequest(LayoutModel):
     page_heading_moves: list[PageHeadingMove] = Field(default_factory=list, max_length=1000)
 
 
+logger = logging.getLogger(__name__)
+
+_PRINT_MESSAGES = {
+    "PAGE_GEOMETRY_MISMATCH": "印刷ページの寸法が想定と一致しません。印刷ページを設定し直してください。",
+    "PAGE_COUNT_MISMATCH": "印刷ページの枚数が想定と一致しません。印刷ページを設定し直してください。",
+    "RENDERER_BUSY": "別の印刷プレビューを作成中です。しばらく待ってからもう一度お試しください。",
+    "RENDERER_UNAVAILABLE": "印刷プレビューを作成する機能を利用できません。管理者に確認してください。",
+    "RENDER_FAILED": "印刷プレビューを作成できませんでした。もう一度お試しください。",
+    "RENDER_TIMEOUT": "印刷プレビューの作成に時間がかかりすぎたため中止しました。",
+    "RENDER_CANCELLED": "印刷プレビューの作成を中止しました。",
+    "UNSUPPORTED_XLSX_FEATURE": "このXLSXには、印刷用に扱えない内容が含まれています。",
+    "SOURCE_CHANGED": "元のXLSXファイルが変更されています。テンプレートを開き直してください。",
+    "PRINT_LAYOUT_SOURCE_CHANGED": "元のXLSXファイルが変更されています。テンプレートを開き直してください。",
+    "PRINT_FILE_CHANGED": "印刷用ファイルが変更されています。開き直してください。",
+    "PRINT_GEOMETRY_CHANGED": "印刷ページの配置が変わっています。印刷ページを設定し直してください。",
+    "PRINT_LAYOUT_CHANGED": "印刷ページの設定が変わっています。画面を再読み込みしてください。",
+    "PRINT_LAYOUT_SOURCE_MISSING": "印刷ページの元になるXLSXが見つかりません。",
+    "PRINT_FILE_SOURCE_MISSING": "印刷用ファイルの元になるXLSXが見つかりません。",
+    "PRINT_LAYOUT_UNSUPPORTED": "この印刷ページの設定には対応していません。",
+    "PRINT_LAYOUT_INVALID": "印刷ページの設定を使用できません。設定を見直してください。",
+    "PRINT_PAGE_NOT_FOUND": "指定した印刷ページが見つかりません。",
+    "PAGE_RESULT_CHANGED": "このページの読み取り結果が更新されています。画面を再読み込みしてください。",
+    "PAGE_RESULT_NOT_READY": "このページの読み取りはまだ終わっていません。",
+    "PAGE_RESULT_NOT_FOUND": "このページの読み取り結果が見つかりません。",
+    "PAGE_OUTPUT_SOURCE_CHANGED": "出力の元になるXLSXが変更されています。",
+    "PAGE_OUTPUT_MAPPING_INVALID": "出力先のセルとの対応を確認できません。",
+    "PAGE_OUTPUT_SNAPSHOT_REQUIRED": "この書類はXLSXへ出力できない形式で受け付けられています。",
+    "PAGE_BINDING_INVALID": "ページと読み取り欄の対応を確認できません。",
+    "PAGE_OCR_BUDGET_INVALID": "読み取りの利用上限を確認できません。",
+    "PAGE_OCR_ATTEMPT_CHANGED": "読み取りの状態が変わりました。画面を再読み込みしてください。",
+    "JOB_PAGE_SNAPSHOT_INVALID": "受け付けたページの情報を確認できません。",
+    "JOB_CANCELLED": "この読み取りは中止されています。",
+    "JOB_NOT_FOUND": "読み取りが見つかりません。",
+    "TEMPLATE_NOT_FOUND": "テンプレートが見つかりません。",
+    "REVISION_CONFLICT": "別の変更が保存されています。画面を再読み込みしてください。",
+    "INVALID_STATE_TRANSITION": "現在の処理状態ではこの操作を行えません。",
+    "DOCUMENT_NAME_REQUIRED": "書類名を入力してください。",
+    "CONFIRMED_RESULT_MISSING": "確定した読み取り結果が見つかりません。",
+}
+
+
 def print_error(detail: str, code: str = "PRINT_LAYOUT_INVALID", status: int = 422) -> AppError:
+    # Technical (English) reasons go to the log; the person sees a plain Japanese explanation.
+    if not re.search(r"[぀-ヿ一-鿿]", detail):
+        logger.info("print error %s: %s", code, detail)
+        detail = _PRINT_MESSAGES.get(code, "印刷ページの処理を完了できませんでした。")
     return AppError(status=status, code=code, title="Print layout cannot be used", detail=detail)
 
 

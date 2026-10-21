@@ -44,6 +44,7 @@ from app.services.document_series import DocumentSeries
 from app.services.review_display_structure import build_review_display_structure
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_candidate_service import TemplateCandidateService
+from app.services.template_field_hint_service import TemplateFieldHintService
 from app.storage.local_storage import LocalStorageService, StoragePathError
 
 ATTENTION_JOB_STATUSES = (
@@ -142,14 +143,14 @@ class JobService:
                     status=404,
                     code="TEMPLATE_NOT_FOUND",
                     title="Template version not found",
-                    detail="指定されたテンプレート版が見つかりません。",
+                    detail="指定されたテンプレートが見つかりません。",
                 )
             if template_version.status != TemplateVersionStatus.ACTIVE.value:
                 raise AppError(
                     status=409,
                     code="INVALID_STATE_TRANSITION",
                     title="Template version is not active",
-                    detail="OCRにはACTIVEテンプレート版を指定してください。",
+                    detail="読み取りには使用中のテンプレートを指定してください。",
                 )
             from app.domain.print_layout import require_image_ocr
 
@@ -274,7 +275,10 @@ class JobService:
                 version=template_version,
             )
             template_candidate_snapshot = (
-                TemplateCandidateService.snapshot(session, template_version.template_id)
+                {
+                    **TemplateCandidateService.snapshot(session, template_version.template_id),
+                    **TemplateFieldHintService.snapshot(session, template_version.template_id),
+                }
                 if ocr_enabled
                 else {
                     "templateCandidatePools": [],
@@ -1108,7 +1112,7 @@ class JobService:
             status=422,
             code="INVALID_TEMPLATE_INPUT_COUNT",
             title="Invalid template input count",
-            detail=f"{mode.value}には画像1枚が必要です。",
+            detail="このテンプレートの作成には画像1枚が必要です。",
             metadata={"expected": 1, "received": count},
         )
 

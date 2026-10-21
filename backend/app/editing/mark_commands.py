@@ -58,9 +58,10 @@ def edit_marks(ctx: SemanticCommands, op: MarkConfigure | MarkClear) -> None:
         )
     result: list[dict[str, Any]] = []
     for spec in op.sets:
-        if ctx.catalog.pages and spec.recognition_mode != "checklist":
+        if ctx.catalog.pages and spec.recognition_mode not in {"checklist", "symbol"}:
             raise reject(
-                "CAPABILITY_UNAVAILABLE", "ページ別テンプレートのマークはチェック一覧のみです。"
+                "CAPABILITY_UNAVAILABLE",
+                "ページ別テンプレートのマークはチェック一覧と記号だけです。",
             )
         old = None
         if spec.set:
@@ -114,12 +115,23 @@ def edit_marks(ctx: SemanticCommands, op: MarkConfigure | MarkClear) -> None:
                 if source is None:
                     raise reject("TARGET_STALE", "保存済みの選択肢領域を参照してください。")
                 geometry = {k: source[k] for k in ("x", "y", "width", "height")}
+            write_in = (
+                old_options.get(option_id, {}).get("writeInTargetPath")
+                if option.write_in_target_path is None
+                else option.write_in_target_path
+            )
             options.append(
                 {
                     "id": option_id,
                     "label": name(option.label),
                     "value": name(option.value),
                     **geometry,
+                    # A write-in link set by hand survives a spoken change of the same option.
+                    **(
+                        {"writeInTargetPath": write_in}
+                        if write_in and spec.recognition_mode in {"checklist", "symbol"}
+                        else {}
+                    ),
                 }
             )
         result.append(

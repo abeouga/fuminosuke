@@ -30,5 +30,6 @@ def require_transition(current: JobStatus, target: JobStatus) -> None:
             status=409,
             code="INVALID_STATE_TRANSITION",
             title="Invalid job state transition",
-            detail=f"ジョブ状態を {current.value} から {target.value} へ変更できません。",
+            detail="現在の処理状態ではこの操作を行えません。画面を再読み込みして状態を確認してください。",
+            metadata={"from": current.value, "to": target.value},
         )

@@ -1,3 +1,4 @@
+import { logDetail, userText } from "../userMessages";
 import { authenticatedFetch } from "../auth/transport";
 import type { Batch, BatchResult, CatalogResult, ContextResult, ContextUpdate, ConversationStart, ReceiptResult, ResolveTurn, SessionCreate, SessionResult, StartedTurn, TargetSearch, TurnResolution, TurnStatus, Undo } from "./generated";
 import type { TemplateAuthoringUpdate } from "../assistant/generatedAuthoring";
@@ -15,7 +16,13 @@ export type ManualReceipt = Omit<ReceiptResult, "result"> & { result: ManualResu
 export type EditingOwner = { sessionId: string; token: string };
 
 export class EditingError extends Error {
-  constructor(message: string, public readonly code: string, public readonly status: number) { super(message); }
+  /** The server's original text; the screen only gets the cleaned message. */
+  readonly detail: string;
+  constructor(message: string, public readonly code: string, public readonly status: number) {
+    super(userText(message, "編集エラー"));
+    this.detail = message;
+    logDetail("編集エラー", code, status, message);
+  }
 }
 export async function editingRequest<T>(path: string, owner?: EditingOwner, body?: unknown, method = "GET"): Promise<T> {
   const response = await authenticatedFetch(`/api/v1/editing${path}`, {

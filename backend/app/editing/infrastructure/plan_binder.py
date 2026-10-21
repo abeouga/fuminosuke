@@ -13,7 +13,7 @@ from app.editing.domain.fast_path import compile_fast, compile_recent_edit
 from app.editing.domain.plan_conflicts import reject_competing_writes
 from app.editing.domain.planning import InvalidPlan, PlanningIssue, check_evidence
 from app.editing.domain.planning_catalog import PlanningCatalog, normalized
-from app.editing.domain.values import resolve_value
+from app.editing.domain.values import fit_value, resolve_value
 from app.editing.infrastructure.planner_schema import planner_schema
 from app.editing.operation_contracts import Operation
 
@@ -24,7 +24,11 @@ class PlanBinder:
         self.operations = TypeAdapter(list[Operation])
 
     def selector(
-        self, selector: dict[str, Any], turns: dict[str, str], catalog: PlanningCatalog
+        self,
+        selector: dict[str, Any],
+        turns: dict[str, str],
+        catalog: PlanningCatalog,
+        spatial: bool = False,
     ) -> str:
         address = selector["address"]
         quote = check_evidence(address["evidence"], turns)
@@ -106,6 +110,12 @@ class PlanBinder:
             if "選択" in quote or quote.strip() in {"この欄", "このセル"}:
                 selected = catalog.scope["selectedHandles"]
                 pool = [r for r in pool if catalog.targets[r]["handle"] in selected]
+            if spatial:
+                # Box-shape edits name neighbours by position ("運転免許証の右の小さい枠");
+                # a named label in the quote does not have to be the selected box itself.
+                if ref not in pool:
+                    raise InvalidPlan("Selected target is outside the complete structural pool")
+                return str(ref)
             catalog.unambiguous(ref, pool, quote)
             if catalog.targets[ref].get("recordCell") and row is None:
                 raise PlanningIssue("row")
@@ -217,13 +227,28 @@ class PlanBinder:
             )
         change = decision["change"]
         raw_operations, evidences = change["operations"], change["operationEvidence"]
+        if len(evidences) == 1 and all(
+            o["op"] in {"cell.merge", "cell.delete"} for o in raw_operations
+        ):
+            # One spoken sentence often yields label + field merges from the same clause.
+            evidences = evidences * len(raw_operations)
         if len(raw_operations) != len(evidences):
             raise InvalidPlan("Evidence count does not match operations")
         selectors, quotes = {}, {}
+        used: dict[str, set[str]] = {}
+        for raw in raw_operations:
+            for value in raw.values():
+                for item in value if isinstance(value, list) else [value]:
+                    if isinstance(item, dict) and "targetRef" in item:
+                        used.setdefault(item["targetRef"], set()).add(raw["op"])
         for selector in change["selectors"]:
             if selector["id"] in selectors:
                 raise InvalidPlan("Duplicate selector")
-            selectors[selector["id"]] = self.selector(selector, turns, catalog)
+            spatial = bool(used.get(selector["id"])) and used[selector["id"]] <= {
+                "cell.merge",
+                "cell.delete",
+            }
+            selectors[selector["id"]] = self.selector(selector, turns, catalog, spatial)
             quotes[selector["id"]] = check_evidence(selector["address"]["evidence"], turns)
         operations, assigned = [], set()
         for raw, evidence in zip(raw_operations, evidences, strict=True):
@@ -266,10 +291,18 @@ class PlanBinder:
                     )
                     if operation["value"] != expected:
                         raise InvalidPlan("Value belongs to another clause")
+                operation["value"] = fit_value(operation["value"], catalog.targets[ref])
                 if operation["target"] in assigned:
                     raise PlanningIssue("operation")
                 assigned.add(operation["target"])
             operations.append(operation)
+        # "消して代わりに一つの枠に" is one merge; deleting the merged boxes is implied.
+        merged = {h for o in operations if o["op"] == "cell.merge" for h in o["cells"]}
+        operations = [
+            o
+            for o in operations
+            if not (o["op"] == "cell.delete" and set(o["cells"]) <= merged)
+        ]
         reject_competing_writes(operations)
         try:
             validated = self.operations.validate_python(operations)

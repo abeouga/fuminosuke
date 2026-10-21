@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from app.core.errors import AppError
 from app.editing.application.ports import DecisionSelector, PlanBinding, TextPlanner
 from app.editing.domain.candidates import build_candidates, select_operations
 from app.editing.domain.command import ResolvedInstruction, canonical, digest
@@ -29,6 +30,12 @@ QUESTIONS = {
     "operation": "どの変更を行いますか。",
     "scope": "現在選択している表の外です。対象範囲を切り替えますか。",
 }
+
+
+def row_column(catalog: PlanningCatalog | None, refs: list[str]) -> str | None:
+    cells = [(catalog.targets.get(r) or {}).get("recordCell") for r in refs] if catalog else []
+    names = {c["columnName"] for c in cells if c}
+    return next(iter(names)) if len(names) == 1 and all(cells) and cells else None
 
 
 class InstructionPlanner:
@@ -88,6 +95,20 @@ class InstructionPlanner:
                 else None
             )
             if clauses:
+                for clause in clauses:
+                    blocked = clause.target and catalog.unavailable_mention(clause.target)
+                    if clause.target and clause.row is None and clause.column is None:
+                        # A column named without its row: ask which row, no model call.
+                        rows = catalog.column_rows(clause.target)
+                        if rows:
+                            raise PlanningIssue("row", rows)
+                    if blocked:
+                        raise reject(
+                            "TARGET_UNAVAILABLE",
+                            f"「{blocked}」はこの書類では音声やAIで変更できない欄です。"
+                            "画面で直接修正してください。",
+                            409,
+                        )
                 candidates = build_candidates(instruction, clauses, catalog, self.policy)
                 if candidates is not None:
                     route = "decisions"
@@ -95,17 +116,24 @@ class InstructionPlanner:
                         len(q["choices"]) for q in json.loads(candidates.snapshot_json)["questions"]
                     )
                     start = time.perf_counter()
+                    result = None
                     try:
                         result = await self.decisions.choose(instruction, candidates)
+                    except AppError as error:
+                        # A timed-out short route falls back to the full planner instead
+                        # of dropping a spoken instruction.
+                        if error.code != "PLANNER_TIMEOUT":
+                            raise
                     finally:
                         decision_ms = round((time.perf_counter() - start) * 1000)
-                    action, operations, probabilities, confidences = select_operations(
-                        candidates, result, catalog, clauses, self.policy
-                    )
-                    if action == "apply":
-                        return ResolvedInstruction(operations)
-                    if action == "no_action":
-                        return ResolvedInstruction(no_action=True)
+                    if result is not None:
+                        action, operations, probabilities, confidences = select_operations(
+                            candidates, result, catalog, clauses, self.policy
+                        )
+                        if action == "apply":
+                            return ResolvedInstruction(operations)
+                        if action == "no_action":
+                            return ResolvedInstruction(no_action=True)
                     route = "decisions+responses"
             public = catalog.public()
             if catalog.dialogue:
@@ -146,10 +174,20 @@ class InstructionPlanner:
                 "questionId": "q_" + uuid4().hex,
                 "version": 1,
                 "missingKind": issue.kind,
-                "message": QUESTIONS[issue.kind],
+                # One candidate is a confirmation, not a choice between fields.
+                "message": f"「{catalog.label(choice_refs[0])[:60]}」を変更してよいですか。"
+                "よければ欄名を押してください。"
+                if issue.kind == "target" and catalog and len(choice_refs) == 1
+                else f"何行目の{column_name}ですか。「3行目」のように話すか、選んでください。"
+                if issue.kind == "row" and (column_name := row_column(catalog, choice_refs))
+                else QUESTIONS[issue.kind],
                 "choices": [
-                    {"choiceId": "c_" + uuid4().hex, "label": catalog.label(r)[:200]}
-                    for r in choice_refs[:5]
+                    {
+                        "choiceId": "c_" + uuid4().hex,
+                        "label": catalog.label(r)[:200],
+                        "handle": (catalog.targets.get(r) or {}).get("handle"),
+                    }
+                    for r in choice_refs[: 12 if issue.kind == "row" else 5]
                 ]
                 if catalog
                 else [],
@@ -188,7 +226,10 @@ class InstructionPlanner:
             )
         except InvalidPlan as error:
             raise reject(
-                "PLANNER_PLAN_INVALID", "指示と編集案の対応を確認できませんでした。", 422
+                "PLANNER_PLAN_INVALID",
+                "指示をうまく解釈できませんでした。何も変更していません。"
+                "「3行目の体重を500にして」のように、行・欄名・値を続けて話してください。",
+                422,
             ) from error
         finally:
             if self.trace:

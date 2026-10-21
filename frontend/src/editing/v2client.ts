@@ -3,7 +3,7 @@ import type { CommandRequest, CommandResult, ContextResult, ContextUpdate, Event
 export { EditingError } from "./client";
 import { EditingError } from "./client";
 export type Owner = { sessionId: string; token: string };
-export type EditingStatus = { enabled: boolean; plannerConnected: boolean; voiceConnected: boolean; templateAnalysisEnabled?: boolean };
+export type EditingStatus = { enabled: boolean; plannerConnected: boolean; voiceConnected: boolean; templateAnalysisEnabled?: boolean; voiceSecondsRemaining?: number | null };
 const base = "/api/v2/editing";
 export async function editingRequest<T>(path: string, owner?: Owner, body?: unknown, method = "GET"): Promise<T> {
   const response = await authenticatedFetch(base + path, { method, credentials: "include", headers: {

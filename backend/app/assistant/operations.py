@@ -242,7 +242,7 @@ class OperationRegistry:
         layout = LayoutDefinition.model_validate(version.layout_json)
         cell = next((c for c in layout.cells if c.id == context.cell_ids[0]), None)
         if cell is None:
-            raise refused("選択セルが版にありません。", "ASSISTANT_TARGET_MISMATCH")
+            raise refused("選択セルがテンプレートにありません。", "ASSISTANT_TARGET_MISMATCH")
         self._page(session, version, layout, context, cell)
         before_cell = cell.model_dump(mode="json", by_alias=True)
         after_cell = copy.deepcopy(before_cell)

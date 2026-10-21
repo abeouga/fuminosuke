@@ -22,7 +22,7 @@ export function buildHeadingConnections(layout: LayoutDefinition, cells: Readonl
       key, start: center(parent), end: center(child), hoverIds: [parent.id, child.id], color,
     });
   };
-  layout.cells.forEach(cell => addCell(cell.parentLabelCellId, cell.id, "#a21caf"));
+  layout.cells.forEach(cell => addCell(cell.parentLabelCellId, cell.id, "#16805d"));
   layout.relations.forEach(relation => {
     const children = relation.labelCellIds.length ? relation.labelCellIds : [relation.inputCellId];
     children.forEach(id => addCell(relation.parentLabelCellId, id, "#16805d"));

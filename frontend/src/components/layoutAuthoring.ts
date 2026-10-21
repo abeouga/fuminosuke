@@ -95,7 +95,9 @@ export function uniqueMeaningEntry(
   let label = original;
   let number = 1;
   const keyFor = (value: string) => value.replace(/[\s　.。・:：／/()（）［］\[\]【】]+/g, "") || "項目";
-  while (occupiedNames.has(label) || occupiedPaths.has(`fields.${keyFor(label)}`)) {
+  // A renamed entry keeps its old ID, so the ID is checked too (the server requires unique IDs).
+  const occupiedIds = new Set((layout.labelPool ?? []).map(entry => entry.id));
+  while (occupiedNames.has(label) || occupiedPaths.has(`fields.${keyFor(label)}`) || occupiedIds.has(`label_auto_${keyFor(label)}`)) {
     const suffix = String(++number);
     label = original.slice(0, 100 - suffix.length) + suffix;
   }

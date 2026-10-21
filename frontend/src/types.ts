@@ -129,23 +129,19 @@ export type TemplatePackageActivation = {
   alreadyActive: boolean;
 };
 
-export type TemplateCandidateBinding = {
-  targetPattern: string;
+export type TemplateFieldSetting = {
+  targetPatterns: string[];
   label: string;
+  keywords: string[];
+  keywordsEnabled: boolean;
+  keywordsForced: boolean;
+  instruction: string;
 };
 
-export type TemplateCandidateSet = {
-  id: string;
-  name: string;
-  values: string[];
-  allowedSuffixes: string[];
-  bindings: TemplateCandidateBinding[];
-};
-
-export type TemplateCandidateSettings = {
+export type TemplateFieldSettings = {
   resourceRevision: number;
   templateId: string;
-  sets: TemplateCandidateSet[];
+  items: TemplateFieldSetting[];
 };
 
 export type Job = {
@@ -302,6 +298,8 @@ export type LayoutMarkOption = {
   y: number;
   width: number;
   height: number;
+  /** Checklist or symbol box: the item's text field written next to it, e.g. 「その他（　）」. */
+  writeInTargetPath?: string;
 };
 
 export type LayoutMarkSet = {
@@ -583,7 +581,7 @@ export type OcrFieldPreview = {
   mappingType?: "text" | "mark";
   markRecognitionMode?: "automatic" | "manual" | "symbol" | "checklist";
   markSelectionMode?: "single" | "multiple";
-  markOptions?: Array<{ label: string; value: string }>;
+  markOptions?: Array<{ label: string; value: string; writeInTargetPath?: string }>;
 };
 
 export type OcrResult = {

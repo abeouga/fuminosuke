@@ -20,7 +20,9 @@ export function incompleteMeaningCellIds(layout: LayoutDefinition): Set<string> 
     const unassigned = unassignedMeaningCellIds(layout);
     return new Set(layout.cells.filter((cell) => cell.role === "mark"
         && !unassigned.has(cell.id)
-        && (!(cell.markSets?.length) || cell.markSets.some((set) => (!set.targetPath.trim() || set.options.length === 0)))).map((cell) => cell.id));
+        && (!(cell.markSets?.length) || cell.markSets.some((set) => (!set.targetPath.trim()
+            // A checklist box without listed boxes counts as one whole-cell checkbox.
+            || (set.options.length === 0 && set.recognitionMode !== "checklist"))))).map((cell) => cell.id));
 }
 export function eraseMeaningParentLinksAlongSegment(relations: LayoutRelation[], cellsById: ReadonlyMap<string, LayoutCell>, start: Point, end: Point, tolerance: number) {
     const erasedParentLinks = new Set<string>();
@@ -478,7 +480,9 @@ export function inferTargetPath(labelText: string, inputCount: number, targets: 
     return candidates.find((candidate) => !assignedPaths.has(candidate.path))?.path
         ?? candidates[0]?.path ?? null;
 }
-export function mergeLabelRelations(currentRelations: LayoutRelation[], inputs: LayoutCell[], labelId: string, axis: LayoutRelation["axis"], targetPaths: string[], relationStamp = Date.now()): LayoutRelation[] {
+export function mergeLabelRelations(currentRelations: LayoutRelation[], inputs: LayoutCell[], labelId: string, axis: LayoutRelation["axis"], targetPaths: string[], relationStamp = Date.now(),
+    /** The item name's heading: a box linked after the heading was set belongs under it too. */
+    parentLabelCellId: string | null = null): LayoutRelation[] {
     const inputIds = new Set(inputs.map((input) => input.id));
     const nextTargetPaths = new Set(targetPaths);
     const targetByInputId = new Map(inputs.map((input, index) => [input.id, targetPaths[index]]));
@@ -499,11 +503,17 @@ export function mergeLabelRelations(currentRelations: LayoutRelation[], inputs: 
             id: `rel_${relationStamp}_${index + 1}`,
             inputCellId: input.id,
             labelCellIds: [labelId],
+            ...(parentLabelCellId ? { parentLabelCellId } : {}),
             axis,
             order: index + 1,
             targetPath: targetPaths[index],
         })),
     ];
+}
+/** The name printed in an item-name cell; a merged cell keeps it as printed text. Symbols only ("□", "(") name nothing. */
+export function labelCellName(cell: Pick<LayoutCell, "text" | "printedLabelText" | "fieldLabel">): string {
+    const named = (value?: string | null) => value && /[\p{L}\p{N}]/u.test(value) ? value.trim() : "";
+    return named(cell.text) || named(cell.printedLabelText) || named(cell.fieldLabel);
 }
 function stableMeaningKeyHash(value: string): string {
     return Array.from(value).reduce((hash, character) => ((hash * 31) + (character.codePointAt(0) ?? 0)) >>> 0, 2166136261).toString(36);
@@ -528,8 +538,9 @@ export function attachParentLabelToMeaningRelations(currentRelations: LayoutRela
         .sort((first, second) => first.order - second.order || first.inputCellId.localeCompare(second.inputCellId));
     if (matched.length === 0)
         return null;
-    const parentName = parentLabel.text.trim() || parentLabel.id;
-    const childName = childLabel.text.trim() || childLabel.id;
+    // A cell's ID is never a name: a drawn cell without printed text is named generically.
+    const parentName = labelCellName(parentLabel) || "見出し";
+    const childName = labelCellName(childLabel) || "項目";
     const parentKey = parentMeaningPathSegment(parentName, "parent");
     const childKey = parentMeaningPathSegment(childName, "field");
     const parentIdentity = stableMeaningKeyHash(parentLabel.id).slice(0, 7);

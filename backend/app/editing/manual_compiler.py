@@ -212,6 +212,7 @@ class ManualCompiler:
                                 "label": option["label"],
                                 "value": option["value"],
                                 "region": "whole-cell" if whole else bindings["region", parts],
+                                "writeInTargetPath": option.get("writeInTargetPath") or "",
                             }
                         )
                     specs.append(
@@ -520,6 +521,13 @@ class ManualCompiler:
                         for s in plan.after["layout"]["recordSections"]
                         if s["id"] == entity
                     )
+        # A write-in may point at a meaning created in this same draft; use its saved path.
+        for cell in plan.after["layout"]["cells"]:
+            for mark_set in cell.get("markSets", []):
+                for option in mark_set["options"]:
+                    path = option.get("writeInTargetPath")
+                    if path in substitutions:
+                        option["writeInTargetPath"] = substitutions[path]
         # Canonical relation IDs are allocated in the shared compiler.
         for relation in desired["relations"]:
             path = substitutions.get(relation["targetPath"], relation["targetPath"])

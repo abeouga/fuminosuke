@@ -319,8 +319,11 @@ class BusinessMutationUnitOfWork:
                 }
                 state = "NO_ACTION"
             else:
-                names = [c["name"] for c in self.core.changes(plan, saved)]
-                notification = "、".join(names)[:960] + (
+                names = list(dict.fromkeys(c["name"] for c in self.core.changes(plan, saved)))
+                notification = geometry_notice(plan, change.change_set.operations) if not (
+                    work.undo_of
+                ) else None
+                notification = notification or "、".join(names)[:960] + (
                     "を取り消しました。" if work.undo_of else "を変更しました。"
                 )
                 receipt = {
@@ -344,3 +347,26 @@ class BusinessMutationUnitOfWork:
 
     def discard(self, change: PreparedChange) -> None:
         self.prepared.pop(change.token, None)
+
+
+def geometry_notice(plan: Plan, operations: tuple[BoundOperation, ...]) -> str | None:
+    """Spoken merges/deletes say what the boxes became, not every removed box."""
+    values = [op.value() for op in operations]
+    if not any(v["op"] in {"cell.merge", "cell.delete"} for v in values):
+        return None
+    before = {m["id"] for m in plan.before["layout"]["cellMerges"]}
+    cells = {c["id"]: c for c in plan.after["layout"]["cells"]}
+    parts = []
+    for merge in plan.after["layout"]["cellMerges"]:
+        if merge["id"] in before or merge["parentCellId"] not in cells:
+            continue
+        cell = cells[merge["parentCellId"]]
+        name = cell.get("fieldLabel") or cell.get("text") or "名称未設定の欄"
+        parts.append(f"{len(merge['parts'])}つの枠を結合して「{name}」にしました。")
+    deleted = sum(len(v["cells"]) for v in values if v["op"] == "cell.delete")
+    if deleted:
+        parts.append(f"{deleted}つの枠を削除しました。")
+    others = [v for v in values if v["op"] not in {"cell.merge", "cell.delete"}]
+    if others:
+        parts.append("ほかの設定も変更しました。")
+    return "".join(parts)[:960] or None

@@ -114,6 +114,14 @@ class OcrResponseFinalizer:
                     ),
                 ),
             )
+        from app.domain.checklist import apply_write_ins, flag_symbol_write_ins
+
+        dumped_mappings = [
+            mapping.model_dump(mode="json", by_alias=True)
+            for mapping in extraction.config.field_mappings
+        ]
+        apply_write_ins(provider_response.document, dumped_mappings)
+        flag_symbol_write_ins(provider_response.document, dumped_mappings)
         apply_sequence_numbers(
             provider_response.document,
             prepared.sequence_regions,

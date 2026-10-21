@@ -255,7 +255,7 @@ it.each([true, false])("uses only the catalog availability=%s without a second q
 it("rejects a catalog belonging to a different version and allows read-only retry", async () => {
   vi.mocked(api.getOcrPages).mockResolvedValueOnce({ ...catalog, templateVersionId: "other" });
   render(<OcrPageBindings versionId="v1" onAccepted={vi.fn()} />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("ページ構成の版が一致しません");
+  expect(await screen.findByRole("alert")).toHaveTextContent("ページ構成が変わりました");
   expect(screen.queryByText("Page 1")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "ページ構成を再取得" }));
   expect(await screen.findByText("Page 1")).toBeInTheDocument();

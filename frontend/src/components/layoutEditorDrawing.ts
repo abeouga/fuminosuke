@@ -78,7 +78,8 @@ export function drawUnassignedMeaningOverlay(
 }
 export const LAYOUT_ROLE_STYLE = {
   label: { stroke: "#d13c2f", fill: "#d13c2f", dash: [] },
-  parent_label: { stroke: "#a21caf", fill: "#a21caf", dash: [12, 5] },
+  // Headings are green everywhere: frame, text badge and connection lines.
+  parent_label: { stroke: "#16805d", fill: "#16805d", dash: [12, 5] },
   input: { stroke: "#0067c0", fill: "#0067c0", dash: [] },
   mark: { stroke: "#6d28d9", fill: "#6d28d9", dash: [7, 4] },
   // Legacy layouts are normalized to input before display. Keep defensive
@@ -92,9 +93,10 @@ export const LAYOUT_ROLE_LABEL: Record<LayoutCell["role"], string> = {
   record_key_cell: "記入欄", column_key_cell: "記入欄", ignored: "読み取らない",
 };
 const OCR_LABEL_BADGE_STYLE = {
+  // Text badges use the same color family as the frame of their role.
   label: {
-    background: "rgba(255, 240, 213, 0.92)",
-    text: "#5f3a00",
+    background: "rgba(255, 237, 234, 0.92)",
+    text: "#8f2119",
   },
   parent_label: {
     background: "rgba(226, 243, 236, 0.92)",

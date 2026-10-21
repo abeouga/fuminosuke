@@ -81,6 +81,12 @@ def _field_previews(
                         {
                             "label": option.get("label"),
                             "value": option.get("value"),
+                            # The write-in 「その他(　)」 this box's item owns.
+                            **(
+                                {"writeInTargetPath": option["writeInTargetPath"]}
+                                if isinstance(option.get("writeInTargetPath"), str)
+                                else {}
+                            ),
                         }
                         for option in raw.get("markOptions", [])
                         if isinstance(option, dict)

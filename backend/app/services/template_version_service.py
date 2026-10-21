@@ -344,7 +344,7 @@ class TemplateVersionService:
                     status=404,
                     code="TEMPLATE_NOT_FOUND",
                     title="Template not found",
-                    detail="テンプレート版がありません。",
+                    detail="テンプレートがありません。",
                 )
             template = repository.get_template(source.template_id)
             if template is None or template.archived_at is not None:
@@ -381,7 +381,7 @@ class TemplateVersionService:
                     status=409,
                     code="INVALID_STATE_TRANSITION",
                     title="Active template required",
-                    detail="現在の有効版から編集してください。",
+                    detail="使用中のテンプレートから編集してください。",
                 )
             if drafts:
                 self._validate_resume(session, source, drafts[0])

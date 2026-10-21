@@ -1,10 +1,11 @@
+import { userText } from "../userMessages";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { v2client as editingClient, EditingError } from "../editing/v2client";
 import { templateEditingStore, type LoadedManualView } from "../editing/workbenchStore";
 import { reconcileOwnSave } from "../editing/reconcile";
 import { TemplateAnalysisStore } from "../editing/templateAnalysisStore";
-import { TemplateAnalysisPanel } from "../editing/TemplateAnalysisPanel";
-import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiFileText, FiImage, FiGrid, FiX } from "react-icons/fi";
+import { TemplateAnalysisStatus } from "../editing/TemplateAnalysisStatus";
+import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiChevronDown, FiCopy, FiFileText, FiImage, FiGrid, FiPrinter, FiX } from "react-icons/fi";
 import { ApiError, api, createIdempotencyKey } from "../api";
 import { AssistantPanel } from "../assistant/AssistantPanel";
 import { EditingControls } from "../editing/EditingControls";
@@ -30,16 +31,19 @@ import {
   type LayoutEditorMeaningState,
   type LayoutWorkflowStep,
 } from "../components/LayoutEditor";
-import { MaskEditor } from "../components/MaskEditor";
-import { TemplateCandidateSettingsEditor } from "../components/TemplateCandidateSettingsEditor";
+import { TemplateFieldSettingsEditor } from "../components/TemplateFieldSettingsEditor";
+import { openItemJoinEditor } from "../components/TemplateItemJoinEditor";
 import { showToast } from "../components/Toast";
 import { useJobPoller } from "../hooks/useJobPoller";
+import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Artifact, DocumentIdentity, DocumentNameRule, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
+import { isEditingDraft, suggestedCopyName } from "../templateEditing";
 
 const MODES = [
   { id: "SINGLE_IMAGE_EXPERIMENTAL", number: "01", title: "記入済みの一枚から", copy: "記入済み帳票1枚を補正し、矩形と読み取り欄を画面で設定します。", count: "記入済み・1枚" },
   { id: "REFERENCE_TEMPLATE", number: "02", title: "白紙帳票から", copy: "記入前の白紙帳票を基準画像として使用します。", count: "白紙・1枚" },
   { id: "SPREADSHEET_TEMPLATE", number: "03", title: "元のExcelから", copy: "XLSXのセル、罫線、結合から矩形と区分の案を自動作成します。", count: "XLSX・1ファイル" },
+  { id: "COPY", number: "04", title: "既存のテンプレートから", copy: "使用中のテンプレートを複製し、そのまま編集します。", count: "既存・1件" },
 ] as const;
 
 const LAYOUT_WIZARD_STEPS: Array<{
@@ -52,11 +56,10 @@ const LAYOUT_WIZARD_STEPS: Array<{
   { id: "meaning", shortTitle: "読み取る内容", title: "各欄で読み取る内容を決める", description: "記入欄と保存する情報を対応づけます。項目名のない記入欄には、保存する情報を直接指定できます。" },
   { id: "records", shortTitle: "繰り返し部分", title: "繰り返し部分をまとめる", description: "明細表など、同じ構造を繰り返す欄をひとまとまりとして設定します。" },
   { id: "identity", shortTitle: "確認する欄とファイル名", title: "読み取り後に確認する欄とファイル名を決める", description: "氏名や番号など、読み取り後に「この書類で合っているか」を確かめる欄と、保存するファイル名を決めます。" },
-  { id: "review", shortTitle: "確認・保存", title: "設定を確認して保存する", description: "未割当とレコード構造を確認し、テンプレート設定を保存します。" },
 ];
 
 type TemplateWorkspace = "create" | "manage";
-type TemplateListFilter = "current" | "draft" | "active" | "history";
+type TemplateListFilter = "current" | "draft" | "active";
 
 export function TemplatePage({
   templates,
@@ -65,6 +68,7 @@ export function TemplatePage({
   onNavigationGuardChange,
   initialWorkspace,
   initialEditVersionId,
+  initialEditTarget,
   onClose,
   onTemplateActivated,
 }: {
@@ -74,6 +78,7 @@ export function TemplatePage({
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
   initialWorkspace?: TemplateWorkspace;
   initialEditVersionId?: string;
+  initialEditTarget?: "structure" | "fields";
   onClose?: () => void;
   onTemplateActivated?: (versionId: string) => void;
 }) {
@@ -83,6 +88,8 @@ export function TemplatePage({
   const [fieldNames, setFieldNames] = useState<string[]>([]);
   const [fieldNameDraft, setFieldNameDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  // 「既存のテンプレートから」: the template series to copy.
+  const [copySourceId, setCopySourceId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobPollRevision, setJobPollRevision] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -94,7 +101,13 @@ export function TemplatePage({
   const [candidateEditor, setCandidateEditor] = useState<{
     template: Template;
     version: TemplateVersion;
-  } | null>(null);
+    returnToReading?: boolean;
+  } | null>(() => {
+    if (initialEditTarget !== "fields" || !initialEditVersionId) return null;
+    const owner = templates.find((template) => template.versions.some((candidate) => candidate.id === initialEditVersionId));
+    const version = owner?.versions.find((candidate) => candidate.id === initialEditVersionId);
+    return owner && version ? { template: owner, version, returnToReading: true } : null;
+  });
   const [review, setReview] = useState<{
     templateId: string;
     version: TemplateVersion;
@@ -102,7 +115,7 @@ export function TemplatePage({
     origin: TemplateWorkspace;
     returnToReading?: boolean;
   } | null>(() => {
-    if (!initialEditVersionId) return null;
+    if (!initialEditVersionId || initialEditTarget === "fields") return null;
     const owner = templates.find((template) => template.versions.some((candidate) => candidate.id === initialEditVersionId));
     const version = owner?.versions.find((candidate) => candidate.id === initialEditVersionId);
     if (!version?.sourceJobId) return null;
@@ -149,6 +162,17 @@ export function TemplatePage({
     }
   };
   const selectedWorkspace = workspace ?? (templates.length > 0 ? "manage" : "create");
+  // When each template was last opened in this browser; the list shows the latest first.
+  const [openedAt, setOpenedAt] = useState<Record<string, number>>(readOpenedAt);
+  const openedTemplateId = review?.templateId ?? null;
+  useEffect(() => {
+    if (!openedTemplateId) return;
+    setOpenedAt((current) => {
+      const next = { ...current, [openedTemplateId]: Date.now() };
+      try { window.localStorage.setItem(OPENED_AT_KEY, JSON.stringify(next)); } catch { /* per-browser order only */ }
+      return next;
+    });
+  }, [openedTemplateId]);
   const listedTemplates = useMemo(() => {
     return templates
       .map((template) => ({
@@ -159,26 +183,55 @@ export function TemplatePage({
         )),
       }))
       .filter(({ versions }) => {
-        const hasDraft = versions.some((version) => version.status === "DRAFT");
+        const hasDraft = versions.some(isEditingDraft);
         const hasActive = versions.some((version) => version.status === "ACTIVE");
         if (templateFilter === "draft") return hasDraft;
         if (templateFilter === "active") return hasActive;
-        if (templateFilter === "history") return true;
         return hasDraft || hasActive;
       })
       .sort((first, second) => {
-        const firstDraft = first.versions.some((version) => version.status === "DRAFT");
-        const secondDraft = second.versions.some((version) => version.status === "DRAFT");
+        const opened = (openedAt[second.template.id] ?? 0) - (openedAt[first.template.id] ?? 0);
+        if (opened !== 0) return opened;
+        const firstDraft = first.versions.some(isEditingDraft);
+        const secondDraft = second.versions.some(isEditingDraft);
         if (firstDraft !== secondDraft) return firstDraft ? -1 : 1;
         const firstDate = Date.parse(first.versions[0]?.createdAt ?? first.template.createdAt);
         const secondDate = Date.parse(second.versions[0]?.createdAt ?? second.template.createdAt);
         return secondDate - firstDate;
       });
-  }, [templateFilter, templates]);
+  }, [openedAt, templateFilter, templates]);
+  const listedPreviewVersions = useMemo(() => listedTemplates.flatMap(({ versions }) => {
+    const version = versions.find((item) => item.status === "DRAFT") ?? versions.find((item) => item.status === "ACTIVE") ?? versions[0];
+    return version ? [version] : [];
+  }), [listedTemplates]);
+  const listedPreviewFor = useTemplatePreviews(listedPreviewVersions, selectedWorkspace === "manage" && !review);
+  const [listedImageState, setListedImageState] = useState<Record<string, "loaded" | "failed">>({});
   const draftCount = templates.filter((template) => (
-    template.versions.some((version) => version.status === "DRAFT")
+    template.versions.some(isEditingDraft)
   )).length;
-  const requiredCountValid = files.length === 1;
+  // Copies start from the template in use; one without its source image cannot be edited.
+  const copySources = useMemo(() => templates.flatMap((template) => {
+    const version = template.versions.find((item) => item.status === "ACTIVE");
+    return version?.sourceJobId ? [{ template, version }] : [];
+  }), [templates]);
+  const copySource = copySources.find(({ template }) => template.id === copySourceId) ?? null;
+  const copyPreviewVersions = useMemo(() => copySources.map(({ version }) => version), [copySources]);
+  const copyPreviewFor = useTemplatePreviews(
+    copyPreviewVersions, selectedWorkspace === "create" && mode === "COPY" && !review,
+  );
+  const chooseCopySource = (template: Template) => {
+    idempotencyKeyRef.current = null;
+    setCopySourceId(template.id);
+    if (!nameEditedRef.current) setName(suggestedCopyName(template.name, templates.map((item) => item.name)));
+  };
+  const startCopy = (template: Template) => {
+    setMode("COPY");
+    setFiles([]);
+    nameEditedRef.current = false;
+    chooseCopySource(template);
+    setWorkspace("create");
+  };
+  const requiredCountValid = mode === "COPY" ? copySource !== null : files.length === 1;
   const templateName = name.trim();
   const normalizedFieldNameDraft = normalizeTemplateName(fieldNameDraft);
   const duplicateFieldName = normalizedFieldNameDraft
@@ -252,6 +305,12 @@ export function TemplatePage({
           showToast({ tone: "warning", title: "このテンプレートは有効です",
             message: "一覧を更新できませんでした。再読み込み後に最新の状態が反映されます。" });
         }
+        // Optional, after activation: show scattered items (an address, a date) as one value.
+        showToast({
+          tone: "success", title: "テンプレートを使えるようになりました", duration: 12000,
+          message: "住所や日付など、ばらばらの欄を1つにまとめて表示できます（任意）。",
+          actionLabel: "まとめ方を設定", onAction: () => openItemJoinEditor(review.templateId, versionId),
+        });
         if (onTemplateActivated) onTemplateActivated(versionId);
         return { handled: Boolean(onTemplateActivated), version: active };
       }}
@@ -265,11 +324,13 @@ export function TemplatePage({
     />;
   }
   if (candidateEditor) {
-    return <TemplateCandidateSettingsEditor
+    return <TemplateFieldSettingsEditor
       template={candidateEditor.template}
       version={candidateEditor.version}
+      closeLabel={candidateEditor.returnToReading ? "← 読み取りへ戻る" : undefined}
       onNavigationGuardChange={onNavigationGuardChange}
       onClose={() => {
+        if (candidateEditor.returnToReading && onClose) { onClose(); return; }
         setWorkspace("manage");
         setCandidateEditor(null);
       }}
@@ -301,6 +362,36 @@ export function TemplatePage({
       setMessage(errorMessage(error, "テンプレートを削除できませんでした。"));
     } finally {
       setDeletingTemplateId((current) => (current === deletingId ? null : current));
+    }
+  };
+  const copyTemplate = async (source: Template, version: TemplateVersion) => {
+    creatingRef.current = true;
+    setBusy(true); setMessage(null);
+    try {
+      const result = await api.duplicateTemplateVersion(version.id, version.revision, templateName, true);
+      const details = (await refresh()) ?? [];
+      const copied = details.find((item) => item.id === result.templateId) ?? await api.template(result.templateId);
+      const copiedVersion = copied.versions.find((item) => item.id === result.templateVersionId);
+      showToast({
+        tone: "success", title: "テンプレートを複製しました",
+        message: `「${source.name}」をもとに「${copied.name}」を作成しました。`,
+      });
+      setName(""); nameEditedRef.current = false; setCopySourceId(null);
+      if (copiedVersion?.sourceJobId) {
+        setReview({ templateId: copied.id, version: copiedVersion, jobId: copiedVersion.sourceJobId, origin: "manage" });
+      } else {
+        setWorkspace("manage");
+      }
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setMessage(errorMessage(error, "テンプレートを複製できませんでした。"));
+      } else {
+        try { await refresh(); } catch { /* The outcome is still unknown. */ }
+        setMessage("複製できたか確認できませんでした。「既存を確認・修正」の一覧を確認してから再操作してください。");
+      }
+    } finally {
+      creatingRef.current = false;
+      setBusy(false);
     }
   };
   return (
@@ -372,11 +463,39 @@ export function TemplatePage({
               idempotencyKeyRef.current = null;
               setMode(item.id);
               setFiles([]);
+              if (item.id === "COPY" && copySource && !nameEditedRef.current) chooseCopySource(copySource.template);
             }}>
-              <span className="template-mode-heading">{item.id === "SPREADSHEET_TEMPLATE" ? <FiGrid aria-hidden="true" /> : item.id === "REFERENCE_TEMPLATE" ? <FiFileText aria-hidden="true" /> : <FiImage aria-hidden="true" />}<strong>{item.title}</strong><span className="template-mode-selected">{mode === item.id && <FiCheck aria-label="選択中" />}</span></span><p>{item.copy}</p><small>{item.count}</small>
+              <span className="template-mode-heading">{item.id === "COPY" ? <FiCopy aria-hidden="true" /> : item.id === "SPREADSHEET_TEMPLATE" ? <FiGrid aria-hidden="true" /> : item.id === "REFERENCE_TEMPLATE" ? <FiFileText aria-hidden="true" /> : <FiImage aria-hidden="true" />}<strong>{item.title}</strong><span className="template-mode-selected">{mode === item.id && <FiCheck aria-label="選択中" />}</span></span><p>{item.copy}</p><small>{item.count}</small>
             </button>
           ))}</div></fieldset>
-          <fieldset className="template-create-section"><legend><span className="template-section-number">2</span> {mode === "SPREADSHEET_TEMPLATE" ? "Excelファイルを選ぶ" : "帳票画像を選ぶ"}</legend>
+          {mode === "COPY" ? <fieldset className="template-create-section"><legend><span className="template-section-number">2</span> もとにするテンプレートを選ぶ</legend>
+            {copySources.length === 0 ? <p className="template-copy-empty">複製できる使用中のテンプレートはありません。</p> : (
+              <div className="template-copy-grid">{copySources.map(({ template, version }) => {
+                const preview = copyPreviewFor(version);
+                const previewKey = templatePreviewKey(version);
+                const selected = copySourceId === template.id;
+                return (
+                  <button type="button" key={template.id} className={`template-copy-card${selected ? " selected" : ""}`}
+                    aria-pressed={selected} onClick={() => chooseCopySource(template)}>
+                    <span className="ocr-template-card-visual">
+                      {(preview?.loading || (Boolean(preview?.url) && !listedImageState[previewKey]))
+                        && <span className="ocr-template-card-skeleton" aria-hidden="true" />}
+                      {(!preview?.loading && (!preview?.url || listedImageState[previewKey] === "failed"))
+                        && <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>}
+                      {preview?.url && <img key={previewKey} src={preview.url} alt="" loading="lazy"
+                        className={listedImageState[previewKey] === "loaded" ? "loaded" : ""}
+                        onLoad={() => setListedImageState((current) => ({ ...current, [previewKey]: "loaded" }))}
+                        onError={() => setListedImageState((current) => ({ ...current, [previewKey]: "failed" }))} />}
+                    </span>
+                    <span className="template-copy-card-name">
+                      <strong title={template.name}>{template.name}</strong>
+                      {selected && <FiCheck aria-label="選択中" />}
+                    </span>
+                  </button>
+                );
+              })}</div>
+            )}
+          </fieldset> : <fieldset className="template-create-section"><legend><span className="template-section-number">2</span> {mode === "SPREADSHEET_TEMPLATE" ? "Excelファイルを選ぶ" : "帳票画像を選ぶ"}</legend>
           <FilePicker
             key={mode}
             multiple={false}
@@ -394,7 +513,7 @@ export function TemplatePage({
               }
               setFiles(nextFiles);
             }} />
-          </fieldset>
+          </fieldset>}
           <fieldset className="template-create-section"><legend><span className="template-section-number">3</span> 名前を付ける</legend>
           <label className="field-label">テンプレート名<input value={name} required maxLength={200} placeholder="テンプレート名を入力してください" onChange={(event) => {
             idempotencyKeyRef.current = null;
@@ -411,9 +530,13 @@ export function TemplatePage({
             </div>
           )}
           </fieldset>
-          <div className="template-create-submit"><p>準備後に、読み取る欄と内容を確認できます。</p>
+          <div className="template-create-submit"><p>{mode === "COPY" ? "複製したテンプレートの編集画面が開きます。元のテンプレートは変わりません。" : "準備後に、読み取る欄と内容を確認できます。"}</p>
           <button className="primary full" disabled={busy || submissionLocked || !templateName || !requiredCountValid || Boolean(duplicateTemplate)} onClick={async () => {
             if (creatingRef.current || submissionLocked) return;
+            if (mode === "COPY") {
+              if (copySource) void copyTemplate(copySource.template, copySource.version);
+              return;
+            }
             creatingRef.current = true;
             const idempotencyKey = idempotencyKeyRef.current
               ?? createIdempotencyKey("template");
@@ -435,7 +558,7 @@ export function TemplatePage({
             }
             catch (error) { setMessage(errorMessage(error, "開始できませんでした。")); }
             finally { creatingRef.current = false; setBusy(false); }
-          }}><FiArrowRight aria-hidden="true" />{busy ? "送信中…" : submissionLocked ? "テンプレート準備を開始しました" : "テンプレート準備を開始"}</button>
+          }}><FiArrowRight aria-hidden="true" />{mode === "COPY" ? (busy ? "複製中…" : "複製して編集を開始") : busy ? "送信中…" : submissionLocked ? "テンプレート準備を開始しました" : "テンプレート準備を開始"}</button>
           </div>
         </section>
         <JobProgress job={job} connectionLost={connectionLost} />
@@ -466,7 +589,6 @@ export function TemplatePage({
             <option value="current">作業途中・使用中</option>
             <option value="draft">作業途中のみ</option>
             <option value="active">使用中のみ</option>
-            <option value="history">過去を含むすべて</option>
           </select></label>
         </div>
         <div className="template-management-list" aria-label="既存テンプレート一覧">
@@ -475,48 +597,64 @@ export function TemplatePage({
             const active = versions.find((version) => version.status === "ACTIVE") ?? null;
             const primaryVersion = draft ?? active;
             const printVersion = active ?? primaryVersion;
-            const status = draft ? "draft" : active ? "active" : "history";
-            const statusLabel = draft ? "作業途中" : active ? "使用中" : "過去のテンプレート";
+            const editing = Boolean(draft && isEditingDraft(draft));
+            const status = editing ? "draft" : active ? "active" : "history";
+            const statusLabel = editing ? "作業途中" : active ? "使用中" : "過去のテンプレート";
             const isDeletingCurrentTemplate = deletingTemplateId === template.id;
+            const thumbnailVersion = primaryVersion ?? versions[0];
+            const preview = thumbnailVersion ? listedPreviewFor(thumbnailVersion) : undefined;
+            const previewKey = thumbnailVersion ? templatePreviewKey(thumbnailVersion) : "";
             return (
               <article className="template-management-card" key={template.id}>
+                <button type="button" className="template-management-visual ocr-template-card-visual"
+                  aria-label={primaryVersion ? `${template.name}を開く` : `${template.name}の書類見本`}
+                  disabled={!primaryVersion?.sourceJobId || isDeletingCurrentTemplate || openingReview}
+                  onClick={() => primaryVersion?.sourceJobId && setReview({
+                    templateId: template.id, version: primaryVersion, jobId: primaryVersion.sourceJobId, origin: "manage",
+                  })}>
+                  {(preview?.loading || (Boolean(preview?.url) && !listedImageState[previewKey]))
+                    && <span className="ocr-template-card-skeleton" aria-hidden="true" />}
+                  {(!preview?.loading && (!preview?.url || listedImageState[previewKey] === "failed"))
+                    && <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>}
+                  {preview?.url && <img key={previewKey} src={preview.url} alt="" loading="lazy"
+                    className={listedImageState[previewKey] === "loaded" ? "loaded" : ""}
+                    onLoad={() => setListedImageState((current) => ({ ...current, [previewKey]: "loaded" }))}
+                    onError={() => setListedImageState((current) => ({ ...current, [previewKey]: "failed" }))} />}
+                </button>
                 <div className="template-management-main">
                   <div className="template-management-title">
                     <span className={`template-version-status ${status}`}>{statusLabel}</span>
-                    <h3>{template.name}</h3>
+                    <h3 title={template.name}>{template.name}</h3>
                   </div>
                   {primaryVersion ? (
-                    <p>v{primaryVersion.versionNumber} · {templateModeLabel(primaryVersion.mode)} · 更新 {formatTemplateDateTime(primaryVersion.createdAt)}</p>
+                    <p>{templateModeLabel(primaryVersion.mode)} · 更新 {formatTemplateDateTime(primaryVersion.createdAt)}</p>
                   ) : (
-                    <p>現在利用できるバージョンはありません。</p>
+                    <p>現在使用できる設定はありません。</p>
                   )}
                 </div>
                 <div className="template-management-action">
-                  {printVersion?.mode === "SPREADSHEET_TEMPLATE" && printVersion.quality.printLayout ? <div>
-                    <small>{printVersion.status === "ACTIVE" ? "使用中" : "下書き"} v{printVersion.versionNumber} の印刷用帳票</small>
-                    <TemplatePrintFiles key={printVersion.id}
-                      versionId={printVersion.id} disabled={isDeletingCurrentTemplate || openingReview} />
-                  </div> : null}
-
                   {primaryVersion && (
-                    <button
-                      type="button"
-                      className={draft ? "primary compact" : "secondary compact"}
-                      aria-label={draft ? draftResumeLabel(template.name, primaryVersion) : `${template.name} v${primaryVersion.versionNumber} のテンプレートを編集`}
+                    <TemplateEditMenu
+                      label={draft ? "作成を再開" : "編集"}
+                      primary={Boolean(draft)}
                       disabled={!primaryVersion.sourceJobId || isDeletingCurrentTemplate || openingReview}
-                      onClick={() => primaryVersion.sourceJobId && setReview({
+                      structureLabel={draft ? "作成を再開する" : "構造を編集する"}
+                      structureAriaLabel={draft ? draftResumeLabel(template.name, primaryVersion) : `${template.name}のテンプレートを編集`}
+                      onStructure={() => primaryVersion.sourceJobId && setReview({
                         templateId: template.id,
                         version: primaryVersion,
                         jobId: primaryVersion.sourceJobId,
                         origin: "manage",
                       })}
-                    >{draft ? "作成を再開" : "テンプレートを編集"}</button>
+                      onFields={() => setCandidateEditor({ template, version: active ?? primaryVersion })}
+                      onCopy={active?.sourceJobId ? () => startCopy(template) : undefined}
+                    />
                   )}
                   {primaryVersion && (
                     <button
                       type="button"
                       className="secondary compact template-print-button"
-                      aria-label={`${template.name} v${primaryVersion.versionNumber}を印刷`}
+                      aria-label={`${template.name}を印刷`}
                       disabled={isDeletingCurrentTemplate || openingReview}
                       onClick={() => {
                         const opened = window.open(
@@ -539,20 +677,11 @@ export function TemplatePage({
                       印刷
                     </button>
                   )}
-                  {primaryVersion && (
-                    <button
-                      type="button"
-                      className="secondary compact template-candidate-settings-button"
-                      aria-label={`${template.name}の読み取り候補を設定`}
-                      disabled={!primaryVersion.sourceJobId || isDeletingCurrentTemplate || openingReview}
-                      onClick={() => setCandidateEditor({ template, version: primaryVersion })}
-                    >
-                      <svg aria-hidden="true" viewBox="0 0 24 24">
-                        <path d="M5 5h14v3H5zm0 6h9v3H5zm0 6h6v2H5zm13-6v8m-4-4h8" />
-                      </svg>
-                      読み取り候補を設定
-                    </button>
-                  )}
+                  {printVersion?.mode === "SPREADSHEET_TEMPLATE" && printVersion.quality.printLayout ? <div>
+                    <small>印刷用帳票</small>
+                    <TemplatePrintFiles key={printVersion.id}
+                      versionId={printVersion.id} disabled={isDeletingCurrentTemplate || openingReview} />
+                  </div> : null}
 
                   <button
                     type="button"
@@ -564,34 +693,8 @@ export function TemplatePage({
                   </button>
                   {isDeletingCurrentTemplate && <small>削除処理中…</small>}
                   {!primaryVersion?.sourceJobId && <small>元画像がないため編集できません</small>}
-                  {!primaryVersion && <small>編集対象の版がありません</small>}
+                  {!primaryVersion && <small>編集できる設定がありません</small>}
                 </div>
-                <details className="template-version-history">
-                  <summary>バージョン履歴（{versions.length}件）</summary>
-                  <div>{versions.map((version) => (
-                    <div className="template-version-row" key={version.id}>
-                      <span>v{version.versionNumber}</span>
-                      <span>{templateVersionStatusLabel(version.status)}</span>
-                      <span>{formatTemplateDateTime(version.createdAt)}</span>
-                      {(version.status === "DRAFT" || version.status === "ACTIVE") && version.id !== primaryVersion?.id && (
-                        <button
-                          type="button"
-                          className="ghost compact"
-                          aria-label={version.status === "DRAFT"
-                            ? draftResumeLabel(template.name, version)
-                            : `${template.name} v${version.versionNumber} のテンプレートを編集`}
-                          disabled={!version.sourceJobId || isDeletingCurrentTemplate || openingReview}
-                          onClick={() => version.sourceJobId && setReview({
-                            templateId: template.id,
-                            version,
-                            jobId: version.sourceJobId,
-                            origin: "manage",
-                        })}
-                        >テンプレートを編集</button>
-                      )}
-                    </div>
-                  ))}</div>
-                </details>
               </article>
             );
           })}
@@ -672,7 +775,6 @@ function TemplateReview({
   const [layoutConfig, setLayoutConfig] = useState<LayoutDefinition | null>(null);
   const [layer, setLayer] = useState("layoutVerificationOverlay");
   const [layoutVerified, setLayoutVerified] = useState(version.quality.layoutVerified === true);
-  const [verifying, setVerifying] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
   const [printDirty, setPrintDirty] = useState(false);
   const [printBusy, setPrintBusy] = useState(false);
@@ -708,8 +810,6 @@ function TemplateReview({
   const editingInteractionChange = useCallback((active: boolean) => editingStore.setInteraction(active), [editingStore]);
   const [editingEnabled, setEditingEnabled] = useState<boolean | null>(null);
   const [analysisEnabled, setAnalysisEnabled] = useState(false);
-  const [editingReview, setEditingReview] = useState<LoadedManualView | null>(null);
-  const [editingRecoveryBusy, setEditingRecoveryBusy] = useState(false);
   const ownSubstitutionsRef = useRef<Record<string, string>>({});
   useEffect(() => {
     let active = true;
@@ -731,6 +831,18 @@ function TemplateReview({
   const [decisionBusy, setDecisionBusy] = useState<DecisionAction | null>(null);
   const [layoutWorkflowStep, setLayoutWorkflowStep] = useState<LayoutWorkflowStep>("classify");
   const [mappingWarningsExpanded, setMappingWarningsExpanded] = useState(false);
+  const [printEditorOpen, setPrintEditorOpen] = useState(false);
+  useEffect(() => {
+    // The issue list is a dropdown: a click elsewhere or Esc closes it.
+    if (!mappingWarningsExpanded) return;
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape"
+        : !(event.target instanceof Element && event.target.closest(".mapping-warning-panel"))) setMappingWarningsExpanded(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
+  }, [mappingWarningsExpanded]);
   const [mappingWarningFocusRequest, setMappingWarningFocusRequest] = useState(0);
   const [mappingWarningNotices, setMappingWarningNotices] = useState<Record<string, string>>({});
   const [layoutCellFocusRequest, setLayoutCellFocusRequest] = useState<LayoutEditorFocusRequest | null>(null);
@@ -769,7 +881,6 @@ function TemplateReview({
   }, [analysisEnabled, Boolean(layoutConfig), analysisStore]);
   const mappingSectionHeadingRef = useRef<HTMLHeadingElement>(null);
   const decisionLockRef = useRef(false);
-  const verificationLockRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     setLoadFailed(false);
@@ -801,7 +912,6 @@ function TemplateReview({
     || editorSaving
     || maskDirty
     || maskBusy
-    || verifying
     || identityFieldsSignature(identityFields) !== identityFieldsSignature(
       mappingConfig ? identityFieldsFromResponse(mappingConfig) : [],
     )
@@ -838,7 +948,6 @@ function TemplateReview({
   }, [analysisEnabled, layoutConfig, mappingConfig, after, editingStatus.state, editorBusy, editorSaving, loadFailed, mappingFresh,
     version.status, version.quality.forkParentVersionId, activatedVersion, analysisStatus.run, analysisStatus.recovery,
     analysisStatus.held, analysisStatus.busy, analysisStore, currentPrintPage]);
-  const mask = layoutVerified ? byName.get("handwritingMask") : undefined;
   const isSpreadsheetTemplate = version.mode === "SPREADSHEET_TEMPLATE";
   const layers = ["layoutVerificationOverlay", "debugOverlay", "handwritingOnly", "handwritingProbability"].filter((name) => byName.has(name));
   const persistedIdentityFields = mappingConfig ? identityFieldsFromResponse(mappingConfig) : [];
@@ -866,12 +975,14 @@ function TemplateReview({
       mappingConfig?.fieldErrors,
       layoutMeaningState,
     );
+  // A draft made from an existing version changes a template already in use.
+  const isRevision = Boolean(version.quality.forkParentVersionId);
   const effectiveLayoutVerified = layoutVerified
     && !editorDirty
     && !identityDirty
     && !documentNameDirty
     && mappingFresh;
-  const navigationBusy = navigationPending || editorBusy || maskBusy || printBusy || verifying
+  const navigationBusy = navigationPending || editorBusy || maskBusy || printBusy
     || assistantApplying || decisionBusy !== null;
   const operationBusy = navigationBusy || editorSaving || assistantApplying;
   const layoutEditorDisabled = maskDirty || maskBusy || printDirty || printBusy
@@ -910,7 +1021,7 @@ function TemplateReview({
     step: LayoutWorkflowStep,
   ) => {
     if (navigationBusy || navigationLockRef.current) return;
-    const structuredCellTarget = warning.startsWith("[MARK_OPTIONS_REQUIRED]")
+    const structuredCellTarget = isChoiceSetupWarning(warning)
       || warning === "読み取りに使用できる意味づけ済みセルがありません。";
     if (!structuredCellTarget) {
       moveLayoutWorkflow(step);
@@ -927,7 +1038,7 @@ function TemplateReview({
       }));
       setMappingWarningFocusRequest((request) => request + 1);
     };
-    const target = warning.startsWith("[MARK_OPTIONS_REQUIRED]")
+    const target = isChoiceSetupWarning(warning)
       ? markOptionsTargetFromFieldErrors(mappingConfig?.fieldErrors)
       : firstMeaningFocusTarget(layoutMeaningState);
     const targetCell = target
@@ -1061,7 +1172,7 @@ function TemplateReview({
     if (!confirmation) onClose();
     else if (!confirmation.handled) {
       setActivatedVersion(confirmation.version);
-      setFeedback({ kind: "success", text: "承認結果を再取得し、この版が有効になったことを確認しました。" });
+      setFeedback({ kind: "success", text: isRevision ? "変更を反映しました。" : "テンプレートを作成しました。" });
     }
     setApprovalPendingConfirmation(false);
   };
@@ -1069,7 +1180,7 @@ function TemplateReview({
     if (!beginDecision("approve")) return;
     try { await confirmApproval(); }
     catch (error) {
-      setFeedback({ kind: "error", text: `承認要求は成功しましたが、状態を確認できません。${errorMessage(error, "承認結果を再取得してください。")}` });
+      setFeedback({ kind: "error", text: `${isRevision ? "反映" : "作成"}の要求は届きましたが、結果を確認できません。${errorMessage(error, "結果を再取得してください。")}` });
     }
     finally { endDecision(); }
   };
@@ -1078,11 +1189,21 @@ function TemplateReview({
     let revision = printSaved ? printState?.revision : undefined;
     if (printSaved) {
       if (!revision || !meaningSaved) return;
-    } else if (!effectiveLayoutVerified || !meaningSaved || maskRequiresReprocess) return;
+    } else if (!meaningSaved || maskRequiresReprocess) return;
     if (editorBusy || editorSaving || editorDirty || identityDirty || documentNameDirty
       || maskDirty || maskBusy || !beginDecision("approve")) return;
     let approvalPosted = false;
     try {
+      if (!printSaved && !effectiveLayoutVerified) {
+        // The reading areas are checked against the form as part of creating the template.
+        setPreparationMessage("読み取る欄を確認しています…");
+        const verified = await api.verifyLayout(version.id, revisionRef.current);
+        acceptRevision(verified.resourceRevision);
+        setLayoutConfig(verified);
+        setArtifacts((await api.artifacts(jobId)).items);
+        setLayoutVerified(true);
+        setPreparationMessage("テンプレートを有効にしています…");
+      }
       if (printSaved && revision) {
         if (!printReferencePreparationReady(printState?.saved)) {
           setPreparationMessage("印刷見本を作成しています…");
@@ -1093,7 +1214,7 @@ function TemplateReview({
         }
         setPreparationMessage("読み取る欄を準備しています…");
         acceptRevision((await api.prepareReviewedOcr(version.id, revisionRef.current, revision)).resourceRevision);
-        setPreparationMessage("テンプレートを有効化しています…");
+        setPreparationMessage("テンプレートを有効にしています…");
       }
       acceptRevision((await api.approve(version.id, revisionRef.current, revision)).resourceRevision);
       approvalPosted = true;
@@ -1101,7 +1222,7 @@ function TemplateReview({
       await confirmApproval();
     } catch (error) {
       if (approvalPosted) {
-        setFeedback({ kind: "error", text: `承認要求は成功しましたが、状態を確認できません。${errorMessage(error, "承認結果を再取得してください。")}` });
+        setFeedback({ kind: "error", text: `${isRevision ? "反映" : "作成"}の要求は届きましたが、結果を確認できません。${errorMessage(error, "結果を再取得してください。")}` });
       } else if (printSaved && error instanceof ApiError && [
         "PRINT_LAYOUT_CONFLICT",
         "TEMPLATE_VERSION_CONFLICT",
@@ -1113,7 +1234,7 @@ function TemplateReview({
         }
         setFeedback({ kind: "error", text: `${error.message} 最新のページ設定を取得しました。内容を確認してもう一度実行してください。` });
       } else {
-        setFeedback({ kind: "error", text: errorMessage(error, "テンプレートを承認できませんでした。") });
+        setFeedback({ kind: "error", text: errorMessage(error, isRevision ? "変更を反映できませんでした。" : "テンプレートを作成できませんでした。") });
       }
     } finally {
       setPreparationMessage("");
@@ -1144,11 +1265,11 @@ function TemplateReview({
     operations: assistantOperations,
     dirty: editorDirty || identityDirty || documentNameDirty,
     recoveryDirty: editorDirty || identityDirty || documentNameDirty || maskDirty || printDirty || Boolean(assistantSelection?.draftReviewRequired),
-    recoveryBusy: editorBusy || editorSaving || maskBusy || printBusy || verifying || decisionBusy !== null,
-    resourceBlocker: version.status !== "DRAFT" || activatedVersion ? "公開済みの版です。"
+    recoveryBusy: editorBusy || editorSaving || maskBusy || printBusy || decisionBusy !== null,
+    resourceBlocker: version.status !== "DRAFT" || activatedVersion ? "使用中のテンプレートです。"
       : loadFailed || !mappingFresh || maskDirty || printDirty || assistantSelection?.draftReviewRequired ? "既存の編集・保存状態を先に解決してください。" : null,
     busy: operationBusy || printBusy || maskBusy,
-    blocker: version.status !== "DRAFT" || activatedVersion ? "公開済みの版は操作できません。下書き版を開いてください。"
+    blocker: version.status !== "DRAFT" || activatedVersion ? "使用中のテンプレートは直接操作できません。一覧の「編集」から開いてください。"
       : loadFailed || !mappingFresh ? "保存状態を確認できません。既存の編集画面で再取得または保存を完了してください。"
       : maskDirty || printDirty ? "マスク・印刷ページの未保存変更を、既存の編集画面で保存または取り消してください。"
       : assistantSelection?.draftReviewRequired ? "復元した下書きの確認を既存の編集画面で完了してください。"
@@ -1159,7 +1280,72 @@ function TemplateReview({
   };
   return (
     <div className="page-stack template-authoring-workspace">
-      <header className="page-header split"><div><span className="eyebrow">テンプレート設定 · V{version.versionNumber}</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1></div><button className="ghost" disabled={navigationBusy} onClick={closeReview}><FiArrowLeft aria-hidden="true" />{closeLabel.replace(/^←\s*/, "")}</button></header>
+      <header className="page-header split authoring-header">
+        <div className="authoring-title"><span className="eyebrow">テンプレート設定</span><h1>{version.quality.forkParentVersionId ? "読み取る欄を設定" : "復元結果を確認"}</h1></div>
+        <div className="authoring-header-actions">
+          {visibleMappingWarnings.length > 0 && (
+            <aside className="mapping-warning-panel" aria-label="テンプレート設定の要対応事項">
+              <button
+                type="button"
+                className="mapping-warning-toggle"
+                aria-expanded={mappingWarningsExpanded}
+                aria-controls="mapping-warning-list"
+                onClick={() => setMappingWarningsExpanded((expanded) => !expanded)}
+              >
+                <FiAlertCircle aria-hidden="true" />
+                <strong>要対応</strong>
+                <span className="mapping-warning-count" aria-live="polite" aria-atomic="true">
+                  {visibleMappingWarnings.length}件
+                </span>
+                <FiChevronDown className="mapping-warning-chevron" aria-hidden="true" />
+              </button>
+              {mappingWarningsExpanded && (
+                <div className="mapping-warning-list" id="mapping-warning-list">
+                  <ul>
+                    {visibleMappingWarnings.map((warning, index) => {
+                      const warningKey = `${index}-${warning}`;
+                      const targetStep = mappingWarningWorkflowStep(warning);
+                      const target = targetStep === null
+                        ? null
+                        : LAYOUT_WIZARD_STEPS.find((step) => step.id === targetStep) ?? null;
+                      return (
+                        <li key={warningKey}>
+                          {target ? (
+                            <button
+                              type="button"
+                              className="mapping-warning-action"
+                              disabled={navigationBusy || navigationLockRef.current}
+                              onClick={() => moveToMappingWarning(warning, warningKey, target.id)}
+                            >
+                              <span>{userText(warning, "設定の注意")}</span>
+                              <small>{navigationBusy || navigationLockRef.current
+                                ? "現在の処理が完了するまで移動できません。"
+                                : `Step ${LAYOUT_WIZARD_STEPS.indexOf(target) + 1}「${target.shortTitle}」へ移動`}</small>
+                            </button>
+                          ) : (
+                            <span className="mapping-warning-message">{userText(warning, "設定の注意")}</span>
+                          )}
+                          {mappingWarningNotices[warningKey] && (
+                            <small className="mapping-warning-notice" role="status">
+                              <span>{mappingWarningNotices[warningKey]}</span>
+                              <span>{isChoiceSetupWarning(warning)
+                                ? "帳票プレビューから対象の選択欄を選んでください。"
+                                : "帳票プレビューから対象の記入欄または選択欄を選んでください。"}</span>
+                            </small>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </aside>
+          )}
+          {isSpreadsheetTemplate && <button type="button" className={`secondary compact authoring-print-toggle${printEditorOpen ? " active" : ""}`} aria-expanded={printEditorOpen}
+            onClick={() => setPrintEditorOpen((current) => !current)}><FiPrinter aria-hidden="true" />印刷ページを編集</button>}
+          <button type="button" className="ghost compact" disabled={navigationBusy} onClick={closeReview}><FiArrowLeft aria-hidden="true" />{closeLabel.replace(/^←\s*/, "")}</button>
+        </div>
+      </header>
       {loadFailed && (
         <div className="error-box action-message" role="alert">
           <span>テンプレート設定を最後まで読み込めませんでした。</span>
@@ -1167,66 +1353,6 @@ function TemplateReview({
             読み込みを再試行
           </button>
         </div>
-      )}
-      {visibleMappingWarnings.length > 0 && (
-        <aside className="mapping-warning-panel" aria-label="テンプレート設定の要対応事項">
-          <button
-            type="button"
-            className="mapping-warning-toggle"
-            aria-expanded={mappingWarningsExpanded}
-            aria-controls="mapping-warning-list"
-            onClick={() => setMappingWarningsExpanded((expanded) => !expanded)}
-          >
-            <FiAlertCircle aria-hidden="true" />
-            <strong>要対応</strong>
-            <span className="mapping-warning-count" aria-live="polite" aria-atomic="true">
-              {visibleMappingWarnings.length}件
-            </span>
-            <span className="mapping-warning-toggle-label">
-              {mappingWarningsExpanded ? "折りたたむ" : "展開する"}
-            </span>
-          </button>
-          {mappingWarningsExpanded && (
-            <div className="mapping-warning-list" id="mapping-warning-list">
-              <ul>
-                {visibleMappingWarnings.map((warning, index) => {
-                  const warningKey = `${index}-${warning}`;
-                  const targetStep = mappingWarningWorkflowStep(warning);
-                  const target = targetStep === null
-                    ? null
-                    : LAYOUT_WIZARD_STEPS.find((step) => step.id === targetStep) ?? null;
-                  return (
-                    <li key={warningKey}>
-                      {target ? (
-                        <button
-                          type="button"
-                          className="mapping-warning-action"
-                          disabled={navigationBusy || navigationLockRef.current}
-                          onClick={() => moveToMappingWarning(warning, warningKey, target.id)}
-                        >
-                          <span>{warning}</span>
-                          <small>{navigationBusy || navigationLockRef.current
-                            ? "現在の処理が完了するまで移動できません。"
-                            : `Step ${LAYOUT_WIZARD_STEPS.indexOf(target) + 1}「${target.shortTitle}」へ移動`}</small>
-                        </button>
-                      ) : (
-                        <span className="mapping-warning-message">{warning}</span>
-                      )}
-                      {mappingWarningNotices[warningKey] && (
-                        <small className="mapping-warning-notice" role="status">
-                          <span>{mappingWarningNotices[warningKey]}</span>
-                          <span>{warning.startsWith("[MARK_OPTIONS_REQUIRED]")
-                            ? "帳票プレビューから対象の選択欄を選んでください。"
-                            : "帳票プレビューから対象の記入欄または選択欄を選んでください。"}</span>
-                        </small>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-        </aside>
       )}
       {effectiveLayoutVerified && <div className="template-verification-view">
         <section className="viewer-card">
@@ -1243,11 +1369,12 @@ function TemplateReview({
             setFeedback({ kind: "error", text: errorMessage(error, "印刷操作後の編集状態を確認してください。") });
           });
         }}
-        disabled={editorDirty || editorBusy || maskDirty || maskBusy || verifying || assistantApplying || decisionBusy !== null}
+        disabled={editorDirty || editorBusy || maskDirty || maskBusy || assistantApplying || decisionBusy !== null}
         onDirtyChange={setPrintDirty} onBusyChange={setPrintBusy} onSavedChange={setPrintSaved}
         initialSaved={Boolean(version.quality.printLayout)}
         onStateChange={setPrintState} externalState={printState}
         onLayoutSaved={setLayoutConfig}
+        open={printEditorOpen || printDirty}
       />}
       {mappingConfig && layoutConfig && after && (
         <section className="form-card mapping-section">
@@ -1264,7 +1391,7 @@ function TemplateReview({
                 key={step.id}
                 className={step.id === layoutWorkflowStep ? "current" : ""}
                 aria-current={step.id === layoutWorkflowStep ? "step" : undefined}
-                disabled={navigationBusy || (step.id === "review" && (!identityReady || !documentNameReady))}
+                disabled={navigationBusy}
                 onClick={() => moveLayoutWorkflow(step.id)}
               >
                 <span>{index + 1}</span>
@@ -1272,14 +1399,13 @@ function TemplateReview({
               </button>
             ))}
           </nav>
-          {maskDirty && <p className="inline-warning">先に文字候補の選別結果を保存してください。</p>}
           <div className="assistant-editor-workspace">
-          {editingEnabled ? <EditingControls store={editingStore}
+          {editingEnabled ? <EditingControls store={editingStore} tableSelector={false} voiceOnly floatingAnchor=".layout-workbench .mapping-canvas-wrap"
             holdSelectionContext={analysisStatus.held}
             pageScope={currentPrintPage ? { mode: "current", pageId: `${currentPrintPage.page}:${currentPrintPage.range}` } : { mode: "all", pageId: null }}
             selectedEntities={assistantSelection?.selectedIds ?? []} selectionEpoch={assistantSelection?.selectionEpoch ?? 0}
             manualActive={analysisStatus.held || editorDirty || editorBusy || editorSaving || identityDirty || documentNameDirty || maskDirty || printDirty || maskBusy || printBusy || decisionBusy !== null || Boolean(assistantSelection?.draftReviewRequired)}
-            disabled={version.status !== "DRAFT" || activatedVersion?.status === "ACTIVE" ? "編集中の版で音声入力を使用してください。" : loadFailed || !mappingFresh ? "編集状態を取得してから音声入力を使用してください。" : null}
+            disabled={version.status !== "DRAFT" || activatedVersion?.status === "ACTIVE" ? "一覧の「編集」から開いて音声入力を使用してください。" : loadFailed || !mappingFresh ? "編集状態を取得してから音声入力を使用してください。" : null}
             onSaved={async saved => {
               if (!saved.template) throw new Error("保存済みのテンプレートを取得できません。");
               if (editorDirty || identityDirty || documentNameDirty || maskDirty || printDirty || editorBusy || editorSaving) throw new Error("保存済み・表示更新待ちです。未保存の入力を保持しています。");
@@ -1288,7 +1414,8 @@ function TemplateReview({
               acceptRevision(next.revision); setLayoutConfig(next.layout); setMappingConfig(next.mapping);
               setIdentityFields(identityFieldsFromResponse(next.mapping)); setDocumentNameRule(documentNameFromResponse(next.mapping));
               setMappingFresh(true); setLayoutVerified(next.quality.layoutVerified === true);
-              setAssistantSaveError(null); setFeedback({ kind: "success", text: saved.result.notification });
+              // The voice overlay shows the result as a bubble; a page banner would also scroll the page.
+              setAssistantSaveError(null);
             }} /> : <AssistantPanel snapshot={assistantSnapshot} adapter={{
             setApplying: setAssistantApplying,
             saved: async (receipt, discardDraft = false) => {
@@ -1328,11 +1455,8 @@ function TemplateReview({
               return true;
             },
           }} />}
-          {analysisEnabled && <TemplateAnalysisPanel store={analysisStore}
-            structureAvailable={version.mode === "SINGLE_IMAGE_EXPERIMENTAL" && !printSaved && !editingStatus.context?.scopeContext.selectedTableId}
-            pageScope={currentPrintPage ? { mode: "current", pageId: `${currentPrintPage.page}:${currentPrintPage.range}` } : { mode: "all", pageId: null }}
-            multiplePages={(printState?.saved?.pages.length ?? 0) > 1}
-            blocked={layoutEditorDisabled || editorBusy || editorSaving || editingStatus.state !== "ready" || version.status !== "DRAFT" || activatedVersion?.status === "ACTIVE" || Boolean(assistantSelection?.draftReviewRequired)}
+          {analysisEnabled && <TemplateAnalysisStatus store={analysisStore}
+            blocked={layoutEditorDisabled || editorBusy || editingStatus.state !== "ready"}
             saving={editorSaving} onSave={() => { void layoutEditorRef.current?.saveIfNeeded(); }} />}
           <LayoutEditor
             aiFocus={editingEnabled ? analysisStatus.held ? analysisStatus.focus : analysisStatus.focus ?? editingStatus.focus : null}
@@ -1370,6 +1494,15 @@ function TemplateReview({
             } : undefined}
             targets={mappingConfig.targets}
             workflowStep={layoutWorkflowStep}
+            stepNavigation={{
+              index: layoutWorkflowIndex, count: LAYOUT_WIZARD_STEPS.length,
+              title: LAYOUT_WIZARD_STEPS[layoutWorkflowIndex]?.shortTitle ?? "",
+              previous: layoutWorkflowIndex > 0 && !navigationBusy
+                ? () => moveLayoutWorkflow(LAYOUT_WIZARD_STEPS[layoutWorkflowIndex - 1].id) : null,
+              next: layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1 && !navigationBusy
+                && !(layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady))
+                ? () => moveLayoutWorkflow(LAYOUT_WIZARD_STEPS[layoutWorkflowIndex + 1].id) : null,
+            }}
             focusRequest={layoutCellFocusRequest}
             onFocusRequestResult={handleLayoutFocusResult}
             documentIdentityFields={identityFields}
@@ -1429,7 +1562,7 @@ function TemplateReview({
                 setMappingFresh(true);
                 if (!printDisplayPending) setFeedback({ kind: saved.mapping.fieldErrors?.length ? "error" : "success",
                   text: saved.mapping.fieldErrors?.length
-                    ? `レイアウトを途中保存しました。${saved.mapping.warnings.join(" ")}`
+                    ? `レイアウトを途中保存しました。${saved.mapping.warnings.map((warning) => userText(warning, "保存時の注意")).join(" ")}`
                     : manualSaved ? manualSaved.result.notification
                     : `レイアウト${saved.layout.cells.length}セル、意味づけ${saved.layout.relations.length}件と確認する欄・ファイル名を保存しました。`,
                 });
@@ -1440,61 +1573,6 @@ function TemplateReview({
               }
             }}
           />
-          {editingEnabled && editingStatus.state !== "ready" && editingStatus.state !== "saving" && (
-            <section className="inline-warning" aria-label="編集保存の復旧">
-              <p role="status">{editingStatus.message} 未保存の入力は画面に保持しています。</p>
-              <button type="button" disabled={editingRecoveryBusy} onClick={async () => {
-                setEditingRecoveryBusy(true);
-                try {
-                  const retained = editingStore.retainedDraft();
-                  const { view, result } = await editingStore.recover();
-                  ownSubstitutionsRef.current = result.substitutions ?? {};
-                  acceptRevision(view.authoring.revision); setLayoutConfig(view.authoring.layout);
-                  setMappingConfig(view.authoring.mapping); setMappingFresh(true); setLayoutVerified(false);
-                  // A recovered response must not erase input typed after the lost
-                  // response. The editor accepts only an unchanged retained draft.
-                  if (retained) {
-                    layoutEditorRef.current?.acceptOwnSaved(retained.layout, view.authoring.layout);
-                    setIdentityFields(current => reconcileOwnSave(current, retained.documentIdentityFields,
-                      identityFieldsFromResponse(view.authoring.mapping), result.substitutions ?? {}));
-                    setDocumentNameRule(current => reconcileOwnSave(current, retained.documentName,
-                      documentNameFromResponse(view.authoring.mapping), result.substitutions ?? {}));
-                  }
-                  if (analysisEnabled) analysisStore.saved(undefined, result.substitutions ?? {});
-                  setFeedback({ kind: "success", text: result.notification });
-                } catch (error) { setFeedback({ kind: "error", text: errorMessage(error, "保存結果をまだ確認できません。") }); }
-                finally { setEditingRecoveryBusy(false); }
-              }}>保存結果を再取得</button>
-              {(editingStatus.state === "conflict" || editingStatus.state === "failed") && <button type="button" disabled={editingRecoveryBusy} onClick={async () => {
-                setEditingRecoveryBusy(true);
-                try { setEditingReview(await editingStore.inspectLatest()); }
-                catch (error) { setFeedback({ kind: "error", text: errorMessage(error, "最新の保存版を取得できません。") }); }
-                finally { setEditingRecoveryBusy(false); }
-              }}>最新の保存版を確認</button>}
-              {editingReview && <div>
-                <p>保存版の変更点を確認してください。編集再開時は未編集の箇所に保存版を反映し、未保存の入力を保持します。次の操作までは再送しません。</p>
-                <table><thead><tr><th>保存版の項目</th><th>名称</th></tr></thead><tbody>
-                  {editingReview.authoring.layout.cells.flatMap((cell, index) => {
-                    const previous = layoutConfig.cells.find(item => item.id === cell.id);
-                    return !previous || JSON.stringify(previous) !== JSON.stringify(cell)
-                      ? [<tr key={cell.id}><td>{cell.printedLabelText || cell.text || `欄 ${index + 1}`}</td><td>{cell.fieldLabel || cell.text || "名称未設定"}</td></tr>] : [];
-                  })}
-                </tbody></table>
-                <p>変更された意味：{editingReview.authoring.layout.labelPool?.filter(entry => JSON.stringify(layoutConfig.labelPool?.find(previous => previous.id === entry.id)) !== JSON.stringify(entry)).map(entry => entry.label).join("、") || "変更なし"}。変更された表：{editingReview.authoring.layout.recordSections?.filter(section => JSON.stringify(layoutConfig.recordSections?.find(previous => previous.id === section.id)) !== JSON.stringify(section)).map(section => section.displayName || section.title).join("、") || "変更なし"}。</p>
-                <button type="button" onClick={async () => {
-                  try {
-                  await editingStore.resumeAfterReview(editingReview);
-                  layoutEditorRef.current?.acceptReviewedSaved(layoutConfig, editingReview.authoring.layout);
-                  setIdentityFields(current => reconcileOwnSave(current, identityFieldsFromResponse(mappingConfig), identityFieldsFromResponse(editingReview.authoring.mapping), {}));
-                  setDocumentNameRule(current => reconcileOwnSave(current, documentNameFromResponse(mappingConfig), documentNameFromResponse(editingReview.authoring.mapping), {}));
-                  setLayoutConfig(editingReview.authoring.layout); setMappingConfig(editingReview.authoring.mapping); setMappingFresh(true);
-                  acceptRevision(editingReview.authoring.revision); setEditingReview(null);
-                  setFeedback({ kind: "success", text: "入力を保持して編集を再開しました。次の手動操作で保存します。" });
-                  } catch (error) { setFeedback({ kind: "error", text: errorMessage(error, "編集を再開できません。入力は保持しています。") }); }
-                }}>保存版を確認して編集を再開</button>
-              </div>}
-            </section>
-          )}
           </div>
           <div className="layout-wizard-navigation">
             <button
@@ -1512,9 +1590,7 @@ function TemplateReview({
                 ? "変更を保存してから移動します。"
                 : layoutWorkflowStep === "identity" && (!identityReady || !documentNameReady)
                 ? "確認する欄と、保存するファイル名を決めてください。"
-                : layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1
-                  ? null
-                  : "未割当と、書類を見分ける項目を確認して保存してください。"}
+                : null}
             </span>
             {layoutWorkflowIndex < LAYOUT_WIZARD_STEPS.length - 1 && (
               <button
@@ -1529,67 +1605,86 @@ function TemplateReview({
           </div>
         </section>
       )}
-      {meaningSaved && !printSaved && !effectiveLayoutVerified && <section className="form-card verification-gate"><div><h2>{isSpreadsheetTemplate ? "XLSXのセル構造を確定" : "記入欄を実データで再検出"}</h2><p>{editorDirty ? "先に未保存のレイアウト変更を保存してください。" : isSpreadsheetTemplate ? "XLSXテンプレートでは実画像による再検出を行わず、確認済みのセル構造と印刷プレビューを読み取り基準として確定します。" : "保存した読み取り範囲と帳票画像が対応しているか確認します。"}</p></div><button className="primary" type="button" disabled={verifying || editorBusy || editorDirty || assistantApplying} onClick={async () => {
-        if (verificationLockRef.current || editorDirty || editorBusy) return;
-        verificationLockRef.current = true;
-        setVerifying(true);
-        setFeedback(null);
-        try {
-          const verified = await api.verifyLayout(version.id, revisionRef.current);
-          acceptRevision(verified.resourceRevision);
-          setLayoutConfig(verified);
-          const refreshedArtifacts = await api.artifacts(jobId);
-          setArtifacts(refreshedArtifacts.items);
-          if (!isSpreadsheetTemplate) setLayer("layoutVerificationOverlay");
-          setLayoutVerified(true);
-          setFeedback({ kind: "success", text: isSpreadsheetTemplate
-            ? `${verified.relations.length}件の意味づけとXLSXセル構造を確定しました。`
-            : `${verified.relations.length}件の意味づけ対象を再検出しました。` });
-        } catch (error) {
-          setFeedback({ kind: "error", text: errorMessage(error, isSpreadsheetTemplate ? "XLSXのセル構造を確定できませんでした。" : "記入欄を再検出できませんでした。") });
-        } finally {
-          setVerifying(false);
-          verificationLockRef.current = false;
-        }
-      }}>{verifying ? (isSpreadsheetTemplate ? "確定中…" : "再検出中…") : (isSpreadsheetTemplate ? "XLSX構造を確定" : "記入欄を再検出")}</button></section>}
-      {mask && layoutVerified && mappingFresh && <section className="form-card"><div className="section-title"><div><h2>再検出した文字候補の選別</h2><p>保存済みの記入欄内をOpenCVで再検証した候補です。任意の文字認識機能がある場合は候補を補助します。</p></div></div>{editorDirty && <p className="inline-warning">先にレイアウト変更を保存し、記入欄を再検出してください。</p>}<MaskEditor key={recoveryDiscardEpoch} source={mask} background={before} candidatesSource={byName.get("handwritingCandidates")} disabled={editorDirty || editorBusy || assistantApplying} onDirtyChange={setMaskDirty} onBusyChange={setMaskBusy} onSave={async (blob) => {
-        acceptRevision((await api.saveMask(version.id, revisionRef.current, blob)).resourceRevision);
-        if (version.status === "DRAFT" && !version.quality.forkParentVersionId) {
-          setMaskRequiresReprocess(true);
-          setFeedback({ kind: "success", text: "選別結果を保存しました。「選別マスクから再生成」で新しい下書きへ反映してください。" });
-        } else {
-          setLayoutVerified(false);
-          setFeedback({ kind: "success", text: "選別結果を保存しました。記入欄を再検出すると、次のOCRから反映されます。" });
-        }
-      }} /></section>}
       {feedback && <p className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</p>}
       {approvalPendingConfirmation && <button type="button" className="secondary"
-        disabled={assistantApplying || decisionBusy !== null} onClick={() => void recheckApproval()}>承認結果を再取得</button>}
+        disabled={assistantApplying || decisionBusy !== null} onClick={() => void recheckApproval()}>結果を再取得</button>}
       {activatedVersion && <div className="decision-bar">
         <div><strong>このテンプレートは有効です</strong></div>
       </div>}
       {version.status === "DRAFT" && !activatedVersion && <div className="decision-bar">
-        <div><strong>{printSaved
-          ? preparationMessage || "設定したページと欄でOCRを始めます"
-          : "このテンプレート設定を採用しますか？"}</strong>
+        <div><strong>{preparationMessage || (isRevision ? "変更をテンプレートに反映します" : "この設定でテンプレートを作成します")}</strong>
           <span>{editorDirty || maskDirty || identityDirty || documentNameDirty
             ? "未保存の変更があります。保存してから次へ進んでください。"
-            : printSaved
-              ? "必要な印刷見本と読み取り準備は自動で行います。読み取り後に結果を確認・修正してください。"
-              : isSpreadsheetTemplate
-                ? "設定を保存し、XLSX構造を確定してから承認してください。"
-                : "設定を保存し、読み取り確認を完了してから承認してください。"}</span></div>
+            : isRevision
+              ? "反映すると、次の読み取りからこの設定を使います。"
+              : "読み取りの準備は自動で行います。作成後は読み取りで使えます。"}</span></div>
         <button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>
           <FiX aria-hidden="true" />{decisionBusy === "reject" ? "却下中…" : "却下"}</button>
-        {!version.quality.forkParentVersionId && <button className="secondary"
-          disabled={operationBusy || printSaved || printDirty || maskDirty || (!effectiveLayoutVerified && !maskRequiresReprocess) || !meaningSaved}
+        {!version.quality.forkParentVersionId && maskRequiresReprocess && <button className="secondary"
+          disabled={operationBusy || printSaved || printDirty || maskDirty || !meaningSaved}
           onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? "再生成中…" : "選別マスクから再生成"}</button>}
         <button className="primary"
           disabled={operationBusy || printDirty || editorDirty || identityDirty || documentNameDirty || maskDirty
             || approvalPendingConfirmation || (printSaved ? !meaningSaved || !printState?.revision
-              : maskRequiresReprocess || !effectiveLayoutVerified || !meaningSaved)}
-          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? (printSaved ? "準備中…" : "承認中…") : printSaved ? "このテンプレートでOCRを使う" : "承認して有効化"}</button>
+              : maskRequiresReprocess || !meaningSaved)}
+          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? (isRevision ? "反映中…" : "作成中…") : isRevision ? "変更を反映する" : "テンプレートを作成する"}</button>
       </div>}
+    </div>
+  );
+}
+
+/** 「編集」: edit the structure, the per-field settings or the item joins, or copy the template. */
+function TemplateEditMenu({ label, primary, disabled, structureLabel, structureAriaLabel, onStructure, onFields, onCopy }: {
+  label: string;
+  primary: boolean;
+  disabled: boolean;
+  structureLabel: string;
+  structureAriaLabel: string;
+  onStructure: () => void;
+  onFields: () => void;
+  onCopy?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  return (
+    <div className="template-edit-menu" ref={root}>
+      <button
+        type="button"
+        className={primary ? "primary compact" : "secondary compact"}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >{label}</button>
+      {open && (
+        <div className="template-edit-menu-list" role="menu">
+          <button type="button" role="menuitem" aria-label={structureAriaLabel} onClick={() => { setOpen(false); onStructure(); }}>
+            <strong>{structureLabel}</strong>
+            <small>欄・表・項目名など、テンプレートの形を直します。</small>
+          </button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); onFields(); }}>
+            <strong>項目の読み取り設定</strong>
+            <small>欄ごとに候補語や読み方の指示を付けます。</small>
+          </button>
+          {onCopy && <button type="button" role="menuitem" onClick={() => { setOpen(false); onCopy(); }}>
+            <strong>複製する</strong>
+            <small>このテンプレートをもとに、新しいテンプレートを作ります。</small>
+          </button>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1602,17 +1697,9 @@ function templateModeLabel(mode: string) {
   return MODES.find((item) => item.id === mode)?.title ?? mode;
 }
 
-function templateVersionStatusLabel(status: TemplateVersion["status"]) {
-  return {
-    DRAFT: "作業途中",
-    ACTIVE: "使用中",
-    REJECTED: "却下済み",
-    ARCHIVED: "過去の版",
-  }[status];
-}
 
 function draftResumeLabel(templateName: string, version: TemplateVersion) {
-  return `確認を再開: ${templateName} v${version.versionNumber} · ${templateModeLabel(version.mode)} · ${formatTemplateDateTime(version.createdAt)} · ID ${version.id.slice(0, 8)}`;
+  return `確認を再開: ${templateName} · ${templateModeLabel(version.mode)} · ${formatTemplateDateTime(version.createdAt)}`;
 }
 
 function formatTemplateDateTime(value: string) {
@@ -1691,7 +1778,7 @@ export function mappingWarningsForCurrentDraft(
     if (warning === "読み取りに使用できる意味づけ済みセルがありません。") {
       return state.usableMeaningCellCount === 0;
     }
-    if (!warning.startsWith("[MARK_OPTIONS_REQUIRED]") || !markTarget) return true;
+    if (!isChoiceSetupWarning(warning) || !markTarget) return true;
     const currentCell = state.cells.find((cell) => cell.id === markTarget.cellId);
     if (currentCell?.role !== "mark") return false;
     if (markTarget.purpose === "mark-cell") {
@@ -1705,7 +1792,7 @@ export function mappingWarningsForCurrentDraft(
 export function mappingWarningWorkflowStep(warning: string): LayoutWorkflowStep | null {
   if (
     warning === "読み取りに使用できる意味づけ済みセルがありません。"
-    || warning.startsWith("[MARK_OPTIONS_REQUIRED]")
+    || isChoiceSetupWarning(warning)
   ) return "meaning";
   if (
     warning.startsWith("書類を見分ける項目")
@@ -1767,4 +1854,19 @@ function documentNameFromResponse(config: FieldMappingsResponse): DocumentNameRu
 
 function documentNameSignature(rule: DocumentNameRule | null) {
   return JSON.stringify(rule);
+}
+
+const OPENED_AT_KEY = "fuminosuke.templateOpenedAt";
+function readOpenedAt(): Record<string, number> {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(OPENED_AT_KEY) ?? "{}") as unknown;
+    return value && typeof value === "object" ? value as Record<string, number> : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Warnings about an unfinished choice box (its options or storage path). */
+export function isChoiceSetupWarning(warning: string) {
+  return warning.startsWith("選択欄「") || warning.startsWith("[MARK_OPTIONS_REQUIRED]");
 }

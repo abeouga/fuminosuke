@@ -265,7 +265,9 @@ class QuestionVoice:
                                 or control.sequence != len(active.order) + 1
                             ):
                                 raise VoiceInvalid("Segment order is invalid")
-                            await asyncio.to_thread(self.budget.reserve, AUDIO_PURPOSE)
+                            if control.sequence == 1:
+                                # One question is one reservation, however many pieces.
+                                await asyncio.to_thread(self.budget.reserve, AUDIO_PURPOSE)
                             active.open_segment = control.segment_id
                             active.order.append(control.segment_id)
                             active.texts[control.segment_id] = None
@@ -355,6 +357,15 @@ class QuestionVoice:
                 while True:
                     await asyncio.sleep(0.25)
                     now = time.monotonic()
+                    if now - opened >= CONNECTION_SECONDS and active is None and not any(
+                        u.final_deadline is not None for u in utterances.values()
+                    ):
+                        raise reject(
+                            "VOICE_IDLE",
+                            "しばらく話がなかったため音声入力を止めました。"
+                            "続けるにはマイクのボタンを押してください。",
+                            409,
+                        )
                     if (
                         now - opened >= CONNECTION_SECONDS
                         or (active is not None and now - active.started > UTTERANCE_SECONDS)

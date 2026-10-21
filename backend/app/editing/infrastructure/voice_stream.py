@@ -6,9 +6,11 @@ import asyncio
 import base64
 import json
 import math
+import re
 import time
 from collections import deque
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -22,8 +24,33 @@ from app.assistant.stream_models import VoiceStream
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.models import utc_now
-from app.editing.domain.utterance import AudioInvalid, Utterance, UtteranceBoundaryPolicy
+from app.editing.domain.utterance import (
+    AudioInvalid,
+    Utterance,
+    UtteranceBoundaryPolicy,
+    is_noise,
+)
 from app.editing.errors import reject
+
+JST = timezone(timedelta(hours=9))
+
+def day_start() -> datetime:
+    """Start of the current JST calendar day, in UTC."""
+    now = datetime.now(JST)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def used_today(session: Any) -> int:
+    # Connections are charged their reserved 300 s until closed, so an open or
+    # crashed connection never makes the remaining time look larger than it is.
+    return int(
+        session.scalar(
+            select(func.sum(VoiceStream.charged_seconds)).where(
+                VoiceStream.created_at >= day_start()
+            )
+        )
+        or 0
+    )
 
 
 def binding(context: dict[str, Any]) -> dict[str, Any]:
@@ -56,9 +83,14 @@ class VoiceConnections:
         if self.settings.voice.provider != "openai" or not self.settings.ocr.openai_api_key:
             raise reject("VOICE_NOT_CONFIGURED", "音声APIの設定がありません。", 503)
         with self.runtime.sessions.database.transaction() as session:
-            used = session.scalar(select(func.sum(VoiceStream.charged_seconds))) or 0
-            if used + 300 > 1200:
-                raise reject("VOICE_TIME_EXHAUSTED", "累計の音声接続時間の上限に達しました。", 429)
+            limit = self.settings.voice.daily_seconds
+            if used_today(session) + 300 > limit:
+                raise reject(
+                    "VOICE_TIME_EXHAUSTED",
+                    f"本日の音声入力時間の上限、{limit // 60}分に達しました。"
+                    "明日になると再び使えます。手動の編集は続けられます。",
+                    429,
+                )
             row = VoiceStream(
                 session_id=session_id,
                 state="CONNECTED",
@@ -78,6 +110,17 @@ class VoiceConnections:
             session.flush()
             connection_id = row.id
         return connection_id
+
+    def record(self, session_id: str, **entry: Any) -> None:
+        """Opt-in test log (VOICE_TRANSCRIPT_LOG): text and outcome, local file only."""
+        if not self.settings.voice.transcript_log:
+            return
+        path = self.settings.storage.data_dir / "logs" / "voice-transcripts.jsonl"
+        with suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as file:
+                line = {"at": utc_now().isoformat(), "sessionId": session_id, **entry}
+                file.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def finish(self, connection_id: str, elapsed: float) -> None:
         with self.runtime.sessions.database.transaction() as session:
@@ -107,6 +150,7 @@ class VoiceConnections:
                         allowed.add(t.handle)
                         if t.detail.get("meaningHandle"):
                             allowed.add(t.detail["meaningHandle"])
+        in_scope: list[str] = []
         for target in context["catalog"]["targets"]:
             if scope["mode"] == "local" and target["handle"] != scope["localTargetHandle"]:
                 continue
@@ -119,6 +163,7 @@ class VoiceConnections:
                 and cell.get("tableId") != scope["selectedTableId"]
             ):
                 continue
+            in_scope.append(target["handle"])
             for name in [
                 target["name"],
                 *target.get("aliases", []),
@@ -132,7 +177,49 @@ class VoiceConnections:
                     and name not in result
                 ):
                     result.append(name)
+        # Then the keywords the template settings give each field in scope (bull names
+        # and the like), so a spoken keyword is transcribed in its registered spelling.
+        for word in self.field_keywords(context, in_scope):
+            if word not in result:
+                result.append(word)
+        # Then words already written on the document (names such as こよみ), which a
+        # transcriber otherwise turns into common homophones. Numbers are not hints.
+        for target in context["catalog"]["targets"]:
+            value = target.get("currentValue")
+            if (
+                isinstance(value, str)
+                and 2 <= len(value) <= 20
+                and not any(c.isdigit() for c in value)
+                and not any(c in value for c in "<>\r\n")
+                and value not in result
+            ):
+                result.append(value)
         return result[:100]
+
+    def field_keywords(self, context: dict[str, Any], handles: list[str]) -> list[str]:
+        """Enabled keywords of the given OCR fields, as fixed when the job was accepted."""
+        resource = context["scopeContext"]["resource"]
+        if resource["kind"] != "ocr" or not handles:
+            return []
+        from app.db.models import ProcessingJob
+        from app.domain.template_candidates import normalize_candidate_target
+        from app.services.template_field_hint_service import snapshot_hints
+
+        with self.runtime.sessions.database.session() as session:
+            job = session.get(ProcessingJob, resource["id"])
+            hints = snapshot_hints(job.config_snapshot_json or {}) if job is not None else {}
+        if not hints:
+            return []
+        entity = {b["handle"]: b["entityId"] for b in context.get("uiBindings", [])}
+        words: list[str] = []
+        for handle in handles:
+            if handle not in entity:
+                continue
+            hint = hints.get(normalize_candidate_target(f"fields.{entity[handle]}"))
+            for word in hint["keywords"] if hint else ():
+                if len(word) <= 100 and not any(c in word for c in "<>\r\n") and word not in words:
+                    words.append(word)
+        return words
 
     async def close(self, session_id: str | None = None) -> None:
         ids = [session_id] if session_id else list(self.sockets)
@@ -146,6 +233,9 @@ class VoiceConnections:
             if task and task is not asyncio.current_task():
                 task.cancel()
                 pending.append(task)
+            self.sockets.pop(key, None)
+            self.tasks.pop(key, None)
+            self.generations.pop(key, None)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self.runtime.acquisition.clear(session_id)
@@ -170,6 +260,8 @@ class VoiceConnections:
         completed: set[str] = set()
         started_ids: set[str] = set()
         captions: dict[str, str] = {}
+        keywords: list[str] = []
+        question = ""
         lock = asyncio.Lock()
         upstream_lock = asyncio.Lock()
         renewal = asyncio.Event()
@@ -210,9 +302,85 @@ class VoiceConnections:
                 await asyncio.to_thread(self.finish, connection_id, time.monotonic() - opened)
                 connection_id = None
 
+        def forget(utterance: Utterance) -> None:
+            for item_id in [
+                key for key, uid in identities.items() if uid == utterance.utterance_id
+            ]:
+                identities.pop(item_id)
+            utterances.pop(utterance.utterance_id, None)
+            captions.pop(utterance.utterance_id, None)
+            final_wait.pop(utterance.utterance_id, None)
+            self.runtime.acquisition.release(utterance.utterance_id)
+
+        async def cancel_held(utterance: Utterance, ids: list[str]) -> None:
+            for command_id in ids:
+                with suppress(Exception):
+                    await self.runtime.controller.submit(
+                        session_id,
+                        token,
+                        {
+                            "contractVersion": "editing.v2",
+                            "requestId": "drop_" + uuid4().hex,
+                            "binding": utterance.binding,
+                            "afterCommandId": None,
+                            "command": {"kind": "cancel", "commandId": command_id},
+                        },
+                    )
+
         async def submit(utterance: Utterance) -> None:
-            if not utterance.text or utterance.utterance_id in completed:
+            uid = utterance.utterance_id
+            if uid in completed or utterance.text is None:
                 return
+            waiting = self.runtime.controller.pending.get(session_id)
+            if not utterance.text or is_noise(
+                utterance.text, answering=bool(waiting and waiting.question)
+            ):
+                # Noise or hesitation only. Held earlier instructions proceed.
+                self.record(session_id, utteranceId=uid, text=utterance.text, outcome="ignored")
+                completed.add(uid)
+                ids = holds.pop(uid, [])
+                if ids:
+                    try:
+                        await asyncio.to_thread(
+                            self.runtime.repository.hold,
+                            session_id,
+                            token,
+                            utterance.binding,
+                            False,
+                        )
+                    except AppError:
+                        await cancel_held(utterance, ids)
+                forget(utterance)
+                await send(
+                    {
+                        "type": "utterance.ignored",
+                        "utteranceId": uid,
+                        "message": "聞き取れる言葉がなかったため、何も変更していません。",
+                    }
+                )
+                return
+            try:
+                await dispatch(utterance)
+            except AppError as error:
+                self.record(
+                    session_id, utteranceId=uid, text=utterance.text, outcome=error.code,
+                    message=error.detail,
+                )
+                # One rejected instruction never ends the voice connection. Instructions
+                # still held for it are not released into a save.
+                await cancel_held(utterance, holds.pop(uid, []))
+                forget(utterance)
+                await send(
+                    {
+                        "type": "command.rejected",
+                        "utteranceId": uid,
+                        "code": error.code,
+                        "message": error.detail,
+                    }
+                )
+
+        async def dispatch(utterance: Utterance) -> None:
+            assert utterance.text
             completed.add(utterance.utterance_id)
             if len(completed) > 256:
                 raise AudioInvalid("Connection instruction limit exceeded")
@@ -299,16 +467,19 @@ class VoiceConnections:
                 await asyncio.to_thread(
                     self.runtime.repository.hold, session_id, token, utterance.binding, False
                 )
+                holds.pop(utterance.utterance_id, None)
                 result = await self.runtime.controller.submit(session_id, token, value)
             holds.pop(utterance.utterance_id, None)
             await send({"type": "command.accepted", "result": result})
-            for item_id in [
-                key for key, uid in identities.items() if uid == utterance.utterance_id
-            ]:
-                identities.pop(item_id)
-            utterances.pop(utterance.utterance_id, None)
-            captions.pop(utterance.utterance_id, None)
-            self.runtime.acquisition.release(utterance.utterance_id)
+            self.record(
+                session_id,
+                utteranceId=utterance.utterance_id,
+                text=utterance.text,
+                outcome="submitted",
+                requestId=value["requestId"],
+                commandId=result.get("commandId") if isinstance(result, dict) else None,
+            )
+            forget(utterance)
 
         try:
             if (
@@ -332,9 +503,17 @@ class VoiceConnections:
                 raise AudioInvalid("Invalid authentication envelope")
             token = auth["token"]
             await asyncio.to_thread(self.runtime.sessions.context, session_id, token)
+            # A quick restart (e.g. after choosing a table) may arrive while the previous
+            # connection is still shutting down; a live one is still never replaced.
+            for _ in range(20):
+                if session_id not in self.sockets:
+                    break
+                await asyncio.sleep(0.1)
             if session_id in self.sockets:
                 raise reject(
-                    "VOICE_ALREADY_CONNECTED", "このsessionの音声接続は既に存在します。", 409
+                    "VOICE_ALREADY_CONNECTED",
+                    "別の画面でこの書類の音声入力が動いています。そちらを止めてから押してください。",
+                    409,
                 )
             self.sockets[session_id] = socket
             task = asyncio.current_task()
@@ -352,7 +531,7 @@ class VoiceConnections:
             )
 
             async def incoming() -> None:
-                nonlocal active
+                nonlocal active, keywords, question
                 while True:
                     message = await socket.receive()
                     if message["type"] == "websocket.disconnect":
@@ -402,13 +581,22 @@ class VoiceConnections:
                                     "音声開始時の対象世代が一致しません。",
                                     409,
                                 )
+                            keywords = await asyncio.to_thread(
+                                self.keywords, context, session_id, token
+                            )
+                            question = ""
+                            waiting = self.runtime.controller.pending.get(session_id)
+                            if waiting and waiting.question:
+                                question = waiting.question["message"]
+                                answers = [
+                                    word
+                                    for choice in waiting.question["choices"]
+                                    for word in re.findall(r"\d+行目", choice["label"])
+                                ]
+                                keywords = list(dict.fromkeys([*answers, *keywords]))[:100]
                             await upstream.send(
                                 json.dumps(
-                                    transcription_config(
-                                        await asyncio.to_thread(
-                                            self.keywords, context, session_id, token
-                                        )
-                                    )
+                                    transcription_config(keywords, question=question)
                                 )
                             )
                             held = await asyncio.to_thread(
@@ -430,7 +618,23 @@ class VoiceConnections:
                             if active is None:
                                 raise AudioInvalid("Segment without an utterance")
                             active.segment(control.segment_id, control.sequence)
-                            await asyncio.to_thread(self.budget.reserve, "editing.v2.voice.audio")
+                            if control.sequence == 1:
+                                # One utterance is one instruction: reserve once, not per piece.
+                                await asyncio.to_thread(
+                                    self.budget.reserve, "editing.v2.voice.audio"
+                                )
+                            else:
+                                preceding = captions.get(active.utterance_id, "") or "".join(
+                                    s.text or "" for s in active.segments
+                                )
+                                if preceding.strip():
+                                    await upstream.send(
+                                        json.dumps(
+                                            transcription_config(
+                                                keywords, preceding, question=question
+                                            )
+                                        )
+                                    )
                         elif isinstance(control, SegmentEnd):
                             if active is None:
                                 raise AudioInvalid("Segment without an utterance")
@@ -542,6 +746,13 @@ class VoiceConnections:
                     await asyncio.sleep(0.25)
                     self.runtime.acquisition.prune()
                     now = time.monotonic()
+                    if now - opened >= 300 and active is None and not final_wait:
+                        raise reject(
+                            "VOICE_IDLE",
+                            "しばらく話がなかったため音声入力を止めました。"
+                            "続けるには「音声入力」を押してください。",
+                            409,
+                        )
                     if (
                         now - opened >= 300
                         or (active and now - active.started > 180)
@@ -580,7 +791,14 @@ class VoiceConnections:
                         }
                     )
         finally:
-            with suppress(Exception):
+            # Release the registration first: a cancelled shutdown must never leave the
+            # session looking connected (which refused every later voice start).
+            registered = self.sockets.get(session_id) is socket
+            if registered:
+                self.sockets.pop(session_id, None)
+                self.tasks.pop(session_id, None)
+                self.generations.pop(session_id, None)
+            with suppress(Exception, asyncio.CancelledError):
                 await close_upstream()
             # Recognition failure cannot release a speculative plan into a save.
             for uid, ids in holds.items():
@@ -598,11 +816,8 @@ class VoiceConnections:
                                     "command": {"kind": "cancel", "commandId": command_id},
                                 },
                             )
-            if self.sockets.get(session_id) is socket:
+            if registered:
                 self.runtime.acquisition.clear(session_id)
-                self.sockets.pop(session_id, None)
-                self.tasks.pop(session_id, None)
-                self.generations.pop(session_id, None)
             if accepted:
                 with suppress(RuntimeError, WebSocketDisconnect, OSError):
                     await socket.close(code=1000)

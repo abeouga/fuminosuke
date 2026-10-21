@@ -23,6 +23,8 @@ def reject_competing_writes(operations: list[dict[str, Any]]) -> None:
         "cell.set_reading": ("reading", "cells"),
         "heading.attach": ("parent", "children"),
         "heading.detach": ("parent", "children"),
+        "cell.merge": ("geometry", "cells"),
+        "cell.delete": ("geometry", "cells"),
     }
     for operation in operations:
         op = operation["op"]

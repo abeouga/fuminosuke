@@ -1,7 +1,7 @@
 import { OcrTemplateSelector, type ReadingTemplateCard } from "../components/OcrTemplateSelector";
 import { OcrJobProgressPanel } from "../components/OcrJobProgressPanel";
 import { useOcrMappingPreview } from "../hooks/useOcrMappingPreview";
-import { lazy, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   FiArrowLeft,
   FiArrowRight,
@@ -23,8 +23,9 @@ import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { usePreviewDialog } from "../hooks/usePreviewDialog";
 import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Template } from "../types";
+import { isEditingDraft } from "../templateEditing";
 
-type OcrStep = 1 | 2 | 3;
+type OcrStep = 1 | 2;
 const TemplatePage = lazy(() => import("./TemplatePage").then(module => ({ default: module.TemplatePage })));
 type TemplateWorkspace = "create" | "manage";
 
@@ -32,26 +33,19 @@ export type TemplateWorkspaceRequest = {
   id: number;
   workspace: TemplateWorkspace;
   editVersionId?: string;
+  /** "fields": open 「項目の読み取り設定」 of `editVersionId` instead of its structure. */
+  editTarget?: "structure" | "fields";
 };
 
 type TemplateWorkspaceView = TemplateWorkspaceRequest;
 
 const EMPTY_TEMPLATE_REFRESH = async () => undefined;
 
-function suggestedDuplicateName(template: Template, templates: Template[]): string {
-  const base = `${template.name} のコピー`;
-  const existing = new Set(templates.map((item) => item.name.normalize("NFKC").trim().toLocaleLowerCase()));
-  for (let number = 1; ; number += 1) {
-    const suffix = number === 1 ? "" : ` ${number}`;
-    const name = `${base.slice(0, 200 - suffix.length)}${suffix}`;
-    if (!existing.has(name.normalize("NFKC").trim().toLocaleLowerCase())) return name;
-  }
-}
-
 const OCR_STEPS = [
   { number: 1 as const, title: "型を選択", caption: "テンプレート" },
   { number: 2 as const, title: "画像を準備", caption: "撮影・アップロード" },
-  { number: 3 as const, title: "確認・実行", caption: "読み取り開始" },
+  // Reading runs by itself once started: the third step only shows its progress.
+  { number: 3 as const, title: "読み取り", caption: "自動で進みます" },
 ];
 
 
@@ -68,6 +62,7 @@ export function OcrPage({
   onTemplateWorkspaceVisibilityChange,
   onNavigationGuardChange,
   onTemplateNavigationGuardChange,
+  templateSelectionFooter,
 }: {
   templates: Template[];
   textRecognitionToggleEnabled?: boolean;
@@ -81,6 +76,8 @@ export function OcrPage({
   onTemplateWorkspaceVisibilityChange?: (visible: boolean) => void;
   onNavigationGuardChange?: (shouldWarn: boolean) => void;
   onTemplateNavigationGuardChange?: (shouldWarn: boolean) => void;
+  // Shown under the template list: pending jobs and system notices (there is no separate home page).
+  templateSelectionFooter?: ReactNode;
 }) {
   const templateCards = useMemo<ReadingTemplateCard[]>(() => templates.flatMap((template) => {
     const pointedVersion = template.versions.find(
@@ -91,7 +88,7 @@ export function OcrPage({
       : template.versions.find((version) => version.status === "ACTIVE");
     if (!activeVersion) return [];
     const draftVersion = [...template.versions]
-      .filter((version) => version.status === "DRAFT")
+      .filter(isEditingDraft)
       .sort((first, second) => second.versionNumber - first.versionNumber)[0];
     return [{
       template,
@@ -118,7 +115,6 @@ export function OcrPage({
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { mappingPreview, mappingValid, mappingError, mappingResolvedVersionId, reloadMappings } = useOcrMappingPreview(versionId);
-  const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [previewImageState, setPreviewImageState] = useState<Record<string, "loaded" | "failed">>({});
   const [templatePreviewOpen, setTemplatePreviewOpen] = useState(false);
   const previewTriggerButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -127,11 +123,6 @@ export function OcrPage({
   const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
   const phoneDevice = usePhoneDevice();
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
-  const [duplicateBusyTemplateId, setDuplicateBusyTemplateId] = useState<string | null>(null);
-  const [recentCopies, setRecentCopies] = useState<Array<{
-    sourceTemplateId: string; copyTemplateId: string;
-  }>>([]);
-  const [pendingCopyVersionId, setPendingCopyVersionId] = useState<string | null>(null);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
   const creatingRef = useRef(false);
   const submissionGenerationRef = useRef(0);
@@ -158,18 +149,6 @@ export function OcrPage({
     || (Boolean(activeVersion.sourceJobId) && (!activePreviewState || activePreviewState.loading))
   );
   const activePreviewLabel = `${activeSelection?.template.name ?? "選択したテンプレート"}の書類見本`;
-  const visibleVersions = useMemo(() => {
-    const ordered = [...templateCards];
-    for (const { sourceTemplateId, copyTemplateId } of recentCopies) {
-      const sourceIndex = ordered.findIndex(({ template }) => template.id === sourceTemplateId);
-      const copyIndex = ordered.findIndex(({ template }) => template.id === copyTemplateId);
-      if (sourceIndex < 0 || copyIndex < 0) continue;
-      const [copy] = ordered.splice(copyIndex, 1);
-      const nextSourceIndex = ordered.findIndex(({ template }) => template.id === sourceTemplateId);
-      ordered.splice(nextSourceIndex + 1, 0, copy);
-    }
-    return ordered;
-  }, [recentCopies, templateCards]);
   const ocrEnabledForSubmission = !textRecognitionToggleEnabled || enabled;
   const mappedReadingReady = !ocrEnabledForSubmission || (
     Boolean(mappingPreview?.length)
@@ -206,6 +185,7 @@ export function OcrPage({
   const openTemplateWorkspace = (
     workspace: TemplateWorkspace,
     editVersionId?: string,
+    editTarget?: "structure" | "fields",
   ) => {
     if (openTemplates) {
       openTemplates();
@@ -216,6 +196,7 @@ export function OcrPage({
       id: templateWorkspaceIdRef.current,
       workspace,
       editVersionId,
+      editTarget,
     });
   };
   const deleteTemplate = async (template: Template) => {
@@ -253,66 +234,6 @@ export function OcrPage({
       setDeletingTemplateId((current) => current === template.id ? null : current);
     }
   };
-  const duplicateTemplate = async (template: Template, version: Template["versions"][number]) => {
-    if (duplicateBusyTemplateId) return;
-    setDuplicateError(null);
-    const name = suggestedDuplicateName(template, templates);
-    setDuplicateBusyTemplateId(template.id);
-    try {
-      const result = await api.duplicateTemplateVersion(version.id, version.revision, name, true);
-      let copied: Template;
-      try {
-        copied = await api.template(result.templateId);
-      } catch {
-        try { await refreshTemplates(); } catch { /* The operation outcome is still unknown. */ }
-        showToast({
-          tone: "warning", title: "複製結果を確認できませんでした",
-          message: "コピーが作成された可能性があります。一覧を確認してから再操作してください。",
-        });
-        return;
-      }
-      const copiedVersion = copied.versions.find((item) => item.id === result.templateVersionId);
-      if (copied.activeVersionId !== result.templateVersionId || copiedVersion?.status !== "ACTIVE") {
-        try { await refreshTemplates(); } catch { /* The draft is still not reading-ready. */ }
-        showToast({
-          tone: "error", title: "コピーは読み取り用に有効化されていません",
-          message: `「${name}」は下書きとして作成されました。バックエンドを更新してから再操作してください。`,
-        });
-        return;
-      }
-      try {
-        await refreshTemplates();
-      } catch {
-        showToast({
-          tone: "error", title: "複製は完了しました",
-          message: "一覧を更新できませんでした。画面を再読み込みしてコピーを確認してください。",
-        });
-        return;
-      }
-      setRecentCopies((current) => [...current, {
-        sourceTemplateId: template.id, copyTemplateId: result.templateId,
-      }]);
-      setPendingCopyVersionId(result.templateVersionId);
-      setVersionId(result.templateVersionId);
-      setSelectionInvalidated(false);
-      showToast({
-        tone: "success", title: "テンプレートを複製しました",
-        message: `「${name}」を読み取り用テンプレートに追加しました。`,
-      });
-    } catch (error) {
-      if (error instanceof ApiError) {
-        setDuplicateError(error.message);
-      } else {
-        try { await refreshTemplates(); } catch { /* The operation outcome is still unknown. */ }
-        showToast({
-          tone: "warning", title: "複製結果を確認できませんでした",
-          message: "通信が切れた可能性があります。一覧を確認してから再操作してください。",
-        });
-      }
-    } finally {
-      setDuplicateBusyTemplateId(null);
-    }
-  };
   useEffect(() => {
     if (!templateWorkspaceRequest) return;
     setTemplateWorkspace(templateWorkspaceRequest);
@@ -336,7 +257,6 @@ export function OcrPage({
     return () => onTemplateWorkspaceVisibilityChange?.(false);
   }, [onTemplateWorkspaceVisibilityChange, templateWorkspace]);
   useEffect(() => {
-    if (versionId === pendingCopyVersionId) return;
     if (versions.some((item) => item.version.id === versionId)) return;
     idempotencyKeyRef.current = null;
     if (versionId) {
@@ -348,15 +268,45 @@ export function OcrPage({
     setVersionId(
       versions[0]?.version.id ?? "",
     );
-  }, [pendingCopyVersionId, selectionInvalidated, versionId, versions]);
-  useEffect(() => {
-    if (pendingCopyVersionId && versions.some((item) => item.version.id === pendingCopyVersionId)) {
-      setPendingCopyVersionId(null);
-    }
-  }, [pendingCopyVersionId, versions]);
+  }, [selectionInvalidated, versionId, versions]);
   const { job, connectionLost, canRetry, retryBusy, retryPending, retryBlocked, retryJob, resetRetry } = useOcrJobProgress(
     jobId, activeVersion?.quality.printLayout != null, openReview,
   );
+  const currentStep = jobId ? 3 : step;
+  const startReading = async () => {
+    if (!file || creatingRef.current || jobId) return;
+    creatingRef.current = true;
+    const generation = submissionGenerationRef.current;
+    const idempotencyKey = idempotencyKeyRef.current
+      ?? createIdempotencyKey("ocr");
+    idempotencyKeyRef.current = idempotencyKey;
+    setBusy(true);
+    try {
+      const created = await api.createOcr(
+        versionId,
+        file,
+        ocrEnabledForSubmission,
+        idempotencyKey,
+        predecessor?.jobId,
+      );
+      rememberJob(created.jobId);
+      if (generation !== submissionGenerationRef.current) return;
+      idempotencyKeyRef.current = null;
+      setJobId(created.jobId);
+    } catch (error) {
+      if (generation !== submissionGenerationRef.current) return;
+      showToast({
+        tone: "error",
+        title: "読み取りを開始できませんでした",
+        message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
+      });
+    } finally {
+      if (generation === submissionGenerationRef.current) {
+        creatingRef.current = false;
+        setBusy(false);
+      }
+    }
+  };
   const startNewReading = () => {
     idempotencyKeyRef.current = null;
     setFile(null);
@@ -385,6 +335,7 @@ export function OcrPage({
         rememberJob={rememberJob}
         initialWorkspace={templateWorkspace.workspace}
         initialEditVersionId={templateWorkspace.editVersionId}
+        initialEditTarget={templateWorkspace.editTarget}
         onNavigationGuardChange={onTemplateNavigationGuardChange}
         onClose={() => setTemplateWorkspace(null)}
         onTemplateActivated={(activatedVersionId) => {
@@ -402,44 +353,34 @@ export function OcrPage({
         <nav className="ocr-breadcrumb" aria-label="パンくずリスト">
           <span>読み取り</span>
           <span aria-hidden="true">›</span>
-          <strong>{step === 1 ? "テンプレート選択" : step === 2 ? "画像を準備" : "内容確認・実行"}</strong>
+          <strong>{jobId ? "読み取り中" : step === 1 ? "テンプレート選択" : "画像を準備"}</strong>
         </nav>
       </header>
+      <ol className="ocr-step-progress" aria-label="読み取り手順">
+        {OCR_STEPS.map((item) => (
+          <li
+            key={item.number}
+            className={item.number < currentStep ? "completed" : item.number === currentStep ? "current" : ""}
+            aria-current={item.number === currentStep ? "step" : undefined}
+          >
+            <span>{item.number < currentStep ? "✓" : item.number}</span>
+            <div><strong>{item.title}</strong><small>{item.caption}</small></div>
+          </li>
+        ))}
+      </ol>
       {jobId ? (
         <OcrJobProgressPanel job={job} connectionLost={connectionLost} canRetry={canRetry} retryBusy={retryBusy} retryPending={retryPending} retryBlocked={retryBlocked} retryJob={retryJob} startNewReading={startNewReading} />
       ) : (
         <>
-          <ol className="ocr-step-progress" aria-label="読み取り手順">
-            {OCR_STEPS.map((item) => (
-              <li
-                key={item.number}
-                className={item.number < step ? "completed" : item.number === step ? "current" : ""}
-                aria-current={item.number === step ? "step" : undefined}
-              >
-                <span>{item.number < step ? "✓" : item.number}</span>
-                <div><strong>{item.title}</strong><small>{item.caption}</small></div>
-              </li>
-            ))}
-          </ol>
-
           <section className={`form-card ocr-step-card${step === 1 ? " ocr-template-select-card" : ""}`}>
-            {step === 1 && duplicateError && <aside className="error-box" role="alert">
-              <strong>テンプレートを複製できませんでした</strong>
-              <p>{duplicateError}</p>
-              <button type="button" className="secondary compact" aria-label="複製エラーを閉じる"
-                onClick={() => setDuplicateError(null)}><FiX aria-hidden="true" />閉じる</button>
-            </aside>}
             {step === 1 && (
               <OcrTemplateSelector templateCards={templateCards}
-                visibleVersions={visibleVersions}
                 previewFor={previewFor}
                 previewImageState={previewImageState}
                 setPreviewImageState={setPreviewImageState}
                 deletingTemplateId={deletingTemplateId}
-                duplicateBusyTemplateId={duplicateBusyTemplateId}
                 openReadingSetup={openReadingSetup}
                 deleteTemplate={deleteTemplate}
-                duplicateTemplate={duplicateTemplate}
                 openTemplateWorkspace={openTemplateWorkspace} />
             )}
 
@@ -535,8 +476,9 @@ export function OcrPage({
                 </div>
                 <div className="ocr-step-actions ocr-step-actions-single">
                   <button type="button" className="primary"
-                    disabled={!file || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
-                    onClick={() => setStep(3)}>内容確認へ<FiArrowRight aria-hidden="true" /></button>
+                    disabled={!file || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
+                    onClick={() => void startReading()}>
+                    <FiPlay aria-hidden="true" />{busy ? "送信中…" : ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}</button>
                 </div>
               </section>
             )}
@@ -560,65 +502,8 @@ export function OcrPage({
               </div>
             )}
 
-            {step === 3 && (
-              <section className="ocr-step-panel" aria-labelledby="ocr-step-confirm">
-                <div className="ocr-step-heading">
-                  <span>STEP 3</span>
-                  <h2 id="ocr-step-confirm">読み取り内容を確認</h2>
-                  <p>使用するテンプレートと帳票画像を確認してから開始してください。</p>
-                </div>
-                <dl className="ocr-reading-summary">
-                  <div><dt>テンプレート</dt><dd>{activeSelection ? `${activeSelection.template.name} · v${activeSelection.version.versionNumber}` : "未選択"}</dd></div>
-                  <div><dt>帳票画像</dt><dd>{file?.name ?? "未選択"}</dd></div>
-                  <div><dt>読み込み方</dt><dd>{predecessor ? `「${predecessor.label}」の更新（版${predecessor.seriesVersion + 1}として保存し、前の版は履歴に残します）` : "新しい書類として読み込む"}</dd></div>
-                  <div><dt>処理内容</dt><dd>{ocrEnabledForSubmission ? "手書き文字を読み取る" : "画像処理のみ"}</dd></div>
-                </dl>
-                <div className="ocr-step-actions">
-                  <button type="button" className="secondary" disabled={busy || Boolean(jobId)} onClick={() => setStep(2)}><FiArrowLeft aria-hidden="true" />戻る</button>
-                  <button
-                    className="primary"
-                    disabled={!file || !versionId || busy || !mappedReadingReady || Boolean(jobId)}
-                    onClick={async () => {
-                      if (!file || creatingRef.current || jobId) return;
-                      creatingRef.current = true;
-                      const generation = submissionGenerationRef.current;
-                      const idempotencyKey = idempotencyKeyRef.current
-                        ?? createIdempotencyKey("ocr");
-                      idempotencyKeyRef.current = idempotencyKey;
-                      setBusy(true);
-                      try {
-                        const created = await api.createOcr(
-                          versionId,
-                          file,
-                          ocrEnabledForSubmission,
-                          idempotencyKey,
-                          predecessor?.jobId,
-                        );
-                        rememberJob(created.jobId);
-                        if (generation !== submissionGenerationRef.current) return;
-                        idempotencyKeyRef.current = null;
-                        setJobId(created.jobId);
-                      } catch (error) {
-                        if (generation !== submissionGenerationRef.current) return;
-                        showToast({
-                          tone: "error",
-                          title: "読み取りを開始できませんでした",
-                          message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
-                        });
-                      } finally {
-                        if (generation === submissionGenerationRef.current) {
-                          creatingRef.current = false;
-                          setBusy(false);
-                        }
-                      }
-                    }}
-                  >
-                    <FiPlay aria-hidden="true" />{busy ? "送信中…" : jobId ? "読み取りを開始しました" : ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}
-                  </button>
-                </div>
-              </section>
-            )}
           </section>
+          {step === 1 && templateSelectionFooter}
         </>
       )}
     </div>

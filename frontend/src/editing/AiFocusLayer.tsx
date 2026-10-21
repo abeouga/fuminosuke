@@ -14,7 +14,10 @@ type Painted = { id: string; box: Box; viewport: Box; phase: AiFocusState["phase
 const screen = (): Box => {
   const nav = document.querySelector<HTMLElement>(".side-nav"), rect = nav?.getBoundingClientRect();
   const top = rect && rect.width > innerWidth / 2 && rect.height < 120 && rect.top <= 8 && nav && /fixed|sticky/.test(getComputedStyle(nav).position) ? Math.max(8, rect.bottom + 8) : 8;
-  return { left: 8, top, width: Math.max(0, innerWidth - 16), height: Math.max(0, innerHeight - top - 8) };
+  // The voice panel can be pinned to the bottom of the screen; targets must stay above it.
+  const panel = document.querySelector<HTMLElement>(".review-assistant-workspace > .editing-controls"), box = panel?.getBoundingClientRect();
+  const bottom = box && panel && getComputedStyle(panel).position === "sticky" && box.bottom >= innerHeight - 24 && box.top > top ? box.top - 8 : innerHeight - 8;
+  return { left: 8, top, width: Math.max(0, innerWidth - 16), height: Math.max(0, bottom - top) };
 };
 function parents(element: HTMLElement) {
   const result: HTMLElement[] = [];
@@ -39,11 +42,17 @@ export function AiFocusLayer(props: Props) {
   const previousPaint = useRef<Painted[]>([]), retiring = useRef(new Map<string, { value: Painted; until: number }>()), paintGeneration = useRef("");
   const focusKey = props.focus ? `${props.focus.commandId}:${props.focus.phase}:${props.focus.focus.viewRevision}:${props.focus.focus.anchors.map(a => a.anchorId).join()}` : "";
   const suppressedUntil = useRef(0), pointer = useRef(false), composing = useRef(false), scrollPending = useRef(false);
+  const lastPhase = useRef<AiFocusState["phase"] | null>(null), previewing = useRef(false);
   useEffect(() => {
-    const anchors = props.focus?.focus.anchors ?? [];
-    old.current = anchors.length === 1 && prior.current.length === 1 && anchors[0].anchorId !== prior.current[0].anchorId ? prior.current[0] : null;
+    const anchors = props.focus?.focus.anchors ?? [], phase = props.focus?.phase ?? null;
+    // A hovered choice moves nothing: no sliding outline, and leaving the hover does not
+    // scroll back to the previous outline.
+    previewing.current = phase === "preview";
+    old.current = !previewing.current && anchors.length === 1 && prior.current.length === 1 && anchors[0].anchorId !== prior.current[0].anchorId ? prior.current[0] : null;
     movementOrigin.current = old.current ? previousPaint.current.find(p => p.id === old.current!.anchorId)?.box ?? null : null;
-    movedAt.current = performance.now(); prior.current = anchors; scrollPending.current = Boolean(anchors.length);
+    movedAt.current = performance.now(); prior.current = anchors;
+    scrollPending.current = Boolean(anchors.length) && lastPhase.current !== "preview";
+    lastPhase.current = phase;
   }, [focusKey]);
   useEffect(() => {
     let frame = 0, timer: ReturnType<typeof setTimeout> | null = null, alive = true;
@@ -54,6 +63,22 @@ export function AiFocusLayer(props: Props) {
       const valid = p.context && p.focus && validFocus(p.focus.focus, p.context, p.viewRevision);
       const targets = valid ? p.focus!.focus.anchors.flatMap(anchor => { const found = p.registry.resolve(anchor); return found ? [{ anchor, ...found }] : []; }) : [];
       if (!valid) scrollPending.current = false;
+      // A hovered choice scrolls only when its cell is entirely out of sight.
+      if (previewing.current && scrollPending.current && targets.length) {
+        // Just enough to bring the hovered cell into view, at once; no centering.
+        const target = targets[0], view = screen();
+        const hidden = (box: Box) => !intersects(box, view) || box.top + box.height / 2 > view.top + view.height || box.top + box.height / 2 < view.top;
+        if (hidden(target.box)) {
+          // A template cell is a region of one canvas; only a review cell is its own element.
+          const own = !(target.element instanceof HTMLCanvasElement);
+          if (own) target.element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+          const box = own ? target.element.getBoundingClientRect() : target.box, bottom = view.top + view.height;
+          const end = box.top + box.height;
+          const dy = end > bottom ? end - bottom + 12 : box.top < view.top ? box.top - view.top - 12 : 0;
+          if (dy) window.scrollBy({ top: dy, behavior: "instant" });
+        }
+        scrollPending.current = false;
+      }
       if (targets.length && scrollPending.current && !pointer.current && !composing.current && !p.suspendScroll) {
         if (now >= suppressedUntil.current) {
           const first = targets[0], groupView = viewport(first.element);
@@ -74,7 +99,7 @@ export function AiFocusLayer(props: Props) {
           }
           if (!scrolled) {
             const delta = scrollDelta(chosen, inset(screen(), 32));
-            if (Math.abs(delta.left) > 1 || Math.abs(delta.top) > 1) window.scrollBy({ ...delta, behavior: reduced.matches ? "instant" : "smooth" });
+            if (Math.abs(delta.left) > 1 || Math.abs(delta.top) > 1) window.scrollBy({ ...delta, behavior: reduced.matches || previewing.current ? "instant" : "smooth" });
             scrollPending.current = false;
           }
           if (scrolled) schedule();

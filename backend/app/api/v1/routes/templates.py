@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -51,11 +52,12 @@ from app.services.layout_service import LayoutService
 from app.services.legacy_template_print_service import LegacyTemplatePrintService
 from app.services.spreadsheet_template_import_service import SpreadsheetTemplateImportService
 from app.services.template_authoring_service import TemplateAuthoringService
-from app.services.template_candidate_service import TemplateCandidateService
 from app.services.template_definition_service import TemplateDefinitionService
+from app.services.template_field_hint_service import TemplateFieldHintService
 from app.services.template_management_service import TemplateManagementService
 from app.template_packages.activation_service import TemplatePackageActivationService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["templates"])
 
 
@@ -125,36 +127,33 @@ class TemplateBoundaryUpdate(ApiModel):
     corners: list[BoundaryPoint] = Field(min_length=4, max_length=4)
 
 
-class TemplateCandidateBindingView(ApiModel):
-    target_pattern: str
+class TemplateFieldHintView(ApiModel):
+    target_patterns: list[str]
     label: str
+    keywords: list[str]
+    keywords_enabled: bool
+    keywords_forced: bool
+    instruction: str
 
 
-class TemplateCandidateSetView(ApiModel):
-    id: str
-    name: str
-    values: list[str]
-    allowed_suffixes: list[str]
-    bindings: list[TemplateCandidateBindingView]
-
-
-class TemplateCandidateSettingsView(ApiModel):
+class TemplateFieldHintSettingsView(ApiModel):
     resource_revision: int
     template_id: str
-    sets: list[TemplateCandidateSetView]
+    items: list[TemplateFieldHintView]
 
 
-class TemplateCandidateSetUpdate(ApiModel):
-    name: str = Field(min_length=1, max_length=100)
-    values: list[str] = Field(min_length=1, max_length=500)
-    allowed_suffixes: list[str] = Field(default_factory=list, max_length=30)
-    target_patterns: list[str] = Field(default_factory=list, max_length=300)
+class TemplateFieldHintUpdate(ApiModel):
+    target_patterns: list[str] = Field(min_length=1, max_length=300)
+    keywords: list[str] = Field(default_factory=list, max_length=500)
+    keywords_enabled: bool = True
+    keywords_forced: bool = False
+    instruction: str = Field(default="", max_length=300)
 
 
-class TemplateCandidateSettingsUpdate(ApiModel):
+class TemplateFieldHintSettingsUpdate(ApiModel):
     expected_revision: int = Field(ge=1, strict=True)
     template_version_id: str = Field(min_length=1, max_length=36)
-    sets: list[TemplateCandidateSetUpdate] = Field(default_factory=list, max_length=30)
+    items: list[TemplateFieldHintUpdate] = Field(default_factory=list, max_length=300)
 
 
 class MarkOptionView(ApiModel):
@@ -334,7 +333,7 @@ def _mapping_validation(
     invalid = [mapping for mapping in enabled if not is_supported_field_path(mapping.target_path)]
     warnings = [
         (
-            f"{mapping.label}: {mapping.target_path} は未対応の保存先です。"
+            f"「{mapping.label}」に対応していない保存先が設定されています。"
             "意味づけを修正して再検出してください。"
         )
         for mapping in invalid
@@ -472,7 +471,7 @@ def get_template_field_identities(request: Request, version_id: str) -> dict[str
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template not found",
-                detail="テンプレート版がありません。",
+                detail="テンプレートがありません。",
             )
         return identities(session, version, mappings)
 
@@ -533,43 +532,166 @@ def get_template(request: Request, template_id: str) -> TemplateView:
         )
 
 
-@router.get(
-    "/templates/{template_id}/candidate-settings",
-    response_model=TemplateCandidateSettingsView,
-    response_model_by_alias=True,
+class TemplateDisplayNamesView(ApiModel):
+    names: dict[str, str]
+
+
+class TemplateDisplayNameUpdate(ApiModel):
+    target_path: str = Field(min_length=1, max_length=200)
+    # Empty or null goes back to the template's own name.
+    display_name: str | None = Field(default=None, max_length=200)
+
+
+@router.get("/templates/{template_id}/display-names", response_model=TemplateDisplayNamesView)
+def get_template_display_names(request: Request, template_id: str) -> TemplateDisplayNamesView:
+    from app.services.template_display_name_service import TemplateDisplayNameService
+
+    return TemplateDisplayNamesView(
+        names=TemplateDisplayNameService(request.app.state.database).names(template_id)
+    )
+
+
+@router.put("/templates/{template_id}/display-names", response_model=TemplateDisplayNamesView)
+def rename_template_item(
+    request: Request, template_id: str, payload: TemplateDisplayNameUpdate
+) -> TemplateDisplayNamesView:
+    """Display only: saved values, keys, mappings and accepted snapshots are unchanged."""
+    from app.services.template_display_name_service import TemplateDisplayNameService
+
+    return TemplateDisplayNamesView(
+        names=TemplateDisplayNameService(request.app.state.database).rename(
+            template_id, payload.target_path, payload.display_name
+        )
+    )
+
+
+class TemplateItemJoinMember(ApiModel):
+    target_path: str = Field(min_length=1, max_length=200)
+    label: str | None = Field(default=None, max_length=200)
+    before: str = Field(default="", max_length=100)
+    after: str = Field(default="", max_length=100)
+
+
+class TemplateItemJoinItem(ApiModel):
+    id: str | None = None
+    name: str = Field(max_length=200)
+    kind: Literal["join", "order"] = "join"
+    separator: str = Field(default="", max_length=10)
+    members: list[TemplateItemJoinMember] = Field(max_length=100)
+
+
+class TemplateItemSectionMember(ApiModel):
+    target_path: str
+    label: str
+    kind: Literal["text", "mark"]
+
+
+class TemplateItemSection(ApiModel):
+    name: str
+    members: list[TemplateItemSectionMember]
+
+
+class TemplateItemJoinsView(ApiModel):
+    items: list[TemplateItemJoinItem]
+    suggestions: list[TemplateItemJoinItem] = Field(default_factory=list)
+    sections: list[TemplateItemSection] = Field(default_factory=list)
+
+
+class TemplateItemJoinsUpdate(ApiModel):
+    items: list[TemplateItemJoinItem] = Field(max_length=100)
+
+
+@router.get("/templates/{template_id}/item-joins", response_model=TemplateItemJoinsView)
+def get_template_item_joins(
+    request: Request,
+    template_id: str,
+    template_version_id: str | None = Query(default=None, alias="templateVersionId"),
+) -> TemplateItemJoinsView:
+    """Items shown as one value (display only); suggestions from the given version."""
+    from app.services.template_item_join_service import TemplateItemJoinService
+
+    return TemplateItemJoinsView.model_validate(
+        TemplateItemJoinService(request.app.state.database, request.app.state.storage)
+        .settings(template_id, template_version_id)
+    )
+
+
+@router.put("/templates/{template_id}/item-joins", response_model=TemplateItemJoinsView)
+def save_template_item_joins(
+    request: Request, template_id: str, payload: TemplateItemJoinsUpdate
+) -> TemplateItemJoinsView:
+    """Display only: readings, mappings and accepted snapshots are unchanged."""
+    from app.services.template_item_join_service import TemplateItemJoinService
+
+    items = TemplateItemJoinService(request.app.state.database).replace(
+        template_id,
+        [item.model_dump(by_alias=True) for item in payload.items],
+    )
+    return TemplateItemJoinsView.model_validate({"items": items})
+
+
+@router.post(
+    "/templates/{template_id}/item-joins/ai-suggestions", response_model=TemplateItemJoinsView
 )
-def get_template_candidate_settings(
+async def suggest_template_item_joins(
     request: Request,
     template_id: str,
     template_version_id: str = Query(alias="templateVersionId"),
-) -> TemplateCandidateSettingsView:
-    result = TemplateCandidateService(
+) -> TemplateItemJoinsView:
+    """One GPT-6 Luna Decisions request (shared API budget); nothing is saved."""
+    from app.ai.api_budget import ApiBudget
+    from app.api.dependencies import get_app_settings
+    from app.services.template_item_join_service import TemplateItemJoinService
+    from app.structured.decisions import OpenAIDecisions
+
+    database = request.app.state.database
+    chooser = OpenAIDecisions(
+        get_app_settings(request), ApiBudget(database), purpose="template.item_joins"
+    )
+    chooser.check_available()
+    suggestions = await TemplateItemJoinService(
+        database, request.app.state.storage
+    ).ai_suggestions(template_id, template_version_id, chooser)
+    return TemplateItemJoinsView.model_validate({"items": [], "suggestions": suggestions})
+
+
+@router.get(
+    "/templates/{template_id}/field-settings",
+    response_model=TemplateFieldHintSettingsView,
+    response_model_by_alias=True,
+)
+def get_template_field_settings(
+    request: Request,
+    template_id: str,
+    template_version_id: str = Query(alias="templateVersionId"),
+) -> TemplateFieldHintSettingsView:
+    result = TemplateFieldHintService(
         request.app.state.database,
         request.app.state.storage,
     ).get_settings(template_id, template_version_id)
-    return TemplateCandidateSettingsView.model_validate(result)
+    return TemplateFieldHintSettingsView.model_validate(result)
 
 
 @router.put(
-    "/templates/{template_id}/candidate-settings",
-    response_model=TemplateCandidateSettingsView,
+    "/templates/{template_id}/field-settings",
+    response_model=TemplateFieldHintSettingsView,
     response_model_by_alias=True,
 )
-def replace_template_candidate_settings(
+def replace_template_field_settings(
     request: Request,
     template_id: str,
-    payload: TemplateCandidateSettingsUpdate,
-) -> TemplateCandidateSettingsView:
-    result = TemplateCandidateService(
+    payload: TemplateFieldHintSettingsUpdate,
+) -> TemplateFieldHintSettingsView:
+    result = TemplateFieldHintService(
         request.app.state.database,
         request.app.state.storage,
     ).replace_settings(
         template_id,
         payload.template_version_id,
-        [item.model_dump(mode="json", by_alias=True) for item in payload.sets],
+        [item.model_dump(mode="json", by_alias=True) for item in payload.items],
         expected_revision=payload.expected_revision,
     )
-    return TemplateCandidateSettingsView.model_validate(result)
+    return TemplateFieldHintSettingsView.model_validate(result)
 
 
 @router.delete(
@@ -699,7 +821,7 @@ def print_template_version(
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template not found",
-                detail="指定されたテンプレート版が見つかりません。",
+                detail="指定されたテンプレートが見つかりません。",
             )
         template = TemplateRepository(session).get_template(version.template_id)
         if template is None:
@@ -755,7 +877,7 @@ def get_template_version_print_pdf(request: Request, version_id: str) -> FileRes
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template not found",
-                detail="指定されたテンプレート版が見つかりません。",
+                detail="指定されたテンプレートが見つかりません。",
             )
         if version.quality_json.get("printLayout") is not None:
             raise AppError(
@@ -971,7 +1093,9 @@ def _mapping_response(layout: LayoutDefinition, config) -> FieldMappingsResponse
     layout_warnings = _unassigned_layout_warnings(layout)
     layout_error = LayoutService.mapping_validation_error(layout)
     if layout_error:
-        layout_warnings.insert(0, f"[{layout_error.code}] {layout_error.detail}")
+        # The person sees the reason only; the code stays in the server log.
+        logger.info("layout not ready for OCR: %s %s", layout_error.code, layout_error.detail)
+        layout_warnings.insert(0, layout_error.detail)
     if layout_warnings:
         valid_for_ocr = False
         warnings = [*warnings, *layout_warnings]
@@ -1136,14 +1260,14 @@ async def reprocess_template_version(request: Request, version_id: str,
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template version not found",
-                detail="指定されたテンプレート版が見つかりません。",
+                detail="指定されたテンプレートが見つかりません。",
             )
         if version.status != "DRAFT":
             raise AppError(
                 status=409,
                 code="INVALID_STATE_TRANSITION",
                 title="Template version cannot be reprocessed",
-                detail="DRAFTテンプレート版だけを再処理できます。",
+                detail="作業途中のテンプレートだけを再処理できます。",
             )
         if version.quality_json.get("forkParentVersionId"):
             raise AppError(

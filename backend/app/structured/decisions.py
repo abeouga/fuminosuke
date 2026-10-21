@@ -31,8 +31,8 @@ class DecisionChooser(Protocol):
 
 
 class OpenAIDecisions:
-    def __init__(self, settings: Settings, budget: ApiBudget) -> None:
-        self.settings, self.budget = settings, budget
+    def __init__(self, settings: Settings, budget: ApiBudget, purpose: str = PURPOSE) -> None:
+        self.settings, self.budget, self.purpose = settings, budget, purpose
 
     @property
     def configured(self) -> bool:
@@ -56,7 +56,7 @@ class OpenAIDecisions:
         try:
             # ApiBudget reserves before the actual send and never refunds failures.
             async with asyncio.timeout(TIMEOUT_SECONDS):
-                async with self.budget.client(PURPOSE) as client:
+                async with self.budget.client(self.purpose) as client:
                     response = await client.post(
                         "https://api.openai.com/v1/decisions",
                         headers={"Authorization": "Bearer " + key.get_secret_value()},
@@ -89,6 +89,14 @@ def decode_answer(
     answers: list[dict[str, Any]], name: str, allowed: set[str], threshold: float
 ) -> str | None:
     """The chosen value when it is an allowed choice above ``threshold``; otherwise None."""
+    decoded = decode_choice(answers, name, allowed)
+    return decoded[0] if decoded is not None and decoded[1] >= threshold else None
+
+
+def decode_choice(
+    answers: list[dict[str, Any]], name: str, allowed: set[str]
+) -> tuple[str, float] | None:
+    """The chosen value and its confidence; None for a refusal or a missing answer."""
     answer = next((a for a in answers if a.get("name") == name), None)
     if answer is None or answer.get("type") != "choice":
         return None
@@ -102,4 +110,4 @@ def decode_answer(
         or not 0 <= confidence <= 1
     ):
         raise reject("QA_RESPONSE_INVALID", "候補選択の候補又は確率が不正です。", 422)
-    return candidate if confidence >= threshold else None
+    return candidate, float(confidence)

@@ -16,7 +16,7 @@ from app.editing.domain.planning import (
     PlanningIssue,
 )
 from app.editing.domain.planning_catalog import PlanningCatalog
-from app.editing.domain.values import resolve_value
+from app.editing.domain.values import fit_value, resolve_value
 
 
 def build_candidates(
@@ -47,7 +47,7 @@ def build_candidates(
                 "operation": {
                     "op": "ocr.set_value",
                     "target": catalog.targets[ref]["handle"],
-                    "value": value,
+                    "value": fit_value(value, catalog.targets[ref]),
                 },
             }
             description = catalog.label(ref)
@@ -168,8 +168,14 @@ def select_operations(
             or first - second < policy.margin
             or answer["confidence"] < confidence_floor
         ):
+            # Offer the likeliest targets first; only five choices are shown.
             pending = PlanningIssue(
-                "target", tuple(proposals[c]["targetRef"] for c in scores if c in proposals)
+                "target",
+                tuple(
+                    proposals[c]["targetRef"]
+                    for c in sorted(scores, key=lambda v: -scores[v])
+                    if c in proposals
+                ),
             )
         if kind == "apply":
             pool = [

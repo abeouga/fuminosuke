@@ -119,7 +119,7 @@ class TemplateCandidateService:
         version = session.get(TemplateVersion, version_id)
         if version is None or version.template_id != template_id:
             raise AppError(status=404, code="TEMPLATE_VERSION_NOT_FOUND",
-                           title="Template version not found", detail="指定されたテンプレート版が見つかりません。")
+                           title="Template version not found", detail="指定されたテンプレートが見つかりません。")
         return version
 
     @staticmethod

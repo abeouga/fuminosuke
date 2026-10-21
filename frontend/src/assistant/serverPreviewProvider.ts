@@ -1,3 +1,4 @@
+import { userText } from "../userMessages";
 import { authenticatedFetch } from "../auth/transport";
 import { ApiError } from "../api";
 import type { AssistantContext, AssistantHistoryItem, AssistantPreview, AssistantPreviewProvider, AssistantReceipt, AssistantSnapshot, VoiceStatus, VoiceTurnResult } from "./contracts";
@@ -30,7 +31,7 @@ export function createServerPreviewProvider(resource: string): AssistantPreviewP
     });
     if (!response.ok) {
       const problem = await response.json().catch(() => ({})) as { detail?: string; code?: string };
-      if (response.status >= 500) throw new Error(problem.detail ?? "操作アシスタントとの通信に失敗しました。");
+      if (response.status >= 500) throw new Error(userText(problem.detail, "操作アシスタントエラー") || "操作アシスタントとの通信に失敗しました。");
       throw new ApiError(problem.detail ?? "操作アシスタントとの通信に失敗しました。", problem.code);
     }
     return await response.json() as T;
@@ -146,7 +147,7 @@ export function createServerPreviewProvider(resource: string): AssistantPreviewP
       if (state?.state === "SUCCEEDED") {
         if (!state.result) throw new Error("保存結果の内容を確認できません。");
         stored.receipt = state.result;
-      } else if (state?.state === "FAILED") stored.failure = state.error?.detail ?? "この操作は保存されませんでした。";
+      } else if (state?.state === "FAILED") stored.failure = userText(state.error?.detail, "操作アシスタントエラー") || "この操作は保存されませんでした。";
       else {
         // Not found/PENDING is not proof of failure: replay the exact approved
         // request. The receipt/transaction lock arbitrates a still-running sender.

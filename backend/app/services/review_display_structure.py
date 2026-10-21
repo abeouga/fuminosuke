@@ -65,7 +65,7 @@ def build_review_display_structure(
                 "mappingId": mapping_id,
                 "targetPath": str(mapping["targetPath"]),
                 "label": _non_empty_text(mapping.get("label")) or str(mapping["targetPath"]),
-                "groupId": _logical_field_group_id(field_relation, mapping_id),
+                "groupId": _logical_field_group_id(field_relation, mapping_id, cells),
                 "inputCellId": input_cell_id,
                 "relationId": field_relation.id if field_relation is not None else None,
             }
@@ -179,7 +179,7 @@ def build_review_display_structure(
     parent_fields: dict[str, list[str]] = {}
     if layout is not None:
         for field_id, relation in selected_relation_by_field_id.items():
-            parent_id = relation.parent_label_cell_id
+            parent_id = _effective_parent(relation, cells)
             if (
                 not parent_id
                 or parent_id not in cells
@@ -244,14 +244,46 @@ def _relation_for_mapping(relations: list[Any], target_path: str) -> Any | None:
     )
 
 
-def _logical_field_group_id(relation: Any | None, mapping_id: str) -> str:
+def _effective_parent(relation: Any, cells: dict[str, LayoutCell]) -> str | None:
+    """The heading of a link; a link made after the item name got its heading takes the
+    item name's heading (「その他」's write-in under 「利用目的」)."""
+    if relation.parent_label_cell_id:
+        return str(relation.parent_label_cell_id)
+    parents = {_cell_heading(label_id, cells) for label_id in relation.label_cell_ids}
+    if len(parents) == 1:
+        parent = next(iter(parents))
+        return parent if parent and parent in cells else None
+    return None
+
+
+def _cell_heading(cell_id: str, cells: dict[str, LayoutCell]) -> str | None:
+    cell = cells.get(cell_id)
+    if cell is None:
+        return None
+    if cell.parent_label_cell_id:
+        return cell.parent_label_cell_id
+    # A heading line drawn from the item name to the heading stores them the other way
+    # round (the heading under a plain item name); it still puts the item under it.
+    if cell.role != "label":
+        return None
+    reversed_headings = [
+        other.id
+        for other in cells.values()
+        if other.role == "parent_label" and other.parent_label_cell_id == cell_id
+    ]
+    return reversed_headings[0] if len(reversed_headings) == 1 else None
+
+
+def _logical_field_group_id(
+    relation: Any | None, mapping_id: str, cells: dict[str, LayoutCell]
+) -> str:
     """Return a stable display group without relying on the rendered label text."""
     if relation is None:
         return f"field:{mapping_id}"
     label_cell_ids = sorted(set(relation.label_cell_ids))
     if not label_cell_ids:
         return f"field:{mapping_id}"
-    parent_id = relation.parent_label_cell_id or "none"
+    parent_id = _effective_parent(relation, cells) or "none"
     return f"labels:{parent_id}:{'|'.join(label_cell_ids)}"
 
 

@@ -667,7 +667,7 @@ class CandidateReadinessService(ReferenceQualificationService):
                 self._validate_preparation(db, version, report)
             except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                 raise print_error(
-                    "検証中に対象の版・証拠が変わりました。再確認してください。",
+                    "検証中に対象が変わりました。再確認してください。",
                     "CANDIDATE_EVIDENCE_CHANGED",
                     409,
                 ) from exc

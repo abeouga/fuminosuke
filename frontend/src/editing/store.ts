@@ -169,7 +169,7 @@ export class EditingStore {
   }
   private async resolveReceipt(): Promise<ManualResult> {
     if (!this.journal) throw new EditingError("保存記録がありません。", "JOURNAL_MISSING", 409);
-    if (!this.journal.sent) throw new EditingError("送信前に停止した入力です。最新の保存版を確認してください。", "UNSENT_DRAFT", 409);
+    if (!this.journal.sent) throw new EditingError("送信前に停止した入力です。最新の保存内容を確認してください。", "UNSENT_DRAFT", 409);
     const { owner, body } = this.journal;
     const receipt = this.journal.kind === "manual" ? await editingClient.manualReceipt(owner, body.requestId) : await editingClient.receipt(owner, body.requestId);
     if (receipt.state === "SUCCEEDED" && receipt.result) return { substitutions: {}, ...receipt.result };
@@ -234,16 +234,16 @@ export class EditingStore {
     await this.tail;
     if (this.journal && !this.journal.result && ["recovering", "saved_display_pending"].includes(this.status.state)) throw new EditingError("先に保存結果を確認してください。", "RECEIPT_PENDING", 409);
     this.context = view.context; this.journal = null; this.remember();
-    this.halted = false; this.notify("ready", "確認した保存版から編集を再開しました。保持した入力は次の操作で保存します。", view.context.history.some(item => item.canUndo));
+    this.halted = false; this.notify("ready", "確認した保存内容から編集を再開しました。保持した入力は次の操作で保存します。", view.context.history.some(item => item.canUndo));
   }
   async resumeOcrAfterReview(reviewed: OcrResult): Promise<void> {
     if (this.resourceKind !== "ocr") throw new EditingError("OCRの編集対象ではありません。", "CAPABILITY_UNAVAILABLE", 409);
     this.invalidateConversation(); await this.tail;
     if (["recovering", "saved_display_pending"].includes(this.status.state)) throw new EditingError("先に保存結果を確認してください。", "RECEIPT_PENDING", 409);
     const context = await editingClient.context(this.requireOwner()), current = await api.result(this.resourceId);
-    if (context.resourceRevision !== reviewed.revision || JSON.stringify(current) !== JSON.stringify(reviewed)) throw new EditingError("確認後に別の編集が入りました。保存版を再確認してください。", "REVISION_CONFLICT", 409);
+    if (context.resourceRevision !== reviewed.revision || JSON.stringify(current) !== JSON.stringify(reviewed)) throw new EditingError("確認後に別の編集が入りました。保存内容を再確認してください。", "REVISION_CONFLICT", 409);
     this.context = context; this.journal = null; this.remember(); this.halted = false;
-    this.notify("ready", "確認した保存版から編集を再開しました。", context.history.some(item => item.canUndo));
+    this.notify("ready", "確認した保存内容から編集を再開しました。", context.history.some(item => item.canUndo));
   }
   /** The controller's fixed envelope is journalled without rebasing or re-keying. */
   async commitConversation(owner: EditingOwner, command: BatchCommand | UndoCommand, epoch: number): Promise<SavedResource> {

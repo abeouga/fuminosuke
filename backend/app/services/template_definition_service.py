@@ -108,7 +108,7 @@ class TemplateDefinitionService:
                 status=422,
                 code="TEMPLATE_DEFINITION_VERSION_MISMATCH",
                 title="Template definition version mismatch",
-                detail="TemplateDefinitionの対象テンプレート版が一致しません。",
+                detail="テンプレートの定義が変わりました。画面を再読み込みしてください。",
             )
         return self._append(
             version_id,
@@ -135,7 +135,7 @@ class TemplateDefinitionService:
                 status=422,
                 code="TEMPLATE_DEFINITION_VERSION_MISMATCH",
                 title="Template definition version mismatch",
-                detail="TemplateDefinitionの対象テンプレート版が一致しません。",
+                detail="テンプレートの定義が変わりました。画面を再読み込みしてください。",
             )
         approved = candidate.model_copy(update={"state": "APPROVED"})
         validation = validate_template_definition(approved)
@@ -363,7 +363,7 @@ class TemplateDefinitionService:
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template not found",
-                detail="指定されたテンプレート版が見つかりません。",
+                detail="指定されたテンプレートが見つかりません。",
             )
         return version
 

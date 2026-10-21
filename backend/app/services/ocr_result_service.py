@@ -20,6 +20,7 @@ from app.services.excel_export_service import ExcelExportService
 from app.services.ocr_result_preview import _field_previews
 from app.services.ocr_result_types import CorrectionValues as CorrectionValues
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
+from app.services.template_item_join_service import item_joins
 from app.storage.local_storage import LocalStorageService
 from app.validation.business_validators import DeterministicValidator, ValidationReport
 
@@ -143,6 +144,14 @@ class OcrResultService:
                 )
         candidate = current.model_copy(
             update={"fields": values.fields, "review_items": values.review_items}, deep=True
+        )
+        from app.domain.checklist import apply_write_ins
+
+        apply_write_ins(
+            candidate,
+            job.config_snapshot_json.get("templateSnapshot", {}).get("config", {}).get(
+                "fieldMappings", []
+            ),
         )
         # Derived views must follow the saved correction, never a mutable current template.
         from app.domain.generic_data import build_generic_data, build_generic_values
@@ -306,6 +315,7 @@ class OcrResultService:
             config_snapshot=job.config_snapshot_json,
             document_name=name,
             confirmed_at=when,
+            joins=item_joins(session, (job.config_snapshot_json or {}).get("templateId")),
         )
         return self._excel.render_xlsx(table), table.file_name
 
@@ -349,4 +359,5 @@ class OcrResultService:
                 config_snapshot=job.config_snapshot_json,
                 document_name=confirmed.document_name,
                 confirmed_at=confirmed.confirmed_at,
+                joins=item_joins(session, (job.config_snapshot_json or {}).get("templateId")),
             ).payload()

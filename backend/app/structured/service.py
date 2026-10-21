@@ -11,6 +11,7 @@ import builtins
 import unicodedata
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from app.editing.errors import reject
 from app.repositories.ocr_result_repository import OcrResultRepository
 from app.services.document_series import DocumentSeries
 from app.services.paged_document_snapshot import load_document_snapshot
+from app.services.template_item_join_service import item_joins, joined_text
 from app.structured.contracts import SCHEMA_VERSION
 from app.structured.projection import project_values
 
@@ -40,11 +42,40 @@ SUMMARY_KEYS = (
     "identity",
     "seriesId",
     "seriesVersion",
+    "thumbnailUrl",
 )
 
 
 def _fold(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold()
+
+
+def page_image_url(job_id: str, page_id: str | None) -> str:
+    """The aligned (registered) page image, in the coordinates of the template's cells."""
+    name = "alignedSource" if page_id is None else f"page.{page_id}.alignedSource"
+    return f"/api/v1/jobs/{quote(job_id, safe='')}/artifacts/{quote(name, safe='')}"
+
+
+def _box(reading: object, mapping: dict[str, Any]) -> dict[str, float] | None:
+    """The reading's own box when stored, else the mapped cell (as the review screen shows it)."""
+    source = reading.get("boundingBox") if isinstance(reading, dict) else None
+    if not isinstance(source, dict):
+        source = mapping
+    values = [source.get(key) for key in ("x", "y", "width", "height")]
+    numbers = [float(v) for v in values if isinstance(v, int | float) and not isinstance(v, bool)]
+    if len(numbers) != 4 or numbers[2] <= 0 or numbers[3] <= 0:
+        return None
+    return dict(zip(("x", "y", "width", "height"), numbers, strict=True))
+
+
+def field_crop_url(job_id: str, field_id: str | None, page_id: str | None) -> str | None:
+    """The stored aligned crop of one cell (the same artifact the review screen shows)."""
+    if field_id is None:
+        return None
+    name = f"fieldCrop.{field_id}.alignedColor"
+    if page_id is not None:
+        name = f"page.{page_id}.{name}"
+    return f"/api/v1/jobs/{quote(job_id, safe='')}/artifacts/{quote(name, safe='')}"
 
 
 class StructuredDocumentService:
@@ -59,7 +90,13 @@ class StructuredDocumentService:
                     "STRUCTURED_DOCUMENT_NOT_FOUND", "指定された読み取り結果が見つかりません。", 404
                 )
             _, versions = DocumentSeries(session).view()
-            return self._with_series(self._project(job), versions)
+            document = self._with_series(self._project(job), versions)
+            document["joinedFields"] = joined_fields(
+                document["fields"], item_joins(session, document["templateId"])
+            )
+        for reading in document["fields"]:
+            reading["cropUrl"] = field_crop_url(job_id, reading["fieldId"], reading["pageId"])
+        return document
 
     def list(
         self, *, limit: int, template_id: str | None = None, query: str | None = None
@@ -183,6 +220,16 @@ class StructuredDocumentService:
             logical_ids=snapshot.get("logicalFieldIds"),
             identity_fields=config.get("documentIdentityFields"),
         )
+        mappings = {
+            m["mappingId"]: m
+            for m in snapshot.get("fieldMappings") or []
+            if isinstance(m, dict) and isinstance(m.get("mappingId"), str)
+        }
+        for reading in body["fields"]:
+            reading["box"] = _box(
+                document["fields"].get(reading["key"]), mappings.get(reading["fieldId"], {})
+            )
+        image = page_image_url(job.id, None)
         return {
             "schemaVersion": SCHEMA_VERSION,
             "jobId": job.id,
@@ -193,6 +240,8 @@ class StructuredDocumentService:
             "documentName": confirmed.document_name,
             "confirmedAt": confirmed.confirmed_at,
             "confirmedRevision": confirmed.ocr_result_revision,
+            "thumbnailUrl": f"{image}/thumbnail",
+            "pages": [{"pageId": None, "pageNumber": 1, "imageUrl": image}],
             **body,
         }
 
@@ -214,6 +263,7 @@ class StructuredDocumentService:
         snapshot = load_document_snapshot(job)
         pages = job.config_snapshot_json["jobPages"]["pages"]
         page_by_mapping: dict[str, str] = {}
+        mapping_by_id: dict[str, dict[str, Any]] = {}
         readings: dict[str, Any] = {}
         labels: dict[str, str] = {}
         for page in pages:
@@ -232,6 +282,7 @@ class StructuredDocumentService:
                         "STRUCTURED_SNAPSHOT_INVALID", "ページの項目所有権を確認できません。", 409
                     )
                 page_by_mapping[mapping["mappingId"]] = page_id
+                mapping_by_id[mapping["mappingId"]] = mapping
                 readings[key] = reading
                 label = document["fieldLabels"].get(key)
                 if isinstance(label, str):
@@ -245,6 +296,18 @@ class StructuredDocumentService:
             identity_fields=config.get("documentIdentityFields"),
             page_by_mapping=page_by_mapping,
         )
+        for reading in body["fields"]:
+            reading["box"] = _box(
+                readings.get(reading["key"]), mapping_by_id.get(reading["fieldId"], {})
+            )
+        page_list = [
+            {
+                "pageId": page["pageId"],
+                "pageNumber": index,
+                "imageUrl": page_image_url(job.id, page["pageId"]),
+            }
+            for index, page in enumerate(pages, start=1)
+        ]
         return {
             "schemaVersion": SCHEMA_VERSION,
             "jobId": job.id,
@@ -255,5 +318,38 @@ class StructuredDocumentService:
             "documentName": confirmed.document_name,
             "confirmedAt": confirmed.confirmed_at,
             "confirmedRevision": confirmed.revision,
+            "thumbnailUrl": f"{page_list[0]['imageUrl']}/thumbnail" if page_list else None,
+            "pages": page_list,
             **body,
         }
+
+
+def joined_fields(
+    readings: builtins.list[dict[str, Any]], joins: builtins.list[dict[str, Any]]
+) -> builtins.list[dict[str, Any]]:
+    """Items shown as one value (「調査場所」), built from the stored readings; display only."""
+    by_path = {r["targetPath"]: r for r in readings if r["tableId"] is None}
+    result: builtins.list[dict[str, Any]] = []
+    for join in joins:
+        if join.get("kind", "join") != "join":
+            continue
+        members = [
+            m for m in join.get("members", [])
+            if isinstance(m, dict) and m.get("targetPath") in by_path
+        ]
+        if len(members) < 2:
+            continue
+        parts = [by_path[m["targetPath"]] for m in members]
+        value = joined_text(
+            members, {r["targetPath"]: r["value"] for r in parts}, join.get("separator") or ""
+        )
+        statuses = {r["status"] for r in parts}
+        result.append({
+            "id": str(join.get("id") or join["name"]),
+            "name": join["name"],
+            "section": parts[0]["section"],
+            "value": value or None,
+            "status": "uncertain" if "uncertain" in statuses else "readable" if value else "blank",
+            "fieldIds": [r["fieldId"] for r in parts],
+        })
+    return result

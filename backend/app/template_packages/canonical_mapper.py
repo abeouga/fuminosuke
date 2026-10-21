@@ -54,12 +54,12 @@ class CanonicalTemplateMapper:
         version = session.get(TemplateVersion, version_id) if version_id else None
         if version is None or version.template_id != template.id:
             raise TemplatePackageExportError(
-                "TEMPLATE_VERSION_NOT_FOUND", "対象のテンプレート版が見つかりません。"
+                "TEMPLATE_VERSION_NOT_FOUND", "対象のテンプレートが見つかりません。"
             )
         if version.status != TemplateVersionStatus.ACTIVE.value:
             raise TemplatePackageExportError(
                 "TEMPLATE_VERSION_NOT_ACTIVE",
-                "利用可能状態ではないテンプレート版は書き出せません。",
+                "利用可能状態ではないテンプレートは書き出せません。",
             )
         if template.active_version_id != version.id:
             raise TemplatePackageExportError(

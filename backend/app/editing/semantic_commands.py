@@ -219,7 +219,8 @@ class SemanticCommands:
                         )
                     sibling["parentLabelCellId"] = parent["id"] if parent else None
             else:
-                if child["role"] not in {"parent_label", "label", "input", "mark"}:
+                # Detaching is always allowed: a box changed to "not read" leaves its heading.
+                if parent and child["role"] not in {"parent_label", "label", "input", "mark"}:
                     raise reject("DEPENDENCY_CONFLICT", "この分類には見出しを付けられません。")
                 if parent:
                     self.same_page([parent, child])

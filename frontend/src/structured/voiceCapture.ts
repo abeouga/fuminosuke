@@ -1,5 +1,6 @@
 import type { MicVAD } from "@ricky0123/vad-web";
 import { acquireMicrophone, Pcm24k } from "../assistant/audioStream";
+import { LevelMeter } from "../components/VoiceMeter";
 
 export type VoiceState = { mode: "stopped" | "starting" | "listening"; message: string; caption: string };
 type Utterance = { id: string; frames: ArrayBuffer[]; ready: boolean; samples: number; segmentSamples: number; segment: string | null; manifest: string[]; pcm: Pcm24k; sealed: boolean };
@@ -9,6 +10,7 @@ const SILENCE_MS = 1200;
 export class QuestionVoiceCapture {
   private state: VoiceState = { mode: "stopped", message: "", caption: "" };
   private listeners = new Set<() => void>();
+  readonly meter = new LevelMeter();
   private epoch = 0;
   private mic: MediaStream | null = null;
   private vad: MicVAD | null = null;
@@ -19,6 +21,7 @@ export class QuestionVoiceCapture {
   private waitingSpeech = false;
   private stoppedAt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private flushed: (() => void) | null = null;
   constructor(private onTranscript: (text: string) => void) {}
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   getSnapshot = () => this.state;
@@ -42,12 +45,12 @@ export class QuestionVoiceCapture {
       this.mic = mic;
       const { MicVAD } = await import("@ricky0123/vad-web");
       if (epoch !== this.epoch) return;
-      const vad = await MicVAD.new({ model: "v5", startOnLoad: false, redemptionMs: 256, minSpeechMs: 250, preSpeechPadMs: 256,
+      const vad = await MicVAD.new({ model: "v5", startOnLoad: false, redemptionMs: 600, minSpeechMs: 250, preSpeechPadMs: 256,
         baseAssetPath: "/voice-assets/", onnxWASMBasePath: "/voice-assets/", processorType: "AudioWorklet",
         getStream: async () => mic, pauseStream: async s => { s.getTracks().forEach(t => t.stop()); },
         resumeStream: async () => { throw new Error("音声入力を再開してください。"); },
         ortConfig: ort => { ort.env.logLevel = "error"; ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; },
-        onFrameProcessed: (_p, frame) => { if (epoch === this.epoch) try { this.frame(frame); } catch (e) { this.fail(e); } },
+        onFrameProcessed: (_p, frame) => { if (epoch === this.epoch) try { this.meter.push(frame); this.frame(frame); } catch (e) { this.fail(e); } },
         onSpeechStart: () => { if (epoch === this.epoch) try { this.speechStart(); } catch (e) { this.fail(e); } },
         onSpeechEnd: () => { if (epoch === this.epoch) this.speechEnd(); },
         onVADMisfire: () => { if (epoch === this.epoch) this.speechEnd(); },
@@ -87,9 +90,11 @@ export class QuestionVoiceCapture {
     } else if (event.type === "transcript.delta") {
       this.set({ caption: (this.state.caption + (event.delta ?? "")).slice(-20000) }); this.scheduleBoundary();
     } else if (event.type === "transcript.completed") {
-      this.active = null; this.set({ caption: "", message: "質問を話してください。" });
+      this.active = null;
       const text = (event.text ?? "").trim();
+      this.set({ caption: "", message: text ? "聞き取った文を入力欄に入れました。確認してEnterで送信してください。" : "聞き取れる言葉がありませんでした。" });
       if (text) this.onTranscript(text);
+      this.flushed?.();
       if (this.waitingSpeech) {
         const speaking = this.speaking; this.waitingSpeech = false;
         try { this.speechStart(); if (!speaking) this.speechEnd(); } catch (e) { this.fail(e); }
@@ -156,6 +161,22 @@ export class QuestionVoiceCapture {
     if (!item.samples) { this.send({ type: "utterance.cancel" }); this.active = null; return; }
     this.commitSegment(item); item.sealed = true; this.ring = [];
     this.send({ type: "utterance.end", manifest: item.manifest });
+  }
+  /** Stop button: a question already spoken is still transcribed before closing. */
+  async finish() {
+    const item = this.active;
+    if (item && item.ready && this.socket?.readyState === WebSocket.OPEN) {
+      this.mic?.getTracks().forEach(t => t.stop());
+      try { if (!item.sealed) { this.speaking = false; this.seal(); } } catch { /* closing anyway */ }
+      if (this.active?.sealed) {
+        this.set({ message: "聞き取った文を受け取っています…" });
+        await new Promise<void>(resolve => { this.flushed = resolve; setTimeout(resolve, 8000); });
+      }
+    }
+    this.flushed = null;
+    const message = this.state.message;
+    await this.stop();
+    if (message.startsWith("聞き取")) this.set({ message });
   }
   async stop() {
     this.epoch++; if (this.timer) clearTimeout(this.timer); this.timer = null; this.waitingSpeech = false;

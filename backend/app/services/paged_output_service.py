@@ -38,7 +38,7 @@ class PagedOutputService:
             job, pages, stored = reviews._load(session, job_id)
             if job.status != "CONFIRMED" or stored.revision != revision:
                 raise print_error(
-                    "確認済みの版を再取得してください。", "PAGE_OUTPUT_REVISION_CHANGED", 409
+                    "確認済みの内容を再取得してください。", "PAGE_OUTPUT_REVISION_CHANGED", 409
                 )
             confirmed = session.get(PagedConfirmation, (job_id, revision))
             assert confirmed is not None  # _load verifies the full confirmed snapshot.

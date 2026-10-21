@@ -6,6 +6,8 @@ Only the selected worksheet's print nodes and its Print_Area name are changed.
 
 from __future__ import annotations
 
+import logging
+
 import hashlib
 import io
 import math
@@ -86,8 +88,15 @@ _DENIED = {
 }
 
 
+logger = logging.getLogger(__name__)
+
 def _reject(detail: str) -> None:
-    raise print_error(detail, "UNSUPPORTED_XLSX_FEATURE")
+    # The specific XML reason is for the log; the person gets one plain explanation.
+    logger.info("xlsx rejected: %s", detail)
+    raise print_error(
+        "このXLSXには、印刷用に扱えない機能（マクロ・外部リンク・埋め込み部品など）が含まれています。",
+        "UNSUPPORTED_XLSX_FEATURE",
+    )
 
 
 def inspect(content: bytes) -> dict[str, bytes]:
@@ -106,7 +115,7 @@ def inspect(content: bytes) -> dict[str, bytes]:
                 _reject("Invalid or excessive ZIP resources.")
             parts = {e.filename: archive.read(e) for e in entries}
     except (BadZipFile, RuntimeError) as exc:
-        raise print_error("Invalid XLSX package.", "UNSUPPORTED_XLSX_FEATURE") from exc
+        raise print_error("XLSXファイルを読み取れません。ファイルが壊れていないか確認してください。", "UNSUPPORTED_XLSX_FEATURE") from exc
     binary = set()
     declared_printers = set()
     for name, data in parts.items():
@@ -126,7 +135,7 @@ def inspect(content: bytes) -> dict[str, bytes]:
             print_xml.parse(data)
             root = ET.fromstring(data)
         except (ValueError, ET.ParseError) as exc:
-            raise print_error("Invalid package XML.", "UNSUPPORTED_XLSX_FEATURE") from exc
+            raise print_error("XLSXの内部構造を読み取れません。ファイルが壊れていないか確認してください。", "UNSUPPORTED_XLSX_FEATURE") from exc
         parents = {child: parent for parent in root.iter() for child in parent}
         for node in root.iter():
             namespace, _, tag = node.tag[1:].rpartition("}")
@@ -232,7 +241,7 @@ def workbook_copy(content: bytes, plan: dict[str, Any]) -> bytes:
     """Generate only an explicitly versioned, integer-scale print copy."""
     parts = inspect(content)
     if hashlib.sha256(content).hexdigest() != plan.get("sourceSha256"):
-        raise print_error("Source SHA changed.", "SOURCE_CHANGED", 409)
+        raise print_error("元のXLSXファイルが変更されています。テンプレートを開き直してください。", "SOURCE_CHANGED", 409)
     try:
         if plan.get("printAdapter") != ADAPTER:
             raise ValueError("Print adapter must be explicitly selected")

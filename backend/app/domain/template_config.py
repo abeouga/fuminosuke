@@ -115,11 +115,24 @@ class MarkOptionConfig(TemplateConfigModel):
     y: int = Field(ge=0)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
+    # A checklist option may own a separate text field written next to it, such as
+    # 「その他(　　)」. Text in that field counts as this option being selected. On a
+    # symbol box one option holds the write-in; text with no symbol read needs review.
+    write_in_target_path: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("label", "value", mode="before")
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @model_serializer(mode="wrap")
+    def omit_unlinked_write_in(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Options without a write-in keep their stored form and hashes unchanged.
+        data: dict[str, Any] = handler(self)
+        if self.write_in_target_path is None:
+            data.pop("writeInTargetPath", None)
+            data.pop("write_in_target_path", None)
+        return data
 
 
 class CompositeSubfieldConfig(TemplateConfigModel):
@@ -181,6 +194,11 @@ class FieldMappingConfig(PolygonConfigModel):
                 raise ValueError("Checklist labels must not contain selection separators")
             if self.mapping_type != "mark":
                 raise ValueError("Checklist recognition requires a mark mapping")
+        write_ins = [option for option in self.mark_options if option.write_in_target_path]
+        if write_ins and self.mark_recognition_mode not in {"checklist", "symbol"}:
+            raise ValueError("Write-in fields are only available for checklist or symbol options")
+        if self.mark_recognition_mode == "symbol" and len(write_ins) > 1:
+            raise ValueError("A symbol box has at most one write-in field")
         if self.mark_recognition_mode == "symbol" and (
             self.mapping_type != "mark" or self.mark_selection_mode != "single"
         ):

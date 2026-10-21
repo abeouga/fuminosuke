@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 
 import cv2
@@ -30,6 +31,7 @@ from app.layout_analysis.models import (
     LayoutCell,
     LayoutDefinition,
     LayoutLabelPoolEntry,
+    LayoutMarkOption,
     LayoutRelation,
 )
 from app.layout_analysis.text_placement import spreadsheet_vertical_alignment
@@ -434,7 +436,7 @@ class LayoutService:
                 status=422,
                 code="FIELD_TARGET_SEQUENCE_EXHAUSTED",
                 title="Field target sequence exhausted",
-                detail=f"保存先の連番を作成できませんでした: {requested_path}",
+                detail="保存先の連番を作成できませんでした。",
             )
 
         for cell in layout.cells:
@@ -583,7 +585,7 @@ class LayoutService:
                     status=422,
                     code="LAYOUT_MEANING_REQUIRED",
                     title="Layout meaning is required",
-                    detail="Meaning must be assigned to the template fields before verification.",
+                    detail="確認の前に、記入欄へ読み取る内容を設定してください。",
                 )
             self._as_field_mappings(layout)
             self._require_verified_record_structure(layout)
@@ -655,7 +657,7 @@ class LayoutService:
                 status=409,
                 code="SOURCE_IMAGE_NOT_READY",
                 title="Source image is not ready",
-                detail="The normalized source image is not available.",
+                detail="テンプレートの元画像を読み込めません。",
             )
         edited_mask_artifact = self._active_edited_mask_artifact(
             session,
@@ -743,7 +745,7 @@ class LayoutService:
                 status=409,
                 code="EDITED_MASK_NOT_READY",
                 title="Edited handwriting mask is not ready",
-                detail="Save the edited handwriting mask again before verification.",
+                detail="確認の前に、編集した手書き領域をもう一度保存してください。",
             )
         return edited_mask_artifact
 
@@ -1307,7 +1309,7 @@ class LayoutService:
                     status=422,
                     code="INVALID_INPUT_CELL",
                     title="Invalid input cell",
-                    detail=f"{input_id} は記入欄として設定されていません。",
+                    detail=f"「{_cell_name(input_cell)}」は記入欄として設定されていません。",
                 )
             relations = sorted(
                 untyped_relations,
@@ -1320,32 +1322,31 @@ class LayoutService:
                     status=422,
                     code="INVALID_FIELD_MAPPING",
                     title="Invalid field mapping",
-                    detail=f"未対応の保存先です: {target_path}",
+                    detail=f"「{_cell_name(input_cell)}」に対応していない保存先が設定されています。",
                 )
             if target_path in target_paths:
                 raise AppError(
                     status=422,
                     code="DUPLICATE_FIELD_TARGET",
                     title="Duplicate field target",
-                    detail=f"同じ保存先が複数の記入欄に割り当てられています: {target_path}",
+                    detail=(
+                        f"「{pool_labels.get(target_path) or _cell_name(input_cell)}」が"
+                        "複数の記入欄に割り当てられています。"
+                    ),
                 )
             target_paths.add(target_path)
             label_ids = [label_id for item in relations for label_id in item.label_cell_ids]
-            label_texts = [
-                cell_by_id[label_id].text.strip()
-                for label_id in dict.fromkeys(label_ids)
-                if cell_by_id[label_id].text.strip()
-            ]
+            label_texts = _label_names(cell_by_id, label_ids)
             mappings.append(
                 FieldMappingConfig(
                     mapping_id=f"layout_{input_id}",
                     target_path=target_path,
-                    label=(
-                        input_cell.field_label
-                        or " / ".join(label_texts)
-                        or input_cell.printed_label_text.strip()
-                        or field_key(target_path)
-                        or target_path
+                    label=_visible_name(
+                        input_cell.field_label,
+                        " / ".join(label_texts),
+                        input_cell.printed_label_text,
+                        pool_labels.get(target_path),
+                        field_key(target_path),
                     ),
                     x=input_cell.x,
                     y=input_cell.y,
@@ -1392,21 +1393,17 @@ class LayoutService:
                 for relation in relations_by_input.get(cell.id, [])
                 for label_id in relation.label_cell_ids
             ]
-            mark_label_texts = [
-                cell_by_id[label_id].text.strip()
-                for label_id in dict.fromkeys(mark_label_ids)
-                if cell_by_id[label_id].text.strip()
-            ]
+            mark_label_texts = _label_names(cell_by_id, mark_label_ids)
             if not cell.mark_sets:
                 raise AppError(
                     status=422,
                     code="MARK_OPTIONS_REQUIRED",
                     title="Mark options are required",
-                    detail=f"{cell.id} の選択肢を設定してください。",
+                    detail=f"選択欄「{_cell_name(cell)}」の選択肢を設定してください。",
                     field_errors=[
                         FieldError(
                             field=f"cells.{cell.id}.markSets",
-                            message=f"{cell.id}: 選択肢を設定してください。",
+                            message=f"選択欄「{_cell_name(cell)}」の選択肢を設定してください。",
                         )
                     ],
                 )
@@ -1417,21 +1414,39 @@ class LayoutService:
                         status=422,
                         code="MARK_TARGET_REQUIRED",
                         title="Mark target is required",
-                        detail=f"{cell.id} の保存先を設定してください。",
+                        detail=f"選択欄「{_cell_name(cell)}」の保存先を設定してください。",
+                        field_errors=[
+                            FieldError(
+                                field=f"cells.{cell.id}.markSets.{mark_set.id}.options",
+                                message=f"選択欄「{_cell_name(cell)}」の保存先を設定してください。",
+                            )
+                        ],
                     )
-                if not mark_set.options:
+                options = mark_set.options or (
+                    # A checklist box with no listed boxes is one box filling the cell
+                    # (a lone "□"): it is checked or not, there is nothing to choose. Its ID
+                    # follows the mark set's, which a draft of an active template renames.
+                    [
+                        LayoutMarkOption(
+                            id=f"{mark_set.id}_box"[:100],
+                            label="チェック済み",
+                            value="チェック済み",
+                            x=0, y=0, width=cell.width, height=cell.height,
+                        )
+                    ]
+                    if mark_set.recognition_mode == "checklist"
+                    else []
+                )
+                if not options:
                     raise AppError(
                         status=422,
                         code="MARK_OPTIONS_REQUIRED",
                         title="Mark options are required",
-                        detail=(
-                            f"{cell.text or cell.id} ({cell.id} / {mark_set.id} / "
-                            f"{target_path}): 選択肢を1件以上設定してください。"
-                        ),
+                        detail=f"選択欄「{_cell_name(cell)}」の選択肢を1件以上設定してください。",
                         field_errors=[
                             FieldError(
                                 field=f"cells.{cell.id}.markSets.{mark_set.id}.options",
-                                message=f"{target_path}: 選択肢を1件以上設定してください。",
+                                message=f"選択欄「{_cell_name(cell)}」の選択肢を1件以上設定してください。",
                             )
                         ],
                     )
@@ -1440,14 +1455,17 @@ class LayoutService:
                         status=422,
                         code="INVALID_FIELD_MAPPING",
                         title="Invalid field mapping",
-                        detail=f"未対応の保存先です: {target_path}",
+                        detail=f"選択欄「{_cell_name(cell)}」に対応していない保存先が設定されています。",
                     )
                 if target_path in target_paths:
                     raise AppError(
                         status=422,
                         code="DUPLICATE_FIELD_TARGET",
                         title="Duplicate field target",
-                        detail=f"同じ保存先が複数の矩形に割り当てられています: {target_path}",
+                        detail=(
+                            f"「{pool_labels.get(target_path) or _cell_name(cell)}」が"
+                            "複数の欄に割り当てられています。"
+                        ),
                     )
                 target_paths.add(target_path)
                 mapping_id = f"layout_{cell.id}_{mark_set.id}"
@@ -1457,12 +1475,11 @@ class LayoutService:
                     FieldMappingConfig(
                         mapping_id=mapping_id,
                         target_path=target_path,
-                        label=(
-                            " / ".join(mark_label_texts)
-                            or pool_labels.get(target_path)
-                            or (cell.field_label if len(cell.mark_sets) == 1 else None)
-                            or field_key(target_path)
-                            or target_path
+                        label=_visible_name(
+                            " / ".join(mark_label_texts),
+                            pool_labels.get(target_path),
+                            cell.field_label if len(cell.mark_sets) == 1 else None,
+                            field_key(target_path),
                         ),
                         x=cell.x,
                         y=cell.y,
@@ -1479,10 +1496,26 @@ class LayoutService:
                             MarkOptionConfig.model_validate(
                                 option.model_dump(mode="json", by_alias=True)
                             )
-                            for option in mark_set.options
+                            for option in options
                         ],
                     )
                 )
+        text_paths = {m.target_path for m in mappings if m.mapping_type == "text"}
+        write_ins = [
+            o.write_in_target_path
+            for m in mappings
+            for o in m.mark_options
+            if o.write_in_target_path
+        ]
+        if any(path not in text_paths for path in write_ins) or len(write_ins) != len(
+            set(write_ins)
+        ):
+            raise AppError(
+                status=422,
+                code="INVALID_WRITE_IN",
+                title="Invalid write-in field",
+                detail="選択肢の記入欄には、別の選択肢と重ならない文字の記入欄を指定してください。",
+            )
         return mappings
 
     @staticmethod
@@ -1500,7 +1533,7 @@ class LayoutService:
             status=404,
             code="TEMPLATE_NOT_FOUND",
             title="Template version not found",
-            detail="指定されたテンプレート版が見つかりません。",
+            detail="指定されたテンプレートが見つかりません。",
         )
 
     @staticmethod
@@ -1516,3 +1549,45 @@ class LayoutService:
                 title="Record structure is not verified",
                 detail="表の行・列の対応を確認してください。",
             )
+
+
+# Generated identifiers (cell, meaning, option and field keys, UUIDs) are never names.
+_INTERNAL_ID = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z][A-Za-z0-9]*_)+(?:[0-9a-f]{12,}|\d{10,})(?![A-Za-z0-9])"
+    r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+
+
+def _is_visible_name(value: str | None) -> bool:
+    text = (value or "").strip()
+    # A lone "□" or "(" names nothing; a leaked ID is not a name either.
+    return bool(text) and any(ch.isalnum() for ch in text) and not _INTERNAL_ID.search(text)
+
+
+def _visible_name(*candidates: str | None) -> str:
+    """The first person-readable name; cell text alone never decides a saved field's key."""
+    for candidate in candidates:
+        if _is_visible_name(candidate):
+            return str(candidate).strip()[:100]
+    return "名称未設定の欄"
+
+
+def _label_names(cells: dict[str, LayoutCell], label_ids: list[str]) -> list[str]:
+    """Names printed in the linked item-name cells (a merged one keeps it as printed text)."""
+    names = []
+    for label_id in dict.fromkeys(label_ids):
+        cell = cells[label_id]
+        name = cell.text.strip() or (cell.printed_label_text or "").strip()
+        if _is_visible_name(name):
+            names.append(name)
+    return names
+
+
+def _cell_name(cell: LayoutCell) -> str:
+    """How a cell is named to the person: its visible name, never its internal ID."""
+    return (
+        (cell.field_label or "").strip()
+        or (cell.text or "").strip()
+        or (cell.printed_label_text or "").strip()
+        or "名称未設定の欄"
+    )

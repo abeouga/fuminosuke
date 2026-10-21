@@ -201,6 +201,8 @@ class Applied(Contract):
 class Choice(Contract):
     choice_id: Id
     label: str = Field(min_length=1, max_length=200)
+    # The target this choice would edit, for highlighting it on screen (added 2026-10-18).
+    handle: str | None = Field(default=None, max_length=200)
 
 
 class Question(Contract):
@@ -210,7 +212,8 @@ class Question(Contract):
         "target", "table", "row", "column", "value", "meaning", "name", "operation", "scope"
     ]
     message: str = Field(min_length=1, max_length=1000)
-    choices: list[Choice] = Field(max_length=5)
+    # Up to 12 so a "which row" question can list a whole short table.
+    choices: list[Choice] = Field(max_length=12)
     expires_at: str = Field(min_length=1, max_length=40)
 
 

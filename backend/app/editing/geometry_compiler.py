@@ -229,12 +229,32 @@ class GeometryCompiler:
             # Existing merge records must be preserved unless explicitly unmerged.
             affected = set(removed) | (new_cells.keys() - old_cells.keys())
             old_merges, new_merges = indexed(before["cellMerges"]), indexed(desired["cellMerges"])
+            # Re-merging a merged box records the original cells of the merge it replaces.
+            replaced = {
+                p["cell"]["id"]: p["cell"]
+                for key, m in old_merges.items()
+                if key not in new_merges and m["parentCellId"] in removed
+                for p in m["parts"]
+            }
+            for merge in new_merges.values():
+                if merge["id"] in old_merges:
+                    continue
+                ids = {p["cell"]["id"] for p in merge["parts"]}
+                absorbed = [
+                    m
+                    for key, m in old_merges.items()
+                    if key not in new_merges and {p["cell"]["id"] for p in m["parts"]} <= ids
+                ]
+                if len(absorbed) > 1:
+                    raise reject(
+                        "GEOMETRY_MERGE_INVALID", "結合済みの枠どうしは結合できません。", 422
+                    )
             for merge_id, merge in new_merges.items():
                 previous = old_merges.get(merge_id)
                 sources = (
                     {p["cell"]["id"]: p["cell"] for p in previous["parts"]}
                     if previous
-                    else old_cells
+                    else {**old_cells, **replaced}
                 )
                 if any(p["cell"] != sources.get(p["cell"]["id"]) for p in merge["parts"]):
                     raise reject(

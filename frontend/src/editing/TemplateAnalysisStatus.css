@@ -1,0 +1,8 @@
+.template-analysis-overlay { position: absolute; inset: 0; z-index: 30; display: flex; align-items: flex-start; justify-content: center; padding-top: 120px; background: rgb(255 255 255 / 72%); backdrop-filter: blur(1px); border-radius: 8px; }
+.template-analysis-overlay-box { position: sticky; top: 120px; display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 12px; padding: 16px 20px; border-radius: 10px; background: #fff; color: #1f4f7a; box-shadow: 0 6px 24px rgb(15 23 42 / 18%); }
+.template-analysis-spinner { flex: none; width: 22px; height: 22px; border: 3px solid #2874a633; border-top-color: var(--ui-primary, #2874a6); border-radius: 50%; animation: template-analysis-spin .8s linear infinite; }
+@keyframes template-analysis-spin { to { transform: rotate(360deg); } }
+.template-analysis-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; border-radius: 8px; background: #fff7e6; border: 1px solid #f3d19e; font-size: .9rem; }
+.template-analysis-notice p { margin: 0; flex: 1 1 260px; overflow-wrap: anywhere; }
+.template-analysis-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.template-analysis-notice.is-info { background: #eef5fb; border-color: #c7dcef; }

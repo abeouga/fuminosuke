@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { FiArrowLeft, FiArrowRight, FiCheck, FiDownload, FiEdit3, FiRefreshCw, FiSave } from "react-icons/fi";
-import { GenericChoiceModal } from "./ReviewPage";
 import { api } from "../api";
+import { displayName } from "../userMessages";
 import {
   AnchoredReviewPopover,
+  ReviewChecklists,
+  ReviewJoins,
+  ReviewRenaming,
+  checklistOptionsByPath,
   buildReviewDisplayModel,
   CellStatusPopover,
+  MarkStatusPopover,
+  markPopoverIsWide,
+  reviewEntryLabel,
   GenericRecordReviewTable,
   IndependentReviewGroups,
   KeyValueReviewTable,
@@ -20,13 +27,16 @@ import {
   type ReviewInteractionMode,
 } from "../components/OcrReviewResults";
 import type { PageFieldEdit, PagedReviewResult } from "../pagedReview";
+import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
+import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
 import type { FieldReading, OcrFieldPreview } from "../types";
 
 type Drafts = Record<string, Record<string, PageFieldEdit>>;
 
-export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templateNames = {} }: {
+export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templateNames = {}, closeLabel = "ホームへ" }: {
   jobId: string;
   onClose: () => void;
+  closeLabel?: string;
   onNavigationGuardChange?: (dirty: boolean) => void;
   templateNames?: Record<string, string>;
 }) {
@@ -36,6 +46,8 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [previewRatio, setPreviewRatio] = useState(50);
   const [interactionMode, setInteractionMode] = useState<ReviewInteractionMode>("edit");
+  // Names given to items on this screen (display only; per template).
+  const [itemNames, setItemNames] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Drafts>({});
   const [inlineDirty, setInlineDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -93,7 +105,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
   }, 0), 0) ?? 0;
   const pageEntries = useMemo<ReadingEntry[]>(() => page?.fields.map((field) => ({
     path: field.targetPath,
-    label: field.label,
+    label: displayName(field.label),
     value: result?.confirmed
       ? field.reading
       : mergePagedReading(field.reading, drafts[page.pageId]?.[field.mappingId]),
@@ -109,7 +121,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
     boundingBox: field.reading.boundingBox,
   })) ?? [], [page]);
   const displayModel = useMemo<ReviewDisplayModel>(() => {
-    const model = buildReviewDisplayModel(pageEntries, pagePreviews, result?.reviewStructure ?? undefined);
+    const model = buildReviewDisplayModel(pageEntries, pagePreviews, result?.reviewStructure ?? undefined, itemNames);
     return {
       ...model,
       recordSections: model.recordSections
@@ -121,7 +133,32 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
       parentSections: model.parentSections.filter((section) => section.entries.length > 0),
       independentGroups: model.independentGroups.filter((group) => group.entries.length > 0),
     };
-  }, [pageEntries, pagePreviews, result?.reviewStructure]);
+  }, [pageEntries, pagePreviews, result?.reviewStructure, itemNames]);
+  const templateId = result?.pages[0]?.result.templateId ?? null;
+  useEffect(() => {
+    if (!templateId) return;
+    let active = true;
+    void api.displayNames(templateId).then((value) => { if (active) setItemNames(value.names); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [templateId]);
+  const [itemJoins, setItemJoins] = useState<ItemJoin[]>([]);
+  useEffect(() => {
+    if (!templateId) return;
+    let active = true;
+    void api.itemJoins(templateId).then((value) => { if (active) setItemJoins(value.items); }).catch(() => undefined);
+    const stop = onItemJoinsSaved((savedTemplateId, items) => { if (active && savedTemplateId === templateId) setItemJoins(items); });
+    return () => { active = false; stop(); };
+  }, [templateId]);
+  const joinContext = useMemo(() => ({
+    byPath: joinByPath(itemJoins),
+        orders: displayOrders(itemJoins),
+    configure: templateId ? () => openItemJoinEditor(templateId) : undefined,
+  }), [itemJoins, templateId]);
+  const renameItem = async (entry: ReadingEntry, name: string) => {
+    if (!templateId) return;
+    try { setItemNames((await api.renameItem(templateId, entry.path, name || null)).names); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "項目名を変更できませんでした。"); }
+  };
   const warningPaths = useMemo(() => new Set(pageEntries
     .filter((entry) => entry.value.status === "uncertain" || Boolean(entry.value.reviewReason))
     .map((entry) => entry.path)), [pageEntries]);
@@ -301,7 +338,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
     <header className="page-header split">
       <div><span className="eyebrow">OCR REVIEW · REVISION {result?.revision ?? "-"}</span><h1>読み取り結果を確認</h1>
         <p>全ページの画像と読み取り結果を確認・修正してから確定します。確定後にXLSXを取得できます。</p></div>
-      <button className="ghost" onClick={onClose}><FiArrowLeft aria-hidden="true" />ホームへ</button>
+      <button className="ghost" onClick={onClose}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
     </header>
     {error && <p className="error-box" role="alert">{error}</p>}
     {(needsRefresh || (!result && error)) && <button className="secondary" disabled={busy}
@@ -309,7 +346,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
     {!result && !error && <p role="status">読み込み中…</p>}
     {result && <>
       <aside className="notice compact"><strong>使用テンプレート</strong><span>
-        {templateNames[result.pages[0]?.result.templateId ?? ""] ?? "読み取り時のテンプレート"} · v{result.pages[0]?.result.templateVersion ?? "-"} · 全{result.pages.length}ページ
+        {templateNames[result.pages[0]?.result.templateId ?? ""] ?? "読み取り時のテンプレート"} · 全{result.pages.length}ページ
       </span></aside>
       {result.confirmed && <aside className="notice compact"><strong>確定した書類名</strong><span>{result.documentName}</span></aside>}
 
@@ -365,11 +402,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
             }}
             onNextWarning={selectNextWarning}
           />
-          {!result.confirmed && selectedEntry && selected?.mappingType === "mark" && interactionMode === "edit" && <GenericChoiceModal
-            entry={selectedEntry} preview={pagePreviews.find(preview => preview.mappingId === selected.mappingId)!}
-            imageUrl={selected.cropUrl} confirmed={busy || lifecycleBusy || lifecycleUncertain}
-            onClose={() => setSelectedId(null)} onChange={patch => edit(selected.mappingId, patch)} />}
-          <div className="ocr-edit-tables paged-review-results">
+          <ReviewChecklists.Provider value={checklistOptionsByPath(pagePreviews)}><ReviewRenaming.Provider value={interactionMode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><div className="ocr-edit-tables paged-review-results">
             {displayModel.recordSections.map((section) => (
               <GenericRecordReviewTable
                 key={section.id}
@@ -391,7 +424,7 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
                   selectedPath={selectedEntry?.path ?? null}
                   warningPaths={warningPaths}
                   choicePaths={choicePaths}
-                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode === "reorder"}
+                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode !== "edit"}
                   onSelect={selectEntry}
                   onEdit={editEntry}
                 />
@@ -404,23 +437,35 @@ export function PagedReviewPage({ jobId, onClose, onNavigationGuardChange, templ
                   selectedPath={selectedEntry?.path ?? null}
                   warningPaths={warningPaths}
                   choicePaths={choicePaths}
-                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode === "reorder"}
+                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode !== "edit"}
                   onSelect={selectEntry}
                   onEdit={editEntry}
                 />
               </ReviewTableSection>
             )}
-          </div>
-          {!result.confirmed && interactionMode === "edit" && selected && selectedEntry && (
-            <AnchoredReviewPopover path={selectedEntry.path} onClose={() => setSelectedId(null)}>
-              <CellStatusPopover
-                entry={selectedEntry}
-                confirmed={lifecycleBusy || lifecycleUncertain}
-                onClose={() => setSelectedId(null)}
-                onChange={(patch) => edit(selected.mappingId, pageFieldPatch(patch))}
-              />
-            </AnchoredReviewPopover>
-          )}
+          </div></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider>
+          {!result.confirmed && interactionMode === "edit" && selected && selectedEntry && selected.markRecognitionMode !== "checklist" && (() => {
+            const markPreview = selected.mappingType === "mark"
+              ? pagePreviews.find(preview => preview.mappingId === selected.mappingId) : undefined;
+            return (
+              <AnchoredReviewPopover path={selectedEntry.path} wide={markPopoverIsWide(markPreview)} onClose={() => setSelectedId(null)}>
+                {markPreview
+                  ? <MarkStatusPopover
+                      entry={{ ...selectedEntry, label: reviewEntryLabel(displayModel, selectedEntry) }}
+                      preview={markPreview}
+                      confirmed={busy || lifecycleBusy || lifecycleUncertain}
+                      onClose={() => setSelectedId(null)}
+                      onChange={(patch) => edit(selected.mappingId, pageFieldPatch(patch))}
+                    />
+                  : <CellStatusPopover
+                      entry={{ ...selectedEntry, label: reviewEntryLabel(displayModel, selectedEntry) }}
+                      confirmed={lifecycleBusy || lifecycleUncertain}
+                      onClose={() => setSelectedId(null)}
+                      onChange={(patch) => edit(selected.mappingId, pageFieldPatch(patch))}
+                    />}
+              </AnchoredReviewPopover>
+            );
+          })()}
           {page.validation.issues.length > 0 && <div className="paged-review-validation">
             {page.validation.issues.map((issue, index) => <p key={index}>{issue.message}</p>)}</div>}
           {!result.confirmed && result.confirmAvailable && <label className="paged-review-acknowledgement">

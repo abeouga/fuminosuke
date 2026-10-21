@@ -25,6 +25,12 @@ class OcrRegionInput:
     is_document_identity: bool = False
     identity_value_type: str | None = None
     identity_exact_length: int | None = None
+    # 2026-10-19: template reading settings of this field. The instruction is sent
+    # with the image; keywords are never sent and are applied to the reading by the
+    # server only (keyword_mode "reference_text" or "forced_text").
+    reading_instruction: str | None = None
+    keywords: tuple[str, ...] = ()
+    keyword_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

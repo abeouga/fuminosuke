@@ -64,6 +64,20 @@ class CellSetReading(Contract):
     reading: Literal["text", "sequence"]
 
 
+class CellMerge(Contract):
+    """Replace adjacent physical cells with one rectangle covering exactly them."""
+
+    op: Literal["cell.merge"]
+    cells: list[Handle] = Field(min_length=2, max_length=100)
+    role: Literal["input", "label", "parent_label", "ignored"]
+    name: Name | None
+
+
+class CellDelete(Contract):
+    op: Literal["cell.delete"]
+    cells: list[Handle] = Field(min_length=1, max_length=100)
+
+
 class MeaningCreate(Contract):
     op: Literal["meaning.create"]
     local_ref: LocalId
@@ -185,6 +199,8 @@ class MarkOptionSpec(Contract):
     label: Name
     value: Name
     region: Handle | Literal["whole-cell"] | None
+    # Checklist/symbol write-in field path: None keeps the saved link, "" removes it.
+    write_in_target_path: str | None = Field(default=None, max_length=200, strict=True)
 
     @model_validator(mode="after")
     def require_identity(self) -> MarkOptionSpec:
@@ -260,6 +276,8 @@ Operation = Annotated[
     | CellSetRole
     | CellRename
     | CellSetReading
+    | CellMerge
+    | CellDelete
     | MeaningCreate
     | MeaningUpdate
     | MeaningDelete

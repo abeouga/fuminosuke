@@ -116,6 +116,82 @@ class TemplateCandidateBinding(Base):
     )
 
 
+class TemplateDisplayName(Base):
+    """A name a person gave an item on the result screen (e.g. 「番地)」→「番地」).
+
+    Display only: saved values, keys, mappings, OCR requests and accepted snapshots keep
+    the template's own name. Kept per template series, so every result of it shows it.
+    """
+
+    __tablename__ = "template_display_names"
+    __table_args__ = (
+        UniqueConstraint("template_id", "target_path", name="uq_template_display_names_target"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_path: Mapped[str] = mapped_column(String(200), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateItemJoin(Base):
+    """Items shown as one value on the result screen and the list XLSX (e.g. an address).
+
+    Display only, per template series: each item keeps its own reading, crop, warning and
+    correction; the joined value is built from them in the given order with the printed
+    text around each item (``members_json``: ``[{targetPath, before, after}]``).
+    """
+
+    __tablename__ = "template_item_joins"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # "join": one value; "order": only the display order of the items under a heading.
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="join")
+    # Put between two non-empty items of a join that have no printed text between them.
+    separator: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    members_json: Mapped[list[dict[str, str]]] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateFieldHint(Base):
+    """Reading settings of a template series (keywords and an instruction).
+
+    One entry covers one item: a single field, or every row cell of a table column.
+    A target belongs to at most one entry (checked by the service).
+    """
+
+    __tablename__ = "template_field_hints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_patterns_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    field_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    keywords_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    keywords_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    keywords_forced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
 class TemplateVersion(Base):
     __tablename__ = "template_versions"
     __table_args__ = (

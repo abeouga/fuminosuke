@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any
 
@@ -11,6 +12,8 @@ from fastapi.routing import APIRoute
 from app.api.dependencies import get_app_settings
 from app.core.errors import AppError, FieldError
 from app.editing.errors import problem, reject
+
+logger = logging.getLogger(__name__)
 
 
 class EditingRoute(APIRoute):
@@ -33,6 +36,15 @@ class EditingRoute(APIRoute):
                     request._body = bytes(data)
                 return await handler(request)
             except RequestValidationError as error:
+                # The screen shows one plain sentence; the failing fields go to the log.
+                logger.warning(
+                    "Editing request validation failed",
+                    extra={"validationErrors": [
+                        {"field": ".".join(str(part) for part in item["loc"]),
+                         "message": item["msg"]}
+                        for item in error.errors()[:20]
+                    ]},
+                )
                 problem_error = AppError(
                     status=422,
                     code="INVALID_ARGUMENT",

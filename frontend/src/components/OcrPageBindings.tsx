@@ -132,7 +132,7 @@ export function OcrPageBindings({ versionId, templateId, templateName, onRenameT
     setCatalog(null); setFiles({}); setError(""); setBusy(false); setAccepted(false);
     submitting.current = false; key.current = createIdempotencyKey("ocr");
     api.getOcrPages(versionId).then((value) => {
-      if (value.templateVersionId !== versionId) throw new Error("ページ構成の版が一致しません。再取得してください。");
+      if (value.templateVersionId !== versionId) throw new Error("ページ構成が変わりました。再取得してください。");
       if (current === generation.current) setCatalog(value);
     }).catch((reason: Error) => {
       if (current === generation.current) setError(reason.message);

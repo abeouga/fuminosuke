@@ -81,7 +81,18 @@ async def status(request: Request) -> dict[str, Any]:
             and get_app_settings(request).voice.provider == "openai"
             and get_app_settings(request).ocr.openai_api_key
         ),
+        "voiceSecondsRemaining": await asyncio.to_thread(voice_seconds_remaining, request),
     }
+
+
+def voice_seconds_remaining(request: Request) -> int | None:
+    database = get_database(request)
+    if "editing_voice_streams" not in inspect(database.engine).get_table_names():
+        return None
+    from app.editing.infrastructure.voice_stream import used_today
+
+    with database.session() as session:
+        return max(0, get_app_settings(request).voice.daily_seconds - used_today(session))
 
 
 @router.post(

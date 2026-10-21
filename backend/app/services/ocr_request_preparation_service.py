@@ -7,12 +7,17 @@ from dataclasses import dataclass
 from app.core.errors import AppError
 from app.domain.ocr_models import ReadingStatus
 from app.domain.paged_document_metadata import request_identity_fields
-from app.domain.template_candidates import normalize_candidate_target
+from app.domain.template_candidates import (
+    FORCED_KEYWORD_TYPE,
+    REFERENCE_KEYWORD_TYPE,
+    normalize_candidate_target,
+)
 from app.domain.template_config import FieldMappingConfig, RegionConfig
 from app.extraction.region_cropper import RegionCrops
 from app.image_processing.artifacts import encode_png
 from app.ocr.base import OcrProviderRequest, OcrRegionInput
 from app.services.extraction_service import ExtractionOutput
+from app.services.template_field_hint_service import snapshot_hints
 
 MarkState = tuple[ReadingStatus, str | None, str | None]
 
@@ -62,6 +67,7 @@ class OcrRequestPreparer:
                 if candidates:
                     managed_pool_by_target[target_pattern] = (candidates, suffixes)
 
+        field_hints = snapshot_hints(job_snapshot)
         region_configs = (
             extraction.config.mapped_ocr_regions()
             if provider_name == "openai"
@@ -109,6 +115,14 @@ class OcrRequestPreparer:
                 if target_path
                 else None
             )
+            # 2026-10-19: the field settings fixed at acceptance (keywords and a
+            # reading instruction). A former candidate pool of the same field wins.
+            field_hint = (
+                field_hints.get(normalize_candidate_target(target_path)) if target_path else None
+            )
+            hint_keywords: tuple[str, ...] = (
+                field_hint["keywords"] if field_hint is not None and managed_pool is None else ()
+            )
             transcription_format = (
                 "printed_or_handwritten_number" if region.reading_mode == "number" else None
             )
@@ -137,6 +151,19 @@ class OcrRequestPreparer:
                 candidates=managed_pool[0] if managed_pool is not None else (),
                 allowed_suffixes=managed_pool[1] if managed_pool is not None else (),
                 candidate_type="managed_text" if managed_pool is not None else None,
+                reading_instruction=(
+                    field_hint["instruction"] if field_hint is not None else None
+                ),
+                keywords=hint_keywords,
+                keyword_mode=(
+                    (
+                        FORCED_KEYWORD_TYPE
+                        if field_hint is not None and field_hint["forced"]
+                        else REFERENCE_KEYWORD_TYPE
+                    )
+                    if hint_keywords
+                    else None
+                ),
                 transcription_format=transcription_format,
                 printed_label_excluded=printed_label_excluded,
                 printed_label_text=region.printed_label_text.strip(),

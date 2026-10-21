@@ -21,7 +21,7 @@ def require_draft(version: TemplateVersion) -> None:
     if version.status != "DRAFT" or version.approved_at is not None:
         raise AppError(status=409, code="TEMPLATE_VERSION_IMMUTABLE",
                        title="Published template cannot be edited",
-                       detail="公開済みの版は変更できません。編集から下書きを作成してください。")
+                       detail="使用中のテンプレートは直接変更できません。一覧の「編集」から開いてください。")
 
 
 def require_isolated_ids(version: TemplateVersion, ids: list[str]) -> None:
@@ -29,7 +29,7 @@ def require_isolated_ids(version: TemplateVersion, ids: list[str]) -> None:
     if protected.intersection(ids):
         raise AppError(status=409, code="TEMPLATE_PHYSICAL_ID_SHARED",
                        title="Physical identity belongs to an earlier version",
-                       detail="過去版の矩形・mapping IDは編集用下書きで再利用できません。")
+                       detail="以前の設定の枠IDは再利用できません。画面を再読み込みしてください。")
 
 
 def require_isolated_structure(version: TemplateVersion, value: Any) -> None:

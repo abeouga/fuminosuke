@@ -112,7 +112,11 @@ async def list_fields(
 )
 async def ask(request: Request, body: QuestionRequest) -> dict[str, Any]:
     reply = (
-        {"questionId": body.reply_to.question_id, "value": body.reply_to.value}
+        {
+            "questionId": body.reply_to.question_id,
+            "value": body.reply_to.value,
+            "text": body.reply_to.text,
+        }
         if body.reply_to is not None
         else None
     )

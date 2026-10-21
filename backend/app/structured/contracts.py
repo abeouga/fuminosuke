@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.editing.operation_contracts import Contract
 
@@ -14,6 +14,15 @@ CONTRACT_VERSION: Literal["structured.v1"] = "structured.v1"
 
 ReadingStatus = Literal["readable", "uncertain", "blank"]
 DocumentKind = Literal["single", "paged"]
+
+
+class Box(Contract):
+    """A cell's rectangle on its page image (aligned-image pixels)."""
+
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 class StructuredReading(Contract):
@@ -32,6 +41,8 @@ class StructuredReading(Contract):
     value: str | None = None
     status: ReadingStatus
     review_reason: str | None = None
+    crop_url: str | None = None
+    box: Box | None = None
 
 
 class ExtraReading(Contract):
@@ -41,6 +52,17 @@ class ExtraReading(Contract):
     normalized: str | None = None
     value: str | None = None
     status: ReadingStatus
+
+
+class JoinedReading(Contract):
+    """Items shown as one value (the template's 「項目のまとめ方」); display only."""
+
+    id: str
+    name: str
+    section: str | None = None
+    value: str | None = None
+    status: ReadingStatus
+    field_ids: list[str]
 
 
 class IdentityValue(Contract):
@@ -89,13 +111,23 @@ class DocumentSummary(Contract):
     # The document series this job belongs to (its own id when never updated) and its version.
     series_id: str | None = None
     series_version: int = Field(default=1, ge=1)
+    # Small image of the (first) page, for lists.
+    thumbnail_url: str | None = None
+
+
+class DocumentPage(Contract):
+    page_id: str | None = None
+    page_number: int = Field(ge=1)
+    image_url: str
 
 
 class StructuredDocument(DocumentSummary):
     schema_version: Literal["structured-document.v1"] = SCHEMA_VERSION
+    pages: list[DocumentPage] = Field(default_factory=list)
     fields: list[StructuredReading]
     tables: list[StructuredTable]
     extra_fields: list[ExtraReading]
+    joined_fields: list[JoinedReading] = Field(default_factory=list)
 
 
 class DocumentList(Contract):
@@ -112,7 +144,15 @@ class StructuredStatus(Contract):
 
 class QuestionReply(Contract):
     question_id: str = Field(min_length=3, max_length=100)
-    value: str = Field(min_length=1, max_length=300)
+    # One of the offered choices, or the user's own words when no choice fits.
+    value: str | None = Field(default=None, min_length=1, max_length=300)
+    text: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _one_answer(self) -> QuestionReply:
+        if (self.value is None) == (self.text is None or not self.text.strip()):
+            raise ValueError("value か text のどちらか一方を指定してください。")
+        return self
 
 
 class QuestionRequest(Contract):
@@ -133,6 +173,8 @@ class Clarification(Contract):
     kind: str
     message: str
     choices: list[QuestionChoice]
+    # True when an answer is already given and the choices only offer a different reading.
+    optional: bool = False
 
 
 class AnswerTable(Contract):
@@ -182,6 +224,8 @@ class QuestionResult(Contract):
     steps: list[AnswerStep] = Field(default_factory=list)
     evidence: list[Evidence]
     caveats: list[str]
+    # How the question was read (field, calculation, documents) when it was not certain.
+    notes: list[str] = Field(default_factory=list)
     question: Clarification | None = None
     model_calls: int = Field(ge=0)
     documents: list[DocumentRef]

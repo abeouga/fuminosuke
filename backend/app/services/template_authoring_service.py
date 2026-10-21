@@ -61,7 +61,7 @@ class TemplateAuthoringService:
                 status=404,
                 code="TEMPLATE_NOT_FOUND",
                 title="Template not found",
-                detail="指定されたテンプレート版がありません。",
+                detail="指定されたテンプレートがありません。",
             )
         return version
 

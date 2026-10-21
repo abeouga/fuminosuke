@@ -6,7 +6,14 @@ import unicodedata
 from app.domain.field_targets import field_key
 from app.domain.ocr_factory import blank_ocr_document
 from app.domain.ocr_models import BoundingBox, FieldReading, OcrDocument, ReadingStatus, ReviewItem
-from app.domain.template_candidates import canonical_managed_candidate
+from app.domain.template_candidates import (
+    FORCED_KEYWORD_TYPE,
+    REFERENCE_KEYWORD_TYPE,
+    REFERENCE_SUGGESTION_SCORE,
+    canonical_managed_candidate,
+    is_ditto_mark,
+    nearest_keywords,
+)
 from app.ocr.base import OcrProviderRequest
 from app.ocr.transcription_models import TranscriptionBatch, TranscriptionItem
 
@@ -47,6 +54,8 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
             candidates=region.candidates,
             allowed_suffixes=region.allowed_suffixes,
             candidate_type=region.candidate_type,
+            keywords=region.keywords,
+            keyword_mode=region.keyword_mode,
             identity_value_type=region.identity_value_type,
             identity_exact_length=region.identity_exact_length,
         )
@@ -68,6 +77,8 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
                 "MANAGED_CANDIDATE_UNRESOLVED": (
                     "登録済みの読み取り候補と一致しないため確認してください。"
                 ),
+                "KEYWORD_ABSORBED": _keyword_message(issue_code, reading),
+                "KEYWORD_UNRESOLVED": _keyword_message(issue_code, reading),
                 "MARK_CHOICE_UNRESOLVED": (
                     "選択マークを確定できないため、印の付いた項目を確認してください。"
                 ),
@@ -98,6 +109,23 @@ def build_mapped_document(request: OcrProviderRequest, batch: TranscriptionBatch
     return document
 
 
+def _keyword_message(code: str, reading: FieldReading) -> str:
+    """The review page shows this message, not the alternatives: say what was read."""
+    if code == "KEYWORD_ABSORBED":
+        seen = reading.alternatives[0] if reading.alternatives else reading.raw
+        return (
+            f"読み取った「{seen}」を候補語「{reading.normalized}」にしました。"
+            "原本と見比べて確認してください。"
+        )
+    seen_text = f"読み取った「{reading.raw}」は" if reading.raw else "この欄は"
+    close = (
+        "近い候補語は「" + "」「".join(reading.alternatives) + "」です。"
+        if reading.alternatives
+        else ""
+    )
+    return f"{seen_text}どの候補語か決められません。{close}確認してください。"[:500]
+
+
 def _reading(
     mapping_id: str,
     target_path: str,
@@ -107,6 +135,8 @@ def _reading(
     candidates: tuple[str, ...] = (),
     allowed_suffixes: tuple[str, ...] = (),
     candidate_type: str | None = None,
+    keywords: tuple[str, ...] = (),
+    keyword_mode: str | None = None,
     identity_value_type: str | None = None,
     identity_exact_length: int | None = None,
 ) -> tuple[FieldReading, str | None, bool]:
@@ -166,6 +196,43 @@ def _reading(
             status = ReadingStatus.UNCERTAIN
             normalized = None
             review_reason = "MARK_CHOICE_UNRESOLVED"
+            issue_code = review_reason
+    elif keyword_mode is not None and (
+        status is ReadingStatus.BLANK or is_ditto_mark(raw)
+    ):
+        pass  # a blank stays blank and a ditto mark (〃) is left as read
+    elif keyword_mode == REFERENCE_KEYWORD_TYPE:
+        # Keywords are never sent to the model (a live run with them in the request
+        # swapped words between rows). The same word takes the keyword's spelling;
+        # any other reading stays as read and only offers close keywords to choose.
+        matched = canonical_managed_candidate(raw, keywords)
+        if status is ReadingStatus.READABLE and matched is not None:
+            normalized = matched
+        elif matched is None:
+            close = nearest_keywords(raw, keywords, minimum=REFERENCE_SUGGESTION_SCORE)
+            alternatives = list(dict.fromkeys([*alternatives, *close]))[:10]
+    elif keyword_mode == FORCED_KEYWORD_TYPE:
+        # The user chose "absorb into the keywords": a reading outside the list takes
+        # the unique nearest keyword by characters, and the field keeps a warning
+        # with what was actually read.
+        exact = canonical_managed_candidate(raw, keywords)
+        nearest = [] if exact is not None else nearest_keywords(raw, keywords)
+        chosen = exact or (nearest[0] if len(nearest) == 1 else None)
+        if chosen is not None:
+            status = ReadingStatus.READABLE
+            alternatives = [raw] if exact is None and raw and raw != chosen else []
+            raw = raw or chosen
+            normalized = chosen
+            if exact is None or item.status is not ReadingStatus.READABLE:
+                review_reason = "KEYWORD_ABSORBED"
+                issue_code = review_reason
+            else:
+                review_reason = None
+        else:
+            status = ReadingStatus.UNCERTAIN
+            normalized = None
+            alternatives = nearest[:10]
+            review_reason = "KEYWORD_UNRESOLVED"
             issue_code = review_reason
     elif candidates and status is not ReadingStatus.BLANK:
         candidate_matcher = canonical_managed_candidate

@@ -85,6 +85,10 @@ class State(StrEnum):
 
 ACTIVE = frozenset({State.ACCEPTED, State.PLANNING, State.VALIDATING, State.COMMITTING})
 TERMINAL = frozenset(State) - ACTIVE
+# Final states that never advanced the resource revision.
+UNSAVED_FINAL = frozenset(
+    {State.NO_ACTION, State.CONFLICT, State.FAILED, State.CANCELLED, State.EXPIRED}
+)
 _NEXT = {
     State.ACCEPTED: frozenset({State.PLANNING, State.VALIDATING}),
     State.PLANNING: frozenset({State.VALIDATING, State.WAITING_INFORMATION, State.NO_ACTION}),

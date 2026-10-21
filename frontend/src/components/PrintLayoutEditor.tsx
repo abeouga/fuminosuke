@@ -26,7 +26,7 @@ function Cells({ cells, physical = false }: { cells: PrintCell[]; physical?: boo
 }
 
 export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyChange, onSavedChange,
-  onStateChange, onLayoutSaved, externalState, resourceRevision, onMutationRevision, initialSaved = false }: {
+  onStateChange, onLayoutSaved, externalState, resourceRevision, onMutationRevision, initialSaved = false, open }: {
   resourceRevision: number; onMutationRevision: (revision: number) => void;
   versionId: string; disabled: boolean;
   onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
@@ -35,8 +35,11 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   onLayoutSaved?: (layout: NonNullable<PrintState["layout"]>) => void;
   externalState?: PrintState | null;
   initialSaved?: boolean;
+  /** Opened from outside (a header button); the component then shows no toggle of its own. */
+  open?: boolean;
 }) {
-  const [opened, setOpened] = useState(false);
+  const [openedState, setOpened] = useState(false);
+  const opened = open ?? openedState;
   const [state, setState] = useState<PrintState | null>(null);
   const [request, setRequest] = useState<PrintRequest | null>(null);
   const [plan, setPlan] = useState<PrintPlan | null>(null);
@@ -57,6 +60,12 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
   const svg = useRef<SVGSVGElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  const loadRequested = useRef(false);
+  useEffect(() => {
+    if (!open || state || loadRequested.current) return;
+    loadRequested.current = true;
+    void load();
+  });
   useEffect(() => onBusyChange(busy || preparing), [busy, preparing, onBusyChange]);
   useEffect(() => {
     setPreparing(false); setPrepareMessage("");
@@ -171,9 +180,10 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
     if ((index > 0 && row <= breaks[index - 1]) || (index + 1 < breaks.length && row >= breaks[index + 1])) return;
     update({ breakAfterRows: breaks.map((b, i) => i === index ? row : b) });
   };
+  if (open !== undefined && !open) return null;
   return <section className="form-card print-editor">
-    <button type="button" className="secondary" disabled={busy} aria-expanded={opened}
-      onClick={() => { setOpened(!opened); if (!state && !opened) void load(); }}>印刷ページを編集</button>
+    {open === undefined && <button type="button" className="secondary" disabled={busy} aria-expanded={opened}
+      onClick={() => { setOpened(!opened); if (!state && !opened) void load(); }}>印刷ページを編集</button>}
     {opened && <>
       <p>青い区切り線をドラッグして、各ページに印刷する範囲を調整してください。保存後は「このテンプレートでOCRを使う」から続けられます。</p>
       {error && <p role="alert" className="error-box">{error}</p>}
@@ -184,7 +194,7 @@ export function PrintLayoutEditor({ versionId, disabled, onDirtyChange, onBusyCh
           <ul>{state.source.unsupported.map(w => <li key={w}>{w}</li>)}</ul>
           <p>Excel側で該当する構造・設定を確認して再取り込みしてください。下の表示は拡大・スクロールで確認できます。</p>
         </div>}
-        {!state.editable && <p className="inline-warning">この版は閲覧専用です。編集には下書き版が必要です。</p>}
+        {!state.editable && <p className="inline-warning">このテンプレートは閲覧専用です。一覧の「編集」から開いてください。</p>}
         {disabled && <p className="inline-warning">テンプレート側の編集中の内容を保存してからページ境界を編集してください。</p>}
         <fieldset disabled={blocked} className="print-controls">
           <label>用紙<select value={request.paperSize} onChange={e => update({ paperSize: e.target.value as PrintRequest["paperSize"] })}>

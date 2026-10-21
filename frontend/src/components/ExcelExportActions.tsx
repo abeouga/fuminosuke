@@ -1,3 +1,4 @@
+import { userText } from "../userMessages";
 import { authenticatedFetch } from "../auth/transport";
 import { useRef, useState } from "react";
 import { FiDownload } from "react-icons/fi";
@@ -18,7 +19,7 @@ export function ExcelExportActions({ jobId, documentName, compact = false }: {
       const response = await authenticatedFetch(exportUrl(jobId, "xlsx"), { credentials: "include" });
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}));
-        throw new Error(problem.detail ?? problem.message ?? "XLSXを取得できませんでした。もう一度お試しください。");
+        throw new Error(userText(problem.detail ?? problem.message, "XLSX取得エラー") || "XLSXを取得できませんでした。もう一度お試しください。");
       }
       const disposition = response.headers.get("Content-Disposition") ?? "";
       const encoded = /filename\*=utf-8''([^;]+)/i.exec(disposition)?.[1];

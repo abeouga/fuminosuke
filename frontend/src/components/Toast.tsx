@@ -1,3 +1,4 @@
+import { userText } from "../userMessages";
 import { useEffect, useRef, useState } from "react";
 
 type ToastTone = "info" | "success" | "warning" | "error";
@@ -16,7 +17,8 @@ type ToastItem = ToastInput & { id: string };
 const TOAST_EVENT = "ledger-toast";
 
 export function showToast(input: ToastInput) {
-  window.dispatchEvent(new CustomEvent<ToastInput>(TOAST_EVENT, { detail: input }));
+  const shown = { ...input, title: userText(input.title, "通知", input.title), message: input.message ? userText(input.message, "通知") : input.message };
+  window.dispatchEvent(new CustomEvent<ToastInput>(TOAST_EVENT, { detail: shown }));
 }
 
 export function ToastViewport() {

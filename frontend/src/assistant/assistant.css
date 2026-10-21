@@ -28,7 +28,7 @@
 .assistant-warning { padding: 10px 12px; background: #fff6e7; color: #674511; border-radius: 5px; }
 .assistant-status { margin-bottom: 0; }
 .assistant-panel :focus-visible { outline: 2px solid #176281; outline-offset: 3px; }
-.assistant-editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.assistant-editor-workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .assistant-editor-workspace:has(> .assistant-slot.is-open) { grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; align-items: start; }
 .assistant-editor-workspace:has(> .assistant-slot.is-open) > .assistant-slot { grid-column: 2; grid-row: 1; }
 .assistant-editor-workspace:has(> .assistant-slot.is-open) > .layout-editor { grid-column: 1; grid-row: 1; min-width: 0; }

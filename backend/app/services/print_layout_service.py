@@ -57,7 +57,7 @@ class PrintLayoutService:
     def _version(session: Session, version_id: str) -> TemplateVersion:
         version = session.get(TemplateVersion, version_id)
         if version is None:
-            raise print_error("テンプレート版がありません。", "TEMPLATE_NOT_FOUND", 404)
+            raise print_error("テンプレートがありません。", "TEMPLATE_NOT_FOUND", 404)
         if version.mode != "SPREADSHEET_TEMPLATE":
             raise print_error("XLSXテンプレートだけが対象です。", "PRINT_LAYOUT_UNSUPPORTED")
         return version

@@ -33,9 +33,21 @@ export function likelyPlaybackEcho(text: string, spoken: string): boolean {
   return common / Math.max(aa.size, bb.size) >= 0.82;
 }
 
+/** Browser microphone failures, explained in the user's terms. */
+export function microphoneMessage(error: unknown): string {
+  const name = error instanceof DOMException || error instanceof Error ? error.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") return "マイクの使用が許可されていません。アドレス欄の左にあるマイクの設定で「許可」にしてから、もう一度押してください。";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "マイクが見つかりません。マイクを接続してから、もう一度押してください。";
+  if (name === "NotReadableError" || name === "AbortError") return "マイクを使えません。ほかのアプリがマイクを使っていないか確認してください。";
+  return error instanceof Error && error.message ? error.message : "マイクを開始できませんでした。";
+}
+
 export async function acquireMicrophone(stillCurrent: () => boolean): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia)
+    throw new Error("この画面の開き方ではマイクを使えません。このPCで http://localhost から開くか、https の接続で開いてください。");
   let expired = false, timer: ReturnType<typeof setTimeout> | undefined;
-  const request = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  const request = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+    .catch((error: unknown) => { throw new Error(microphoneMessage(error)); });
   void request.then(stream => { if (expired || !stillCurrent()) stream.getTracks().forEach(track => track.stop()); }).catch(() => undefined);
   try {
     return await Promise.race([request, new Promise<never>((_, reject) => {

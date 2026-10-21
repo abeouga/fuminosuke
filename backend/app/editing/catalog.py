@@ -140,6 +140,25 @@ class CatalogService:
             raise reject("PAGE_OWNERSHIP_INVALID", "セルの保存済みページを一意に検証できません。")
         return f"{matches[0]['page']}:{matches[0]['range']}"
 
+    def _spills(
+        self, session: Session, version: Any, layout: LayoutDefinition
+    ) -> dict[str, int]:
+        from app.db.models import JobArtifact
+        from app.editing.printed_overflow import spills
+
+        artifact = (
+            session.get(JobArtifact, version.clean_template_artifact_id)
+            if version.clean_template_artifact_id
+            else None
+        )
+        if artifact is None:
+            return {}
+        try:
+            image = self.authoring.storage.read_bytes(artifact.relative_path)
+        except Exception:  # A missing image only removes the hint.
+            return {}
+        return spills(image, layout.model_dump(mode="json", by_alias=True)["cells"])
+
     def _template(self, session: Session, owner: EditingSession) -> Catalog:
         version = self.authoring.version(session, owner.resource_id)
         snapshot = self.authoring.snapshot(session, version)
@@ -178,6 +197,7 @@ class CatalogService:
             )
             add(target)
         cell_pages = {cell.id: self.cell_page(layout, cell, pages) for cell in layout.cells}
+        spill = self._spills(session, version, layout) if editable and not pages else {}
         cells = {c.id: c for c in layout.cells}
         meanings_by_path = {entry.target_path: entry for entry in layout.label_pool}
         for cell in layout.cells:
@@ -191,12 +211,15 @@ class CatalogService:
                 heading_names.insert(0, ancestor.field_label or ancestor.text)
                 parent = ancestor.parent_label_cell_id
             permitted: tuple[str, ...] = ("cell.rename", "cell.set_role", "meaning.bind")
+            if cell.shape_type == "rectangle" and not cell.mark_sets:
+                permitted += ("cell.merge", "cell.delete")
             if cell.role == "input":
                 permitted += ("cell.set_reading", "mark.configure")
             elif cell.role == "mark":
                 permitted += ("mark.configure", "mark.clear")
             if cell.composite_subfields:
-                permitted = ("cell.rename",)
+                # The address split derives its parts' paths from the bound meaning.
+                permitted = ("cell.rename", "meaning.bind")
             if cell.virtual:
                 permitted = (
                     "heading.update",
@@ -209,6 +232,10 @@ class CatalogService:
                 "role": cell.role,
                 "headingPath": heading_names,
                 "position": {"x": cell.x, "y": cell.y},
+                "size": {"width": cell.width, "height": cell.height},
+                # Spreadsheet-derived cells keep their sheet address in the ID.
+                "sheetCell": cell.id[5:] if cell.id.startswith("xlsx_") else None,
+                "textSpillsRight": spill.get(cell.id),
                 "unavailableReason": None if editable else "RESOURCE_NOT_EDITABLE",
                 "order": next(
                     (g.order for g in layout.record_groups if cell.id in g.input_cell_ids), None

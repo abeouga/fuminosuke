@@ -605,6 +605,12 @@
                 "$ref": "#/$defs/CellSetReading"
               },
               {
+                "$ref": "#/$defs/CellMerge"
+              },
+              {
+                "$ref": "#/$defs/CellDelete"
+              },
+              {
                 "$ref": "#/$defs/MeaningCreate"
               },
               {
@@ -679,6 +685,30 @@
       ],
       "additionalProperties": false
     },
+    "CellDelete": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "cell.delete"
+          ]
+        },
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/TargetRef"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "cells"
+      ],
+      "type": "object"
+    },
     "CellMeaningRef": {
       "additionalProperties": false,
       "properties": {
@@ -706,6 +736,54 @@
       "required": [
         "cell",
         "meaning"
+      ],
+      "type": "object"
+    },
+    "CellMerge": {
+      "additionalProperties": false,
+      "description": "Replace adjacent physical cells with one rectangle covering exactly them.",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "cell.merge"
+          ]
+        },
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/TargetRef"
+          },
+          "maxItems": 100,
+          "minItems": 2,
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "input",
+            "label",
+            "parent_label",
+            "ignored"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "cells",
+        "role",
+        "name"
       ],
       "type": "object"
     },
@@ -1237,6 +1315,17 @@
               "type": "null"
             }
           ]
+        },
+        "writeInTargetPath": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1244,7 +1333,8 @@
         "localRef",
         "label",
         "value",
-        "region"
+        "region",
+        "writeInTargetPath"
       ],
       "type": "object"
     },

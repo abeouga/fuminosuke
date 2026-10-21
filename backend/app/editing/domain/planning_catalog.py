@@ -7,7 +7,13 @@ import re
 import unicodedata
 from typing import Any
 
-from app.editing.domain.fast_path import COLUMN, ROW, compile_recent_edit, explicit_target
+from app.editing.domain.fast_path import (
+    COLUMN,
+    ROW,
+    bare_row,
+    compile_recent_edit,
+    explicit_target,
+)
 from app.editing.domain.planning import InvalidPlan, PlanningIssue
 from app.editing.domain.values import ordinal
 
@@ -176,6 +182,71 @@ class PlanningCatalog:
         if selected and explicit and selected not in explicit:
             raise PlanningIssue("scope", (self.tables[next(iter(explicit))]["ref"],))
         table_id = selected or next(iter(explicit), None) or self.scope["recentTableId"]
+        result = self._pool(table_id, row, column, kind)
+        if (
+            kind == "field"
+            and table_id
+            and not selected
+            and not explicit
+            and not any(self.names(r) & self._mentioned(text) for r in result)
+        ):
+            # The recent table is only a preference for table cells. A name that matches
+            # nothing in it but names an independent field (e.g. 名号 after a table edit)
+            # selects that field; another table is still never switched to silently.
+            mentioned = self._mentioned(text)
+            independent = [
+                r
+                for r in self._pool(None, row, column, kind)
+                if not self.targets[r].get("recordCell") and self.names(r) & mentioned
+            ]
+            if independent:
+                result = independent
+        return result
+
+    def column_rows(self, mention: str) -> tuple[str, ...] | None:
+        """Cells of one table column named without a row (体重を600にして), by row."""
+        text = normalized(mention)
+        pool = self.pool(mention)
+        lengths = {
+            r: max((len(n) for n in self.names(r) if n and n in text), default=0) for r in pool
+        }
+        longest = max(lengths.values(), default=0)
+        named = [r for r, n in lengths.items() if longest and n == longest]
+        cells = [self.targets[r].get("recordCell") for r in named]
+        if (
+            len(named) < 2
+            or any(not c for c in cells)
+            or len({(c["tableId"], c["columnName"]) for c in cells if c}) != 1
+            or len({c["rowNumber"] for c in cells if c}) != len(named)
+        ):
+            return None
+        return tuple(sorted(named, key=lambda r: self.targets[r]["recordCell"]["rowNumber"]))
+
+    def unavailable_mention(self, mention: str) -> str | None:
+        """The name of a field the user named exactly but which cannot be edited here."""
+        text = normalized(mention)
+
+        def longest(ref: str) -> int:
+            return max((len(n) for n in self.names(ref) if n and n in text), default=0)
+
+        available = max(
+            (longest(r) for r, t in self.targets.items() if not t.get("unavailableReason")),
+            default=0,
+        )
+        blocked = [
+            (longest(r), t["name"])
+            for r, t in self.targets.items()
+            if t.get("unavailableReason") and t["kind"] == "field"
+        ]
+        best = max(blocked, default=(0, ""))
+        return best[1] if best[0] > available else None
+
+    def _mentioned(self, text: str) -> set[str]:
+        return {name for r in self.targets for name in self.names(r) if name and name in text}
+
+    def _pool(
+        self, table_id: str | None, row: int | None, column: int | None, kind: str
+    ) -> list[str]:
         result = []
         for ref, target in self.targets.items():
             if target["kind"] != kind or target.get("unavailableReason"):
@@ -219,6 +290,10 @@ class PlanningCatalog:
 
     def coordinates(self, quote: str) -> tuple[int | None, int | None]:
         rows, cols = list(ROW.finditer(quote)), list(COLUMN.finditer(quote))
+        if not rows and not cols:
+            bare = bare_row(explicit_target(quote) or quote)
+            if bare:
+                return bare[1], None
         if len(rows) > 1 or len(cols) > 1:
             raise PlanningIssue("target")
         if any(re.search(r"[-\u2212.万億兆]$", quote[: m.start()].strip()) for m in [*rows, *cols]):
@@ -232,7 +307,8 @@ class PlanningCatalog:
         row, column = self.coordinates(mention)
         if row is not None and column is not None and pool == [ref]:
             return True
-        text = ROW.sub("", mention)
+        bare = bare_row(mention)
+        text = ROW.sub("", bare[0] if bare else mention)
         for table in self.tables.values():
             for name in sorted({table["name"], table["title"]}, key=len, reverse=True):
                 if name:
@@ -263,6 +339,9 @@ class PlanningCatalog:
                 "role",
                 "headingPath",
                 "position",
+                "size",
+                "sheetCell",
+                "textSpillsRight",
                 "order",
                 "printedName",
                 "virtual",

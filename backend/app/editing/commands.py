@@ -12,6 +12,8 @@ from app.editing.catalog import Catalog, Target
 from app.editing.compilation_limits import AUTHORING_LIMITS, COMMAND_LIMITS, CompilationLimits
 from app.editing.errors import reject
 from app.editing.operation_contracts import (
+    CellDelete,
+    CellMerge,
     CellRename,
     CellSetReading,
     CellSetRole,
@@ -105,6 +107,7 @@ class CommandCompiler:
             return entry
 
         semantics = SemanticCommands(catalog, plan, local, resolve, meaning)
+        spill: dict[str, int] | None = None
         for operation in operations:
             if operation.op not in catalog.capabilities:
                 raise reject("CAPABILITY_UNAVAILABLE", "この編集対象で使用できない操作です。")
@@ -129,7 +132,27 @@ class CommandCompiler:
                 continue
             layout = plan.after["layout"]
             cells = {cell["id"]: cell for cell in layout["cells"]}
-            if isinstance(operation, CellRename):
+            if isinstance(operation, CellMerge | CellDelete):
+                from app.editing import cell_geometry_commands as geometry
+
+                entities = [resolve(h, "cell").entity_id for h in self._unique(operation.cells)]
+                if isinstance(operation, CellMerge):
+                    # Shared by every merge of this batch: a merged label keeps its spill.
+                    spill = spill if spill is not None else {
+                        t.entity_id: t.detail["textSpillsRight"]
+                        for t in catalog.targets.values()
+                        if t.kind == "cell" and t.detail.get("textSpillsRight")
+                    }
+                    geometry.merge_spoken(
+                        plan.after,
+                        entities,
+                        operation.role,
+                        None if operation.name is None else name(operation.name),
+                        spill,
+                    )
+                else:
+                    geometry.delete(plan.after, entities)
+            elif isinstance(operation, CellRename):
                 target = resolve(operation.cell, "cell")
                 cell = cells[target.entity_id]
                 if cell.get("virtual"):
@@ -213,15 +236,27 @@ class CommandCompiler:
                     raise reject("INVALID_ARGUMENT", "直接割当には項目名セルを指定しません。", 422)
                 for handle in self._unique(operation.input_cells):
                     cell = cells[resolve(handle, "cell").entity_id]
-                    bound_mark = cell["role"] == "mark" and sum(
-                        m["targetPath"] == entry["targetPath"] for m in cell.get("markSets", [])
-                    ) == 1
-                    if (
-                        cell["role"] != "input" and not bound_mark
-                    ) or cell.get("compositeSubfields"):
+                    sets = cell.get("markSets", [])
+                    if cell["role"] == "mark" and len(sets) == 1:
+                        # Connecting a meaning to a choice box declares where its value is
+                        # stored: the single choice group takes that path, whether it was
+                        # still empty or pointed elsewhere (e.g. a checklist "□" and its label).
+                        sets[0]["targetPath"] = entry["targetPath"]
+                    if cell["role"] == "mark" and len(sets) > 1 and not any(
+                        m["targetPath"] == entry["targetPath"] for m in sets
+                    ):
+                        unset = [m for m in sets if not m["targetPath"]]
+                        if len(unset) != 1:
+                            raise reject(
+                                "DEPENDENCY_CONFLICT",
+                                "選択肢のまとまりが複数あるため、どれに保存するかを選択欄の設定で決めてください。",
+                            )
+                        unset[0]["targetPath"] = entry["targetPath"]
+                    # A mark box without choices yet keeps the connection as unfinished setup.
+                    if cell["role"] not in {"input", "mark"}:
                         raise reject(
                             "DEPENDENCY_CONFLICT",
-                            "記入欄または同じ意味を設定済みのマーク欄へ接続してください。",
+                            "項目名・見出し・読み取らない枠には意味を接続できません。記入欄にしてから接続してください。",
                         )
                     in_table = any(
                         cell["id"] in group["inputCellIds"]

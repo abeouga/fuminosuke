@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +14,32 @@ SEGMENT_BYTES = 1_440_000
 
 class AudioInvalid(Exception):
     pass
+
+
+_FILLER = re.compile(
+    r"(?:え+[ーっ]*と?|あ+ー*|あの+ー*|う+ー*ん|ん+ー*|うーむ|まあ|えーと|えっと|あれ|おっと)+"
+)
+
+
+_MEANINGFUL_SHORT = re.compile(
+    r"[0-9一二三四五六七八九十百千万]|取り?消|戻|中止|やめ|キャンセル|違|はい|いいえ|空欄"
+)
+
+
+def is_noise(text: str, *, answering: bool) -> bool:
+    """Too short to be an instruction (えーと heard as 「A と」), unless it answers a question
+    or is a short command such as 取り消して / 中止."""
+    if is_filler(text):
+        return True
+    core = re.sub(r"[\s、。,.!?…・〜~]", "", unicodedata.normalize("NFKC", text))
+    return not answering and len(core) <= 3 and not _MEANINGFUL_SHORT.search(core)
+
+
+def is_filler(text: str) -> bool:
+    """Hesitation only (えー, あのー, うーん). Never sent as an instruction."""
+    # NFKC folds full-width punctuation, so one ASCII class covers both widths.
+    core = re.sub(r"[\s、。,.!?…・〜~]", "", unicodedata.normalize("NFKC", text))
+    return not core.strip("ー") or bool(_FILLER.fullmatch(core))
 
 
 @dataclass(frozen=True)
@@ -115,8 +142,9 @@ class Utterance:
 
     def completed(self, item_id: str, text: str) -> None:
         segment = next((s for s in self.segments if s.item_id == item_id), None)
-        if not segment or segment.text is not None or not text.strip() or len(text) > 20000:
-            raise AudioInvalid("Unexpected/empty provider transcript")
+        # A piece holding only noise or a cough transcribes as empty; it is skipped.
+        if not segment or segment.text is not None or len(text) > 20000:
+            raise AudioInvalid("Unexpected provider transcript")
         segment.text = text
         self.assemble()
 
@@ -136,8 +164,12 @@ class Utterance:
         if self.manifest is None or any(s.text is None for s in self.segments):
             return
         text = "".join(s.text or "" for s in self.segments)
-        if not text.strip() or len(text) > 20000:
+        if len(text) > 20000:
             raise AudioInvalid("Full transcript is invalid")
+        if not text.strip():
+            # Nothing intelligible: an empty text is never an instruction.
+            self.text, self.transcript_digest = "", None
+            return
         self.text = text
         self.transcript_digest = hashlib.sha256(text.encode()).hexdigest()
 

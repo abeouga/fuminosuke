@@ -51,11 +51,23 @@
           "maxLength": 200,
           "minLength": 1,
           "type": "string"
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "choiceId",
-        "label"
+        "label",
+        "handle"
       ],
       "type": "object"
     },
@@ -373,7 +385,7 @@
           "items": {
             "$ref": "#/$defs/Choice"
           },
-          "maxItems": 5,
+          "maxItems": 12,
           "type": "array"
         },
         "expiresAt": {

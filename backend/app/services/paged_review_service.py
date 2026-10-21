@@ -307,6 +307,9 @@ class PagedReviewService:
                 )
                 assign_mapped_reading(candidate, path, reading)
                 edited_paths.add(path)
+            from app.domain.checklist import apply_write_ins
+
+            apply_write_ins(candidate, page["fieldMappings"])
             candidate.review_items = [
                 i for i in candidate.review_items if i.path not in edited_paths
             ]

@@ -55,3 +55,56 @@ def canonical_managed_candidate(
             if normalized_value == normalized_with_suffix:
                 return f"{candidate}{suffix}"
     return None
+
+
+# 2026-10-19: per-field reading settings (keywords and a reading instruction).
+MAX_FIELD_HINT_COUNT = 300
+MAX_FIELD_KEYWORD_COUNT = 500
+MAX_FIELD_KEYWORD_LENGTH = 100
+MAX_FIELD_INSTRUCTION_LENGTH = 300
+REFERENCE_KEYWORD_TYPE = "reference_text"
+FORCED_KEYWORD_TYPE = "forced_text"
+
+
+# A reference keyword is offered as a choice only when at least this similar.
+REFERENCE_SUGGESTION_SCORE = 0.34
+
+
+def nearest_keywords(
+    value: str | None, keywords: tuple[str, ...], *, minimum: float = 0.0
+) -> list[str]:
+    """Keywords closest to a reading by character similarity; several when tied."""
+    if not value:
+        return []
+    try:
+        target = normalize_candidate_text(value)
+    except ValueError:
+        return []
+    from difflib import SequenceMatcher
+
+    best = 0.0
+    found: list[str] = []
+    for keyword in keywords:
+        try:
+            normalized = normalize_candidate_text(keyword)
+        except ValueError:
+            continue
+        score = SequenceMatcher(None, target, normalized, autojunk=False).ratio()
+        if score > best:
+            best, found = score, [keyword]
+        elif score == best and score > 0 and keyword not in found:
+            found.append(keyword)
+    return found if best > minimum else []
+
+
+_DITTO_MARKS = {"〃", "″", "ゝ", "ヽ", "同上", "同", "''", '"', "々"}
+
+
+def is_ditto_mark(value: str | None) -> bool:
+    """A mark meaning "same as the row above"; never absorbed into a keyword."""
+    if not value:
+        return False
+    try:
+        return normalize_candidate_text(value) in _DITTO_MARKS
+    except ValueError:
+        return False

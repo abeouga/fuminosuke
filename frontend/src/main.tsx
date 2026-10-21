@@ -5,6 +5,8 @@ import { AuthBoundary } from "./auth/AuthBoundary";
 import "./styles.css";
 import "./candidate-editor.css";
 import "./workbench.css";
+import "./ask.css";
+import "./shelf.css";
 import "./assistant/assistant.css";
 import "./mobile.css";
 

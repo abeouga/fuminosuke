@@ -39,11 +39,22 @@ function reflowChoiceOptions(
     };
   });
 }
-function nextChoiceOptionId(options: LayoutMarkSet["options"]): string {
-  const ids = new Set(options.map((option) => option.id));
-  let index = 1;
-  while (ids.has(`choice_${index}`)) index += 1;
-  return `choice_${index}`;
+/**
+ * New choice IDs are never fixed names such as "choice_1": a draft made from an active
+ * template refuses IDs the earlier version used, so a reused fixed name would block saving.
+ */
+/** Checklist results join checked names with "・", so a name may not contain a separator. */
+export function checklistLabel(name: string): string {
+  return name.replace(/[・、,;\n\r]+/g, "／").replace(/^／+|／+$/g, "").trim();
+}
+export function newMarkSetId(): string {
+  return `mark_set_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+export function newMarkOptionId(): string {
+  return `mark_option_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+function nextChoiceOptionId(_options: LayoutMarkSet["options"]): string {
+  return newMarkOptionId();
 }
 export function genericManualChoicePreset(
   cell: LayoutCell,
@@ -51,14 +62,14 @@ export function genericManualChoicePreset(
 ): LayoutMarkSet[] {
   const labels = suggestedChoiceLabels(cell.text);
   return [{
-    id: "choice",
+    id: newMarkSetId(),
     targetPath,
     recognitionMode: "manual",
     selectionMode: "single",
     options: reflowChoiceOptions(
       cell,
-      labels.map((label, index) => ({
-        id: `choice_${index + 1}`,
+      labels.map((label) => ({
+        id: newMarkOptionId(),
         label,
         value: label,
         x: 0,
@@ -70,32 +81,38 @@ export function genericManualChoicePreset(
   }];
 }
 export function checklistPreset(cell: LayoutCell, targetPath = ""): LayoutMarkSet[] {
-  const labels = /^[□☐☑☒■]\s*$/.test(cell.text.trim()) ? ["チェック済み"] : [...new Set(cell.text.split(/[□☐☑☒■]/).slice(1)
-    .map(label => label.trim()).filter(Boolean))];
-  return [{ id: "choice", targetPath, recognitionMode: "checklist", selectionMode: "multiple",
-    options: labels.map((label, index) => ({ id: `choice_${index + 1}`, label, value: label,
+  const listed = [...new Set(cell.text.split(/[□☐☑☒■]/).slice(1).map(label => checklistLabel(label)).filter(Boolean))];
+  // A box without listed choices (a lone "□", or a box imported without text) is one checkbox.
+  const labels = listed.length ? listed : ["チェック済み"];
+  return [{ id: newMarkSetId(), targetPath, recognitionMode: "checklist", selectionMode: "multiple",
+    options: labels.map((label) => ({ id: newMarkOptionId(), label, value: label,
       x: 0, y: 0, width: cell.width, height: cell.height })) }];
 }
 export function MarkCellEditor({
   cell,
   sets,
   targets,
+  writeInTargets = [],
   source,
   canonicalWidth,
   canonicalHeight,
   onChange,
   selectedChoiceId,
   onChoiceSelect,
+  hideTarget = false,
 }: {
   cell: LayoutCell;
   sets: LayoutMarkSet[];
   targets: FieldMappingTarget[];
+  writeInTargets?: FieldMappingTarget[];
   source: string;
   canonicalWidth: number;
   canonicalHeight: number;
   onChange: (sets: LayoutMarkSet[]) => void;
   selectedChoiceId?: string | null;
   onChoiceSelect?: (markSetId: string, choiceId: string) => void;
+  /** The storage target already comes from the label connection drawn on the form. */
+  hideTarget?: boolean;
 }) {
   const [newOptionLabel, setNewOptionLabel] = useState("");
   const markSet = sets[0];
@@ -135,7 +152,7 @@ export function MarkCellEditor({
   return (
     <fieldset className="mark-cell-editor generic-choice-editor">
       <legend>{isSymbol ? "記号の候補と保存先" : isChecklist ? "チェック項目と保存先" : "選択欄の設定"}</legend>
-      <label>
+      {!hideTarget && <label>
         保存する情報
         <select
           value={markSet.targetPath}
@@ -150,7 +167,7 @@ export function MarkCellEditor({
             </optgroup>
           ))}
         </select>
-      </label>
+      </label>}
       {!isSymbol && !isChecklist && <div className="choice-setting-grid">
         <label>
           判定方法
@@ -178,8 +195,8 @@ export function MarkCellEditor({
         </label>
       </div>}
       <p>
-        {isSymbol ? "この欄全体の画像から、候補の記号を1つ判定します。空欄は空欄、候補外や判読できない記号は確認対象にします。"
-          : isChecklist ? "欄全体をOCRで読み、チェックされた項目を複数取得します。全未選択と判別不能を区別します。項目名はチェック記号を除いて入力してください。区切り文字（・、,;）は使えません。"
+        {isSymbol ? "この欄全体の画像から、候補の記号を1つ判定します。空欄は空欄、候補外や判読できない記号は確認対象にします。「その他（　）」のように記入欄がある項目は「記入欄」を選ぶと、確認画面で記号と記入内容を1行に並べ、記入があるのに記号が空欄なら要確認にします。"
+          : isChecklist ? "欄全体をOCRで読み、チェックされた項目を複数取得します。全未選択と判別不能を区別します。項目名はチェック記号を除いて入力してください。区切り文字（・、,;）は使えません。「その他（　）」のように記入欄がある項目は「記入欄」を選ぶと、記入があればチェックありとして扱います。"
           : markSet.recognitionMode === "manual"
           ? "この欄はOCRへ送らず、読み取り確認画面で利用者が画像を見て選択します。"
           : "選択肢ごとの範囲を画像差分で判定し、不確実な場合は確認対象にします。"}
@@ -217,6 +234,23 @@ export function MarkCellEditor({
           </g>
         ))}
       </svg>}
+      {isSymbol && <label title="この項目の「その他（　）」などの記入欄。確認画面で記号と並べて表示します。">
+        記入欄
+        <select
+          value={markSet.options.find((option) => option.writeInTargetPath)?.writeInTargetPath ?? ""}
+          onChange={(event) => {
+            const path = event.target.value || undefined;
+            // One symbol (○, or the first) holds the item's write-in.
+            const holder = markSet.options.find((option) => option.label === "○") ?? markSet.options[0];
+            patchSet({ options: markSet.options.map(({ writeInTargetPath: _old, ...option }) => (
+              path && option.id === holder?.id ? { ...option, writeInTargetPath: path } : option
+            )) });
+          }}
+        >
+          <option value="">なし</option>
+          {writeInTargets.map((target) => <option value={target.path} key={target.path}>{target.label}</option>)}
+        </select>
+      </label>}
       <div className="generic-choice-options">
         {markSet.options.map((option) => (
           <div className="generic-choice-option" key={option.id}>
@@ -227,12 +261,27 @@ export function MarkCellEditor({
               <input
                 value={option.label}
                 maxLength={100}
-                onChange={(event) => patchOption(option.id, {
-                  label: event.target.value,
-                  ...((isSymbol || isChecklist) ? { value: event.target.value } : {}),
-                })}
+                onChange={(event) => {
+                  const label = isChecklist ? event.target.value.replace(/[・、,;\n\r]/g, "／") : event.target.value;
+                  patchOption(option.id, { label, ...((isSymbol || isChecklist) ? { value: label } : {}) });
+                }}
               />
             </label>
+            {isChecklist && <label title="この記入欄に文字があれば、この項目にチェックがあるものとして扱います。">
+              記入欄
+              <select
+                value={option.writeInTargetPath ?? ""}
+                onChange={(event) => patchOption(option.id, { writeInTargetPath: event.target.value || undefined })}
+              >
+                <option value="">なし</option>
+                {writeInTargets.map((target) => (
+                  <option value={target.path} key={target.path}
+                    disabled={markSet.options.some((other) => other.id !== option.id && other.writeInTargetPath === target.path)}>
+                    {target.label}
+                  </option>
+                ))}
+              </select>
+            </label>}
             {!isSymbol && !isChecklist && <label>
               内部識別値
               <input

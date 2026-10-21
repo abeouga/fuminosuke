@@ -63,12 +63,12 @@ export class TemplateAnalysisStore {
       const retired = this.journal.create && this.journal.create.contractVersion !== "template-analysis.v3";
       if (retired) {
         this.journal = { ...emptyJournal(), held: true };
-        this.state.message = "解析の定義が変わりました。手動の下書きを確認してから再解析してください。";
+        this.state.message = "解析の定義が変わりました。手動の下書きを保持しています。";
       }
       this.state = { ...this.state, held: this.journal.held, recovery: !!(this.journal.create || this.journal.pendingMerge),
         applied: this.journal.applied ?? [],
         pendingFacets: this.journal.touches.length, manualSerial: this.journal.serial,
-        message: retired ? "解析の定義が変わりました。手動の下書きを保持しています。確認してから再解析してください。" : this.journal.held ? "保持したAI案と下書きを確認してください。自動保存は保留中です。" : "" };
+        message: retired ? "解析の定義が変わりました。手動の下書きを保持しています。" : this.journal.held ? "保持したAI案と下書きを確認してください。自動保存は保留中です。" : "" };
     } catch { this.state.message = "解析の復旧情報を読めません。手動下書きを確認してください。"; }
   }
   getSnapshot = () => this.state;
@@ -136,7 +136,7 @@ export class TemplateAnalysisStore {
     if (remembered) this.editor.resume();
     // A local journal failure cannot turn a received business receipt into a failed save.
     this.publish({ held: !remembered, recovery: false, focus: null, run: null, applied: [], conflicts: [], pendingFacets: this.journal.touches.length,
-      message: !remembered ? this.state.message : wasHeld ? "保存しました。AI案の再反映には再解析してください。" : "" });
+      message: !remembered ? this.state.message : wasHeld ? "AIの下書きを保存しました。" : "" });
   }
   /** A whole-page draft for a freshly prepared template: run, apply every validated unit, save. */
   startDraft(scope: PageScope) { return this.start(scope, "draft", false, { autoApply: true }); }
@@ -185,10 +185,10 @@ export class TemplateAnalysisStore {
   private async autoApply(run: AnalysisResult) {
     if (!this.journal.autoApply || this.state.busy) return;
     this.journal.autoApply = false; this.tryRemember();
-    if (!analysisMergeAvailable(run)) { this.publish({ message: runMessage(run) }); return; }
+    if (!analysisMergeAvailable(run)) { this.release(runMessage(run)); return; }
     const units = run.proposal?.units ?? run.pages.flatMap(p => p.proposal?.units ?? []);
     const ids = units.filter(u => u.state === "mergeable" && !this.state.applied.includes(u.unitId) && !this.state.staleUnits.includes(u.unitId)).map(u => u.unitId);
-    if (!ids.length) { this.publish({ message: "AIが反映できる下書きを作れませんでした。欄は手動で設定してください。" }); return; }
+    if (!ids.length) { this.release("AIが反映できる下書きを作れませんでした。欄は手動で設定してください。"); return; }
     await this.merge(ids);
     if (!this.state.applied.length || !this.editor.saveDraft) return;
     const saved = await this.editor.saveDraft();
@@ -264,13 +264,13 @@ export class TemplateAnalysisStore {
     const run = this.state.run;
     if (this.state.busy || this.state.storageBlocked || this.state.recovery || !run?.proposal || !this.journal.owner || !unitIds.length) return;
     if (unitIds.some(id => this.state.staleUnits.includes(id))) {
-      this.publish({ focus: null, message: "枠の変更後は再解析してください。手動の下書きを保持しています。" }); return;
+      this.publish({ focus: null, message: "枠が変更されたため、AIの下書きは反映できません。手動の下書きを保持しています。" }); return;
     }
     this.mark("merge_requested", undefined, { unitIds });
     this.publish({ busy: true, focus: null });
     try {
       const owner = this.workbench.getOwner();
-      if (owner.sessionId !== this.journal.owner.sessionId) throw new Error("編集セッションが変わりました。旧案は反映せず、再解析してください。");
+      if (owner.sessionId !== this.journal.owner.sessionId) throw new Error("編集セッションが変わりました。AIの下書きは反映できません。");
       const context = await this.workbench.refreshContext();
       const draft = this.editor.read(); if (!draft) throw new Error("入力を終了してから案を反映してください。");
       const pending: PendingMerge = { owner, analysisId: run.analysisId, manualSerial: this.journal.serial, body: { contractVersion: "template-analysis.v3",
@@ -332,6 +332,13 @@ export class TemplateAnalysisStore {
     this.publish({ applied: this.journal.applied, focus: null, conflicts: [], message: remembered ? "直前のAI反映を戻しました。まだ保存していません。" : this.state.message });
     } catch (e) { this.publish({ recovery: true, message: messageOf(e) }); }
     finally { this.publish({ busy: false }); }
+  }
+  /** An automatic draft with nothing to apply returns to manual editing without asking. */
+  private release(message: string) {
+    if (this.state.storageBlocked || this.state.recovery || this.journal.mergeIds.length) { this.publish({ message }); return; }
+    this.disconnect(); this.journal.create = null; this.journal.analysisId = null; this.journal.held = false;
+    if (!this.tryRemember()) { this.publish({ message }); return; }
+    this.editor.resume(); this.publish({ held: false, focus: null, run: null, message });
   }
   finish() {
     if (this.state.busy || this.state.storageBlocked || analysisRunning(this.state.run) || this.state.recovery || this.journal.mergeIds.length) return;

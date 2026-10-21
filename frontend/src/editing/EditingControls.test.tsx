@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { EditingControls } from "./EditingControls";
 import type { WorkbenchStore } from "./workbenchStore";
@@ -6,16 +6,16 @@ import { v2client } from "./v2client";
 
 const audio = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn() }));
 vi.mock("./voiceCapture", () => ({ VoiceCapture: class {
-  snapshot = { mode: "stopped", message: "", caption: "" };
+  snapshot = { mode: "stopped", message: "", caption: "", error: "", utterance: false };
   subscribe = () => () => {}; getSnapshot = () => this.snapshot;
-  start = audio.start; stop = audio.stop;
+  start = audio.start; stop = audio.stop; clearError = () => {}; meter = { read: () => 0 };
 } }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 function setup() {
   const snapshot = { state: "ready", pending: 0, canUndo: true, message: "", question: null,
     context: { catalog: { targets: [] }, uiBindings: [], scopeContext: { selectedTableId: null } } };
   const store = { resourceKind: "template", subscribe: () => () => {}, getSnapshot: () => snapshot,
-    connectEvents: () => () => {}, onSaved: () => () => {}, subscribeInteraction: () => () => {}, setInteraction: vi.fn(), selectionChanged: vi.fn().mockResolvedValue(undefined) } as unknown as WorkbenchStore;
+    connectEvents: () => () => {}, onSaved: () => () => {}, subscribeInteraction: () => () => {}, subscribeScope: () => () => {}, setInteraction: vi.fn(), selectionChanged: vi.fn().mockResolvedValue(undefined) } as unknown as WorkbenchStore;
   const props = { store, pageScope: { mode: "all" as const, pageId: null }, selectedEntities: [] as string[], selectionEpoch: 0, manualActive: false, onSaved: vi.fn() };
   return { ...render(<EditingControls {...props} />), props };
 }
@@ -33,7 +33,7 @@ it("allows continuous input without a selected cell and retains local recording 
   vi.spyOn(v2client, "status").mockResolvedValue({ enabled: true, plannerConnected: true, voiceConnected: true });
   audio.start.mockResolvedValue(undefined);
   const view = setup();
-  await screen.findByText(/セルを選ばずに話せます/);
+  await waitFor(() => expect(screen.getByRole("button", { name: "音声入力" })).toBeEnabled());
   expect(screen.getByRole("button", { name: "音声入力" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "選択欄を録音" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "音声入力" }));

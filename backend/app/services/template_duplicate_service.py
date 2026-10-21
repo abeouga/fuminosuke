@@ -22,6 +22,9 @@ from app.db.models import (
     TemplateCandidateBinding,
     TemplateCandidateSet,
     TemplateDefinitionRevision,
+    TemplateDisplayName,
+    TemplateFieldHint,
+    TemplateItemJoin,
     TemplateVersion,
 )
 from app.domain.generic_template_mapping import generic_field_locations
@@ -185,7 +188,7 @@ class TemplateDuplicateService(TemplateVersionService):
             if source is None:
                 raise AppError(
                     status=404, code="TEMPLATE_NOT_FOUND", title="Template not found",
-                    detail="複製元のテンプレート版がありません。",
+                    detail="複製元のテンプレートがありません。",
                 )
             owner = repository.get_template(source.template_id)
             if (
@@ -195,7 +198,7 @@ class TemplateDuplicateService(TemplateVersionService):
                 raise AppError(
                     status=409, code="INVALID_STATE_TRANSITION",
                     title="Active template required",
-                    detail="現在の有効版から複製してください。",
+                    detail="使用中のテンプレートから複製してください。",
                 )
             if repository.name_exists(name):
                 raise repository._name_conflict()
@@ -223,7 +226,7 @@ class TemplateDuplicateService(TemplateVersionService):
                     ):
                         raise self._conflict(
                             "PRINT_REFERENCE_NOT_VALIDATED",
-                            "複製元のページ基準画像が保存版と一致しません。",
+                            "複製元のページ基準画像が保存内容と一致しません。",
                         )
                     artifact = session.get(JobArtifact, reference["artifactId"])
                     if (
@@ -233,7 +236,7 @@ class TemplateDuplicateService(TemplateVersionService):
                     ):
                         raise self._conflict(
                             "PRINT_REFERENCE_NOT_VALIDATED",
-                            "複製元のページ基準画像が保存版と一致しません。",
+                            "複製元のページ基準画像が保存内容と一致しません。",
                         )
                     self._artifact_bytes(artifact, owner_job=source_job)
             try:
@@ -251,7 +254,7 @@ class TemplateDuplicateService(TemplateVersionService):
                 or config.canonical_height != source.canonical_height
             ):
                 raise self._conflict(
-                    "TEMPLATE_CONFIG_MISMATCH", "複製元の設定と版が一致しません。"
+                    "TEMPLATE_CONFIG_MISMATCH", "複製元の設定が変わりました。"
                 )
 
             template = Template(name=name, document_type=owner.document_type)
@@ -516,6 +519,41 @@ class TemplateDuplicateService(TemplateVersionService):
                     target_pattern=generic_targets.get(source_binding.target_pattern,
                                                        source_binding.target_pattern),
                     field_label=source_binding.field_label,
+                ))
+            for source_hint in session.scalars(select(TemplateFieldHint).where(
+                TemplateFieldHint.template_id == owner.id,
+            )):
+                session.add(TemplateFieldHint(
+                    template_id=template.id,
+                    target_patterns_json=[
+                        generic_targets.get(target, target)
+                        for target in source_hint.target_patterns_json
+                    ],
+                    field_label=source_hint.field_label,
+                    keywords_json=copy.deepcopy(source_hint.keywords_json),
+                    keywords_enabled=source_hint.keywords_enabled,
+                    keywords_forced=source_hint.keywords_forced,
+                    instruction=source_hint.instruction,
+                ))
+            for source_name in session.scalars(select(TemplateDisplayName).where(
+                TemplateDisplayName.template_id == owner.id,
+            )):
+                session.add(TemplateDisplayName(
+                    template_id=template.id,
+                    target_path=generic_targets.get(source_name.target_path,
+                                                    source_name.target_path),
+                    display_name=source_name.display_name,
+                ))
+            for source_join in session.scalars(select(TemplateItemJoin).where(
+                TemplateItemJoin.template_id == owner.id,
+            )):
+                session.add(TemplateItemJoin(
+                    template_id=template.id, position=source_join.position,
+                    name=source_join.name, kind=source_join.kind,
+                    separator=source_join.separator,
+                    members_json=_generic_targets(
+                        copy.deepcopy(source_join.members_json), generic_targets,
+                    ),
                 ))
             snapshot = without_current_qualification(remap(
                 source_job.config_snapshot_json, {**replacements, **path_map, **artifact_map},

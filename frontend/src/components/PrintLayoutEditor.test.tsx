@@ -198,7 +198,7 @@ describe("印刷ページ編集", () => {
   it("explains read-only versions and exhausted legal boundaries", async () => {
     vi.mocked(api.printLayout).mockResolvedValue({ ...state, editable: false, source: { ...state.source, validBreakRows: [] } });
     await open();
-    expect(screen.getByText("この版は閲覧専用です。編集には下書き版が必要です。")).toBeVisible();
+    expect(screen.getByText("このテンプレートは閲覧専用です。一覧の「編集」から開いてください。")).toBeVisible();
     expect(screen.getByText("結合セルを分断せずに追加できる行境界がありません。")).toBeVisible();
     expect(screen.getByRole("button", { name: "改ページを追加" })).toBeDisabled();
   });

@@ -26,7 +26,9 @@ BARE_YEAR_ERAS = ("令和", "平成", "昭和")
 WESTERN = "西暦"
 
 _DATE = re.compile(
-    r"^(?P<era>令和|平成|昭和|大正|明治|[RHSTM])?\s*(?P<y>元|\d{1,4})\s+(?P<m>\d{1,2})\s+(?P<d>\d{1,2})$"
+    r"^(?P<era>令和|平成|昭和|大正|明治|[RHSTM])?\s*(?P<y>元|\d{1,4})\s+(?P<m>\d{1,2})\s+(?P<d>\d{1,2})"
+    # A short non-numeric suffix written after the day (e.g. 「生」「頃」) is not part of the date.
+    r"(?:\s*[^\d\s]{1,3})?$"
 )
 _NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
 _GROUPED_DOTS = re.compile(r"^\d{1,3}(?:\.\d{3}){2,}$")
@@ -130,10 +132,10 @@ def number_value(text: str | None) -> Decimal | None:
     folded = unicodedata.normalize("NFKC", text).replace(",", "").replace(" ", "")
     if _GROUPED_DOTS.match(folded):
         return None  # 1.234.567: dots may be thousands separators; never guess.
-    match = _NUMBER.search(folded)
-    if match is None:
-        return None
+    numbers = _NUMBER.findall(folded)
+    if len(numbers) != 1:
+        return None  # 「826-100」「1万2千」: several numerals are not one number; never pick one.
     try:
-        return Decimal(match.group(0))
+        return Decimal(numbers[0])
     except InvalidOperation:
         return None

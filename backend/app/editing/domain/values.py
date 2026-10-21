@@ -35,6 +35,38 @@ def literal_value(value: str, quote: str) -> str:
     return numeric_literal(value) or value
 
 
+_AMOUNT_NAMES = ("価格", "金額", "代金", "料金", "単価", "費用", "円")
+
+
+def fit_value(value: str | None, target: dict[str, Any]) -> str | None:
+    """六万円 / 1,200 become digits only for a field that holds a number (価格=540000).
+
+    A note field (備考) keeps 6万円 as written.
+    """
+    digits = amount(value) if value else None
+    if digits is None:
+        return value
+    current = str(target.get("currentValue") or "")
+    cell = target.get("recordCell") or {}
+    names = str(target.get("name") or "") + str(cell.get("columnName") or "")
+    numeric = bool(re.fullmatch(r"[0-9,]+", current)) or any(w in names for w in _AMOUNT_NAMES)
+    return digits if numeric else value
+
+
+def amount(value: str) -> str | None:
+    """A spoken amount: 六万円 / 6万円 / 1,200円 / 1,200 as plain digits, else None.
+
+    Other units (kg, 頭, キロ) are not amounts and stay text.
+    """
+    text = unicodedata.normalize("NFKC", value).strip()
+    text = re.sub(r"\s*円$", "", text)
+    if re.fullmatch(r"[0-9]{1,3}(?:,[0-9]{3})+", text):
+        text = text.replace(",", "")
+    if text == unicodedata.normalize("NFKC", value).strip():
+        return None
+    return numeric_literal(text)
+
+
 def resolve_value(intent: dict[str, Any], turns: dict[str, str], clause: str) -> str | None:
     kind = intent["kind"]
     if kind == "missing":

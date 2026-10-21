@@ -13,6 +13,7 @@ from app.core.errors import AppError
 from app.editing.application.ports import CommandRepository, InstructionResolver, MutationUnitOfWork
 from app.editing.domain.command import BoundOperation, ResolvedInstruction, canonical, digest
 from app.editing.domain.dialogue import PendingInstruction, known_slots, pending_cancellation
+from app.editing.domain.fast_path import spoken_row
 from app.editing.domain.planning import InvalidPlan
 from app.editing.domain.planning_catalog import PlanningCatalog
 from app.editing.errors import reject
@@ -150,6 +151,16 @@ class CommandController:
                 ):
                     choice = pending.question["choices"][0]["choiceId"]
                     text = pending.question["choices"][0]["label"]
+                if not choice and pending.question["missingKind"] in {"row", "target", "column"}:
+                    # 「3」/「3行目」 picks the one offered cell in that row, no model call.
+                    row = spoken_row(text)
+                    picked = [
+                        v
+                        for v in pending.question["choices"]
+                        if row is not None and f"・{row}行目・" in v["label"]
+                    ]
+                    if len(picked) == 1:
+                        choice, text = picked[0]["choiceId"], picked[0]["label"]
                 try:
                     dialogue = pending.dialogue(text)
                 except InvalidPlan as error:
@@ -432,7 +443,8 @@ class CommandController:
                             "type": "failed",
                             "error": {
                                 "code": "PLANNER_PLAN_INVALID",
-                                "message": "元の指示と回答の対象・値が一致しません。",
+                                "message": "質問への答えを元の指示に当てはめられませんでした。"
+                                "何も変更していません。行・欄名・値をまとめて話し直してください。",
                                 "retryable": False,
                                 "currentRevision": None,
                             },

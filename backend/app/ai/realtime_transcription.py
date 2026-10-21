@@ -30,13 +30,21 @@ SESSION_CONFIG: dict[str, Any] = {
 }
 
 
-def transcription_config(keywords: list[str]) -> dict[str, Any]:
+def transcription_config(
+    keywords: list[str], preceding: str = "", question: str = ""
+) -> dict[str, Any]:
     config = copy.deepcopy(SESSION_CONFIG)
     transcription = config["session"]["audio"]["input"]["transcription"]
     transcription["prompt"] = (
         "日本語で帳票の欄を編集する音声。欄名と変更指示を聞き取る。"
         "数字を一桁ずつ読んだ値は先頭のゼロを含めて文字起こしする。"
     )
+    if question.strip():
+        # A short answer (三行目) is easily misheard without the question it answers.
+        transcription["prompt"] += "この音声は質問「" + question.strip()[:200] + "」への答え。"
+    if preceding.strip():
+        # A pause splits one sentence into pieces; the next piece continues this text.
+        transcription["prompt"] += "この音声は次の発言の続き。" + preceding.strip()[-200:]
     if keywords:
         transcription["keywords"] = keywords
     return config

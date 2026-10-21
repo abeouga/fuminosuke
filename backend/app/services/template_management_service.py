@@ -101,7 +101,8 @@ class TemplateManagementService:
                 status=422,
                 code="INVALID_FIELD_MAPPING",
                 title="Invalid field mapping",
-                detail=f"未対応の保存先です: {unknown[0]}",
+                detail="対応していない保存先が含まれています。",
+                metadata={"targetPath": unknown[0]},
             )
         require_draft(version)
         require_isolated_ids(version, [mapping.mapping_id for mapping in mappings])
@@ -243,7 +244,7 @@ class TemplateManagementService:
                     status=404,
                     code="TEMPLATE_NOT_FOUND",
                     title="Template version not found",
-                    detail="指定されたテンプレート版が見つかりません。",
+                    detail="指定されたテンプレートが見つかりません。",
                 )
             require_draft(version)
             if (width, height) != (
@@ -304,5 +305,5 @@ class TemplateManagementService:
             status=404,
             code="TEMPLATE_NOT_FOUND",
             title="Template version not found",
-            detail="指定されたテンプレート版が見つかりません。",
+            detail="指定されたテンプレートが見つかりません。",
         )

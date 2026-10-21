@@ -157,6 +157,32 @@
       "title": "CatalogView",
       "type": "object"
     },
+    "CellDelete": {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "cell.delete",
+          "title": "Op",
+          "type": "string"
+        },
+        "cells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Cells",
+          "type": "array"
+        }
+      },
+      "required": [
+        "op",
+        "cells"
+      ],
+      "title": "CellDelete",
+      "type": "object"
+    },
     "CellMeaningRef": {
       "additionalProperties": false,
       "properties": {
@@ -190,6 +216,58 @@
         "meaning"
       ],
       "title": "CellMeaningRef",
+      "type": "object"
+    },
+    "CellMerge": {
+      "additionalProperties": false,
+      "description": "Replace adjacent physical cells with one rectangle covering exactly them.",
+      "properties": {
+        "op": {
+          "const": "cell.merge",
+          "title": "Op",
+          "type": "string"
+        },
+        "cells": {
+          "items": {
+            "pattern": "^t_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 2,
+          "title": "Cells",
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "input",
+            "label",
+            "parent_label",
+            "ignored"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        }
+      },
+      "required": [
+        "op",
+        "cells",
+        "role",
+        "name"
+      ],
+      "title": "CellMerge",
       "type": "object"
     },
     "CellRename": {
@@ -315,6 +393,19 @@
           "minLength": 1,
           "title": "Label",
           "type": "string"
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handle"
         }
       },
       "required": [
@@ -2257,6 +2348,20 @@
           "exclusiveMinimum": 0,
           "title": "Height",
           "type": "integer"
+        },
+        "writeInTargetPath": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Writeintargetpath"
         }
       },
       "required": [
@@ -2705,6 +2810,8 @@
           "items": {
             "discriminator": {
               "mapping": {
+                "cell.delete": "#/$defs/CellDelete",
+                "cell.merge": "#/$defs/CellMerge",
                 "cell.rename": "#/$defs/CellRename",
                 "cell.set_reading": "#/$defs/CellSetReading",
                 "cell.set_role": "#/$defs/CellSetRole",
@@ -2742,6 +2849,12 @@
               },
               {
                 "$ref": "#/$defs/CellSetReading"
+              },
+              {
+                "$ref": "#/$defs/CellMerge"
+              },
+              {
+                "$ref": "#/$defs/CellDelete"
               },
               {
                 "$ref": "#/$defs/MeaningCreate"
@@ -3018,6 +3131,19 @@
             }
           ],
           "title": "Region"
+        },
+        "writeInTargetPath": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Writeintargetpath"
         }
       },
       "required": [
@@ -3528,7 +3654,7 @@
           "items": {
             "$ref": "#/$defs/Choice"
           },
-          "maxItems": 5,
+          "maxItems": 12,
           "title": "Choices",
           "type": "array"
         },
@@ -4381,6 +4507,25 @@
       "title": "SessionResult",
       "type": "object"
     },
+    "Size": {
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "title": "Height",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "Size",
+      "type": "object"
+    },
     "TargetFocus": {
       "additionalProperties": false,
       "properties": {
@@ -4538,6 +4683,41 @@
             }
           ],
           "default": null
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sheetCell": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sheetcell"
+        },
+        "textSpillsRight": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Textspillsright"
         },
         "unavailableReason": {
           "anyOf": [

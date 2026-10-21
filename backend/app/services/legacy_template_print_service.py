@@ -33,7 +33,7 @@ class LegacyTemplatePrintService:
         with self.database.session() as session:
             version = session.get(TemplateVersion, version_id)
             if version is None:
-                raise print_error("テンプレート版がありません。", "TEMPLATE_NOT_FOUND", 404)
+                raise print_error("テンプレートがありません。", "TEMPLATE_NOT_FOUND", 404)
             owner = session.get(Template, version.template_id)
             quality = version.quality_json
             if (
@@ -56,7 +56,7 @@ class LegacyTemplatePrintService:
             )
             if clean is None or clean.job_id != version.source_job_id:
                 raise print_error(
-                    "テンプレート版の元画像を確認できません。", "PRINT_FILE_SOURCE_MISSING", 409,
+                    "テンプレートの元画像を確認できません。", "PRINT_FILE_SOURCE_MISSING", 409,
                 )
             source = self._verified_content(
                 session, version.source_job_id, clean.attempt_number,

@@ -1,3 +1,4 @@
+import { cellName, displayName, logDetail, userText } from "../userMessages";
 import { privateLocalStorage } from "../auth/transport";
 import { TemplateAiFocus } from "../editing/AiFocusLayer";
 import { changedFacets, facetTouch, patchedCellFacets } from "../editing/authoringFacets";
@@ -17,8 +18,10 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ReactNode } from "react";
-import { FiCheckSquare, FiArrowRight, FiCornerDownRight, FiEdit3, FiEye, FiGrid, FiLayers, FiLink, FiMousePointer, FiPlusSquare, FiRotateCcw, FiSearch, FiSettings, FiTag, FiType, FiX } from "react-icons/fi";
+import type { CSSProperties, ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useCornerPin } from "./useCornerPin";
+import { FiCheckSquare, FiChevronLeft, FiChevronRight, FiArrowRight, FiCornerDownRight, FiEdit3, FiEye, FiGrid, FiLayers, FiLink, FiMousePointer, FiMove, FiPlusSquare, FiRotateCcw, FiSearch, FiSettings, FiTag, FiType, FiX } from "react-icons/fi";
 import type {
   DocumentIdentity,
   DocumentNameRule,
@@ -34,7 +37,6 @@ import type {
   LayoutRelation,
 } from "../types";
 import { showToast } from "./Toast";
-import { LayoutAssignmentPreview } from "./LayoutAssignmentPreview";
 import "./LayoutEditor.move.css";
 import { movePageHeading, pageDisplayCells, type PageView } from "../pageAuthoring";
 import { buildHeadingConnections, traceHeadingConnection } from "./headingConnections";
@@ -78,6 +80,7 @@ import {
   renumberRelations,
   attachParentLabelToMeaningRelations,
   resolveLabelPoolTargetPath,
+  labelCellName,
 } from "./layoutEditorMeaning";
 import {
   type OcrLabelAlignment,
@@ -105,14 +108,17 @@ import {
   findCopiedMergeTargetCells,
 } from "./layoutEditorMerges";
 import {
+  checklistLabel,
   checklistPreset,
   genericManualChoicePreset,
+  newMarkOptionId,
+  newMarkSetId,
   MarkCellEditor,
 } from "./LayoutMarkEditors";
 
 type VirtualHeadingEditorState = { id: string | null; rect: Rect; value: string };
-type Mode = "select" | "move" | "classify" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity" | "virtual" | "virtual-group";
-export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity" | "review";
+type Mode = "select" | "move" | "classify" | "paint" | "draw" | "link" | "record" | "parent" | "record-parent" | "erase" | "identity" | "virtual" | "virtual-group";
+export type LayoutWorkflowStep = "classify" | "meaning" | "records" | "identity";
 export type LayoutEditorHandle = {
   readAnalysisDraft: () => LayoutDefinition | null;
   readAnalysisPriority: () => number[] | null;
@@ -177,6 +183,8 @@ type LayoutEditorProps = {
   allowUnchangedSave?: boolean;
   disabled?: boolean;
   workflowStep?: LayoutWorkflowStep;
+  /** Previous / next step buttons shown at the top of the floating tools. */
+  stepNavigation?: { index: number; count: number; title: string; previous: (() => void) | null; next: (() => void) | null };
   focusRequest?: LayoutEditorFocusRequest | null;
   onFocusRequestResult?: (result: LayoutEditorFocusResult) => void;
   documentIdentityFields?: DocumentIdentity[];
@@ -227,6 +235,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   allowUnchangedSave = false,
   disabled = false,
   workflowStep,
+  stepNavigation,
   focusRequest = null,
   onFocusRequestResult,
   documentIdentityFields = [],
@@ -244,6 +253,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 }: LayoutEditorProps, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
+  const canvasAnchor = useCallback(() => canvasWrapRef.current?.parentElement ?? null, []);
   const markWarningEditorRef = useRef<HTMLDivElement>(null);
   const handledFocusRequestIdRef = useRef<number | null>(null);
   const completedFocusRequestIdRef = useRef<number | null>(null);
@@ -294,8 +304,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assistantChoice, setAssistantChoice] = useState<{ cellId: string; markSetId: string; choiceId: string } | null>(null);
   const lastAutoSaveAttemptSignatureRef = useRef<string | null>(null);
-  const [restoredDraft] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
-  const [layout, setLayoutState] = useState(restoredDraft.layout);
+  const [restoredLayout] = useState(() => restoreLayoutDraft(initialLayout, draftStorageKey));
+  const [layout, setLayoutState] = useState(restoredLayout);
   const layoutRef = useRef(layout);
   const facetsCallbackRef = useRef(onManualFacets);
   facetsCallbackRef.current = onManualFacets;
@@ -309,7 +319,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setLayoutSystem(next);
     facetsCallbackRef.current?.(changedFacets(previous, next));
   }, [setLayoutSystem]);
-  const [draftReviewRequired, setDraftReviewRequired] = useState(restoredDraft.needsReview);
+  // Restored drafts are no longer held for review, so this gate stays closed.
+  const [draftReviewRequired, setDraftReviewRequired] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState(
     () => layoutSignature(normalizeLayout(initialLayout)),
   );
@@ -349,6 +360,11 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [selectedPath, setSelectedPath] = useState("");
   const [draft, setDraft] = useState<Rect | null>(null);
   const [eraserTrail, setEraserTrail] = useState<Point[]>([]);
+  // Step 1 palette: the area painted on boxes (or applied to the selected boxes).
+  const [paintRole, setPaintRole] = useState<PaintRole | null>(null);
+  const [paintPreview, setPaintPreview] = useState<string[]>([]);
+  const [paintHover, setPaintHover] = useState<string | null>(null);
+  const paintStroke = useRef<{ ids: Set<string>; force: boolean; rectStart: Point | null; last: Point } | null>(null);
   const [linkPoint, setLinkPoint] = useState<Point | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -363,6 +379,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   const [magnifierScale, setMagnifierScale] = useState(DEFAULT_MAGNIFIER_SCALE);
   const [magnifierSize, setMagnifierSize] = useState(DEFAULT_MAGNIFIER_SIZE);
   const [message, setMessage] = useState<string | null>(null);
+  // A message floats over the page and fades after a while (or when closed).
+  const [hiddenMessage, setHiddenMessage] = useState<string | null>(null);
+  const [messageRepeat, setMessageRepeat] = useState(0);
+  useEffect(() => {
+    if (!message) return;
+    setHiddenMessage(null);
+    const timer = window.setTimeout(() => setHiddenMessage(message), 8000);
+    return () => window.clearTimeout(timer);
+  }, [message, messageRepeat]);
   const [highlightUnassigned, setHighlightUnassigned] = useState(false);
   const [historyDepth, setHistoryDepth] = useState(0);
   const [customLabel, setCustomLabel] = useState("");
@@ -611,6 +636,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undoMeaning]);
+  const paletteKeyRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => paletteKeyRef.current(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => {
+    if (mode === "paint") return;
+    paintStroke.current = null; setPaintPreview([]); setPaintHover(null);
+  }, [mode]);
   useEffect(() => {
     setRectanglesHidden(false);
     if (!workflowStep) return;
@@ -862,6 +897,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     () => new Map(layout.cells.map((cell) => [cell.id, cell])),
     [layout.cells],
   );
+  // A lone checkbox with a storage target has nothing to set beside the line drawn to it.
+  const selectedChecklist = selected?.role === "mark" && selected.markSets?.length === 1
+    && selected.markSets[0].recognitionMode === "checklist" ? selected.markSets[0] : null;
+  const singleCheckbox = Boolean(selectedChecklist?.targetPath) && (selectedChecklist?.options.length ?? 0) <= 1;
+  const cellNameById = (id: string) => {
+    const cell = cellById.get(id);
+    return cell ? cellName(cell) : "削除された欄";
+  };
   const selectedMeaningRelation = selected
     ? layout.relations.find((relation) => relation.inputCellId === selected.id)
     : undefined;
@@ -1107,14 +1150,17 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
   }, [availableTargets]);
   const showLabelStep = !workflowStep || workflowStep === "classify";
   const showClassificationStep = !workflowStep || workflowStep === "classify";
+  // Step 2 keeps the step 1 area buttons for the selected box (select mode only).
+  const roleEditable = showClassificationStep || (workflowStep === "meaning" && mode === "select");
   const showMeaningStep = !workflowStep || workflowStep === "meaning";
   const showRecordStep = !workflowStep || workflowStep === "records";
   const showIdentityStep = workflowStep === "identity";
-  const showReviewStep = !workflowStep || workflowStep === "review";
+  // Without the wizard everything is shown; in it the last step carries the final checks.
+  const showFinalChecks = !workflowStep || workflowStep === "identity";
   const showDetectAction = !pageView && (showClassificationStep
     || (showMeaningStep && detectLabel !== "枠を再検出"));
   const cellsVisibleInList = displayCells.filter((cell) => {
-    if (!workflowStep || workflowStep === "classify" || workflowStep === "review") return true;
+    if (!workflowStep || workflowStep === "classify") return true;
     if (workflowStep === "identity") {
       return identityCandidateByCellId.has(cell.id);
     }
@@ -1216,7 +1262,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setLayoutSystem(current => layoutSignature(current) === submittedSignature ? saved
         : reconcileSaved ? reconcileSaved(current, layout, saved) : current);
       setBaselineSignature(layoutSignature(saved));
-      setMessage(automatic ? null : `テンプレートへ${saved.cells.length}個の矩形を保存しました。`);
+      // An automatic save leaves the current notice (e.g. what was just painted) in place.
+      if (!automatic) setMessage(`テンプレートへ${saved.cells.length}個の矩形を保存しました。`);
       // The draft effect clears browser storage only when the current edit,
       // rather than merely this request's snapshot, has been persisted.
       return true;
@@ -1378,6 +1425,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     return () => { window.clearTimeout(timer); if (autoSaveTimerRef.current === timer) autoSaveTimerRef.current = null; };
   }, [assistantPaused, busy, saving, flushRequested, currentSignature, dirty, disabled, save, workflowStep, draftReviewRequired, operationEndSave, autoSaveUnchanged, interactionActive, saveSignal, polygonPoints.length, virtualHeadingEditor]);
 
+  const selectionPulseRef = useRef(0.09);
   const hoveredMeaningCellIdRef = useRef<string | null>(null);
   const hoveredHeadingKeysRef = useRef(new Set<string>());
   const headingConnections = useMemo(() => buildHeadingConnections(layout, displayCellById), [layout, displayCellById]);
@@ -1454,12 +1502,22 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       context.save();
       const isPrimarySelection = cell.id === selectedId;
       const isRangeSelection = selectedIds.has(cell.id);
-      context.strokeStyle = isPrimarySelection ? "#d62929" : isRangeSelection ? "#2468a2" : roleStyle.stroke;
-      context.lineWidth = isPrimarySelection ? 5 : isRangeSelection ? 5 : 3;
+      // 選択中の枠は、角丸・細い縁・やわらかい光彩と薄い塗りで見せる
+      context.strokeStyle = isPrimarySelection ? "#f5a800" : isRangeSelection ? "#2468a2" : roleStyle.stroke;
+      context.lineWidth = isPrimarySelection ? 3 : isRangeSelection ? 5 : 3;
       context.setLineDash(isPrimarySelection || isRangeSelection ? [] : [...roleStyle.dash]);
+      const radius = Math.min(6, cell.width / 4, cell.height / 4);
+      if (isPrimarySelection) {
+        context.shadowColor = "rgba(245, 168, 0, 0.55)";
+        context.shadowBlur = 14;
+      }
       if (isPrimarySelection || isRangeSelection) {
-        context.fillStyle = isPrimarySelection ? "#d629291f" : "#2468a21a";
-        if (cell.shapeType !== "polygon") context.fillRect(cell.x, cell.y, cell.width, cell.height);
+        context.fillStyle = isPrimarySelection ? `rgba(255, 214, 10, ${selectionPulseRef.current.toFixed(3)})` : "#2468a21a";
+        if (cell.shapeType !== "polygon") {
+          context.beginPath();
+          context.roundRect(cell.x, cell.y, cell.width, cell.height, radius);
+          context.fill();
+        }
       }
       if (cell.shapeType === "polygon" && cell.vertices?.length) {
         context.beginPath();
@@ -1468,22 +1526,29 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         context.closePath();
         if (isPrimarySelection || isRangeSelection) context.fill();
         context.stroke();
+      } else if (isPrimarySelection) {
+        context.beginPath();
+        context.roundRect(cell.x, cell.y, cell.width, cell.height, radius);
+        context.stroke();
       } else {
         context.strokeRect(cell.x, cell.y, cell.width, cell.height);
       }
+      context.shadowColor = "transparent";
+      context.shadowBlur = 0;
       context.setLineDash([]);
       if (cellMerge) {
         context.save();
         if (cell.width >= 38 && cell.height >= 20) {
           const badgeWidth = Math.min(54, Math.max(34, cell.width - 8));
           const badgeHeight = Math.min(19, Math.max(14, cell.height - 8));
+          const centerX = cell.x + cell.width / 2, centerY = cell.y + cell.height / 2;
           context.fillStyle = "rgba(24, 61, 87, 0.9)";
-          context.fillRect(cell.x + 4, cell.y + 4, badgeWidth, badgeHeight);
+          context.fillRect(centerX - badgeWidth / 2, centerY - badgeHeight / 2, badgeWidth, badgeHeight);
           context.fillStyle = "#ffffff";
           context.font = `800 ${Math.max(9, Math.min(12, badgeHeight - 6))}px sans-serif`;
           context.textAlign = "center";
           context.textBaseline = "middle";
-          context.fillText("結合", cell.x + 4 + badgeWidth / 2, cell.y + 4 + badgeHeight / 2);
+          context.fillText("結合", centerX, centerY);
         }
         context.restore();
       }
@@ -1676,13 +1741,30 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
     if (draft) {
       const isSelectionDraft = mode === "select" || mode === "classify";
-      context.strokeStyle = isSelectionDraft ? "#2468a2" : "#d62929";
-      context.fillStyle = isSelectionDraft ? "#2468a220" : "#d6292920";
+      const paintColor = mode === "paint" && paintRole ? LAYOUT_ROLE_STYLE[paintRole].stroke : null;
+      context.strokeStyle = paintColor ?? (isSelectionDraft ? "#2468a2" : "#d62929");
+      context.fillStyle = paintColor ? `${paintColor}20` : isSelectionDraft ? "#2468a220" : "#d6292920";
       context.lineWidth = 4;
       context.setLineDash([10, 6]);
       context.fillRect(draft.x, draft.y, draft.width, draft.height);
       context.strokeRect(draft.x, draft.y, draft.width, draft.height);
       context.setLineDash([]);
+    }
+    if (mode === "paint" && paintRole) {
+      const color = LAYOUT_ROLE_STYLE[paintRole].stroke;
+      const scale = Math.max(0.1, canvas.getBoundingClientRect().width / displayWidth);
+      context.save();
+      context.setLineDash([]);
+      context.lineWidth = 3 / scale;
+      context.strokeStyle = color;
+      context.fillStyle = `${color}2e`;
+      for (const id of new Set([...paintPreview, ...(paintHover ? [paintHover] : [])])) {
+        const cell = displayCellById.get(id);
+        if (!cell) continue;
+        context.fillRect(cell.x, cell.y, cell.width, cell.height);
+        context.strokeRect(cell.x, cell.y, cell.width, cell.height);
+      }
+      context.restore();
     }
     if (mode === "erase" && eraserTrail.length > 0) {
       context.save();
@@ -1820,6 +1902,35 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
   };
 
+  // 選択中の枠の塗りをゆっくり点滅（フェードイン・アウト）させる
+  const redrawRef = useRef(redraw);
+  redrawRef.current = redraw;
+  useEffect(() => {
+    if (!selectedId || rectanglesHidden || mode === "identity") {
+      selectionPulseRef.current = 0.09;
+      return;
+    }
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      selectionPulseRef.current = 0.09;
+      return;
+    }
+    let frame = 0;
+    let last = 0;
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick);
+      if (now - last < 33) return;
+      last = now;
+      const wave = 0.5 - 0.5 * Math.cos((now / 1500) * Math.PI * 2);
+      selectionPulseRef.current = 0.02 + 0.14 * wave;
+      redrawRef.current();
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      selectionPulseRef.current = 0.09;
+    };
+  }, [selectedId, rectanglesHidden, mode]);
+
   useEffect(redraw, [
     layout, displayCells, displayWidth, displayHeight, wireHoverId,
     selectedId,
@@ -1839,6 +1950,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     identityCandidateByCellId,
     selectedIdentityByPath,
     eraserTrail,
+    paintRole,
+    paintPreview,
+    paintHover,
     showMeaningStep,
     highlightUnassigned,
     unassignedMeaningIds,
@@ -1978,7 +2092,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
     setLayout(current => ({ ...current, cells: [...current.cells, cell] }));
     setSelectedId(cell.id); setSelectedIds(new Set([cell.id]));
-    setPolygonPoints([]); setMode("select"); setMessage(null);
+    setPolygonPoints([]); setMessage(null);
   };
   const moveEditableCell = (current: LayoutDefinition, id: string, dx: number, dy: number) => (
     pageView ? movePageHeading(current, pageView, id, dx, dy) : moveLayoutCell(current, id, dx, dy)
@@ -2176,6 +2290,68 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       }),
     }));
   };
+  /** Whether giving this box another area would drop a meaning or connection set on it. */
+  const losesMeaning = (cell: LayoutCell, role: PaintRole) => {
+    const current = paintRoleOf(cell);
+    if (current === role) return false;
+    if (current === "input" || current === "mark") {
+      if (role === "input" || role === "mark") {
+        return current === "mark" && (cell.markSets ?? []).some(set => set.targetPath || set.options.length > 0);
+      }
+      return layout.relations.some(relation => relation.inputCellId === cell.id && (relation.targetPath || relation.labelCellIds.length > 0))
+        || (cell.markSets ?? []).some(set => set.targetPath)
+        || (layout.recordGroups ?? []).some(group => group.inputCellIds.includes(cell.id));
+    }
+    if (current === "label") {
+      return layout.relations.some(relation => relation.labelCellIds.includes(cell.id))
+        || (layout.recordSections ?? []).some(section => section.recordLabelCellIds.includes(cell.id));
+    }
+    if (current === "parent_label" && role !== "label") {
+      return layout.relations.some(relation => relation.parentLabelCellId === cell.id)
+        || layout.cells.some(other => other.parentLabelCellId === cell.id)
+        || (layout.recordSections ?? []).some(section => section.parentLabelCellId === cell.id);
+    }
+    return false;
+  };
+  /** Gives the boxes one area at once (one save, one undo). Boxes with a meaning are kept unless forced. */
+  const applyPaint = (ids: Iterable<string>, role: PaintRole, force: boolean) => {
+    const cells = [...new Set(ids)].map(id => displayCellById.get(id)).filter((cell): cell is LayoutCell => Boolean(cell));
+    const changing = cells.filter(cell => paintRoleOf(cell) !== role);
+    const virtual = changing.filter(cell => cell.virtual && role !== "parent_label");
+    // A box split into parts keeps its area until the split is undone (the server refuses otherwise).
+    const split = changing.filter(cell => !cell.virtual && (cell.compositeSubfields?.length ?? 0) > 0);
+    const kept = force ? [] : changing.filter(cell => !cell.virtual && !split.includes(cell) && losesMeaning(cell, role));
+    const targets = changing.filter(cell => !virtual.includes(cell) && !split.includes(cell) && !kept.includes(cell)).map(cell => cell.id);
+    if (targets.length) setRoles(targets, role, role === "mark" ? "selection" : undefined);
+    const notes = [
+      targets.length ? `${targets.length}枠を「${PAINT_ROLE_LABEL[role]}」にしました。` : "",
+      kept.length ? `意味を付けた${kept.length}枠は変更しませんでした（Altを押しながらで上書き）。` : "",
+      virtual.length ? `仮想見出し${virtual.length}枠は見出しのままにしました。` : "",
+      split.length ? `分割した記入欄${split.length}枠は変更しませんでした（分割を解除してから変更してください）。` : "",
+    ].filter(Boolean);
+    if (!notes.length && cells.length) notes.push(`選んだ枠はすでに「${PAINT_ROLE_LABEL[role]}」です。`);
+    // The same notice twice in a row is shown again.
+    if (notes.length) { setMessage(notes.join(" ")); setMessageRepeat(count => count + 1); }
+  };
+  const pickPaletteRole = (role: PaintRole, force: boolean) => {
+    if (busy || disabled || rectanglesHidden) return;
+    if (mode !== "paint" && selectedCells.length > 0) { applyPaint(selectedCells.map(cell => cell.id), role, force); return; }
+    if (mode === "paint" && paintRole === role) { setMode("select"); return; }
+    setPaintRole(role); setMode("paint");
+    setSelectedId(null); setSelectedIds(new Set()); setDraft(null); dragStart.current = null;
+  };
+  paletteKeyRef.current = (event: KeyboardEvent) => {
+    if (!showClassificationStep || event.ctrlKey || event.metaKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "")) return;
+    if (event.key === "Escape" && mode === "paint") { setMode("select"); return; }
+    // Esc clears the selection so the palette switches to painting.
+    if (event.key === "Escape" && selectedIds.size > 0) { setSelectedId(null); setSelectedIds(new Set()); return; }
+    const role = PAINT_ROLES[Number(event.key) - 1]?.[0];
+    if (!role || event.repeat) return;
+    event.preventDefault();
+    pickPaletteRole(role, event.altKey);
+  };
   const setRoles = (ids: Iterable<string>, role: LayoutCell["role"], reading?: "symbol" | "selection" | "number" | "checklist") => {
     const idSet = new Set(ids);
     if (idSet.size === 0) return;
@@ -2281,14 +2457,19 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           };
           if (!idSet.has(cell.id)) return cell;
           cell.readingMode = reading === "number" ? "number" : undefined;
+          // The item's write-in 「その他（　）」 stays with the box when its reading changes.
+          const keptWriteIn = cell.markSets?.length === 1
+            ? cell.markSets[0].options.find(option => option.writeInTargetPath)?.writeInTargetPath : undefined;
           if (reading === "checklist") {
             const previous = cell.markSets?.[0];
             const targetPath = current.relations.find(relation => relation.inputCellId === cell.id)?.targetPath
               || previous?.targetPath || "";
+            const sets = previous && previous.recognitionMode !== "symbol" && previous.options.length
+              ? [{ ...previous, targetPath, recognitionMode: "checklist" as const, selectionMode: "multiple" as const }]
+              : checklistPreset(cell, targetPath);
             return { ...cell, role,
-              markSets: previous && previous.recognitionMode !== "symbol"
-                ? [{ ...previous, targetPath, recognitionMode: "checklist" as const, selectionMode: "multiple" as const }]
-                : checklistPreset(cell, targetPath) };
+              markSets: keptWriteIn && sets.length === 1 && sets[0].options.length === 1 && !sets[0].options[0].writeInTargetPath
+                ? [{ ...sets[0], options: [{ ...sets[0].options[0], writeInTargetPath: keptWriteIn }] }] : sets };
           }
           if (reading === "symbol") {
             const previous = cell.markSets?.[0];
@@ -2297,20 +2478,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               : previous?.targetPath) || previous?.targetPath || "";
             return { ...cell, role,
               markSets: previous?.recognitionMode === "symbol" ? [{ ...previous, targetPath }] : [{
-                id: previous?.id ?? "choice",
+                id: previous?.id ?? newMarkSetId(),
                 targetPath,
                 recognitionMode: "symbol" as const,
                 selectionMode: "single" as const,
-                options: ["○", "◎", "×", "△"].map((symbol, index) => ({
-                  id: `symbol_${index + 1}`, label: symbol, value: symbol,
+                options: ["○", "◎", "×", "△"].map((symbol) => ({
+                  id: newMarkOptionId(), label: symbol, value: symbol,
                   x: 0, y: 0, width: cell.width, height: cell.height,
+                  ...(symbol === "○" && keptWriteIn ? { writeInTargetPath: keptWriteIn } : {}),
                 })),
               }],
             };
           }
           if (reading === "selection" && cell.markSets?.some(set => ["symbol", "checklist"].includes(set.recognitionMode ?? ""))) {
+            // A write-in link only exists on checklists and symbol boxes.
             return { ...cell, role,
-              markSets: cell.markSets.map(set => ({ ...set, recognitionMode: "manual" as const })),
+              markSets: cell.markSets.map(set => ({ ...set, recognitionMode: "manual" as const,
+                options: set.options.map(({ writeInTargetPath: _writeIn, ...option }) => option) })),
             };
           }
           if (role !== "mark" || (cell.markSets?.length ?? 0) > 0) {
@@ -2357,17 +2541,27 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       return;
     }
     const selectedIdSet = new Set(cellsToMerge.map((cell) => cell.id));
-    if (cellsToMerge.some((cell) => cellMergeByParentId.has(cell.id))) {
-      showMergeError("結合済みセルを別の結合に含めることはできません。先に結合を解除してください。");
+    // A merged box may be merged again (e.g. a label widened over more spilled cells);
+    // the new merge records its original cells instead of nesting merges.
+    const absorbedMerges = cellsToMerge.flatMap((cell) => {
+      const earlier = cellMergeByParentId.get(cell.id);
+      return earlier ? [earlier] : [];
+    });
+    if (absorbedMerges.length > 1) {
+      showMergeError("結合済みのセルどうしは結合できません。結合済みのセルは1つだけ選び、ほかは結合していないセルを選んでください。");
+      return;
+    }
+    if (copiedMerge && absorbedMerges.length) {
+      showMergeError("結合済みセルへ結合パターンは貼り付けできません。先に結合を解除してください。");
       return;
     }
     if (cellsToMerge.some((cell) => cell.role === "mark" || (cell.markSets?.length ?? 0) > 0)) {
       showMergeError("選択欄はセル結合の対象にできません。");
       return;
     }
+    // Field meanings move with the merge (the first one is kept); labels in use still block.
     const referencedByMeaning = layout.relations.some((relation) => (
-      selectedIdSet.has(relation.inputCellId)
-      || relation.labelCellIds.some((labelId) => selectedIdSet.has(labelId))
+      relation.labelCellIds.some((labelId) => selectedIdSet.has(labelId))
       || Boolean(relation.parentLabelCellId && selectedIdSet.has(relation.parentLabelCellId))
     ));
     const referencedByRecords = (layout.recordSections ?? []).some((section) => (
@@ -2393,16 +2587,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     }
     const unselected = unselectedCellsInsideMerge(layout.cells, cellsToMerge, plan.bounds);
     if (unselected.length > 0) {
-      showMergeError(`結合範囲に未選択セルがあります (${unselected.map((cell) => cell.id).join(", ")})。含めて選択するか、結合を分けてください。`);
+      logDetail("結合範囲の未選択セル", unselected.map((cell) => cell.id));
+      showMergeError(`結合範囲に選択していない枠（${unselected.map(cellName).join("、")}）があります。含めて選択するか、結合を分けてください。`);
       return;
     }
     const containsInput = plan.orderedCells.some((cell) => cell.role === "input");
-    const fieldLabels = new Set(plan.orderedCells.filter(cell => cell.role === "input" && cell.fieldLabel)
-      .map(cell => cell.fieldLabel!));
-    if (fieldLabels.size > 1) {
-      showMergeError("結合する記入欄の表示名が異なります。名称を揃えるか、表示名を解除してから結合してください。");
-      return;
-    }
+    // Differing names (e.g. 記入1, 記入2 on split spreadsheet cells) describe the pieces;
+    // the merged field keeps the first one in reading order.
+    const names = plan.orderedCells.filter(cell => cell.role === "input" && cell.fieldLabel).map(cell => cell.fieldLabel!);
+    const shared = names.length > 1
+      ? names.reduce((prefix, value) => { let i = 0; while (i < prefix.length && prefix[i] === value[i]) i += 1; return prefix.slice(0, i); })
+        .replace(/[\d\s_\-０-９]+$/u, "")
+      : "";
+    const fieldLabels = new Set(shared.length >= 2 ? [shared] : names.slice(0, 1));
+    const ownRelations = layout.relations.filter((relation) => selectedIdSet.has(relation.inputCellId));
+    const keptRelation = containsInput
+      ? plan.orderedCells.map((cell) => ownRelations.find((r) => r.inputCellId === cell.id)).find(Boolean)
+      : undefined;
     const roles = new Set(plan.orderedCells.map((cell) => cell.role));
     if (!containsInput && roles.size > 1) {
       showMergeError("記入欄を含まない異なる区分のセルは結合できません。区分を揃えてから再実行してください。");
@@ -2411,7 +2612,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
 
     const stamp = Date.now();
     const parentCellId = `merged_${stamp}`;
-    const parts: LayoutCellMergePart[] = plan.orderedCells.map((cell, index) => {
+    const parts: LayoutCellMergePart[] = plan.orderedCells.flatMap((cell, index) => {
+      const earlier = cellMergeByParentId.get(cell.id);
+      if (earlier) return earlier.parts.map((part) => ({ ...part, cell: { ...part.cell } }));
       const copiedPart = copiedMerge?.parts[index];
       const partType: LayoutCellMergePart["partType"] = copiedPart?.partType
         ?? (cell.role === "input"
@@ -2419,14 +2622,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           : (cell.text.trim() || cell.printedLabelText?.trim())
             ? "literal"
             : "ignored");
-      return {
+      return [{
         cell: { ...cell },
         partType,
         literal: copiedPart?.literal
           ?? (partType === "literal"
             ? (cell.text.trim() || cell.printedLabelText?.trim() || "")
             : ""),
-      };
+      }];
     });
     const fixedText = parts
       .flatMap((part) => {
@@ -2469,10 +2672,14 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         .map((cell, index) => selectedIdSet.has(cell.id) ? index : Number.POSITIVE_INFINITY));
       const cells = current.cells.filter((cell) => !selectedIdSet.has(cell.id));
       cells.splice(Math.min(firstIndex, cells.length), 0, parentCell);
+      const absorbed = new Set(absorbedMerges.map((item) => item.id));
       return {
         ...current,
         cells,
-        cellMerges: [...(current.cellMerges ?? []), merge],
+        relations: current.relations.flatMap((relation) => !selectedIdSet.has(relation.inputCellId)
+          ? [relation]
+          : relation.id === keptRelation?.id ? [{ ...relation, id: `relation_${stamp}`, inputCellId: parentCellId }] : []),
+        cellMerges: [...(current.cellMerges ?? []).filter((item) => !absorbed.has(item.id)), merge],
       };
     });
     setSelectedId(parentCellId);
@@ -2638,7 +2845,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           ],
     }));
     setMessage(
-      `${selected.id} を ${targetByPath.get(requestedPath)?.label ?? requestedPath} として設定しました。`,
+      `「${cellName(selected)}」を「${targetByPath.get(requestedPath)?.label ?? "読み取る内容"}」として設定しました。`,
     );
   };
   const addCustomTarget = () => {
@@ -2767,6 +2974,23 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setMessage("スライド経路に手書き文字欄がありません。記入欄を通過するようにドラッグしてください。");
       return;
     }
+    const linkedRelations = layout.relations.filter(relation => relation.labelCellIds.includes(label.id));
+    // A name made only of symbols (a misread "(") or holding a leaked cell ID does not name anything.
+    const named = (value?: string | null) => value && /[\p{L}\p{N}]/u.test(value) && displayName(value) === value ? value.trim() : "";
+    // The printed name (kept as printed text in a merged cell) before any saved meaning's name.
+    const labelName = labelCellName(label)
+      || linkedRelations.map(relation => named((layout.labelPool ?? []).find(entry => entry.targetPath === relation.targetPath)?.label
+        ?? availableTargets.find(target => target.path === relation.targetPath)?.label)).find(Boolean)
+      || "";
+    // 「□ その他（　）」「○× その他（　）」: an item name already tied to a check box or a
+    // symbol box, dragged onto a write-in box, gets its own write-in field. A checklist option
+    // is also linked to it (text there checks it); other readings keep the two values apart.
+    const writeInMarks = inputs.length === 1 && inputs[0].role === "input"
+      && !targetPathsForInputs(inputs, layout.relations)
+      ? linkedRelations
+        .map(relation => layout.cells.find(cell => cell.id === relation.inputCellId))
+        .filter((cell): cell is LayoutCell => cell?.role === "mark" && (cell.markSets ?? []).length > 0)
+      : [];
     const existingTargetPaths = targetPathsForInputs(inputs, layout.relations);
     const markTargetPaths = inputs.every((input) => input.role === "mark")
       ? inputs.map((input) => input.markSets?.[0]?.targetPath ?? "")
@@ -2776,22 +3000,26 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       : null;
     const inferredTargetPath = completeMarkTargetPaths?.[0]
       || selectedPath
-      || inferTargetPath(label.text, inputs.length, availableTargets, assignedPaths)
+      || (writeInMarks.length ? "" : inferTargetPath(labelName, inputs.length, availableTargets, assignedPaths))
 ;
     const duplicateMeaning = inputs.length === 1
       && inferredTargetPath
       && !existingTargetPaths
       && layout.relations.some(relation => relation.targetPath === inferredTargetPath
         && relation.inputCellId !== inputs[0].id);
+    // An entry whose ID is already taken (e.g. a renamed one) is made unique instead.
+    const freshEntry = (entry: LayoutLabelPoolEntry | null) => entry && !(layout.labelPool ?? []).some(other => other.id === entry.id) ? entry : null;
     const autoEntries = (!inferredTargetPath || duplicateMeaning)
       && !existingTargetPaths
-      && inputs.every((input) => input.role === "input")
+      && !completeMarkTargetPaths
+      && inputs.every((input) => input.role === "input" || (input.role === "mark" && !(input.markSets ?? []).some(set => set.targetPath)))
       ? inputs.length === 1
-        ? [duplicateMeaning ? uniqueMeaningEntry(label.text, layout, availableTargets)
-          : createAutoLabelPoolEntry(label.text, availableTargets)].filter(
+        ? [writeInMarks.length ? uniqueMeaningEntry(`${labelName || "その他"}（記入）`, layout, availableTargets)
+          : duplicateMeaning || !labelName ? uniqueMeaningEntry(labelName || "項目", layout, availableTargets)
+            : freshEntry(createAutoLabelPoolEntry(labelName, availableTargets)) ?? uniqueMeaningEntry(labelName, layout, availableTargets)].filter(
           (entry): entry is LayoutLabelPoolEntry => Boolean(entry),
         )
-        : createAutoRepeatedLabelPoolEntries(label.text, inputs.length, availableTargets, assignedPaths) ?? []
+        : createAutoRepeatedLabelPoolEntries(labelName || "項目", inputs.length, availableTargets, assignedPaths) ?? []
       : [];
     const autoEntry = autoEntries.length === 1
       ? autoEntries[0]
@@ -2833,10 +3061,38 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         labelId,
         axis,
         targetPaths,
+        undefined,
+        current.cells.find(cell => cell.id === labelId)?.parentLabelCellId ?? null,
       );
       relations = renumberRelations(relations, current.cells);
+      const writeInPath = writeInMarks.length ? targetPaths[0] : null;
+      const markIds = new Set(writeInMarks.map(cell => cell.id));
+      const cells = writeInPath ? current.cells.map(cell => {
+        if (!markIds.has(cell.id)) return cell;
+        return { ...cell, markSets: (cell.markSets ?? []).map(set => {
+          // A symbol box (○×) keeps its item's write-in on the "○" (or first) symbol.
+          if (set.recognitionMode === "symbol") {
+            if (!set.options.length || set.options.some(option => option.writeInTargetPath)) return set;
+            const holder = set.options.find(option => option.label === "○") ?? set.options[0];
+            return { ...set, options: set.options.map(option => option.id === holder.id ? { ...option, writeInTargetPath: writeInPath } : option) };
+          }
+          if (set.recognitionMode !== "checklist") return set;
+          const name = checklistLabel(labelName) || "その他";
+          // A lone check box gets one option named after the item; otherwise the matching or only option.
+          const options = set.options.length ? set.options : [{ id: newMarkOptionId(), label: name, value: name, x: 0, y: 0, width: cell.width, height: cell.height }];
+          const target = options.find(option => option.label === name) ?? (options.length === 1 ? options[0] : null);
+          if (!target || options.some(option => option.id !== target.id && option.writeInTargetPath === writeInPath)) return set;
+          return { ...set, options: options.map(option => option.id === target.id ? { ...option, writeInTargetPath: writeInPath } : option) };
+        }) };
+      }) : current.cells;
+      // A check box without a save item takes the meaning it was connected to.
+      const pathByMark = new Map(inputs.map((input, index) => [input.id, targetPaths[index]] as const)
+        .filter(([id]) => current.cells.some(cell => cell.id === id && cell.role === "mark" && cell.markSets?.length === 1 && !cell.markSets[0].targetPath)));
+      const linkedCells = pathByMark.size ? cells.map(cell => pathByMark.has(cell.id)
+        ? { ...cell, markSets: cell.markSets!.map(set => ({ ...set, targetPath: pathByMark.get(cell.id)! })) } : cell) : cells;
       return {
         ...current,
+        cells: linkedCells,
         labelPool: autoEntries.length > 0
           ? [
             ...(current.labelPool ?? []),
@@ -2854,7 +3110,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setSelectedId(inputs[0].id);
     setSelectedIds(new Set(inputs.map((input) => input.id)));
     setSelectedPath("");
-    setMessage(null);
+    setMessage(writeInMarks.length
+      ? `「${labelName || "その他"}」の記入欄を別の保存項目にしました。${writeInMarks.some(cell => cell.markSets?.some(set => set.recognitionMode === "checklist")) ? "記入があればチェック欄も選択済みとして扱います。" : ""}`
+      : null);
   };
 
   const createRecordsFromColumnLabels = (labelIds: string[]) => {
@@ -3018,7 +3276,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       try {
         const next = attachHeading(layout, labelId, [headingChild.id]);
         rememberRelations(layout.relations); setLayout(next);
-        setMessage(`${headingParent.text || headingParent.id} → ${headingChild.text || headingChild.id} に接続しました。`);
+        setMessage(`${cellName(headingParent)} → ${cellName(headingChild)} に接続しました。`);
       } catch (error) { setMessage((error as Error).message); }
       return;
     }
@@ -3039,7 +3297,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         childLabel,
       );
       if (!scoped) {
-        setMessage(`先に「${childLabel.text.trim() || childLabel.id}」から記入欄への意味づけを行ってください。`);
+        setMessage(`先に「${cellName(childLabel)}」から記入欄への意味づけを行ってください。`);
         return;
       }
       rememberRelations(layout.relations);
@@ -3068,7 +3326,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       setSelectedIds(firstInputId ? new Set([firstInputId]) : new Set());
       setSelectedPath(scoped.entries[0]?.targetPath ?? "");
       setMessage(
-        `${parentLabel.text.trim() || parentLabel.id} > ${childLabel.text.trim() || childLabel.id}`
+        `${cellName(parentLabel)} > ${cellName(childLabel)}`
         + "として親項目を設定しました。",
       );
       return;
@@ -3177,32 +3435,39 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
       onKeyDownCapture={operationEndSave ? event => {
         if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target instanceof HTMLInputElement) event.target.blur();
       } : undefined}>
-      {draftReviewRequired && <section className="inline-warning" aria-label="復元した下書きの確認">
-        <p>保存版との一致を確認できない下書きを復元しました。自動保存を停止しています。現在の編集内容を確認してください。</p>
-        <details>
-          <summary>保存版と異なる欄の区分</summary>
-          <ul>{layout.cells.flatMap(cell => {
-            const savedCell = initialLayout.cells.find(saved => saved.id === cell.id);
-            return savedCell && savedCell.role !== cell.role
-              ? [<li key={cell.id}>{cell.text || cell.id}: 保存版 {LAYOUT_ROLE_LABEL[savedCell.role]} ／ 下書き {LAYOUT_ROLE_LABEL[cell.role]}</li>]
-              : [];
-          })}</ul>
-          <p>区分以外の未保存編集も保持しています。</p>
-        </details>
-        <button type="button" disabled={busy || disabled || saving} onClick={() => {
-          setDraftReviewRequired(false);
-          lastAutoSaveAttemptSignatureRef.current = null;
-        }}>現在の下書きを採用して保存を再開</button>
-      </section>}
       <fieldset className="layout-editor-fields" disabled={busy || disabled}>
-      <div className="layout-commandbar" role="toolbar" aria-label="レイアウト編集">
+      <FloatingTools anchor={canvasAnchor} disabled={busy || disabled} header={stepNavigation && (
+        <div className="layout-step-nav" role="group" aria-label="工程の移動">
+          <button type="button" aria-label="前の工程" data-tip="前の工程へ" disabled={!stepNavigation.previous}
+            onClick={() => stepNavigation.previous?.()}><FiChevronLeft aria-hidden="true" /></button>
+          <span><b>{stepNavigation.index + 1}/{stepNavigation.count}</b>{stepNavigation.title}</span>
+          <button type="button" aria-label="次の工程" data-tip="次の工程へ" disabled={!stepNavigation.next}
+            onClick={() => stepNavigation.next?.()}><FiChevronRight aria-hidden="true" /></button>
+        </div>
+      )}>
+      <div className="layout-commandbar" role="toolbar" aria-orientation="vertical" aria-label="レイアウト編集">
         {(showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && (
           <span className="command-separator" />
         )}
         {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep) && (
           <ModeButton current={mode} mode="select" label="選択" onChange={setMode} />
         )}
-        {showClassificationStep && <ModeButton current={mode} mode="classify" label="区分変更" onChange={setMode} />}
+        {showClassificationStep && <div className="role-palette" role="group" aria-label="区分">
+          <span className="role-palette-caption" data-tip="枠を選んでいればその枠に適用、選んでいなければクリック・ドラッグで塗ります。Shift+ドラッグで四角く囲んで塗る、右クリックで枠の区分を拾う、Altで意味を付けた欄も上書き。">
+            {mode !== "paint" && selectedCells.length > 0 ? `選択中の${selectedCells.length}枠に適用`
+              : mode === "paint" && paintRole ? `塗る：${PAINT_ROLE_LABEL[paintRole]}` : "区分を選んで塗る"}
+          </span>
+          {PAINT_ROLES.map(([role, label, tip], index) => (
+            <button type="button" key={role}
+              className={`role-swatch${mode === "paint" && paintRole === role ? " active" : ""}`}
+              aria-pressed={mode === "paint" && paintRole === role}
+              data-tip={`${tip}（キー ${index + 1}）`}
+              style={{ "--swatch": LAYOUT_ROLE_STYLE[role].stroke } as CSSProperties}
+              onClick={event => pickPaletteRole(role, event.altKey)}>
+              <i aria-hidden="true" />{label}<kbd>{index + 1}</kbd>
+            </button>
+          ))}
+        </div>}
         {showClassificationStep && !pageView && <ModeButton current={mode} mode="draw" label="枠を追加" onChange={setMode} />}
         {mode === "draw" && !pageView && <>
           <label>形状 <select aria-label="追加する枠の形状" value={drawShape}
@@ -3234,6 +3499,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             className={highlightUnassigned
               ? "unassigned-meaning-toggle active"
               : "unassigned-meaning-toggle"}
+            data-tip="読み取る内容がまだ決まっていない記入欄を目立たせます。"
             aria-pressed={highlightUnassigned}
             aria-controls="layout-mapping-canvas"
             aria-label={highlightUnassigned
@@ -3251,7 +3517,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           </button>
         )}
         {showMeaningStep && visibleUnassignedCells.length > 0 && (
-          <button type="button" className="next-unassigned" onClick={selectNextUnassigned}>
+          <button type="button" className="next-unassigned" data-tip="未設定の記入欄を順に選びます。" onClick={selectNextUnassigned}>
             <FiArrowRight aria-hidden="true" />次の未設定欄へ
           </button>
         )}
@@ -3268,12 +3534,13 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         )}
         {showRecordStep && <ModeButton current={mode} mode="record" label="繰り返し部分をまとめる" onChange={setMode} />}
         {showRecordStep && <ModeButton current={mode} mode="record-parent" label="見出しへ接続" onChange={setMode} />}
-        {workflowStep !== "identity" && workflowStep !== "review" && (
+        {workflowStep !== "identity" && (
           <>
 
             <button
               type="button"
               className={rectanglesHidden ? "active" : ""}
+              data-tip={rectanglesHidden ? "枠を表示に戻します。" : "枠を隠して帳票の画像だけを確認します。"}
               aria-pressed={rectanglesHidden}
               aria-controls="layout-mapping-canvas"
               aria-label={rectanglesHidden ? "すべての矩形を表示" : "すべての矩形を非表示"}
@@ -3299,16 +3566,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           <button
             type="button"
             disabled={onUndoSaved ? !canUndoSaved || dirty || saving || interactionActive : historyDepth === 0}
-            title="Ctrl+Z"
+            data-tip="直前の意味づけを取り消します（Ctrl+Z）。"
             onClick={undoMeaning}
           >
             <FiRotateCcw aria-hidden="true" />意味づけを戻す
           </button>
         )}
         <span className="command-separator" />
-        {workflowStep !== "identity" && workflowStep !== "review" && (
+        {workflowStep !== "identity" && (
           <details className="layout-secondary-tools">
-            <summary><FiEdit3 aria-hidden="true" />補助操作{mode === "move" ? " · 移動" : mode === "virtual" ? " · 仮想見出し" : mode === "erase" ? " · 消しゴム" : ""}</summary>
+            <summary data-tip="再検出・文字候補の取得・移動・仮想見出し・消しゴム"><FiEdit3 aria-hidden="true" />補助操作{mode === "move" ? " · 移動" : mode === "virtual" ? " · 仮想見出し" : mode === "erase" ? " · 消しゴム" : ""}</summary>
             <div className="layout-secondary-content">
         {showDetectAction && (
           <button type="button" onClick={() => void detect()} disabled={busy || saving}>
@@ -3333,6 +3600,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 13V5a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v7-4a1.5 1.5 0 0 1 3 0v7c0 5-3 7-6 7h-1c-2 0-4-1-5-3l-4-5a1.5 1.5 0 0 1 2-2l2 2Z" />
             </svg>
+            移動
           </button>
         )}
         {(showClassificationStep || showMeaningStep || showRecordStep) &&
@@ -3344,7 +3612,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           </details>
         )}
         <details className="layout-display-settings">
-          <summary><FiSettings aria-hidden="true" />表示設定</summary>
+          <summary data-tip="文字の位置や拡大鏡を設定します。"><FiSettings aria-hidden="true" />表示設定</summary>
           <div className="layout-display-content">
         {(showLabelStep || showClassificationStep || showMeaningStep || showRecordStep || !workflowStep) && <div className="ocr-alignment-switch" role="group" aria-label="OCR文字の配置">
           <span>文字位置</span>
@@ -3434,18 +3702,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           </div>
         </details>
       </div>
+      </FloatingTools>
 
+      {/* Floats over the page so a message never pushes the preview down. */}
       <div className="layout-status-slot" aria-live="polite" aria-atomic="true">
-        {operationEndSave && saving && <p className="layout-status">保存中です。編集は続けられます。</p>}
-        {mode === "link" && <p className="layout-wire-hint">
-          <FiLink aria-hidden="true" />{wirePreview
-            ? wirePreview.ambiguous ? "接続先が近接しています · つなぐ欄の中へ移動"
-              : wirePreview.visibleInputs.length
-                ? `${wirePreview.visibleInputs.length}欄に接続${wirePreview.snapped ? "（枠に合わせました）" : ""} · 離して反映 / Escで取消`
-                : "接続する記入欄までドラッグ · 画面端でスクロール / Escで取消"
-            : wireHoverId ? "この項目名からドラッグして接続" : "項目名にマウスを合わせ、記入欄へドラッグ"}
+        {wirePreview && <p className="layout-wire-hint">
+          <FiLink aria-hidden="true" />{wirePreview.ambiguous ? "接続先が近接しています · つなぐ欄の中へ移動"
+            : wirePreview.visibleInputs.length
+              ? `${wirePreview.visibleInputs.length}欄に接続${wirePreview.snapped ? "（枠に合わせました）" : ""} · 離して反映 / Escで取消`
+              : "接続する記入欄までドラッグ · Escで取消"}
         </p>}
-        {message && !showReviewStep && <p className="layout-status">{message}</p>}
+        {message && workflowStep && !wirePreview && message !== hiddenMessage && <p className="layout-status">
+          <span>{message}</span>
+          <button type="button" className="layout-status-close" aria-label="閉じる" onClick={() => setHiddenMessage(message)}><FiX aria-hidden="true" /></button>
+        </p>}
       </div>
 
       <div className="layout-workbench">
@@ -3467,11 +3737,18 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             aria-label={showIdentityStep ? "書類を見分ける欄を選択する帳票プレビュー" : "帳票レイアウト編集キャンバス"}
             aria-describedby="layout-keyboard-help"
             className={`layout-mode-${mode}`}
-            style={rectanglesHidden ? { pointerEvents: "none" } : mode === "link"
+            style={rectanglesHidden ? { pointerEvents: "none" } : mode === "paint" ? { cursor: "crosshair" } : mode === "link"
               ? { cursor: wireDragging ? "grabbing" : wireHoverId ? "grab" : "default" } : undefined}
+            onContextMenu={(event) => {
+              if (mode !== "paint") return;
+              event.preventDefault();
+              const hit = cellAt(point(event));
+              if (hit) { setPaintRole(paintRoleOf(hit)); setMessage(`「${PAINT_ROLE_LABEL[paintRoleOf(hit)]}」で塗ります。`); }
+            }}
             onPointerEnter={(event) => queueMagnifier(event.clientX, event.clientY)}
             onPointerLeave={() => {
               if (!linkLabelId.current) setWireHoverId(null);
+              setPaintHover(null);
               magnifierPointerRef.current = null;
               hideMagnifier();
             }}
@@ -3559,6 +3836,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if (mode === "identity") {
                 return;
               }
+              if (mode === "paint") {
+                if (event.button !== 0 || !paintRole) return;
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                const ids = new Set(hit && !event.shiftKey ? [hit.id] : []);
+                paintStroke.current = { ids, force: event.altKey, rectStart: event.shiftKey ? location : null, last: location };
+                setPaintPreview([...ids]);
+                if (event.shiftKey) setDraft({ ...location, width: 0, height: 0 });
+                return;
+              }
               if (mode === "erase") {
                 event.currentTarget.setPointerCapture?.(event.pointerId);
                 eraserPathRef.current = [location];
@@ -3644,6 +3930,30 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               if (rectanglesHidden) return;
               queueMagnifier(event.clientX, event.clientY);
               const location = point(event);
+              if (mode === "paint") {
+                const stroke = paintStroke.current;
+                if (!stroke) { setPaintHover(cellAt(location)?.id ?? null); return; }
+                if (event.altKey) stroke.force = true;
+                if (stroke.rectStart) {
+                  const area = rectFrom(stroke.rectStart, location);
+                  setDraft(area);
+                  setPaintPreview(cellsSelectedByRect(displayCells, area).map(cell => cell.id));
+                  return;
+                }
+                // Sample the path so a fast stroke does not skip small boxes.
+                const steps = Math.max(1, Math.ceil(Math.hypot(location.x - stroke.last.x, location.y - stroke.last.y) / 4));
+                const before = stroke.ids.size;
+                for (let step = 1; step <= steps; step += 1) {
+                  const hit = cellAt({
+                    x: stroke.last.x + (location.x - stroke.last.x) * step / steps,
+                    y: stroke.last.y + (location.y - stroke.last.y) * step / steps,
+                  });
+                  if (hit) stroke.ids.add(hit.id);
+                }
+                stroke.last = location;
+                if (stroke.ids.size !== before) setPaintPreview([...stroke.ids]);
+                return;
+              }
               if (mode === "move" && moveDrag.current) {
                 const { id, start } = moveDrag.current;
                 const moved = moveEditableCell(layout, id, location.x - start.x, location.y - start.y);
@@ -3688,6 +3998,16 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               }
               if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
                 event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              if (mode === "paint") {
+                const stroke = paintStroke.current;
+                paintStroke.current = null; setDraft(null); setPaintPreview([]);
+                if (!stroke || !paintRole || busy || disabled) return;
+                const ids = stroke.rectStart
+                  ? cellsSelectedByRect(displayCells, rectFrom(stroke.rectStart, location)).map(cell => cell.id)
+                  : [...stroke.ids];
+                applyPaint(ids, paintRole, stroke.force || event.altKey);
+                return;
               }
               if (mode === "virtual-group" && dragStart.current && virtualHeadingId.current) {
                 const area = rectFrom(dragStart.current, location);
@@ -3793,7 +4113,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               }));
               setSelectedId(id);
               setSelectedIds(new Set([id]));
-              setMode("select");
+              // Stay in draw mode so several boxes can be added in a row (Esc or a tool ends it).
             }}
             onDoubleClick={(event) => {
               if (rectanglesHidden || busy || disabled || mode !== "record") return;
@@ -3969,17 +4289,17 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               </select>
             </label>
           )}
-          {!selected && workflowStep !== "identity" && workflowStep !== "review" && !showMeaningStep && <p className="empty-property">帳票上の矩形を選択してください。</p>}
+          {!selected && workflowStep !== "identity" && !showMeaningStep && <p className="empty-property">帳票上の矩形を選択してください。</p>}
           {showMeaningStep && (
             <section className="meaning-context" aria-label="意味づけの次の操作">
               <span className="selection-caption">{selected ? "選択中の欄" : "まず帳票の欄を選択"}</span>
-              {selected && <strong>{LAYOUT_ROLE_LABEL[selected.role]} · {selected.text.trim() || `欄 ${displayCells.findIndex(cell => cell.id === selected.id) + 1}`}</strong>}
-              <p>{mode === "link"
-                ? "帳票の項目名から記入欄へドラッグしてつなぎます。1つの項目名から複数の欄にも接続できます。"
-                : selected?.role === "input"
+              {selected && <strong>{LAYOUT_ROLE_LABEL[selected.role]} · {selected.fieldLabel?.trim() || selected.text.trim() || `欄 ${displayCells.findIndex(cell => cell.id === selected.id) + 1}`}</strong>}
+              <p>{selected?.role === "input"
                   ? "下の「保存する情報」を選ぶと、この記入欄に割り当てます。"
                   : selected?.role === "mark"
-                    ? "この欄の選択肢と保存する値を設定してください。"
+                    ? singleCheckbox
+                      ? "チェック枠1つの欄です。線でつないだ項目に、チェックの有無を保存します。"
+                      : "この欄の選択肢と保存する値を設定してください。"
                     : "記入欄を選んで保存先を指定します。項目名と線でつなぐ場合は「意味付け」を選びます。"}</p>
               {mode === "link" && selected?.role === "input" && <button type="button" className="secondary compact" onClick={() => setMode("select")}><FiEdit3 aria-hidden="true" />保存先を直接指定</button>}
             </section>
@@ -4030,7 +4350,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   <button type="button" onClick={unmergeSelectedCell}>結合を解除</button>
                 </section>
               )}
-              {showClassificationStep && (
+              {roleEditable && (
                 <fieldset>
                   <legend>区分</legend>
                   <div className="role-buttons">
@@ -4041,7 +4361,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   </div>
                 </fieldset>
               )}
-              {showClassificationStep && selectedCells.length > 0
+              {roleEditable && selectedCells.length > 0
                 && selectedCells.every(cell => cell.role === "input" || cell.role === "mark") && (
                 <fieldset>
                   <legend>読み取り方法</legend>
@@ -4052,7 +4372,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       disabled={selectedCells.some(cell => (cell.compositeSubfields?.length ?? 0) > 0 || (cell.markSets?.length ?? 0) > 1)}
                       onClick={() => setRoles(selectedIds, "input", "number")}>番号を読む</button>
                     <button aria-pressed={selectedCells.every(cell => cell.role === "mark" && cell.markSets?.some(set => set.recognitionMode === "symbol"))}
-                      disabled={!!pageView || selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)}
+                      disabled={selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)}
                       onClick={() => setRoles(selectedIds, "mark", "symbol")}>記入された記号を読む</button>
                     <button aria-pressed={selectedCells.every(cell => cell.role === "mark" && !cell.markSets?.some(set => ["symbol", "checklist"].includes(set.recognitionMode ?? "")))}
                       onClick={() => setRoles(selectedIds, "mark", "selection")}>印刷された選択肢を読む</button>
@@ -4061,7 +4381,6 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       onClick={() => setRoles(selectedIds, "mark", "checklist")}><FiCheckSquare aria-hidden="true" /> チェックリストを読む</button>
                   </div>
                   {selectedCells.some(cell => cell.readingMode === "number") && <small>番号欄には上から順に1、2、3…を自動で入れます。同じ高さの欄は左から順に数えます。番号の画像はOCRしません。保存先がない欄には「番号」を追加します。</small>}
-                  {pageView && <small>記号の判定は単一ページのテンプレートで利用できます。</small>}
                   {selectedCells.some(cell => (cell.markSets?.length ?? 0) > 1 || (cell.compositeSubfields?.length ?? 0) > 0)
                     && <small>記号の判定には、複合項目や複数の選択グループを含まない欄を使用してください。</small>}
                 </fieldset>
@@ -4070,7 +4389,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                 <label>項目名の文字候補
                   <input
                     value={selected.text}
-                    placeholder="未認識の場合は入力"
+                    // A merged item name keeps its printed name, which names the item until replaced here.
+                    placeholder={selected.printedLabelText?.trim() || "未認識の場合は入力"}
                     onChange={(event) => patchCell(selected.id, { text: event.target.value })}
                     onBlur={() => {
                       if (findLabelPoolMatch(selected.text, labelPoolEntries)) return;
@@ -4105,7 +4425,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     onChange={event => patchCell(selected.id, { fieldLabel: event.target.value || null })} />
                 </label>
               )}
-              {showMeaningStep && selected.role === "mark" && (
+              {showMeaningStep && selected.role === "mark" && !singleCheckbox && (
                 <div
                   ref={markWarningEditorRef}
                   className={warningFocusRequest?.purpose === "mark-options" && warningFocusRequest.cellId === selected.id
@@ -4117,6 +4437,10 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                   <MarkCellEditor
                     cell={selected}
                     targets={availableTargets}
+                    writeInTargets={availableTargets.filter((target) => layout.relations.some((relation) => (
+                      relation.targetPath === target.path
+                      && layout.cells.some((cell) => cell.id === relation.inputCellId && cell.role === "input" && !cell.markSets?.length)
+                    )))}
                     sets={selected.markSets ?? []}
                     source={source}
                     canonicalWidth={layout.canonicalWidth}
@@ -4124,6 +4448,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     onChange={(markSets) => patchCell(selected.id, { markSets })}
                     selectedChoiceId={assistantChoice?.cellId === selected.id ? assistantChoice.choiceId : null}
                     onChoiceSelect={(markSetId, choiceId) => setAssistantChoice({ cellId: selected.id, markSetId, choiceId })}
+                    hideTarget={Boolean(selectedChecklist?.targetPath)
+                      && layout.relations.some(relation => relation.inputCellId === selected.id)}
                   />
                 </div>
               )}
@@ -4143,9 +4469,9 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             <div className="meaning-parent-context" aria-label="設定済みの親項目">
               <span>親項目で区別</span>
               <strong>
-                {selectedMeaningParent.text.trim() || selectedMeaningParent.id}
+                {cellName(selectedMeaningParent)}
                 <b aria-hidden="true">›</b>
-                {selectedMeaningChild.text.trim() || selectedMeaningChild.id}
+                {cellName(selectedMeaningChild)}
               </strong>
               <small>同名の項目は、この親項目ごとに別の情報として保存されます。</small>
             </div>
@@ -4284,29 +4610,8 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
               </div>
             </div>
           )}
-          {workflowStep === "review" && (
-            <div className="wizard-review-summary">
-              <dl>
-                <div><dt>項目名・見出し</dt><dd>{roleCounts.label + roleCounts.parentLabel}</dd></div>
-                <div><dt>記入欄</dt><dd>{roleCounts.input + roleCounts.mark}</dd></div>
-                <div><dt>内容設定済み</dt><dd>{meaningAssignedCellIds.size}</dd></div>
-                <div><dt>未割当</dt><dd>{unassignedMeaningCount}件</dd></div>
-                <div><dt>設定不完全</dt><dd>{incompleteMeaningIds.size}件</dd></div>
-                <div><dt>繰り返し部分</dt><dd>{recordGroups.length}</dd></div>
-                <div><dt>確認する欄</dt><dd>{documentIdentityFields.map((field) => field.label).join("・") || "未選択"}</dd></div>
-                <div><dt>ファイル名</dt><dd>{documentNameRule?.fieldPaths.length
-                  ? `${documentNameRule.prefix}${documentNameRule.fieldPaths.map((path) => `〈${identityCandidates.find((candidate) => candidate.targetPath === path)?.label ?? path}〉`).join(documentNameRule.separator)}${documentNameRule.suffix}.xlsx`
-                  : "未設定"}</dd></div>
-                <div><dt>保存判定</dt><dd>{templateReadyForOcr ? "保存可能" : "要修正"}</dd></div>
-              </dl>
-            </div>
-          )}
         </aside>
       </div>
-
-      {(showMeaningStep || showRecordStep || showReviewStep) && <LayoutAssignmentPreview
-        layout={layout} targets={availableTargets} visibleCells={displayCells} selectedId={selectedId}
-        expanded={showRecordStep || showReviewStep} onSelect={(cell) => { setMode("select"); focusMeaningCell(cell); }} />}
 
       {showMeaningStep && (
         <details className="meaning-target-manager" aria-label="保存する情報を直接指定">
@@ -4590,7 +4895,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                       ))
                       .map((cell) => (
                         <option value={cell.id} key={cell.id}>
-                          {cell.text || cell.id}
+                          {cellName(cell)}
                         </option>
                       ))}
                   </select>
@@ -4714,15 +5019,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
                     <td>
                       {relation.parentLabelCellId && (
                         <span className="relation-parent-breadcrumb">
-                          {cellById.get(relation.parentLabelCellId)?.text || relation.parentLabelCellId}
+                          {cellNameById(relation.parentLabelCellId)}
                           <b aria-hidden="true">›</b>
                         </span>
                       )}
                       {relation.labelCellIds.length > 0
-                        ? relation.labelCellIds.map((id) => cellById.get(id)?.text || id).join(" / ")
+                        ? relation.labelCellIds.map(cellNameById).join(" / ")
                         : cellById.get(relation.inputCellId)?.printedLabelText || "矩形へ直接設定"}
                     </td>
-                    <td>{targetByPath.get(relation.targetPath)?.label ?? `範囲外: ${relation.targetPath}`}</td>
+                    <td>{displayName(targetByPath.get(relation.targetPath)?.label ?? "一覧にない保存先")}</td>
                     <td><button className="danger-button compact" onClick={() => {
                       rememberRelations(layout.relations);
                       setLayout((current) => ({
@@ -4742,15 +5047,15 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
         </details>
       )}
 
-      {showReviewStep && <>
+      {showFinalChecks && <>
       {layout.cells.filter((cell) => incompleteMeaningIds.has(cell.id)).map((cell) => (
         <p className="inline-warning" key={`incomplete-${cell.id}`}>
-          設定不完全: {cell.text || cell.id} ({cell.id}) — 各選択欄に保存先と1件以上の選択肢を設定してください。
+          設定不完全: {cellName(cell)} — 各選択欄に保存先と1件以上の選択肢を設定してください。
         </p>
       ))}
       {layout.warnings
         .filter((warning) => !HIDDEN_REVIEW_INFORMATION_MESSAGES.has(warning))
-        .map((warning) => <p className="inline-warning" key={warning}>{warning}</p>)}
+        .map((warning) => <p className="inline-warning" key={warning}>{userText(warning, "レイアウトの注意")}</p>)}
       {!recordStructureReady && (
         <p className="inline-warning">
           途中保存できます。OCRへ進むには、複数の列見出しを横断して各行を自動編成してください。旧形式の表では親見出しへの接続も必要です。
@@ -4766,20 +5071,20 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
           途中保存できます。OCRへ進むには、未紐づけの手書き文字欄・選択マーク欄を意味づけするか、除外へ変更してください。
         </p>
       )}
-      {(!identityConfigurationReady || !documentNameReady) && (
+      {!showIdentityStep && (!identityConfigurationReady || !documentNameReady) && (
         <p className="inline-warning">
           途中保存できます。OCRへ進むには、「確認する欄とファイル名」で、確認する欄とファイル名を決めてください。
         </p>
       )}
-      {(saving || dirty || allowUnchangedSave) && <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
-        {saving
-          ? busy ? "保存中です。" : "保存中です。編集は続けられます。"
-          : dirty
+      {/* Saving runs in the background; a line that appears and disappears with every
+          autosave shifts the page, so only lasting states are shown. */}
+      {((dirty && !operationEndSave) || (!dirty && allowUnchangedSave)) && <p className={dirty ? "inline-warning" : "layout-status"} aria-live="polite">
+        {dirty
           ? "保存していないレイアウト変更があります。"
           : "検出内容を確認し、意味づけを保存してください。"}
       </p>}
-      {message && <p className="layout-status" aria-live="polite">{message}</p>}
-      <button
+      {message && !workflowStep && <p className="layout-status" aria-live="polite">{message}</p>}
+      {(!workflowStep || dirty) && <button
         type="button"
         className="primary layout-save"
         disabled={
@@ -4796,7 +5101,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
             ? "テンプレート設定を保存"
             : "レイアウトを途中保存"
           : "レイアウトは保存済み"}
-      </button>
+      </button>}
       </>}
       </fieldset>
     </div>
@@ -4812,9 +5117,38 @@ function meaningDestinationLabel(target: FieldMappingTarget, siblings: FieldMapp
 }
 
 const MODE_ICONS = {
-  select: FiMousePointer, move: FiMousePointer, classify: FiTag, draw: FiPlusSquare,
+  select: FiMousePointer, move: FiMousePointer, classify: FiTag, paint: FiTag, draw: FiPlusSquare,
   link: FiLink, record: FiLayers, parent: FiCornerDownRight, "record-parent": FiCornerDownRight,
   erase: FiX, identity: FiSearch, virtual: FiType, "virtual-group": FiGrid,
+};
+
+type PaintRole = "label" | "parent_label" | "input" | "mark" | "ignored";
+const PAINT_ROLES: readonly (readonly [PaintRole, string, string])[] = [
+  ["label", "項目名", "記入欄の名前になる印字"],
+  ["parent_label", "見出し", "いくつかの項目をまとめる見出し"],
+  ["input", "記入欄", "文字や数字を書き込む欄"],
+  ["mark", "選択・記号", "丸・チェック・記号で答える欄"],
+  ["ignored", "読み取らない", "読み取りに使わない枠"],
+];
+const PAINT_ROLE_LABEL: Record<PaintRole, string> = {
+  label: "項目名", parent_label: "見出し", input: "記入欄", mark: "選択・記号", ignored: "読み取らない",
+};
+function paintRoleOf(cell: LayoutCell): PaintRole {
+  return cell.role === "record_key_cell" || cell.role === "column_key_cell" ? "input" : cell.role;
+}
+
+/** Short descriptions shown when hovering the tools (instead of hints that push the preview down). */
+const MODE_TIPS: Partial<Record<Mode, string>> = {
+  select: "枠をクリックして選び、右の欄で編集します。ドラッグで範囲選択。",
+  classify: "枠をクリックして、記入欄・項目名・見出しなどの区分を変えます。",
+  draw: "ドラッグで新しい枠を描きます。続けて描けます（Escで終了）。",
+  link: "項目名から記入欄へドラッグして、何を書く欄かを設定します。",
+  parent: "見出しから項目名へドラッグして、上の見出しにまとめます。",
+  record: "表の列見出しを横にドラッグして、繰り返す行をまとめます。",
+  "record-parent": "まとめた繰り返し部分を見出しへドラッグしてつなぎます。",
+  move: "仮想見出しの枠をドラッグして動かします。",
+  virtual: "帳票にない見出しを作り、枠をまとめます。",
+  erase: "なぞった接続線を消します。",
 };
 
 function ModeButton({
@@ -4834,6 +5168,7 @@ function ModeButton({
   return (
     <button
       type="button"
+      data-tip={MODE_TIPS[mode]}
       className={[
         current === mode ? "active" : "",
         "mode-button-with-icon",
@@ -4878,29 +5213,32 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
       || element instanceof HTMLSelectElement),
   );
 }
+// The latest saved layout wins. A local draft is used only when it was made on
+// top of that same saved version; otherwise it is stale and is dropped silently.
 function restoreLayoutDraft(
   initialLayout: LayoutDefinition,
   draftStorageKey?: string,
-): { layout: LayoutDefinition; needsReview: boolean } {
+): LayoutDefinition {
   const saved = normalizeLayout(initialLayout);
-  if (!draftStorageKey) return { layout: saved, needsReview: false };
+  if (!draftStorageKey) return saved;
   try {
     const stored = privateLocalStorage.getItem(draftStorageKey);
-    if (!stored) return { layout: saved, needsReview: false };
+    if (!stored) return saved;
     const layout = normalizeLayout(JSON.parse(stored) as LayoutDefinition);
     const savedSignature = layoutSignature(saved);
-    return {
-      layout,
-      needsReview: layoutSignature(layout) !== savedSignature
-        && privateLocalStorage.getItem(`${draftStorageKey}:baseline`) !== savedSignature,
-    };
+    if (layoutSignature(layout) === savedSignature) return saved;
+    if (privateLocalStorage.getItem(`${draftStorageKey}:baseline`) === savedSignature) return layout;
+    privateLocalStorage.removeItem(draftStorageKey);
+    privateLocalStorage.removeItem(`${draftStorageKey}:baseline`);
+    return saved;
   } catch {
     try {
       privateLocalStorage.removeItem(draftStorageKey);
+      privateLocalStorage.removeItem(`${draftStorageKey}:baseline`);
     } catch {
       // Ignore storage failures and continue with the server-backed layout.
     }
-    return { layout: saved, needsReview: false };
+    return saved;
   }
 }
 function layoutSignature(layout: LayoutDefinition): string {
@@ -4938,3 +5276,37 @@ export {
 } from "./layoutEditorRecords";
 export { removeLayoutCells, unselectedCellsInsideMerge } from "./layoutEditorMerges";
 export { LAYOUT_ROLE_STYLE, drawOcrLabelText } from "./layoutEditorDrawing";
+
+/** Editing tools as a vertical column pinned to a corner of the preview, separate from voice. */
+function FloatingTools({ anchor, disabled, header, children }: { anchor: () => HTMLElement | null; disabled: boolean; header?: ReactNode; children: ReactNode }) {
+  const { corner, style, dragging, grip, pin, container } = useCornerPin(anchor, "fuminosuke.layoutToolsCorner", "top-left", 0);
+  // One description bubble beside the hovered tool, on the side away from the frame edge.
+  const [tip, setTip] = useState<{ text: string; top: number; x: number } | null>(null);
+  const tipTimer = useRef<number | null>(null);
+  const hideTip = () => { if (tipTimer.current) window.clearTimeout(tipTimer.current); tipTimer.current = null; setTip(null); };
+  const showTip = (target: EventTarget | null) => {
+    const element = target instanceof Element ? target.closest<HTMLElement>("[data-tip]") : null;
+    if (!element?.dataset.tip) { hideTip(); return; }
+    const text = element.dataset.tip;
+    if (tipTimer.current) window.clearTimeout(tipTimer.current);
+    tipTimer.current = window.setTimeout(() => {
+      const box = element.getBoundingClientRect();
+      const panel = element.closest(".layout-floating-tools")?.getBoundingClientRect() ?? box;
+      setTip({ text, top: box.top + box.height / 2, x: corner.endsWith("right") ? panel.left - 10 : panel.right + 10 });
+    }, 350);
+  };
+  useEffect(() => () => { if (tipTimer.current) window.clearTimeout(tipTimer.current); }, []);
+  return createPortal(
+    <div className={`layout-floating-tools is-${corner}${dragging ? " is-dragging" : ""}`} style={style} {...pin}
+      onPointerOver={event => showTip(event.target)} onPointerLeave={hideTip} onPointerDown={hideTip}
+      onFocus={event => showTip(event.target)} onBlur={hideTip}>
+      {tip && !dragging && createPortal(<div className={`layout-tool-tip is-${corner.endsWith("right") ? "left" : "right"}`} role="tooltip"
+        style={{ top: tip.top, ...(corner.endsWith("right") ? { right: window.innerWidth - tip.x } : { left: tip.x }) }}>{tip.text}</div>, document.body)}
+      <button type="button" className="layout-floating-grip" aria-label="編集ツールの位置を移動（ドラッグ又は矢印キー）"
+        title="ドラッグで四隅へ移動" {...grip}><FiMove aria-hidden="true" /></button>
+      {header}
+      <fieldset className="layout-floating-fields" disabled={disabled}>{children}</fieldset>
+    </div>,
+    container,
+  );
+}

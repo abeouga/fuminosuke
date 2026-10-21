@@ -138,7 +138,7 @@ class TemplateRepository:
         if version is None:
             raise self._not_found()
         if version.status != TemplateVersionStatus.DRAFT.value:
-            raise self._invalid_state("DRAFTテンプレート版だけを承認できます。")
+            raise self._invalid_state("編集中のテンプレートだけを反映できます。")
         paged = version.quality_json.get("printLayout") is not None
         if paged:
             # Older callers cannot accidentally activate a paged version.  The
@@ -212,7 +212,7 @@ class TemplateRepository:
         parent_id = version.quality_json.get("forkParentVersionId")
         if parent_id and parent_id != template.active_version_id:
             raise self._invalid_state(
-                "編集中に有効版が変更されました。現在の有効版を確認してください。"
+                "編集中に使用中のテンプレートが変更されました。一覧から開き直してください。"
             )
         if template.active_version_id:
             previous = self.get_version(template.active_version_id)
@@ -241,7 +241,7 @@ class TemplateRepository:
         if version is None:
             raise self._not_found()
         if version.status != TemplateVersionStatus.DRAFT.value:
-            raise self._invalid_state("DRAFTテンプレート版だけを却下できます。")
+            raise self._invalid_state("編集中のテンプレートだけを破棄できます。")
         version.status = TemplateVersionStatus.REJECTED.value
         version.rejected_at = datetime.now(UTC)
         source_job = self._session.get(ProcessingJob, version.source_job_id)

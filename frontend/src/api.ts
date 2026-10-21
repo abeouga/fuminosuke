@@ -1,6 +1,8 @@
+import { logDetail, userText } from "./userMessages";
 import { authenticatedFetch, csrfHeaders } from "./auth/transport";
 import type { TemplateAuthoringUpdate, TemplateAuthoringView } from "./assistant/generatedAuthoring";
-import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateCandidateSettings, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplatePackageActivation, TemplatePackageOperation } from "./types";
+import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplatePackageActivation, TemplatePackageOperation } from "./types";
+import type { ItemJoin, ItemJoinSettings } from "./itemJoins";
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
 import type { PageFieldEdit, PagedReviewResult } from "./pagedReview";
@@ -20,9 +22,13 @@ export type SeriesCandidate = {
 };
 export class ApiError extends Error {
     code: string;
+    /** The server's original text; the screen only gets the cleaned message. */
+    detail: string;
     constructor(message: string, code = "API_ERROR") {
-        super(message);
+        super(userText(message, "エラー"));
         this.code = code;
+        this.detail = message;
+        if (code !== "API_ERROR" || this.message !== message) logDetail("エラー", code, message);
     }
 }
 async function requestResponse(path: string, init?: RequestInit): Promise<Response> {
@@ -97,7 +103,7 @@ export const api = {
     downloadPageOutput: async (id: string, revision: number) => {
         const response = await requestResponse(`/ocr-jobs/${encodeURIComponent(id)}/page-review/output.xlsx?revision=${revision}`);
         if (response.headers.get("X-Result-Revision") !== String(revision)) {
-            throw new ApiError("取得したXLSXの確認版が一致しません。", "PAGE_OUTPUT_REVISION_CHANGED");
+            throw new ApiError("取得したXLSXが確認済みの内容と一致しません。", "PAGE_OUTPUT_REVISION_CHANGED");
         }
         return response.blob();
     },
@@ -274,16 +280,23 @@ export const api = {
         return templateMutation<Record<string, unknown>>(`/template-versions/${id}/handwriting-mask`, expectedRevision, { method: "PUT", body });
     },
     fieldMappings: (id: string) => request<FieldMappingsResponse>(`/template-versions/${id}/field-mappings`),
-    templateCandidateSettings: (templateId: string, templateVersionId: string) => request<TemplateCandidateSettings>(`/templates/${templateId}/candidate-settings?templateVersionId=${encodeURIComponent(templateVersionId)}`),
-    saveTemplateCandidateSettings: (templateId: string, templateVersionId: string, expectedRevision: number, sets: Array<{
-        name: string;
-        values: string[];
-        allowedSuffixes: string[];
-        targetPatterns: string[];
-    }>) => request<TemplateCandidateSettings>(`/templates/${templateId}/candidate-settings`, {
+    /** Item names given on the result screen (display only; path → name). */
+    displayNames: (templateId: string) => request<{ names: Record<string, string> }>(`/templates/${encodeURIComponent(templateId)}/display-names`),
+    renameItem: (templateId: string, targetPath: string, displayName: string | null) => request<{ names: Record<string, string> }>(`/templates/${encodeURIComponent(templateId)}/display-names`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targetPath, displayName }),
+    }),
+    /** Items shown as one value (display only); suggestions come from the given version. */
+    itemJoins: (templateId: string, templateVersionId?: string) => request<ItemJoinSettings>(`/templates/${encodeURIComponent(templateId)}/item-joins${templateVersionId ? `?templateVersionId=${encodeURIComponent(templateVersionId)}` : ""}`),
+    /** One GPT-6 Luna request (shared API budget); proposes joins, saves nothing. */
+    aiItemJoinSuggestions: (templateId: string, templateVersionId: string) => request<ItemJoinSettings>(`/templates/${encodeURIComponent(templateId)}/item-joins/ai-suggestions?templateVersionId=${encodeURIComponent(templateVersionId)}`, { method: "POST" }),
+    saveItemJoins: (templateId: string, items: ItemJoin[]) => request<ItemJoinSettings>(`/templates/${encodeURIComponent(templateId)}/item-joins`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }),
+    }),
+    templateFieldSettings: (templateId: string, templateVersionId: string) => request<TemplateFieldSettings>(`/templates/${templateId}/field-settings?templateVersionId=${encodeURIComponent(templateVersionId)}`),
+    saveTemplateFieldSettings: (templateId: string, templateVersionId: string, expectedRevision: number, items: Array<Omit<TemplateFieldSetting, "label">>) => request<TemplateFieldSettings>(`/templates/${templateId}/field-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateVersionId, expectedRevision, sets }),
+        body: JSON.stringify({ templateVersionId, expectedRevision, items }),
     }),
     layout: (id: string) => request<LayoutDefinition>(`/template-versions/${id}/layout`),
     detectLayout: (id: string, expectedRevision: number) => templateMutation<LayoutDefinition>(`/template-versions/${id}/layout/detect`, expectedRevision, {

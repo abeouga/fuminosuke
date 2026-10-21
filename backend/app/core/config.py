@@ -135,6 +135,10 @@ class VoiceSettings(BaseModel):
     max_audio_bytes: int = Field(default=10_485_760, ge=1024, le=10_485_760)
     max_record_seconds: int = Field(default=60, ge=1, le=60)
     ffmpeg_path: str | None = None
+    # Voice connection time per JST calendar day, shared by all editing voice sessions.
+    daily_seconds: int = Field(default=7200, ge=300, le=86400)
+    # Test aid: keep recognized text and its outcome in data/logs on this PC only.
+    transcript_log: bool = False
 
 
 class RawSettings(BaseSettings):
@@ -198,6 +202,8 @@ class RawSettings(BaseSettings):
     voice_max_audio_bytes: int = Field(default=10_485_760, validation_alias="VOICE_MAX_AUDIO_BYTES")
     voice_max_record_seconds: int = Field(default=60, validation_alias="VOICE_MAX_RECORD_SECONDS")
     voice_ffmpeg_path: str | None = Field(default=None, validation_alias="VOICE_FFMPEG_PATH")
+    voice_daily_seconds: int = Field(default=7200, validation_alias="VOICE_DAILY_SECONDS")
+    voice_transcript_log: bool = Field(default=False, validation_alias="VOICE_TRANSCRIPT_LOG")
     openai_primary_model: str | None = Field(default=None, validation_alias="OPENAI_PRIMARY_MODEL")
     openai_fallback_model: str | None = Field(
         default=None, validation_alias="OPENAI_FALLBACK_MODEL"
@@ -225,7 +231,7 @@ class RawSettings(BaseSettings):
     openai_timeout_seconds: int = Field(default=60, validation_alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_retries: int = Field(default=2, validation_alias="OPENAI_MAX_RETRIES")
     openai_prompt_version: str = Field(
-        default="mapped-compact-v2", validation_alias="OPENAI_PROMPT_VERSION"
+        default="mapped-compact-v3", validation_alias="OPENAI_PROMPT_VERSION"
     )
     openai_schema_version: Literal["2.0"] = Field(
         default="2.0", validation_alias="OPENAI_SCHEMA_VERSION"
@@ -371,6 +377,8 @@ class Settings:
                 tts_voice=raw.voice_tts_voice, max_audio_bytes=raw.voice_max_audio_bytes,
                 max_record_seconds=raw.voice_max_record_seconds,
                 ffmpeg_path=raw.voice_ffmpeg_path or shutil.which("ffmpeg"),
+                daily_seconds=raw.voice_daily_seconds,
+                transcript_log=raw.voice_transcript_log,
             ),
         )
 

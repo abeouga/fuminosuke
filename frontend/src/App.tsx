@@ -2,16 +2,21 @@ import { privateLocalStorage } from "./auth/transport";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { ToastViewport } from "./components/Toast";
-import { HomePage } from "./pages/HomePage";
+import { PendingJobs } from "./components/PendingJobs";
 import { JobPage } from "./pages/JobPage";
 const AskPage = lazy(() => import("./pages/AskPage").then(module => ({ default: module.AskPage })));
+const ShelfPage = lazy(() => import("./pages/ShelfPage").then(module => ({ default: module.ShelfPage })));
+import type { ShelfSelection } from "./pages/ShelfPage";
+import { ItemJoinEditorHost } from "./components/TemplateItemJoinEditor";
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 
-type Page = "home" | "ocr" | "review" | "job" | "ask";
+type Page = "ocr" | "review" | "job" | "ask" | "shelf";
+type ReviewReturn = "ocr" | "ask" | "shelf";
+const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "質問へ戻る", shelf: "書類棚へ戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
 const RECENT_KEY = "document-ocr-recent-jobs";
@@ -29,14 +34,32 @@ export default function App() {
   const initialReviewJobId = initialSearchParams.get("job");
   const initialReviewField = initialSearchParams.get("field");
   const initialReviewEdit = initialSearchParams.get("edit") === "1";
-  const [page, setPage] = useState<Page>(initialReviewJobId ? "review" : "home");
+  const initialView = initialSearchParams.get("view");
+  const [page, setPage] = useState<Page>(
+    initialReviewJobId ? "review" : initialView === "ask" ? "ask" : initialView === "shelf" ? "shelf" : "ocr",
+  );
   const [health, setHealth] = useState<Health | null>(null);
-  const [healthChecked, setHealthChecked] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [reviewJobId, setReviewJobId] = useState<string | null>(initialReviewJobId);
+  const [reviewField, setReviewField] = useState<string | null>(initialReviewField);
+  // The page a review opened from (the question page and the shelf return there instead of the reading page).
+  const [reviewReturn, setReviewReturn] = useState<ReviewReturn>("ocr");
+  // The shelf's folder, document and search survive opening a review and a reload (`?view=shelf&doc=`).
+  const [shelfSelection, setShelfSelection] = useState<ShelfSelection>(() => ({
+    templateId: null,
+    jobId: initialView === "shelf" ? initialSearchParams.get("doc") : null,
+    query: "",
+  }));
+  const updateShelfSelection = useCallback((next: ShelfSelection) => {
+    setShelfSelection(next);
+    const url = new URL(window.location.href);
+    if (next.jobId) url.searchParams.set("doc", next.jobId);
+    else url.searchParams.delete("doc");
+    window.history.replaceState({}, "", url);
+  }, []);
   const [reviewAutoReopen, setReviewAutoReopen] = useState(initialReviewEdit);
   const [reviewRequiresIdentityConfirmation, setReviewRequiresIdentityConfirmation] = useState(
     !initialReviewEdit,
@@ -127,13 +150,22 @@ export default function App() {
     });
     setPage("ocr");
   }, []);
-  const openReview = (id: string, requireIdentityConfirmation = true) => {
+  const openReview = (
+    id: string,
+    requireIdentityConfirmation = true,
+    options: { returnTo?: ReviewReturn; field?: string | null } = {},
+  ) => {
     const url = new URL(window.location.href);
     url.searchParams.set("job", id);
-    url.searchParams.delete("field");
+    if (options.field) url.searchParams.set("field", options.field);
+    else url.searchParams.delete("field");
     url.searchParams.delete("edit");
+    url.searchParams.delete("view");
+    url.searchParams.delete("doc");
     window.history.replaceState({}, "", url);
     setReviewJobId(id);
+    setReviewField(options.field ?? null);
+    setReviewReturn(options.returnTo ?? "ocr");
     setReviewAutoReopen(false);
     setReviewRequiresIdentityConfirmation(requireIdentityConfirmation);
     setNavigationGuard("review");
@@ -162,11 +194,16 @@ export default function App() {
       url.searchParams.delete("job");
       url.searchParams.delete("field");
       url.searchParams.delete("edit");
+      // The question page and the shelf are kept in the address so a reload comes back to them.
+      if (nextPage === "ask" || nextPage === "shelf") url.searchParams.set("view", nextPage);
+      else url.searchParams.delete("view");
+      if (nextPage === "shelf" && shelfSelection.jobId) url.searchParams.set("doc", shelfSelection.jobId);
+      else url.searchParams.delete("doc");
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
-    if (nextPage === "home") void refreshJobs();
     if (nextPage === "ocr") {
+      void refreshJobs();
       setTemplateWorkspaceRequest(null);
     }
     setPage(nextPage);
@@ -206,7 +243,6 @@ export default function App() {
         if (!stopped) setHealth((current) => sameHealth(current, next) ? current : next);
       }
       catch { if (!stopped) setHealth(null); }
-      finally { if (!stopped) setHealthChecked(true); }
     };
     const poll = () => { if (!document.hidden) void check(); };
     const onVisibilityChange = () => { if (!document.hidden) void check(); };
@@ -244,14 +280,14 @@ export default function App() {
   return (
     <div className="app-shell ux-shell deploy-shell">
       <aside className="side-nav">
-        <button className="brand" onClick={() => navigateTo("home")} aria-label="ホーム">
+        <button className="brand" onClick={openReadingRoot} aria-label="読み取り">
           <span aria-hidden="true"><img src="/favicon.svg" alt="" /></span><div><strong>文之助</strong></div>
         </button>
         <span className="beta-badge">ベータ</span>
         <nav id="main-menu" aria-label="メインメニュー">
-          <NavButton active={page === "home"} icon="home" label="ホーム" onClick={() => navigateTo("home")} />
-          <NavButton active={page === "ocr" || page === "review"} icon="ocr" label="読み取り" onClick={openReadingRoot} />
-          <NavButton active={page === "ask"} icon="ask" label="質問" onClick={() => navigateTo("ask")} />
+          <NavButton active={page === "ocr" || (page === "review" && reviewReturn === "ocr")} icon="ocr" label="読み取り" onClick={openReadingRoot} />
+          <NavButton active={page === "shelf" || (page === "review" && reviewReturn === "shelf")} icon="shelf" label="書類棚" onClick={() => navigateTo("shelf")} />
+          <NavButton active={page === "ask" || (page === "review" && reviewReturn === "ask")} icon="ask" label="質問" onClick={() => navigateTo("ask")} />
         </nav>
         <div className="side-footer" role="status">
           <span className={health ? "status-dot ok" : "status-dot"} />
@@ -276,13 +312,6 @@ export default function App() {
             </button>
           </aside>
         )}
-        {page === "home" && <HomePage health={health} healthChecked={healthChecked} jobs={jobs} onNavigate={(destination) => {
-          if (destination === "templates") {
-            openTemplateWorkspace("create");
-            return;
-          }
-          navigateTo(destination);
-        }} onOpenJob={openJob} />}
         {page === "ocr" && <OcrPage
           templates={templates}
           textRecognitionToggleEnabled={health?.ocrTextRecognitionToggleEnabled === true}
@@ -294,12 +323,14 @@ export default function App() {
           readingRootRequestId={readingRootRequestId}
           onNavigationGuardChange={updateOcrGuard}
           onTemplateNavigationGuardChange={updateTemplateGuard}
+          templateSelectionFooter={<PendingJobs health={health} jobs={jobs} onOpenJob={openJob} />}
         />}
-        {page === "review" && reviewJobId && <ReviewPage key={reviewJobId} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={initialReviewJobId === reviewJobId ? initialReviewField : null} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} onClose={() => { void refreshJobs(); navigateTo("home"); }} />}
-        {page === "ask" && <AskPage onOpenReview={(id) => openReview(id)} />}
+        {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={() => { void refreshJobs(); navigateTo(reviewReturn); }} />}
+        {page === "shelf" && <ShelfPage templateNames={templateNames} selection={shelfSelection} onSelectionChange={updateShelfSelection} onOpenReview={(id, field) => openReview(id, true, { returnTo: "shelf", field })} />}
+        {page === "ask" && <AskPage onOpenReview={(id, field) => openReview(id, true, { returnTo: "ask", field })} />}
         {page === "job" && monitoredJobId && <JobPage
           jobId={monitoredJobId}
-          onClose={() => { void refreshJobs(); navigateTo("home"); }}
+          onClose={() => { void refreshJobs(); navigateTo("ocr"); }}
           onOpenReview={openReview}
           onOpenTemplates={(workspace) => { retryTemplates(); openTemplateWorkspace(workspace); }}
           onStartNewReading={() => navigateTo("ocr")}
@@ -307,6 +338,7 @@ export default function App() {
         </Suspense>
       </main>
       <ToastViewport />
+      <ItemJoinEditorHost />
       {pendingNavigation && (
         <NavigationConfirmDialog
           guard={pendingNavigation.guard}
@@ -421,7 +453,7 @@ function writeRecentJobIds(ids: string[]) {
   }
 }
 
-type SidebarIconName = "home" | "ocr" | "ask";
+type SidebarIconName = "ocr" | "ask" | "shelf";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
   return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
@@ -429,8 +461,8 @@ function NavButton({ active, icon, label, onClick }: { active: boolean; icon: Si
 
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
-  if (name === "home") return <svg {...props}><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1Z" /></svg>;
   if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
+  if (name === "shelf") return <svg {...props}><path d="M3.5 6.5a1 1 0 0 1 1-1h4.75l2 2h8.25a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" /><path d="M3.5 10h17" /></svg>;
   if (name === "ask") return <svg {...props}><path d="M4 5.5h16v10H9l-4 3.5v-3.5H4z" /><path d="M9.5 9.25a2.5 2.5 0 1 1 3.25 2.4c-.5.2-.75.6-.75 1.1M12 14.6h.01" /></svg>;
   return null;
 }

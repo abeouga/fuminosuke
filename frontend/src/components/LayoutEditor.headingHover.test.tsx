@@ -159,12 +159,12 @@ test("hides every canvas rectangle while using the auxiliary eraser without chan
   fireEvent.click(screen.getByRole("button", { name: "すべての矩形を非表示" }));
   strokes.mockClear();
   view.rerender(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
-    onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="review" />);
+    onDetect={onDetect} onDirtyChange={onDirtyChange} workflowStep="records" />);
   expect(strokes).toHaveBeenCalled();
   expect(element).toHaveAttribute("tabindex", "0");
 });
 
-test.each(["classify", "meaning", "records", "review"] as const)("%s shows only hovered heading connections, not persistent selection", workflowStep => {
+test.each(["classify", "meaning", "records"] as const)("%s shows only hovered heading connections, not persistent selection", workflowStep => {
   const onSave = vi.fn(), onDirtyChange = vi.fn();
   render(<LayoutEditor source="preview.png" initialLayout={initial} targets={[]} onSave={onSave}
     onDetect={vi.fn()} onDirtyChange={onDirtyChange} workflowStep={workflowStep} />);

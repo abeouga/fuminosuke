@@ -19,6 +19,7 @@ from openpyxl.styles import (  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 
 from app.core.errors import AppError
+from app.services.template_item_join_service import joined_text, ordered
 
 CellKind = Literal["text", "identifier", "integer", "decimal", "currency", "date"]
 RowKind = Literal["title", "section", "header", "data", "blank"]
@@ -76,6 +77,7 @@ class ExcelExportService:
         config_snapshot: dict[str, Any] | None = None,
         confirmed_at: datetime | None = None,
         document_name: str | None = None,
+        joins: list[dict[str, Any]] | None = None,
     ) -> ExcelTable:
         generic_data = self._mapping(document.get("genericData"))
         generic_title = generic_data.get("templateName")
@@ -100,7 +102,7 @@ class ExcelExportService:
                 detail="受付時の出力構造がありません。",
             )
         used_paths = self._append_review_structure(
-            rows, document, snapshot.get("reviewStructure"), mappings
+            rows, document, snapshot.get("reviewStructure"), mappings, joins or []
         )
         self._append_unbound_values(rows, document, used_paths, config_snapshot)
 
@@ -151,6 +153,7 @@ class ExcelExportService:
         document: dict[str, Any],
         structure: object,
         mappings: list[Any],
+        joins: list[dict[str, Any]],
     ) -> set[str]:
         """Project accepted field IDs; labels and array positions never resolve values."""
 
@@ -197,6 +200,9 @@ class ExcelExportService:
             if not isinstance(identifier, str) or identifier not in fields or identifier in visited:
                 raise invalid()
             visited.add(identifier)
+            return read(identifier)
+
+        def read(identifier: str) -> ExcelCell:
             reading: object = document
             for part in accepted[identifier].split("."):
                 if isinstance(reading, dict):
@@ -227,12 +233,49 @@ class ExcelExportService:
                     ExcelRow("header", (self._text_cell("項目"), self._text_cell("値"))),
                 ]
             )
+            # One unit per plain item, or per join at its first item; then the saved order.
+            units: dict[str, list[str]] = {}
             for identifier in identifiers:
-                cell = value(identifier)
-                field = fields[str(identifier)]
-                label = str(field.get("label") or accepted[str(identifier)])
-                rows.append(ExcelRow("data", (self._text_cell(label), cell)))
+                value(identifier)  # Every item is still checked and counted once.
+                join = join_by_path.get(accepted[str(identifier)])
+                key = (
+                    str(join["members"][0].get("targetPath")) if join is not None
+                    else accepted[str(identifier)]
+                )
+                units.setdefault(key, []).append(str(identifier))
+            for key in ordered(list(units), orders):
+                join = join_by_path.get(key)
+                if join is not None:
+                    # Items joined on the result screen are one row here too (display only).
+                    text = joined_text(join["members"], {
+                        path: read(by_path[path]).display or None
+                        for path in (str(m.get("targetPath")) for m in join["members"])
+                        if path in by_path
+                    }, str(join.get("separator") or ""))
+                    rows.append(ExcelRow("data", (
+                        self._text_cell(str(join.get("name") or "項目")),
+                        ExcelCell(text or None, text),
+                    )))
+                    continue
+                identifier = units[key][0]
+                field = fields[identifier]
+                label = str(field.get("label") or accepted[identifier])
+                rows.append(ExcelRow("data", (self._text_cell(label), read(identifier))))
             rows.append(ExcelRow("blank"))
+
+        by_path = {path: identifier for identifier, path in accepted.items()}
+        # A join counts when at least two of its items are in this document.
+        join_by_path: dict[str, dict[str, Any]] = {}
+        for join in joins:
+            members = [
+                m for m in join.get("members", [])
+                if isinstance(m, dict) and str(m.get("targetPath")) in by_path
+            ]
+            if join.get("kind", "join") == "join" and len(members) >= 2:
+                present = {**join, "members": members}
+                for member in members:
+                    join_by_path[str(member.get("targetPath"))] = present
+        orders = [join for join in joins if join.get("kind") == "order"]
 
         append_fields("基本項目", structure.get("independentFieldIds"))
         for section in self._records(structure.get("parentSections")):

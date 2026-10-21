@@ -370,6 +370,8 @@ _SHAPE: dict[str, Any] = {
                             {"$ref": "#/$defs/CellSetRole"},
                             {"$ref": "#/$defs/CellRename"},
                             {"$ref": "#/$defs/CellSetReading"},
+                            {"$ref": "#/$defs/CellMerge"},
+                            {"$ref": "#/$defs/CellDelete"},
                             {"$ref": "#/$defs/MeaningCreate"},
                             {"$ref": "#/$defs/MeaningUpdate"},
                             {"$ref": "#/$defs/MeaningDelete"},

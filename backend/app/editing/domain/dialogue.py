@@ -12,7 +12,7 @@ from app.editing.domain.command import BoundOperation, canonical
 from app.editing.domain.fast_path import compile_fast
 from app.editing.domain.planning import InvalidPlan, PlanningIssue
 from app.editing.domain.planning_catalog import PlanningCatalog, normalized
-from app.editing.domain.values import resolve_value
+from app.editing.domain.values import fit_value, resolve_value
 
 
 def pending_cancellation(text: str) -> str | None:
@@ -144,7 +144,7 @@ class PendingInstruction:
         if (
             len(unresolved) != 1
             or index >= len(refs)
-            or self.question["missingKind"] not in {"target", "column"}
+            or self.question["missingKind"] not in {"target", "column", "row"}
         ):
             return None
         ref, slot = refs[index], unresolved[0]
@@ -158,7 +158,11 @@ class PendingInstruction:
             raise InvalidPlan("A choice is outside the owned instruction scope")
         operations = [
             *self.known.get("operations", []),
-            {"op": "ocr.set_value", "target": target["handle"], "value": slot["value"]},
+            {
+                "op": "ocr.set_value",
+                "target": target["handle"],
+                "value": fit_value(slot["value"], target),
+            },
         ]
         if len({v["target"] for v in operations}) != len(operations):
             raise InvalidPlan("A choice creates competing writes")

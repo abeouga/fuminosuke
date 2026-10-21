@@ -32,6 +32,11 @@ class Position(Contract):
     y: float
 
 
+class Size(Contract):
+    width: float
+    height: float
+
+
 class RecordTable(Contract):
     table_id: EntityId
     table_name: str
@@ -59,6 +64,9 @@ class TargetInfo(Contract):
     role: str | None = None
     heading_path: list[str] | None = None
     position: Position | None = None
+    size: Size | None = None
+    sheet_cell: str | None = None
+    text_spills_right: int | None = None
     unavailable_reason: str | None = None
     virtual: bool | None = None
     input_cell_name: str | None = None

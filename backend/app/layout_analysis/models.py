@@ -33,11 +33,28 @@ class LayoutMarkOption(LayoutModel):
     y: int = Field(ge=0)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
+    # A checklist option may own a separate text field written next to it, such as
+    # 「その他(　　)」. Text in that field counts as this option being selected. On a
+    # symbol box (○ etc.) one option holds the item's write-in: text there with no symbol
+    # read is left for a person to check.
+    write_in_target_path: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("label", "value", mode="before")
     @classmethod
     def repair_text_encoding(cls, value: object) -> object:
         return repair_utf8_mojibake(value) if isinstance(value, str) else value
+
+    @model_serializer(mode="wrap")
+    def omit_unlinked_write_in(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Options without a write-in keep their stored form and hashes unchanged.
+        data: dict[str, Any] = handler(self)
+        if self.write_in_target_path is None:
+            data.pop("writeInTargetPath", None)
+            data.pop("write_in_target_path", None)
+        return data
+
+
+WRITE_IN_MODES = frozenset({"checklist", "symbol"})
 
 
 class LayoutMarkSet(LayoutModel):
@@ -46,6 +63,24 @@ class LayoutMarkSet(LayoutModel):
     recognition_mode: Literal["automatic", "manual", "symbol", "checklist"] = "automatic"
     selection_mode: Literal["single", "multiple"] = "multiple"
     options: list[LayoutMarkOption] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_write_in_outside_checklist(cls, data: Any) -> Any:
+        # A write-in field belongs to a check box or a symbol box. A box switched to
+        # another reading keeps no such link instead of failing the whole save.
+        if not isinstance(data, dict):
+            return data
+        mode = data.get("recognitionMode", data.get("recognition_mode", "automatic"))
+        options = data.get("options")
+        if mode in WRITE_IN_MODES or not isinstance(options, list):
+            return data
+        return {**data, "options": [
+            {k: v for k, v in option.items()
+             if k not in {"writeInTargetPath", "write_in_target_path"}}
+            if isinstance(option, dict) else option
+            for option in options
+        ]}
 
     @model_validator(mode="after")
     def validate_unique_options(self) -> Self:
@@ -59,6 +94,11 @@ class LayoutMarkSet(LayoutModel):
                 raise ValueError("Checklist labels must not contain selection separators")
         if self.recognition_mode == "symbol" and self.selection_mode != "single":
             raise ValueError("Symbol recognition requires single selection")
+        write_ins = [option for option in self.options if option.write_in_target_path]
+        if write_ins and self.recognition_mode not in WRITE_IN_MODES:
+            raise ValueError("Write-in fields are only available for checklist or symbol options")
+        if self.recognition_mode == "symbol" and len(write_ins) > 1:
+            raise ValueError("A symbol box has at most one write-in field")
         for attribute in ("id", "label", "value"):
             values = [getattr(option, attribute) for option in self.options]
             if len(values) != len(set(values)):

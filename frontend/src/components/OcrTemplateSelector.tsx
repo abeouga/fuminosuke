@@ -1,6 +1,5 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
-  FiCopy,
   FiEdit2,
   FiPlus,
   FiTrash2,
@@ -9,6 +8,7 @@ import type { Template } from "../types";
 import { templatePreviewKey, type useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
+import { openItemJoinEditor } from "./TemplateItemJoinEditor";
 
 export type ReadingTemplateCard = {
   template: Template;
@@ -16,16 +16,15 @@ export type ReadingTemplateCard = {
   editVersion: Template["versions"][number];
   inputAvailable: boolean;
 };
-export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor, previewImageState, setPreviewImageState, deletingTemplateId, duplicateBusyTemplateId, openReadingSetup, deleteTemplate, duplicateTemplate, openTemplateWorkspace }: {
-  templateCards: ReadingTemplateCard[]; visibleVersions: ReadingTemplateCard[];
+export function OcrTemplateSelector({ templateCards, previewFor, previewImageState, setPreviewImageState, deletingTemplateId, openReadingSetup, deleteTemplate, openTemplateWorkspace }: {
+  templateCards: ReadingTemplateCard[];
   previewFor: ReturnType<typeof useTemplatePreviews>;
   previewImageState: Record<string, "loaded" | "failed">;
   setPreviewImageState: Dispatch<SetStateAction<Record<string, "loaded" | "failed">>>;
-  deletingTemplateId: string | null; duplicateBusyTemplateId: string | null;
+  deletingTemplateId: string | null;
   openReadingSetup: (versionId: string) => void;
   deleteTemplate: (template: Template) => Promise<void>;
-  duplicateTemplate: (template: Template, version: Template["versions"][number]) => Promise<void>;
-  openTemplateWorkspace: (workspace: "create" | "manage", editVersionId?: string) => void;
+  openTemplateWorkspace: (workspace: "create" | "manage", editVersionId?: string, editTarget?: "structure" | "fields") => void;
 }) {
   // Template authoring is PC-only; phones keep reading with existing templates.
   const phoneDevice = usePhoneDevice();
@@ -40,7 +39,7 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                   <h2 id="ocr-step-template">読み取る書類のテンプレートを選ぶ</h2>
                 </div>
                 <div className="ocr-template-grid" aria-label="使用するテンプレート">
-                  {visibleVersions.map(({ template, version, editVersion, inputAvailable }) => {
+                  {templateCards.map(({ template, version, editVersion, inputAvailable }) => {
                     const preview = previewFor(version);
                     const previewKey = templatePreviewKey(version);
                     const deleting = deletingTemplateId === template.id;
@@ -54,8 +53,8 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                           type="button"
                           className="ocr-template-card-select"
                           aria-label={editing
-                            ? `${template.name} v${version.versionNumber}は編集中のためOCRに使用できません`
-                            : `${template.name} v${version.versionNumber}の読み取り画像を準備`}
+                            ? `${template.name}は編集中のためOCRに使用できません`
+                            : `${template.name}の読み取り画像を準備`}
                           disabled={editing || deleting}
                           onClick={() => openReadingSetup(version.id)}
                         >
@@ -98,27 +97,13 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                           </div>
                         )}
                         {!phoneDevice && <span className="ocr-template-card-actions">
-                          <button
-                            type="button"
-                            className="secondary compact"
-                            aria-label={`${template.name}を複製`}
-                            disabled={deleting || duplicateBusyTemplateId !== null}
-                            onClick={() => { void duplicateTemplate(template, version); }}
-                          >
-                            <FiCopy aria-hidden="true" focusable="false" />
-                            {duplicateBusyTemplateId === template.id ? "複製中…" : "複製"}
-                          </button>
-
-                          <button
-                            type="button"
-                            className="secondary compact"
-                            aria-label={`${template.name}のテンプレートを編集`}
+                          <ReadingEditMenu
+                            templateName={template.name}
                             disabled={!editVersion.sourceJobId || deleting}
-                            onClick={() => openTemplateWorkspace("manage", editVersion.id)}
-                          >
-                            <FiEdit2 aria-hidden="true" focusable="false" />
-                            編集
-                          </button>
+                            onStructure={() => openTemplateWorkspace("manage", editVersion.id)}
+                            onFields={() => openTemplateWorkspace("manage", version.id, "fields")}
+                            onJoins={() => openItemJoinEditor(template.id, version.id)}
+                          />
                           <button
                             type="button"
                             className="danger-button compact"
@@ -147,4 +132,62 @@ export function OcrTemplateSelector({ templateCards, visibleVersions, previewFor
                     : "有効化済みのテンプレートはありません。追加カードから新しく作成してください。"}</p>
                 )}
               </section>);
+}
+
+/** 「編集」: what to edit — the form's structure, the reading settings, or how items are shown. */
+function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins }: {
+  templateName: string;
+  disabled: boolean;
+  onStructure: () => void;
+  onFields: () => void;
+  onJoins: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  const choose = (action: () => void) => () => { setOpen(false); action(); };
+  return (
+    <div className="template-edit-menu reading-edit-menu" ref={root}>
+      <button
+        type="button"
+        className="secondary compact"
+        aria-label={`${templateName}のテンプレートを編集`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <FiEdit2 aria-hidden="true" focusable="false" />
+        編集
+      </button>
+      {open && (
+        <div className="template-edit-menu-list" role="menu">
+          <button type="button" role="menuitem" onClick={choose(onStructure)}>
+            <strong>構造を編集する</strong>
+            <small>欄・表・項目名など、テンプレートの形を直します。</small>
+          </button>
+          <button type="button" role="menuitem" onClick={choose(onFields)}>
+            <strong>項目の読み取り設定</strong>
+            <small>欄ごとに候補語や読み方の指示を付けます。</small>
+          </button>
+          <button type="button" role="menuitem" onClick={choose(onJoins)}>
+            <strong>項目のまとめ方・順番</strong>
+            <small>住所や日付など、ばらばらの欄を1つの値として表示します。</small>
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

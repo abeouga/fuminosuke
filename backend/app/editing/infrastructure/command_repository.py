@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.v2.editing_contracts import Event
 from app.db.models import utc_now
 from app.editing.catalog import Catalog
-from app.editing.domain.command import ACTIVE, digest, transition
+from app.editing.domain.command import ACTIVE, UNSAVED_FINAL, digest, transition
 from app.editing.errors import reject
 from app.editing.infrastructure.command_models import CommandRequest
 from app.editing.infrastructure.sessions import Sessions, aware
@@ -114,8 +114,13 @@ class SqlCommandRepository:
                 return
             event = prior.final_event_json or {}
             payload = event.get("payload", {})
-            if prior.state != "APPLIED" or payload.get("type") != "applied":
+            if prior.state in UNSAVED_FINAL:
+                # The predecessor ended without saving (e.g. cancelled while a question
+                # was open), so nothing advanced: check against the current revision.
+                after = None
+            elif prior.state != "APPLIED" or payload.get("type") != "applied":
                 raise reject("COMMAND_DEPENDENCY_FAILED", "直前の変更が保存されていません。", 409)
+        if after is not None:
             if catalog.revision != payload["receipt"]["afterRevision"]:
                 raise reject(
                     "REVISION_CONFLICT",

@@ -53,12 +53,24 @@ tables内のb1は表ref、b1c3は列refであってfieldのrefではない。cat
 "value":{"kind":"integer","spoken":"501","evidence":{"turnId":"current","quote":"501"}}}],
 "operationEvidence":[{"turnId":"current","quote":"一行目の体重を501にして"}]}}}
 一行目/二行目などの日本語の行指定も行が明示されている。行を再質問しない。
+「日令の3」「体重3番」のように列名の直後の数字も行番号として扱う。日令の3は3行目の日令。
 selectedTableがあれば限定。別表を明示ならscopeを質問。表省略時はrecentTable、なければ全表の一意一致。
 行が不明、重複列名、同名表は質問。最高類似度だけで曖昧な表を選ばない。
 「選択した欄」はselected refsのみ。「そこ」は同scopeで有効なrecentTargetsが一つのときだけ。
 「501に直して」など対象を省略した値変更も、有効なrecentTargetsが一つならrecent_target。
 別の欄について質問中なら、その未完了の対象を優先し、以前の保存先へ移さない。
-自由な意味付けは共通22操作。localRefは同群内で先に宣言した新しい意味/表/見出し等にだけ使う。
+枠の形の修正はcell.mergeとcell.deleteだけ。座標・新しい枠を作らない。
+「小さい枠をまとめて」「結合して」は隣り合うcellのcell.merge。position・size・sheetCellで
+指示に合う隣接セルを全部選ぶ。間に別の枠があると結合できないので間の枠も含める。
+印字の文字が隣の空き枠へはみ出している(textSpillsRightがある)ときは文字の枠と
+はみ出し先を結合してrole=label、その右・下の空き枠はまとめてrole=input。
+roleは結合後の役割。nameは指示で名前を言った場合だけ、それ以外はnull。
+「消して」「いらない」「削除」はcell.delete。表の中の枠は対象にしない。
+「消して代わりに一つの枠に」「まとめて新しい枠に」はcell.mergeだけ。同じ枠をdeleteしない。
+「○○の右の枠」に○○自身は含めない。
+「いい感じに結合」「バラバラだから直して」のように場所は分かるが方法が曖昧な枠の指示は、
+質問せず上の規則で結合する(結果は取り消せる)。場所が分からないときだけ質問する。
+自由な意味付けは共通24操作。localRefは同群内で先に宣言した新しい意味/表/見出し等にだけ使う。
 既存の意味や列を保持する。meaning.createとmeaning.bindは一群。削除/解除は明示だけ。
 meaning.unbind.relationsはkind=relationのrefだけ。cell refや新しいmeaning refを指定しない。
 「接続があれば解除」はcatalogのrelation.ownerRefで確認し、既存relationがなければ解除操作を作らない。

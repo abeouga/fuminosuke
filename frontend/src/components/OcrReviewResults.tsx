@@ -1,12 +1,67 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { FiArrowRight } from "react-icons/fi";
-import type { FieldReading, OcrFieldPreview, ReviewStructure } from "../types";
+import { FiArrowRight, FiEdit2 } from "react-icons/fi";
+import type { FieldReading, OcrFieldPreview, ReviewStructure, ReviewStructureField } from "../types";
+import { displayName } from "../userMessages";
+import { joinedText, orderMark, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
 
-export type ReadingEntry = { path: string; label: string; value: FieldReading };
+/** `writeIn`: the 「その他（　）」 text a symbol/check box's item owns, shown on the same row. */
+export type ReadingEntry = { path: string; label: string; value: FieldReading; writeIn?: ReadingEntry;
+  /** The template's own name when a person renamed the item on the result screen. */
+  originalLabel?: string };
 
 const InlineEditActivity = createContext<(path: string, dirty: boolean) => void>(() => undefined);
 /** Update of a confirmed document: newly filled cells and cells kept from the previous version. */
 export const ReviewSeriesMarks = createContext<{ added: ReadonlySet<string>; carried: ReadonlySet<string> } | null>(null);
+/** Checklist fields (path → their check items): the result shows ☑/☐ boxes, not the stored text. */
+/**
+ * Items shown as one value (path → its join; display only). `configure` opens the
+ * template's 「項目のまとめ方・順番」 (given in the item-name mode).
+ */
+export const ReviewJoins = createContext<{ byPath: ReadonlyMap<string, ItemJoin>; orders?: readonly ItemJoin[]; configure?: () => void }>({ byPath: new Map() });
+export const ReviewChecklists = createContext<ReadonlyMap<string, readonly string[]>>(new Map());
+export function checklistOptionsByPath(previews: readonly OcrFieldPreview[]): Map<string, string[]> {
+  return new Map(previews
+    .filter((preview) => preview.markRecognitionMode === "checklist")
+    .map((preview) => [preview.targetPath, (preview.markOptions ?? []).map((option) => option.label)]));
+}
+
+/** Checked items of a checklist reading (an undecided one counts what was read). */
+function checkedItems(value: FieldReading): Set<string> {
+  const text = value.status === "blank" ? "" : (value.normalized ?? value.raw ?? "");
+  return new Set(text.split("・").map((item) => item.trim()).filter(Boolean));
+}
+
+/** Check boxes toggled in place: a click checks or unchecks, no popover. */
+function ChecklistBoxes({ labels, entry, confirmed, onSelect, onEdit }: {
+  labels: readonly string[];
+  entry: ReadingEntry;
+  confirmed: boolean;
+  onSelect: (entry: ReadingEntry) => void;
+  onEdit: (entry: ReadingEntry, text: string) => void;
+}) {
+  const checked = checkedItems(entry.value);
+  const toggle = (label: string) => {
+    onSelect(entry);
+    if (confirmed) return;
+    const next = new Set(checked);
+    if (next.has(label)) next.delete(label); else next.add(label);
+    onEdit(entry, labels.filter((item) => next.has(item)).join("・"));
+  };
+  return <span className="ocr-checkbox-list">{labels.map((label) => {
+    const on = checked.has(label);
+    // A lone box (its only item is "チェック済み") is just the box.
+    const name = labels.length === 1 ? entry.label : label;
+    return (
+      <button type="button" key={label} className={`ocr-checkbox-toggle${on ? " checked" : ""}`}
+        role="checkbox" aria-checked={on} aria-label={name}
+        title={confirmed ? undefined : on ? "クリックでチェックを外す" : "クリックでチェックを付ける"}
+        onClick={() => toggle(label)}>
+        <span className="ocr-checkbox-value" aria-hidden="true">{on ? "☑" : "☐"}</span>
+        {labels.length > 1 && label}
+      </button>
+    );
+  })}</span>;
+}
 export function ReviewDraftBoundary({ children, onDirtyChange }: {
   children: ReactNode; onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -36,7 +91,36 @@ export type ReviewDisplayModel = {
   independentGroups: Array<{ id: string; label: string; entries: ReadingEntry[] }>;
 };
 
-export type ReviewInteractionMode = "edit" | "reorder";
+export type ReviewInteractionMode = "edit" | "reorder" | "rename";
+
+/** In the 「項目」 mode an item name is clicked to rename it (display only). */
+export const ReviewRenaming = createContext<((entry: ReadingEntry, name: string) => Promise<void>) | null>(null);
+
+export function ReviewItemName({ entry }: { entry: ReadingEntry }) {
+  const rename = useContext(ReviewRenaming);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(entry.label);
+  if (!rename) return <>{entry.label}</>;
+  const commit = () => {
+    setEditing(false);
+    const next = value.trim();
+    // An empty name goes back to the template's own name.
+    if (next !== entry.label) void rename(entry, next);
+  };
+  return editing
+    ? <input className="ocr-item-name-input" autoFocus value={value} maxLength={100}
+        placeholder={entry.originalLabel ?? entry.label} aria-label={`${entry.label}の項目名`}
+        onChange={(event) => setValue(event.target.value)} onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") { event.preventDefault(); commit(); }
+          if (event.key === "Escape") { event.preventDefault(); setEditing(false); }
+        }} />
+    : <button type="button" className="ocr-item-name-button"
+        title={entry.originalLabel ? `元の名前: ${entry.originalLabel}（空にすると戻ります）` : "クリックで項目名を変更"}
+        onClick={() => { setValue(entry.label); setEditing(true); }}>
+        {entry.label}<FiEdit2 aria-hidden="true" />
+      </button>;
+}
 
 export function reviewEntryContext(model: ReviewDisplayModel, entry: ReadingEntry | null | undefined): string {
   if (!entry) return "帳票全体";
@@ -46,8 +130,19 @@ export function reviewEntryContext(model: ReviewDisplayModel, entry: ReadingEntr
       if (cell) return `${section.title} · ${index + 1}行目 · ${section.columns.find(column => column.id === cell.columnId)?.label ?? entry.label}`;
     }
   }
-  const parent = model.parentSections.find(section => section.entries.some(item => item.path === entry.path));
-  return parent ? `${parent.title} · ${entry.label}` : entry.label;
+  for (const section of model.parentSections) {
+    const item = section.entries.find(item => item.path === entry.path || item.writeIn?.path === entry.path);
+    if (item) return `${section.title} · ${item.path === entry.path ? item.label : `${item.label}（記入）`}`;
+  }
+  return entry.label;
+}
+/** The name an entry has in the result table (heading prefix dropped, a write-in named after its box). */
+export function reviewEntryLabel(model: ReviewDisplayModel, entry: ReadingEntry): string {
+  for (const item of [...model.parentSections.flatMap(section => section.entries), ...model.independentEntries]) {
+    if (item.path === entry.path) return item.label;
+    if (item.writeIn?.path === entry.path) return `${item.label}（記入）`;
+  }
+  return entry.label;
 }
 type RectBounds = { left: number; top: number; right: number; bottom: number };
 type PopoverSize = { width: number; height: number };
@@ -123,14 +218,14 @@ export function ReviewResultsToolbar({
         {!confirmed && <span><i className="legend-warning" />要確認</span>}
       </div>
       <div className="field-toolbar-actions">
-        {!confirmed && <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
+        <div className="review-mode-switch" role="group" aria-label="結果表の操作モード">
           <button
             type="button"
             className={interactionMode === "edit" ? "active" : ""}
             aria-label="結果編集モード"
             aria-pressed={interactionMode === "edit"}
             title="ペンでセルの内容を編集"
-            disabled={editingLocked}
+            disabled={editingLocked && !confirmed}
             onClick={() => onInteractionModeChange("edit")}
           >
             <PenModeIcon />
@@ -142,13 +237,24 @@ export function ReviewResultsToolbar({
             aria-label="行移動モード"
             aria-pressed={interactionMode === "reorder"}
             title="繰り返し表の行全体を移動"
-            disabled={editingLocked}
+            disabled={editingLocked || confirmed}
             onClick={() => onInteractionModeChange("reorder")}
           >
             <PointerModeIcon />
             <span>移動</span>
           </button>
-        </div>}
+          <button
+            type="button"
+            className={interactionMode === "rename" ? "active" : ""}
+            aria-label="項目名の変更モード"
+            aria-pressed={interactionMode === "rename"}
+            title="項目名をクリックして表示名を変更（保存した値は変わりません）"
+            onClick={() => onInteractionModeChange("rename")}
+          >
+            <FiEdit2 aria-hidden="true" />
+            <span>項目</span>
+          </button>
+        </div>
         {!confirmed && (
           <button
             type="button"
@@ -163,6 +269,8 @@ export function ReviewResultsToolbar({
           ? "セルを選ぶと画像を確認できます"
           : interactionMode === "reorder"
             ? "行移動モード"
+            : interactionMode === "rename"
+            ? "項目名をクリックして変更"
             : `${cellCount}セルを編集中`}</span>
       </div>
     </div>
@@ -277,6 +385,16 @@ export function CellStatusPopover({
         ? { status, normalized: null, raw: entry.value.raw ?? "" }
         : { status, raw: entry.value.raw ?? "", reviewReason: null });
   };
+  const current = entry.value.normalized ?? entry.value.raw;
+  const choices = readingChoices(entry.value);
+  // The value being replaced stays as a choice, so one click can go back to it.
+  const choose = (value: string) => onChange({
+    raw: value,
+    normalized: value,
+    status: "readable",
+    reviewReason: null,
+    alternatives: [...new Set([...(current ? [current] : []), ...entry.value.alternatives])].filter((item) => item !== value),
+  });
   return (
     <section className="ocr-cell-status-popover" aria-label="選択セルの判定">
       <header>
@@ -301,9 +419,105 @@ export function CellStatusPopover({
           </button>
         ))}
       </div>
+      {choices.length > 0 && (
+        <div className="ocr-cell-choices" role="group" aria-label={`${entry.label}の候補`}>
+          <span>候補</span>
+          {choices.map((value) => (
+            <button type="button" key={value} disabled={confirmed} title={`「${value}」に直す`} onClick={() => choose(value)}>
+              {value}
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
+
+/** A symbol box (○×) is decided like other cells: in a small popover beside it. */
+export function MarkStatusPopover({
+  entry,
+  preview,
+  confirmed,
+  onChange,
+  onClose,
+}: {
+  entry: ReadingEntry;
+  preview: OcrFieldPreview;
+  confirmed: boolean;
+  onChange: (patch: Partial<FieldReading>) => void;
+  onClose: () => void;
+}) {
+  const labels = (preview.markOptions ?? []).map((option) => option.label);
+  const multiple = preview.markSelectionMode === "multiple";
+  const current = entry.value.normalized ?? entry.value.raw ?? "";
+  const parts = current.split("・").map((value) => value.trim()).filter(Boolean);
+  const selected = parts.filter((value) => labels.includes(value));
+  // The value read is made only of this box's choices (it can be accepted as read).
+  const valid = selected.length > 0 && selected.length === parts.length;
+  const apply = (next: string[]) => {
+    const value = labels.filter((label) => next.includes(label)).join("・");
+    onChange(value
+      ? { raw: value, normalized: value, status: "readable", reviewReason: null }
+      : { raw: null, normalized: null, status: "blank", reviewReason: null });
+  };
+  const toggle = (label: string) => apply(multiple
+    ? (selected.includes(label) ? selected.filter((value) => value !== label) : [...selected, label])
+    : [label]);
+  const statuses = [["readable", "読めた"], ["uncertain", "不確実"], ["blank", "空欄"]] as const;
+  const setStatus = (status: FieldReading["status"]) => onChange(
+    status === "readable" ? { raw: current, normalized: current, status, reviewReason: null }
+      : status === "uncertain" ? { raw: entry.value.raw ?? null, normalized: null, status, reviewReason: "MANUAL_CHOICE_UNRESOLVED" }
+        : { raw: null, normalized: null, status, reviewReason: null },
+  );
+  return (
+    <section className="ocr-cell-status-popover ocr-mark-status-popover" aria-label="選択セルの判定">
+      <header>
+        <strong>{entry.label}</strong>
+        <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
+      </header>
+      <div className="ocr-mark-options" role="group" aria-label={`${entry.label}の記号`}>
+        {labels.map((label) => {
+          const active = entry.value.status === "readable" && selected.includes(label);
+          return (
+            <button type="button" key={label} className={active ? "active" : ""} aria-pressed={active}
+              disabled={confirmed} onClick={() => toggle(label)}>{label}</button>
+          );
+        })}
+        {labels.length === 0 && <span>テンプレートに選択肢が設定されていません。</span>}
+      </div>
+      <div role="group" aria-label={`${entry.label}の判定`}>
+        {statuses.map(([status, label]) => (
+          <button
+            type="button"
+            key={status}
+            className={entry.value.status === status ? "active" : ""}
+            aria-pressed={entry.value.status === status}
+            disabled={confirmed || (status === "readable" && !valid)}
+            title={status === "readable" && !valid ? "記号を選んでください" : undefined}
+            onClick={() => setStatus(status)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** A box with several long choices needs the wider popover. */
+export function markPopoverIsWide(preview: OcrFieldPreview | undefined): boolean {
+  const labels = (preview?.markOptions ?? []).map((option) => option.label);
+  return labels.length > 4 || labels.join("").length > 16;
+}
+
+/** Values the reading offers to switch to (the current value excluded). */
+export function readingChoices(reading: FieldReading): string[] {
+  const current = reading.normalized ?? reading.raw;
+  return [...new Set(reading.alternatives ?? [])].filter((value) => value.trim() && value !== current);
+}
+
+/** Voice input target table: clicking a table name focuses voice instructions on it. */
+export const VoiceTableTarget = createContext<{ selected: string | null; select: (tableId: string | null) => void } | null>(null);
 
 export function ReviewTableSection({
   tableId,
@@ -316,6 +530,9 @@ export function ReviewTableSection({
 }) {
   const sectionRef = useRef<HTMLElement>(null);
   const [overflow, setOverflow] = useState(false);
+  const voiceTarget = useContext(VoiceTableTarget);
+  const joinSettings = useContext(ReviewJoins);
+  const voiceSelected = Boolean(voiceTarget && tableId && voiceTarget.selected === tableId);
   useLayoutEffect(() => {
     const element = sectionRef.current?.querySelector<HTMLElement>(".ocr-edit-table-wrap");
     if (!element) return;
@@ -331,8 +548,12 @@ export function ReviewTableSection({
   };
   if (!children) return null;
   return (
-    <section ref={sectionRef} data-ai-table-id={tableId} className="ocr-edit-section" aria-label={title}>
-      <header><h3>{title}</h3>{overflow && <div className="review-column-navigation"><span>横に続きます</span>
+    <section ref={sectionRef} data-ai-table-id={tableId} className={voiceSelected ? "ocr-edit-section is-voice-target" : "ocr-edit-section"} aria-label={title}>
+      <header>{voiceTarget && tableId
+        ? <h3><button type="button" className="voice-table-target" aria-pressed={voiceSelected}
+            title={voiceSelected ? "音声の対象を自動に戻す" : "音声の指示をこの表に絞る"}
+            onClick={() => voiceTarget.select(voiceSelected ? null : tableId)}>{title}{voiceSelected && <span className="voice-table-badge">音声の対象</span>}</button></h3>
+        : <h3>{title}</h3>}{!tableId && joinSettings.configure && <button type="button" className="ghost compact ocr-join-configure" onClick={joinSettings.configure}>まとめ方・順番</button>}{overflow && <div className="review-column-navigation"><span>横に続きます</span>
         <button type="button" aria-label={`${title}の左の列を表示`} onClick={() => scrollColumns(-1)}>←</button>
         <button type="button" aria-label={`${title}の右の列を表示`} onClick={() => scrollColumns(1)}>→</button>
       </div>}</header>
@@ -454,7 +675,7 @@ export function GenericRecordReviewTable({
                       selected={selectedPath === entry.path}
                       warning={warningPaths.has(entry.path)}
                       choice={choicePaths.has(entry.path)}
-                      confirmed={confirmed || interactionMode === "reorder"}
+                      confirmed={confirmed || interactionMode !== "edit"}
                       onSelect={onSelect}
                       onEdit={onEdit}
                     />
@@ -468,6 +689,8 @@ export function GenericRecordReviewTable({
     </ReviewTableSection>
   );
 }
+
+type JoinedUnit = { join: ItemJoin; members: Array<{ member: ItemJoinMember; entry: ReadingEntry }> };
 
 export function KeyValueReviewTable({
   entries,
@@ -486,29 +709,112 @@ export function KeyValueReviewTable({
   onSelect: (entry: ReadingEntry) => void;
   onEdit: (entry: ReadingEntry, text: string) => void;
 }) {
+  const { byPath: joins, orders = [] } = useContext(ReviewJoins);
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   if (entries.length === 0) return null;
-  const rows = chunk(entries, 2);
+  // Items joined into one value (「調査場所」) take the place of their first item.
+  const collected: Array<ReadingEntry | JoinedUnit> = [];
+  const placed = new Set<ItemJoin>();
+  for (const entry of entries) {
+    const join = joins.get(entry.path);
+    const members = join ? join.members.flatMap((member) => {
+      const item = entries.find((candidate) => candidate.path === member.targetPath);
+      return item ? [{ member, entry: item }] : [];
+    }) : [];
+    if (!join || members.length < 2) { collected.push(entry); continue; }
+    if (placed.has(join)) continue;
+    placed.add(join);
+    collected.push({ join, members });
+  }
+  // The template's 「表示の順番」 for this heading, if any (a join counts at its first item).
+  const units = sortByOrder(collected, (unit) => "join" in unit ? unit.members[0].entry.path : unit.path, orders);
+  // A box with its write-in (「その他 ○ ／ 記入 …」) or a joined item fills a row of its own.
+  const ownRow = (unit: ReadingEntry | JoinedUnit) => "join" in unit || Boolean(unit.writeIn);
+  const rows = units.reduce<Array<Array<ReadingEntry | JoinedUnit>>>((result, unit) => {
+    const last = result[result.length - 1];
+    if (ownRow(unit) || !last || last.length === 2 || ownRow(last[0])) result.push([unit]);
+    else last.push(unit);
+    return result;
+  }, []);
+  const single = units.length === 1 && !ownRow(units[0]);
+  const wide = units.length > 1;
+  const cell = (entry: ReadingEntry) => (
+    <ReviewValueCell
+      entry={entry}
+      selected={selectedPath === entry.path}
+      warning={warningPaths.has(entry.path)}
+      choice={choicePaths.has(entry.path)}
+      confirmed={confirmed}
+      onSelect={onSelect}
+      onEdit={onEdit}
+    />
+  );
   return (
     <div className="ocr-edit-table-wrap">
-      <table className={`ocr-edit-table ocr-key-value-table${entries.length === 1 ? " ocr-single-field-table" : ""}`}>
+      <table className={`ocr-edit-table ocr-key-value-table${single ? " ocr-single-field-table" : ""}`}>
         <tbody>
-          {rows.map((row, index) => (
-            <tr key={index}>
-              {row.map((entry) => (
-                <ReviewLabelAndCell
-                  key={entry.path}
-                  entry={entry}
-                  selected={selectedPath === entry.path}
-                  warning={warningPaths.has(entry.path)}
-                  choice={choicePaths.has(entry.path)}
-                  confirmed={confirmed}
-                  onSelect={onSelect}
-                  onEdit={onEdit}
-                />
-              ))}
-              {row.length === 1 && entries.length > 1 && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
+          {rows.map((row, index) => {
+            const first = row[0];
+            if ("join" in first) {
+              const key = first.join.id ?? first.join.name;
+              const memberPaths = first.members.map((item) => item.entry.path);
+              const warned = !confirmed && memberPaths.some((path) => warningPaths.has(path));
+              const open = opened.has(key) || warned || (selectedPath !== null && memberPaths.includes(selectedPath));
+              const text = joinedText(first.members.map((item) => item.member), (path) => {
+                const value = first.members.find((item) => item.entry.path === path)?.entry.value;
+                return value ? value.normalized ?? value.raw : null;
+              }, first.join.separator ?? "");
+              const toggle = () => setOpened((current) => {
+                const next = new Set(current);
+                if (next.has(key)) next.delete(key); else next.add(key);
+                return next;
+              });
+              return [
+                <tr key={`join:${key}`} className="ocr-join-row">
+                  <th scope="row">{first.join.name}</th>
+                  <td colSpan={wide ? 3 : 1} className={warned ? "ocr-join-value warning" : "ocr-join-value"}>
+                    <button type="button" className="ocr-join-toggle" aria-expanded={open}
+                      title={open ? "まとめた欄を閉じる" : "まとめた欄を開いて確認・修正"} onClick={toggle}>
+                      <span className="ocr-join-text">{text || <em>空欄</em>}</span>
+                      <span className="ocr-join-count">{first.members.length}欄{open ? " ▲" : " ▼"}</span>
+                    </button>
+                  </td>
+                </tr>,
+                ...(open ? first.members.map((item, order) => (
+                  <tr key={`join:${key}:${item.entry.path}`} className="ocr-join-member">
+                    <th scope="row"><span className="ocr-join-order">{orderMark(order)}</span><ReviewItemName entry={item.entry} /></th>
+                    {cell(item.entry)}
+                    {wide && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
+                  </tr>
+                )) : []),
+              ];
+            }
+            const plain = row as ReadingEntry[];
+            return (
+            <tr key={index} className={plain[0].writeIn ? "ocr-write-in-row" : undefined}>
+              {plain[0].writeIn
+                ? <>
+                    <th scope="row"><ReviewItemName entry={plain[0]} /></th>
+                    {cell(plain[0])}
+                    <th scope="row" className="ocr-write-in-label" title={plain[0].writeIn.label}>記入</th>
+                    {cell(plain[0].writeIn)}
+                  </>
+                : plain.map((entry) => (
+                  <ReviewLabelAndCell
+                    key={entry.path}
+                    entry={entry}
+                    selected={selectedPath === entry.path}
+                    warning={warningPaths.has(entry.path)}
+                    choice={choicePaths.has(entry.path)}
+                    confirmed={confirmed}
+                    onSelect={onSelect}
+                    onEdit={onEdit}
+                  />
+                ))}
+              {plain.length === 1 && !plain[0].writeIn && wide && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -536,11 +842,11 @@ export function IndependentReviewGroups({
     <div className="ocr-independent-groups">
       {groups.map((group) => (
         <section className="ocr-independent-group" key={group.id}>
-          <h4 className="ocr-independent-label">{group.label}</h4>
+          <h4 className="ocr-independent-label">{group.entries.length === 1 ? <ReviewItemName entry={group.entries[0]} /> : group.label}</h4>
           <table className="ocr-edit-table ocr-independent-values">
             <tbody>
               <tr>
-                {group.entries.map((entry) => (
+                {group.entries.flatMap((entry) => entry.writeIn ? [entry, entry.writeIn] : [entry]).map((entry) => (
                   <ReviewValueCell
                     key={entry.path}
                     entry={entry}
@@ -580,7 +886,7 @@ function ReviewLabelAndCell({
 }) {
   return (
     <>
-      <th scope="row">{entry.label}</th>
+      <th scope="row"><ReviewItemName entry={entry} /></th>
       <ReviewValueCell
         entry={entry}
         selected={selected}
@@ -612,8 +918,10 @@ export function ReviewValueCell({
   onEdit: (entry: ReadingEntry, text: string) => void;
 }) {
   const value = entry.value.normalized ?? entry.value.raw;
+  const hasChoices = !confirmed && !choice && readingChoices(entry.value).length > 0;
   const marks = useContext(ReviewSeriesMarks);
   const added = marks?.added.has(entry.path) ?? false, carried = marks?.carried.has(entry.path) ?? false;
+  const checklistLabels = useContext(ReviewChecklists).get(entry.path);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
   const reportInlineEdit = useContext(InlineEditActivity);
@@ -631,10 +939,15 @@ export function ReviewValueCell({
   };
   return (
     <td
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}`}
+      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}${hasChoices ? " ocr-cell-has-choices" : ""}`}
       data-review-path={entry.path}
     >
-      {editing ? (
+      {checklistLabels ? (
+        <div className="ocr-checkbox-cell">
+          <ChecklistBoxes labels={checklistLabels} entry={entry} confirmed={confirmed} onSelect={onSelect} onEdit={onEdit} />
+          <small>{warning ? "要確認" : added ? "追加" : carried ? "前の版" : "OK"}</small>
+        </div>
+      ) : editing ? (
         <textarea
           className="ocr-inline-cell-input"
           rows={Math.min(6, Math.max(1, editValue.split("\n").length))}
@@ -667,7 +980,7 @@ export function ReviewValueCell({
           }}
         >
           <span>{value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}</span>
-          <small>{warning ? "要確認" : added ? "追加" : carried ? "前の版" : "OK"}</small>
+          <small>{warning ? "要確認" : hasChoices ? "候補あり" : added ? "追加" : carried ? "前の版" : "OK"}</small>
         </button>
       )}
     </td>
@@ -678,9 +991,13 @@ export function buildReviewDisplayModel(
   entries: readonly ReadingEntry[],
   previews: readonly OcrFieldPreview[],
   structure: ReviewStructure | undefined,
+  /** Names given on the result screen (path → name), shown over the template's own. */
+  names: Readonly<Record<string, string>> = {},
 ): ReviewDisplayModel {
+  const named = (entry: ReadingEntry): ReadingEntry => names[entry.path]
+    ? { ...entry, label: names[entry.path], originalLabel: entry.label } : entry;
   if (!structure) {
-    const independentEntries = [...entries];
+    const independentEntries = entries.map(named);
     return {
       recordSections: [],
       parentSections: [],
@@ -707,8 +1024,11 @@ export function buildReviewDisplayModel(
   );
   const fieldById = new Map(structure.fields.map((field) => [field.id, field]));
   const consumedPaths = new Set<string>();
-  const resolveField = (fieldId: string | null): ReadingEntry | null => {
-    if (!fieldId) return null;
+  // 「その他（　）」: the box and its item's write-in are shown as one row, at the box.
+  const writeInByMark = pairWriteIns(structure.fields, previewByMappingId);
+  const attachedWriteIns = new Set(writeInByMark.values());
+  const resolveField = (fieldId: string | null, attaching = false): ReadingEntry | null => {
+    if (!fieldId || (!attaching && attachedWriteIns.has(fieldId))) return null;
     const field = fieldById.get(fieldId);
     if (!field) return null;
     const sourceCandidates = entriesBySource.get(field.mappingId) ?? [];
@@ -721,7 +1041,10 @@ export function buildReviewDisplayModel(
       ?? entryByPath.get(field.targetPath);
     if (!entry || consumedPaths.has(entry.path)) return null;
     consumedPaths.add(entry.path);
-    return { ...entry, label: field.label || entry.label };
+    const resolved = named({ ...entry, label: displayName(field.label || entry.label) });
+    const writeInId = writeInByMark.get(fieldId);
+    const writeIn = writeInId ? resolveField(writeInId, true) : null;
+    return writeIn ? { ...resolved, writeIn } : resolved;
   };
 
   const recordTitleCounts = new Map<string, number>();
@@ -748,12 +1071,20 @@ export function buildReviewDisplayModel(
       })),
     };
   });
+  // Inside its heading's table a name need not repeat the heading (「利用目的 > その他」).
+  const withinHeading = (title: string, entry: ReadingEntry): ReadingEntry => {
+    const prefix = `${title} > `;
+    const local = (item: ReadingEntry) => !item.originalLabel && item.label.startsWith(prefix) && item.label.length > prefix.length
+      ? { ...item, label: item.label.slice(prefix.length) } : item;
+    return entry.writeIn ? { ...local(entry), writeIn: local(entry.writeIn) } : local(entry);
+  };
   const parentSections = structure.parentSections.map((section) => ({
     id: section.id,
     title: section.title,
     entries: section.fieldIds
       .map((fieldId) => resolveField(fieldId))
-      .filter((entry): entry is ReadingEntry => entry !== null),
+      .filter((entry): entry is ReadingEntry => entry !== null)
+      .map((entry) => withinHeading(section.title, entry)),
   }));
 
   const independentEntries: ReadingEntry[] = [];
@@ -781,22 +1112,48 @@ export function buildReviewDisplayModel(
     const entry = resolveField(fieldId);
     const field = fieldById.get(fieldId);
     if (entry && field) {
-      appendIndependent(entry, field.groupId ?? `field:${field.id}`, field.label || entry.label);
+      appendIndependent(entry, field.groupId ?? `field:${field.id}`, entry.label);
     }
   }
   entries.forEach((entry) => {
     if (!consumedPaths.has(entry.path)) {
       consumedPaths.add(entry.path);
-      appendIndependent(entry, `path:${entry.path}`, entry.label);
+      const shown = named(entry);
+      appendIndependent(shown, `path:${entry.path}`, shown.label);
     }
   });
   return { recordSections, parentSections, independentEntries, independentGroups };
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
-  const rows: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    rows.push(items.slice(index, index + size));
+/** Box field ID → the write-in field its item owns (「その他（　）」 next to ○× or □). */
+function pairWriteIns(
+  fields: readonly ReviewStructureField[],
+  previewByMappingId: ReadonlyMap<string, OcrFieldPreview>,
+): Map<string, string> {
+  const isMark = (field: ReviewStructureField) => previewByMappingId.get(field.mappingId)?.mappingType === "mark";
+  const fieldByPath = new Map(fields.map((field) => [field.targetPath, field]));
+  const pairs = new Map<string, string>();
+  const taken = new Set<string>();
+  const pair = (mark: ReviewStructureField, text: ReviewStructureField | undefined) => {
+    if (!text || isMark(text) || pairs.has(mark.id) || taken.has(text.id)) return;
+    pairs.set(mark.id, text.id);
+    taken.add(text.id);
+  };
+  // The link saved on the box's option.
+  for (const field of fields.filter(isMark)) {
+    const paths = [...new Set((previewByMappingId.get(field.mappingId)?.markOptions ?? [])
+      .map((option) => option.writeInTargetPath).filter((path): path is string => Boolean(path)))];
+    if (paths.length === 1) pair(field, fieldByPath.get(paths[0]));
   }
-  return rows;
+  // Older templates: one box and one text field tied to the same item name.
+  const byItemName = new Map<string, ReviewStructureField[]>();
+  for (const field of fields) {
+    const item = /^labels:[^:]*:(.+)$/.exec(field.groupId ?? "")?.[1];
+    if (item) byItemName.set(item, [...(byItemName.get(item) ?? []), field]);
+  }
+  for (const group of byItemName.values()) {
+    const marks = group.filter(isMark), texts = group.filter((field) => !isMark(field));
+    if (marks.length === 1 && texts.length === 1) pair(marks[0], texts[0]);
+  }
+  return pairs;
 }
