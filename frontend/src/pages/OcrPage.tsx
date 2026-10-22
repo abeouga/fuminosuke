@@ -25,6 +25,7 @@ import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePre
 import type { Template } from "../types";
 import { isEditingDraft } from "../templateEditing";
 import { Spinner } from "../components/Spinner";
+import { readingQueue } from "../readingQueue";
 
 type OcrStep = 1 | 2;
 const TemplatePage = lazy(() => import("./TemplatePage").then(module => ({ default: module.TemplatePage })));
@@ -108,7 +109,8 @@ export function OcrPage({
   );
   const [versionId, setVersionId] = useState(versions[0]?.version.id ?? "");
   const [step, setStep] = useState<OcrStep>(1);
-  const [file, setFile] = useState<File | null>(null);
+  // Image templates: each file is read as its own document, queued on the server one after another.
+  const [files, setFiles] = useState<File[]>([]);
   const [enabled, setEnabled] = useState(true);
   // Optional: read the upload as the next version of a confirmed document the user picks.
   const [seriesOpen, setSeriesOpen] = useState(false);
@@ -128,6 +130,8 @@ export function OcrPage({
   const creatingRef = useRef(false);
   const submissionGenerationRef = useRef(0);
   const idempotencyKeyRef = useRef<string | null>(null);
+  // One key per file of a batch, so sending again after a failure does not read a file twice.
+  const fileKeysRef = useRef(new Map<File, string>());
   const templateWorkspaceIdRef = useRef(0);
   const activeSelection = versions.find((item) => item.version.id === versionId);
   const activeVersion = activeSelection?.version;
@@ -159,17 +163,17 @@ export function OcrPage({
     if (!textRecognitionToggleEnabled) setEnabled(true);
   }, [textRecognitionToggleEnabled]);
   useEffect(() => {
-    if (!templateWorkspace) onNavigationGuardChange?.(Boolean(file) || busy || Boolean(jobId) || pageInputRisk);
-  }, [busy, file, jobId, onNavigationGuardChange, pageInputRisk, templateWorkspace]);
+    if (!templateWorkspace) onNavigationGuardChange?.(files.length > 0 || busy || Boolean(jobId) || pageInputRisk);
+  }, [busy, files, jobId, onNavigationGuardChange, pageInputRisk, templateWorkspace]);
   useEffect(() => () => onNavigationGuardChange?.(false), [onNavigationGuardChange]);
   useEffect(() => () => { submissionGenerationRef.current += 1; }, []);
   usePreviewDialog(templatePreviewOpen, () => setTemplatePreviewOpen(false), previewDialogRef, previewTriggerButtonRef);
   const openReadingSetup = (nextVersionId: string) => {
-    if (nextVersionId !== versionId && file
+    if (nextVersionId !== versionId && files.length > 0
       && !window.confirm("選択した画像を破棄して別のテンプレートへ移動しますか？")) return;
     idempotencyKeyRef.current = null;
     setSelectionInvalidated(false);
-    if (nextVersionId !== versionId) setFile(null);
+    if (nextVersionId !== versionId) setFiles([]);
     setVersionId(nextVersionId);
     setStep(2);
   };
@@ -246,7 +250,7 @@ export function OcrPage({
     creatingRef.current = false;
     setBusy(false);
     setTemplateWorkspace(null);
-    setFile(null);
+    setFiles([]);
     setJobId(null);
     setPageInputRisk(false);
     setTemplatePreviewOpen(false);
@@ -275,42 +279,53 @@ export function OcrPage({
   );
   const currentStep = jobId ? 3 : step;
   const startReading = async () => {
-    if (!file || creatingRef.current || jobId) return;
+    if (files.length === 0 || creatingRef.current || jobId) return;
     creatingRef.current = true;
     const generation = submissionGenerationRef.current;
-    const idempotencyKey = idempotencyKeyRef.current
-      ?? createIdempotencyKey("ocr");
-    idempotencyKeyRef.current = idempotencyKey;
+    const templateName = activeSelection?.template.name ?? "テンプレート";
+    const keys = fileKeysRef.current;
     setBusy(true);
+    let accepted = 0;
+    let remaining = files;
     try {
-      const created = await api.createOcr(
-        versionId,
-        file,
-        ocrEnabledForSubmission,
-        idempotencyKey,
-        predecessor?.jobId,
-      );
-      rememberJob(created.jobId);
-      if (generation !== submissionGenerationRef.current) return;
-      idempotencyKeyRef.current = null;
-      setJobId(created.jobId);
+      for (const item of files) {
+        let key = keys.get(item);
+        if (!key) { key = createIdempotencyKey("ocr"); keys.set(item, key); }
+        const created = await api.createOcr(
+          versionId,
+          item,
+          ocrEnabledForSubmission,
+          key,
+          files.length === 1 ? predecessor?.jobId : undefined,
+        );
+        rememberJob(created.jobId);
+        readingQueue.add(created.jobId, item.name, templateName);
+        keys.delete(item);
+        accepted += 1;
+        remaining = remaining.filter((kept) => kept !== item);
+        if (generation === submissionGenerationRef.current) setFiles(remaining);
+      }
     } catch (error) {
       if (generation !== submissionGenerationRef.current) return;
       showToast({
         tone: "error",
-        title: "読み取りを開始できませんでした",
+        title: accepted > 0 ? `${accepted}件を受け付けましたが、残り${remaining.length}件を送れませんでした` : "読み取りを開始できませんでした",
         message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
       });
     } finally {
       if (generation === submissionGenerationRef.current) {
         creatingRef.current = false;
         setBusy(false);
+        if (accepted > 0) {
+          setSeriesOpen(false);
+          setPredecessor(null);
+        }
       }
     }
   };
   const startNewReading = () => {
     idempotencyKeyRef.current = null;
-    setFile(null);
+    setFiles([]);
     setJobId(null);
     resetRetry();
     setStep(2);
@@ -431,12 +446,11 @@ export function OcrPage({
                   </figure>
                   <div className="ocr-reading-input-panel">
                     <div className="ocr-reading-file-picker">
-                      <OcrImagePicker key={versionId} file={file} allowXlsx={activeVersion?.mode === "SPREADSHEET_TEMPLATE" && !activeVersion.quality.printLayout} onChange={(nextFile) => {
-                        idempotencyKeyRef.current = null;
-                        setFile(nextFile);
-                      }} />
+                      <OcrImagePicker key={versionId} files={files} multiple={!seriesOpen}
+                        allowXlsx={activeVersion?.mode === "SPREADSHEET_TEMPLATE" && !activeVersion.quality.printLayout}
+                        onChange={setFiles} />
                     </div>
-                    {versionId && (
+                    {versionId && files.length <= 1 && (
                       <DocumentSeriesPicker
                         templateVersionId={versionId}
                         open={seriesOpen}
@@ -477,9 +491,9 @@ export function OcrPage({
                 </div>
                 <div className="ocr-step-actions ocr-step-actions-single">
                   <button type="button" className="primary"
-                    disabled={!file || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
+                    disabled={files.length === 0 || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
                     onClick={() => void startReading()}>
-                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}</button>
+                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : `${ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}${files.length > 1 ? `（${files.length}件）` : ""}`}</button>
                 </div>
               </section>
             )}

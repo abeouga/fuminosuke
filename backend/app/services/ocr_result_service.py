@@ -19,6 +19,7 @@ from app.services.document_series import DocumentSeries
 from app.services.excel_export_service import ExcelExportService
 from app.services.ocr_result_preview import _field_previews
 from app.services.ocr_result_types import CorrectionValues as CorrectionValues
+from app.services.review_block_order import version_layout, with_blocks
 from app.services.spreadsheet_template_output_service import SpreadsheetTemplateOutputService
 from app.services.template_item_join_service import item_joins
 from app.storage.local_storage import LocalStorageService
@@ -79,7 +80,12 @@ class OcrResultService:
             "confirmed": job.status == JobStatus.CONFIRMED.value,
             "fieldPreviews": _field_previews(job, stored.current_corrected_json),
             "recordStructure": snapshot["recordStructure"],
-            "reviewStructure": snapshot["reviewStructure"],
+            # Blocks in form order are added for display; the snapshot itself is unchanged.
+            "reviewStructure": with_blocks(
+                snapshot["reviewStructure"],
+                snapshot.get("fieldMappings"),
+                version_layout(session, job.template_version_id),
+            ),
             # The user types the name on the review screen; nothing is filled in automatically.
             "documentName": confirmed.document_name
             if confirmed and confirmed.document_name
@@ -325,6 +331,7 @@ class OcrResultService:
             document_name=name,
             confirmed_at=when,
             joins=item_joins(session, (job.config_snapshot_json or {}).get("templateId")),
+            layout=version_layout(session, job.template_version_id),
         )
         return self._excel.render_xlsx(table), table.file_name
 
@@ -369,4 +376,5 @@ class OcrResultService:
                 document_name=confirmed.document_name,
                 confirmed_at=confirmed.confirmed_at,
                 joins=item_joins(session, (job.config_snapshot_json or {}).get("templateId")),
+            layout=version_layout(session, job.template_version_id),
             ).payload()

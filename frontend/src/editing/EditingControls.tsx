@@ -8,7 +8,7 @@ import type { PageScope } from "./v2.generated";
 import type { SavedResource, WorkbenchStore } from "./workbenchStore";
 import "./editing.css";
 
-type Props = { store: WorkbenchStore; pageScope: PageScope; selectedEntities: string[]; selectionEpoch: number; manualActive: boolean; holdSelectionContext?: boolean; tableSelector?: boolean; voiceOnly?: boolean; floatingAnchor?: string; disabled?: string | null; onSaved: (saved: SavedResource) => void | Promise<void> };
+type Props = { store: WorkbenchStore; pageScope: PageScope; selectedEntities: string[]; selectionEpoch: number; manualActive: boolean; holdSelectionContext?: boolean; tableSelector?: boolean; voiceOnly?: boolean; textInstructions?: boolean; floatingAnchor?: string; disabled?: string | null; onSaved: (saved: SavedResource) => void | Promise<void> };
 export function EditingControls(props: Props) {
   const latest = useRef(props); latest.current = props;
   const audio = useMemo(() => new VoiceCapture(props.store), [props.store]);
@@ -16,7 +16,7 @@ export function EditingControls(props: Props) {
   const voice = useSyncExternalStore(audio.subscribe, audio.getSnapshot);
   const [capabilities, setCapabilities] = useState<EditingStatus | null>(null);
   const [error, setError] = useState(""), [text, setText] = useState("");
-  const undoneAt = useRef(0);
+  const undoneAt = useRef(0), typedAt = useRef(-Infinity);
   const run = (work: () => Promise<unknown>) => { setError(""); audio.clearError(); void work().catch(e => setError(e instanceof Error ? e.message : "処理を完了できません。")); };
   const scopeKey = JSON.stringify(props.pageScope), selectedKey = JSON.stringify([props.selectedEntities, props.selectionEpoch]);
   useEffect(() => {
@@ -91,7 +91,7 @@ export function EditingControls(props: Props) {
       ? { key: "q" + state.question.questionId, tone: "question", text: state.question.message, sticky: true }
       : failure ? { key: "e" + failure, tone: "error", text: failure, sticky: true }
         // Manual autosaves report on the page; the bubble speaks only while voice is in use.
-        : message && !TRANSIENT.has(message) && (voice.mode !== "stopped" || performance.now() - undoneAt.current < 15000) ? { key: `m${state.commandId ?? ""}${message}`, tone: message.endsWith("しました。") ? "success" : "info", text: message, sticky: false }
+        : message && !TRANSIENT.has(message) && (voice.mode !== "stopped" || performance.now() - undoneAt.current < 15000 || performance.now() - typedAt.current < 60000) ? { key: `m${state.commandId ?? ""}${message}`, tone: message.endsWith("しました。") ? "success" : "info", text: message, sticky: false }
           : null;
     return <VoiceOverlay anchorSelector={props.floatingAnchor}
       listening={voice.mode === "continuous" || voice.mode === "local"} starting={voice.mode === "starting"}
@@ -102,6 +102,14 @@ export function EditingControls(props: Props) {
       onStart={() => run(async () => { await audio.start("continuous", props.pageScope, props.selectedEntities, table); void v2client.status().then(setCapabilities).catch(() => undefined); })}
       onStop={() => void audio.stop()}
       onUndo={() => run(async () => { undoneAt.current = performance.now(); const saved = await props.store.undoResource(); await latest.current.onSaved(saved); })}
+      textInput={props.textInstructions ? {
+        enabled: !blocked && !active && Boolean(plannerAvailable) && state.pending < 2,
+        hint: props.disabled || (capabilities && !plannerAvailable ? "AIへの指示は現在利用できません。" : active ? "音声入力を止めると文字で指示できます。" : blocked ? "手動の編集・保存が終わると使えます。" : "準備中です。"),
+        onSubmit: async value => {
+          setError(""); audio.clearError(); typedAt.current = performance.now();
+          try { await submit(value); } catch (e) { setError(e instanceof Error ? e.message : "処理を完了できません。"); throw e; }
+        },
+      } : undefined}
       extra={state.question ? <div className="voice-bubble-choices">{state.question.choices.map(choice => <button key={choice.choiceId} type="button" className="secondary editing-choice" disabled={blocked} title={choice.label}
         onMouseEnter={() => props.store.previewTarget(choice.handle ?? null)} onMouseLeave={() => props.store.previewTarget(null)}
         onFocus={() => props.store.previewTarget(choice.handle ?? null)} onBlur={() => props.store.previewTarget(null)}

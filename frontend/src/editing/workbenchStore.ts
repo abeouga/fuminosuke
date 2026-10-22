@@ -322,16 +322,23 @@ export class WorkbenchStore {
     return this.enqueue(async () => { await this.initialize(); this.requireReady(); await this.updateContext({ mode: "manual", selectedTableId: null, selectedHandles: [], localTargetHandle: null }, true);
       return this.sendManual({ contractVersion: "editing.v2", kind: "manual_ocr", requestId: crypto.randomUUID(), binding: bindingOf(this.getContext()), afterCommandId: null, draft: captured }, "ocr"); });
   }
-  async instruction(text: string | { choiceId: string }) {
+  async instruction(text: string | { choiceId: string }): Promise<void> {
     await this.initialize(); this.requireReady(); if (this.manualActive) throw new Error("手動操作を終了してください。");
     const question = this.state.question, requestId = crypto.randomUUID(), owner = this.getOwner();
     this.journals.set(requestId, { requestId, owner, origin: "voice", endpoint: "command" }); this.remember();
     try {
       const result = await v2client.command(owner, { contractVersion: "editing.v2", requestId, binding: bindingOf(this.getContext()), afterCommandId: null, command: { kind: "instruction", input: typeof text === "string" ? { kind: "text", text } : { kind: "choice", choiceId: text.choiceId }, replyTo: question ? { questionId: question.questionId, version: question.version } : null } });
       this.acceptCommand(result);
+      // Choosing the table of "対象範囲を切り替えますか" switched it on the server: show it.
+      if (question?.missingKind === "scope") await this.refreshContext().catch(() => undefined);
     } catch (error) {
       if (error instanceof EditingError && error.status < 500) { this.journals.delete(requestId); this.remember(); }
       else this.publish({ state: "recovering", message: "受付結果を確認してください。指示は再送しません。" });
+      // The question was lost (server restart, expiry): typed words become a new instruction.
+      if (question && error instanceof EditingError && ["QUESTION_STALE", "QUESTION_EXPIRED"].includes(error.code)) {
+        this.publish({ question: null, commandId: null }); this.remember();
+        if (typeof text === "string") return this.instruction(text);
+      }
       throw error;
     }
   }

@@ -286,10 +286,30 @@
 .ocr-page-lightbox { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: #0f1d27d9; cursor: zoom-out; }
 .ocr-page-lightbox img { max-width: 100%; max-height: calc(100vh - 48px); object-fit: contain; background: #fff; box-shadow: 0 12px 40px #0006; }
 .ocr-page-lightbox-close { position: fixed; top: 14px; right: 16px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: #fffffff0; color: #263744; font-size: 24px; line-height: 1; cursor: pointer; }
-/* The selected cell's crop floats over the page image; nothing below it moves. */
-.generic-review-source .ocr-region-preview { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 2; margin: 0; padding: 8px 10px; background: #fffffff5; border: 1px solid #b9c8d0; border-radius: 10px; box-shadow: 0 6px 20px #17344a2e; pointer-events: none; }
+/* The selected cell's crop floats over the middle of the page image; nothing below it moves. */
+.generic-review-source .ocr-region-preview { position: absolute; top: 0; bottom: 0; left: 8px; right: 8px; z-index: 2; height: fit-content; margin: auto 0; padding: 8px 10px; background: #fffffff5; border: 1px solid #b9c8d0; border-radius: 10px; box-shadow: 0 6px 20px #17344a2e; pointer-events: none; }
 .generic-review-source .ocr-region-preview img { display: block; width: 100%; max-height: 130px; object-fit: contain; }
 .generic-review-source figcaption { margin-top: 6px; font-size: 12px; color: #4d6070; }
+/* It flies out of the cell's place on the page (RegionPreviewFlyIn). */
+.generic-review-source .ocr-region-preview { transform-origin: 0 0; will-change: transform; }
+
+/* The cell's dialog holds only 「空欄にする」 (and the reading's other candidates). */
+.ocr-review-popover:not(.ocr-review-popover-wide) { width: max-content; max-width: min(260px, calc(100vw - 16px)); }
+.ocr-cell-status-popover > div[role="group"]:not(.ocr-cell-choices):not(.ocr-mark-options) { grid-template-columns: 1fr; }
+.ocr-cell-status-popover > div[role="group"]:not(.ocr-cell-choices):not(.ocr-mark-options) button { padding: 7px 14px; font-size: 12px; }
+.ocr-cell-status-popover > div button:disabled { cursor: default; opacity: .6; }
+
+/* Check pen: traced cells turn green. The 要確認 note stays on a flagged cell. */
+.ux-shell td.ocr-cell-painted, td.ocr-cell-painted { background: #a3dfb6; }
+td.ocr-cell-painted.ocr-cell-warning { box-shadow: inset 4px 0 0 #e0b52c; }
+.ux-shell td.ocr-cell-painted.ocr-cell-warning button > small { color: #7a5a00; }
+.legend-painted { border-color: #2f9a58 !important; background: #a3dfb6; }
+.review-pen-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid #8fb9a0; border-radius: 6px; background: #fff; color: #1f6b3e; font-size: 12px; font-weight: 700; }
+.review-pen-toggle:hover { background: #ecf8f0; }
+.review-pen-toggle.active { border-color: #22894a; background: #22894a; color: #fff; box-shadow: 0 0 0 3px #22894a33; }
+.review-pen-surface.is-pen { user-select: none; -webkit-user-select: none; }
+.review-pen-surface.is-pen .ocr-edit-table :is(td, th) * { pointer-events: none; }
+.review-pen-surface.is-pen .ocr-edit-table td[data-review-path] { cursor: crosshair; touch-action: none; }
 @media (max-width: 1050px) {
   .generic-review-workspace { grid-template-columns: 1fr; }
   .generic-review-source { position: static; }

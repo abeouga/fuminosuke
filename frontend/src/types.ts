@@ -135,7 +135,21 @@ export type TemplateFieldSetting = {
   keywords: string[];
   keywordsEnabled: boolean;
   keywordsForced: boolean;
-  instruction: string;
+};
+
+/** Writing rules learned from corrections at confirmation (the reading instruction). */
+export type TemplateMemory = {
+  templateId: string;
+  items: Array<{
+    id: string;
+    label: string;
+    rule: string;
+    exampleBefore: string | null;
+    exampleAfter: string | null;
+    hitCount: number;
+    updatedAt: string;
+    boxes: Array<{ x: number; y: number; width: number; height: number }>;
+  }>;
 };
 
 export type TemplateFieldSettings = {
@@ -417,6 +431,17 @@ export type ReviewStructure = {
     fieldIds: string[];
   }>;
   independentFieldIds: string[];
+  /** Tables, headings and runs of items under no heading, from the top of the form (shown results only). */
+  blocks?: ReviewBlock[];
+};
+
+/** `id`: the table or heading; `paths`: its items' save paths, used to match a saved block order. */
+export type ReviewBlock = {
+  kind: "record" | "parent" | "independent"; id: string | null; fieldIds: string[]; paths: string[];
+  /** On a table: its heading's items outside the rows (「導入年月日・金額」), shown after it. */
+  attachedId?: string | null; attachedFieldIds?: string[];
+  /** Items under one printed item name (「登録No.」), shown nested. */
+  itemGroups?: Array<{ name: string; fieldIds: string[] }>;
 };
 
 /** Printed choices read from the template image for selection boxes (not saved by itself). */

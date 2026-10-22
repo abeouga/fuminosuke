@@ -154,7 +154,7 @@ class PendingInstruction:
         cell = target.get("recordCell")
         if slot["row"] is not None and (not cell or cell["rowNumber"] != slot["row"]):
             raise InvalidPlan("A choice contradicts the original row")
-        if ref not in catalog.pool(slot["quote"], row=slot["row"]):
+        if ref not in catalog.pool(slot["quote"], row=slot["row"], other_tables="include"):
             raise InvalidPlan("A choice is outside the owned instruction scope")
         operations = [
             *self.known.get("operations", []),

@@ -162,6 +162,47 @@ class OpenAIPlanner:
             "answers": result["answers"],
         }
 
+    async def rewrite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """One Responses call for a rewrite of existing values (column_rewrite)."""
+        from app.editing.application.column_rewrite import INSTRUCTIONS, SCHEMA
+
+        result = await self.post(
+            "responses",
+            {
+                "model": self.policy.model,
+                "instructions": INSTRUCTIONS,
+                "input": json.dumps(payload, ensure_ascii=False),
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "value_rewrite",
+                        "schema": SCHEMA,
+                        "strict": True,
+                    }
+                },
+                "reasoning": {"effort": "low"},
+                "max_output_tokens": 8192,
+                "store": False,
+            },
+            20,
+        )
+        texts = [
+            part.get("text")
+            for item in result.get("output", [])
+            if item.get("type") == "message"
+            for part in item.get("content", [])
+            if part.get("type") == "output_text"
+        ]
+        if result.get("status") != "completed" or len(texts) != 1:
+            raise reject("PLANNER_RESPONSE_INVALID", "書き換え案を取得できませんでした。", 422)
+        try:
+            value = json.loads(texts[0] or "")
+            if not isinstance(value, dict):
+                raise ValueError("Expected an object")
+            return value
+        except (ValueError, TypeError) as error:
+            raise reject("PLANNER_RESPONSE_INVALID", "書き換え案の形式が不正です。", 422) from error
+
     async def plan(self, instruction: str, catalog: dict[str, Any]) -> dict[str, Any]:
         result = await self.post(
             "responses",

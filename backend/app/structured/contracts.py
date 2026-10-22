@@ -43,6 +43,8 @@ class StructuredReading(Contract):
     review_reason: str | None = None
     crop_url: str | None = None
     box: Box | None = None
+    # A selection box (選択欄): its printed choices are not repeated in the shown name.
+    choice: bool = False
 
 
 class ExtraReading(Contract):
@@ -121,6 +123,39 @@ class DocumentPage(Contract):
     image_url: str
 
 
+class HeadingCell(Contract):
+    """A printed heading or item name on the page, and what it names on the shelf."""
+
+    cell_id: str
+    kind: Literal["section", "table", "column", "item"]
+    box: Box
+    page_id: str | None = None
+    section: str | None = None
+    table_ids: list[str] = Field(default_factory=list)
+    column_id: str | None = None
+    field_ids: list[str] = Field(default_factory=list)
+
+
+class ItemGroupRef(Contract):
+    """Items under one printed item name (「登録No.」), shown nested."""
+
+    name: str
+    field_ids: list[str] = Field(default_factory=list)
+
+
+class ReviewBlockRef(Contract):
+    """A table (``id`` = table id), a heading, or a run of items under no heading."""
+
+    kind: Literal["record", "parent", "independent"]
+    id: str | None = None
+    field_ids: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    # On a table: its heading's items outside the rows, shown with the table.
+    attached_id: str | None = None
+    attached_field_ids: list[str] = Field(default_factory=list)
+    item_groups: list[ItemGroupRef] = Field(default_factory=list)
+
+
 class StructuredDocument(DocumentSummary):
     schema_version: Literal["structured-document.v1"] = SCHEMA_VERSION
     pages: list[DocumentPage] = Field(default_factory=list)
@@ -128,6 +163,9 @@ class StructuredDocument(DocumentSummary):
     tables: list[StructuredTable]
     extra_fields: list[ExtraReading]
     joined_fields: list[JoinedReading] = Field(default_factory=list)
+    headings: list[HeadingCell] = Field(default_factory=list)
+    # Tables, headings and items under no heading from the top of the form (display order).
+    blocks: list[ReviewBlockRef] | None = None
 
 
 class DocumentList(Contract):

@@ -6,6 +6,8 @@ import asyncio
 import json
 import time
 from collections import deque
+from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +19,9 @@ from app.editing.domain.fast_path import spoken_row
 from app.editing.domain.planning import InvalidPlan
 from app.editing.domain.planning_catalog import PlanningCatalog
 from app.editing.errors import reject
+
+# Replies to "現在選択している表の外です。対象範囲を切り替えますか。" that mean yes.
+SCOPE_YES = {"はい", "そうです", "切り替えて", "切り替え", "それでよろしく", "よろしく"}
 
 
 class CommandController:
@@ -35,6 +40,9 @@ class CommandController:
         self.inputs: dict[str, tuple[str, dict[str, Any] | None, str | None]] = {}
         self.admission_locks: dict[str, asyncio.Lock] = {}
         self.voice_input: Any = None
+        # Optional local log of each instruction, question and outcome (set by the runtime).
+        self.instruction_log: Callable[[str, str, dict[str, Any]], None] | None = None
+        self.input_sources: dict[str, str] = {}
 
     async def submit(self, session_id: str, token: str, value: dict[str, Any]) -> dict[str, Any]:
         async with self.admission_locks.setdefault(session_id, asyncio.Lock()):
@@ -53,6 +61,7 @@ class CommandController:
             raise reject("COMMAND_INTERRUPTED", "編集処理が停止しています。", 503)
         command = value.get("command", {})
         prepared_input = None
+        input_source: str | None = None
         provider_free = False
         if command.get("kind") == "instruction":
             # Durable replay precedes access to volatile transcripts/questions.
@@ -75,6 +84,7 @@ class CommandController:
                 }
             source, reply = command["input"], command["replyTo"]
             choice = source.get("choiceId") if source["kind"] == "choice" else None
+            input_source = source["kind"]
             if source["kind"] == "voice":
                 if self.voice_input is None:
                     raise reject("VOICE_UNAVAILABLE", "音声取得が接続されていません。", 503)
@@ -102,6 +112,44 @@ class CommandController:
                     )
                 if pending.binding != value["binding"]:
                     raise reject("CONTEXT_STALE", "質問の対象世代が変わりました。", 409)
+                proposal = (pending.partial or {}).get("scopeProposal")
+                if (
+                    pending.question["missingKind"] == "scope"
+                    and proposal is not None
+                    and (
+                        choice
+                        or text.strip(" 。、!")
+                        in SCOPE_YES
+                    )
+                ):
+                    # Choosing the offered table (or saying yes) is the table switch itself,
+                    # not another answer to plan, which used to ask the same question again.
+                    current = await asyncio.to_thread(
+                        self.repository.input_context, session_id, token
+                    )
+                    scope = current["scopeContext"]
+                    return await self._rebind_scope(
+                        session_id,
+                        token,
+                        {
+                            "contractVersion": "editing.v2",
+                            "requestId": value["requestId"],
+                            "replyTo": reply,
+                            "context": {
+                                "contractVersion": "editing.v2",
+                                "kind": "context_update",
+                                "expectedRevision": scope["resourceRevision"],
+                                "expectedContextRevision": scope["contextRevision"],
+                                "interactionEpoch": scope["interactionEpoch"],
+                                "resource": scope["resource"],
+                                "mode": scope["mode"],
+                                "pageScope": scope["pageScope"],
+                                "selectedTableId": proposal["selectedTableId"],
+                                "selectedHandles": scope["selectedHandles"],
+                                "localTargetHandle": scope["localTargetHandle"],
+                            },
+                        },
+                    )
                 replacement = pending_cancellation(text) if not choice else None
                 if replacement is not None:
                     original_fingerprint = digest(value)
@@ -184,7 +232,12 @@ class CommandController:
             if continuation:
                 prepared_input = (continuation[1] + "\n" + text, None, None)
             if rebinding:
-                prepared_input = (text, rebinding.dialogue(text), None)
+                # The new scope gets the user's own words, not a synthetic answer turn.
+                prepared_input = (
+                    "\n".join([rebinding.original, *(t["text"] for t in rebinding.turns)]),
+                    None,
+                    None,
+                )
         result = await asyncio.to_thread(
             self.repository.admit,
             session_id,
@@ -206,6 +259,8 @@ class CommandController:
             command_id = result["commandId"]
             if prepared_input:
                 self.inputs[command_id] = prepared_input
+                if input_source:
+                    self.input_sources[command_id] = input_source
                 if prepared_input[1] and session_id in self.pending:
                     self.pending[session_id].command_id = command_id
             self.mutations.register(command_id, value)
@@ -248,6 +303,7 @@ class CommandController:
                 command = value.get("command", {})
                 fence, prepared = 1, None
                 waiting_information = False
+                log: dict[str, Any] | None = None
                 try:
                     claimed = await asyncio.to_thread(self.repository.claim, command_id)
                     if claimed is None:
@@ -262,6 +318,20 @@ class CommandController:
                             self.repository.context_for_command, command_id, fence
                         )
                         pending = self.pending.get(session_id)
+                        log = {
+                            "kind": "answer" if dialogue else "instruction",
+                            "source": self.input_sources.get(command_id),
+                            "text": text,
+                        }
+                        if choice and pending and pending.question:
+                            log["choice"] = next(
+                                (
+                                    v.get("label")
+                                    for v in pending.question["choices"]
+                                    if v["choiceId"] == choice
+                                ),
+                                choice,
+                            )
                         if dialogue:
                             context["instructionDialogue"] = dialogue
                         direct = None
@@ -308,6 +378,7 @@ class CommandController:
                                 question_json=canonical(question),
                                 partial_plan_json=canonical(pending.partial or {}),
                             )
+                        log.update(_plan_log(resolution, context))
                         if resolution.question_json is not None:
                             if not dialogue:
                                 pending = PendingInstruction(
@@ -363,7 +434,7 @@ class CommandController:
                             )
                             continue
                         operations = resolution.operations
-                        if dialogue and pending and operations:
+                        if dialogue and pending and operations and not resolution.rewrite:
                             pending.validate(operations, text, PlanningCatalog(context))
                         await asyncio.to_thread(
                             self.repository.stage, command_id, fence, "VALIDATING"
@@ -471,6 +542,13 @@ class CommandController:
                         self.mutations.discard(prepared)
                     self.mutations.forget(command_id)
                     self.inputs.pop(command_id, None)
+                    self.input_sources.pop(command_id, None)
+                    if log is not None and self.instruction_log is not None:
+                        # A log must never break editing.
+                        with suppress(Exception):
+                            await asyncio.to_thread(
+                                self.instruction_log, session_id, command_id, log
+                            )
                     pending = self.pending.get(session_id)
                     if pending and pending.command_id == command_id and not waiting_information:
                         self.pending.pop(session_id, None)
@@ -505,85 +583,91 @@ class CommandController:
         self, session_id: str, token: str, request: dict[str, Any]
     ) -> dict[str, Any]:
         async with self.admission_locks.setdefault(session_id, asyncio.Lock()):
-            replay = await asyncio.to_thread(
-                self.repository.scope_replay,
-                session_id,
-                token,
-                request["requestId"],
-                digest(request),
+            return await self._rebind_scope(session_id, token, request)
+
+    async def _rebind_scope(
+        self, session_id: str, token: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        replay = await asyncio.to_thread(
+            self.repository.scope_replay,
+            session_id,
+            token,
+            request["requestId"],
+            digest(request),
+        )
+        if replay:
+            return replay
+        pending = self.pending.get(session_id)
+        reply = request["replyTo"]
+        if (
+            not pending
+            or not pending.question
+            or pending.question["missingKind"] != "scope"
+            or (
+                pending.question["questionId"] != reply["questionId"]
+                or pending.question["version"] != reply["version"]
             )
-            if replay:
-                return replay
-            pending = self.pending.get(session_id)
-            reply = request["replyTo"]
-            if (
-                not pending
-                or not pending.question
-                or pending.question["missingKind"] != "scope"
-                or (
-                    pending.question["questionId"] != reply["questionId"]
-                    or pending.question["version"] != reply["version"]
-                )
-            ):
-                raise reject("QUESTION_STALE", "有効な対象範囲の質問を指定してください。", 409)
-            if min(pending.deadline, pending.question_deadline) <= time.monotonic():
-                raise reject("QUESTION_EXPIRED", "元の指示の期限が切れました。", 409)
-            context = request["context"]
-            current = await asyncio.to_thread(self.repository.input_context, session_id, token)
-            if all(
-                context[k] == current["scopeContext"][k]
+        ):
+            raise reject("QUESTION_STALE", "有効な対象範囲の質問を指定してください。", 409)
+        if min(pending.deadline, pending.question_deadline) <= time.monotonic():
+            raise reject("QUESTION_EXPIRED", "元の指示の期限が切れました。", 409)
+        context = request["context"]
+        current = await asyncio.to_thread(self.repository.input_context, session_id, token)
+        if all(
+            context[k] == current["scopeContext"][k]
+            for k in (
+                "resource",
+                "mode",
+                "pageScope",
+                "selectedTableId",
+                "selectedHandles",
+                "localTargetHandle",
+            )
+        ):
+            raise reject("SCOPE_UNCHANGED", "変更する対象範囲を指定してください。", 409)
+        if context["interactionEpoch"] != pending.binding["interactionEpoch"]:
+            raise reject("CONTEXT_STALE", "手動編集を越えて指示を移すことはできません。", 409)
+        updated = await asyncio.to_thread(
+            self.repository.rebind_context, session_id, token, context
+        )
+        scope = updated["scopeContext"]
+        pending.binding = {
+            "expectedRevision": scope["resourceRevision"],
+            **{
+                k: scope[k]
                 for k in (
-                    "resource",
-                    "mode",
-                    "pageScope",
-                    "selectedTableId",
-                    "selectedHandles",
-                    "localTargetHandle",
+                    "contextRevision",
+                    "interactionEpoch",
+                    "catalogRevision",
+                    "scopeDigest",
                 )
-            ):
-                raise reject("SCOPE_UNCHANGED", "変更する対象範囲を指定してください。", 409)
-            if context["interactionEpoch"] != pending.binding["interactionEpoch"]:
-                raise reject("CONTEXT_STALE", "手動編集を越えて指示を移すことはできません。", 409)
-            updated = await asyncio.to_thread(
-                self.repository.rebind_context, session_id, token, context
+            },
+        }
+        pending.known["operations"] = []
+        pending.partial = None
+        # The rerun is a fresh instruction in the new scope; its own question replaces this.
+        self.pending.pop(session_id, None)
+        value = {
+            "contractVersion": "editing.v2",
+            "requestId": request["requestId"],
+            "binding": pending.binding,
+            "afterCommandId": None,
+            "command": {
+                "kind": "instruction",
+                "input": {
+                    "kind": "text",
+                    "text": "指定した対象範囲へ切り替えて元の指示を実行してください。",
+                },
+                "replyTo": None,
+            },
+        }
+        try:
+            return await self._submit(
+                session_id, token, value, rebinding=pending, fingerprint=digest(request)
             )
-            scope = updated["scopeContext"]
-            pending.binding = {
-                "expectedRevision": scope["resourceRevision"],
-                **{
-                    k: scope[k]
-                    for k in (
-                        "contextRevision",
-                        "interactionEpoch",
-                        "catalogRevision",
-                        "scopeDigest",
-                    )
-                },
-            }
-            pending.known["operations"] = []
-            pending.partial = None
-            self.pending[session_id] = pending
-            value = {
-                "contractVersion": "editing.v2",
-                "requestId": request["requestId"],
-                "binding": pending.binding,
-                "afterCommandId": None,
-                "command": {
-                    "kind": "instruction",
-                    "input": {
-                        "kind": "text",
-                        "text": "指定した対象範囲へ切り替えて元の指示を実行してください。",
-                    },
-                    "replyTo": None,
-                },
-            }
-            try:
-                return await self._submit(
-                    session_id, token, value, rebinding=pending, fingerprint=digest(request)
-                )
-            except Exception:
-                self.pending.pop(session_id, None)
-                raise
+        except Exception:
+            self.pending.pop(session_id, None)
+            raise
 
     async def close(self) -> None:
         self.closed = True
@@ -612,3 +696,34 @@ class CommandController:
                 )
         if self.tasks:
             await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+
+
+def _plan_log(resolution: ResolvedInstruction, context: dict[str, Any]) -> dict[str, Any]:
+    """What the AI answered, with target handles replaced by readable cell names."""
+    names: dict[str, str] = {}
+    for target in (context.get("catalog") or {}).get("targets") or []:
+        cell = target.get("recordCell")
+        names[target["handle"]] = (
+            f"{cell['tableName']} {cell['rowNumber']}行目 {cell['columnName']}"
+            if cell
+            else str(target.get("name") or target["handle"])
+        )
+
+    def readable(value: Any) -> Any:
+        if isinstance(value, str):
+            return names.get(value, value)
+        if isinstance(value, list):
+            return [readable(v) for v in value]
+        if isinstance(value, dict):
+            return {k: readable(v) for k, v in value.items()}
+        return value
+
+    if resolution.question_json is not None:
+        question = json.loads(resolution.question_json)
+        return {
+            "question": question.get("message"),
+            "choices": [v.get("label") for v in question.get("choices") or []],
+        }
+    if resolution.no_action:
+        return {"plan": "no_action"}
+    return {"operations": [readable(op.value()) for op in resolution.operations]}

@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import AppError
+from app.editing.application import column_rewrite
 from app.editing.application.ports import DecisionSelector, PlanBinding, TextPlanner
 from app.editing.domain.candidates import build_candidates, select_operations
 from app.editing.domain.command import ResolvedInstruction, canonical, digest
@@ -69,6 +70,49 @@ class InstructionPlanner:
         return self.catalogs[key]
 
     async def resolve(self, instruction: str, context: dict[str, Any]) -> ResolvedInstruction:
+        """Plain plan, or a checked rewrite of existing values (column_rewrite).
+
+        Rewrite-like wording goes to the rewrite first; a plain plan that fails or asks
+        without any choice gets one rewrite attempt before giving up.
+        """
+        try:
+            catalog = self.catalog(context)
+        except InvalidPlan:
+            return await self._resolve(instruction, context, "plain")
+        usable = hasattr(self.responses, "rewrite") and column_rewrite.applicable(catalog)
+        text = column_rewrite.instruction_text(instruction, catalog)
+        if usable and column_rewrite.HINT.search(text):
+            return await self._resolve(instruction, context, "rewrite_first")
+        try:
+            result = await self._resolve(instruction, context, "plain")
+        except AppError as error:
+            if not usable or error.code != "PLANNER_PLAN_INVALID":
+                raise
+            try:
+                return await self._resolve(instruction, context, "rewrite_only")
+            except AppError:
+                raise error from None
+        if usable and result.question_json and not json.loads(result.question_json)["choices"]:
+            try:
+                return await self._resolve(instruction, context, "rewrite_only")
+            except AppError:
+                return result
+        return result
+
+    async def _rewrite(
+        self, instruction: str, catalog: PlanningCatalog
+    ) -> ResolvedInstruction | None:
+        payload = column_rewrite.payload(
+            column_rewrite.instruction_text(instruction, catalog), catalog
+        )
+        if len(canonical(payload).encode("utf-8")) // 2 > self.policy.catalog_tokens:
+            return None
+        answer = await self.responses.rewrite(payload)  # type: ignore[attr-defined]
+        return column_rewrite.resolve(answer, catalog)
+
+    async def _resolve(
+        self, instruction: str, context: dict[str, Any], mode: str
+    ) -> ResolvedInstruction:
         catalog: PlanningCatalog | None = None
         plan = None
         route, decision_ms, response_ms = "responses", 0, 0
@@ -79,6 +123,14 @@ class InstructionPlanner:
             if not instruction.strip() or len(instruction) > 20000:
                 raise InvalidPlan("Instruction size is invalid")
             catalog = self.catalog(context)
+            if mode != "plain":
+                route = "rewrite"
+                rewritten = await self._rewrite(instruction, catalog)
+                if rewritten is not None:
+                    return rewritten
+                if mode == "rewrite_only":
+                    raise InvalidPlan("Not a rewrite of existing values")
+                route = "responses"
             clauses = (
                 compile_fast(instruction)
                 if (
@@ -150,6 +202,11 @@ class InstructionPlanner:
             probabilities = issue.probabilities or probabilities
             confidences = issue.confidences or confidences
             choice_refs = [r for r in issue.candidates if catalog and catalog.known_ref(r)]
+            if not choice_refs and catalog and issue.kind in {"target", "column"}:
+                # Never a question with only "cancel": offer the fields the words name.
+                choice_refs = column_rewrite.suggested_refs(
+                    column_rewrite.instruction_text(instruction, catalog), catalog
+                )
             established: list[dict[str, Any]] = []
             change = (plan or {}).get("decision", {}).get("knownChange")
             if change and catalog:

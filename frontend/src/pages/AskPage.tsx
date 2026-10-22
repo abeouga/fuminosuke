@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   FiAlertTriangle,
   FiArrowUp,
@@ -6,8 +6,6 @@ import {
   FiChevronDown,
   FiCopy,
   FiExternalLink,
-  FiFileText,
-  FiFilter,
   FiImage,
   FiInfo,
   FiMessageSquare,
@@ -15,11 +13,12 @@ import {
   FiMicOff,
   FiPlus,
   FiRefreshCw,
-  FiSearch,
   FiX,
 } from "react-icons/fi";
-import { EditingError } from "../editing/client";
-import { askStore, openQuestion, type ScopeItem, type Turn } from "../structured/askStore";
+import { askStore, openQuestion, type Turn } from "../structured/askStore";
+import { chatReadings, useChatReadings, type ChatReading } from "../structured/chatReadings";
+import { useReadingQueue } from "../readingQueue";
+import { Spinner } from "../components/Spinner";
 import {
   evidenceHref,
   structuredClient,
@@ -33,24 +32,22 @@ import {
 import { QuestionVoiceCapture } from "../structured/voiceCapture";
 import { VoiceMeter } from "../components/VoiceMeter";
 
-/** Same limit as the questions API (`documentIds` max 20). */
-const MAX_SCOPE = 20;
 // Last known status and documents, so coming back to the page shows them at once (refreshed on mount).
 let cachedStatus: StructuredStatus | null = null;
 let cachedDocuments: DocumentSummary[] | null = null;
 
 export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?: string | null) => void }) {
   const state = useSyncExternalStore(askStore.subscribe, askStore.getSnapshot);
-  const { turns, scope, filter, templateId, draft, replyMode, evidence } = state;
+  const { turns, draft, replyMode, evidence } = state;
   const [status, setStatus] = useState<StructuredStatus | null | "unavailable">(cachedStatus);
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(cachedDocuments);
-  const [documentsError, setDocumentsError] = useState<string | null>(null);
-  const [fieldNames, setFieldNames] = useState<FieldName[]>([]);
   const [suggestionFields, setSuggestionFields] = useState<Record<string, FieldName[]>>({});
-  const [scopeOpen, setScopeOpen] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const readings = useChatReadings();
+  const [dragging, setDragging] = useState(false);
   // One capture per page visit; a completed transcript is sent exactly like typed text.
   // Spoken text goes into the input box: the user checks it and sends it with Enter.
   const [voice] = useState(() => new QuestionVoiceCapture((spoken) => {
@@ -62,17 +59,6 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
 
   const enabled = status !== null && status !== "unavailable" && status.enabled;
 
-  const loadDocuments = useCallback(async () => {
-    try {
-      const page = await structuredClient.documents();
-      cachedDocuments = page.items;
-      setDocuments(page.items);
-      setDocumentsError(null);
-    } catch (error) {
-      setDocumentsError(error instanceof EditingError ? error.message : "確定済みの書類を取得できませんでした。");
-    }
-  }, []);
-
   useEffect(() => {
     let stopped = false;
     void structuredClient.status()
@@ -80,38 +66,18 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       .catch(() => { if (!stopped) setStatus("unavailable"); });
     return () => { stopped = true; };
   }, []);
-  useEffect(() => { if (enabled) void loadDocuments(); }, [enabled, loadDocuments]);
-
-  const allDocuments = useMemo(() => documents ?? [], [documents]);
-  const templates = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const document of allDocuments) if (!byId.has(document.templateId)) byId.set(document.templateId, document.templateName);
-    return [...byId].map(([id, name]) => ({ id, name }));
-  }, [allDocuments]);
-  const byJob = useMemo(() => new Map(allDocuments.map((document) => [document.jobId, document])), [allDocuments]);
-  // A document dropped from the confirmed list (e.g. reopened) silently leaves the scope.
-  const scopeItems: ScopeItem[] = scope.flatMap((jobId) => {
-    const document = byJob.get(jobId);
-    return document ? [{ jobId, label: documentLabel(document) }] : [];
-  });
-  const visible = useMemo(() => {
-    const needle = fold(filter.trim());
-    return allDocuments.filter((document) =>
-      (!templateId || document.templateId === templateId)
-      && (!needle || [document.documentName, document.templateName, ...document.identity.map((item) => item.value)].some((value) => value && fold(value).includes(needle))));
-  }, [allDocuments, filter, templateId]);
-  // Field names are shown for one template: the chosen one, or the one all selected documents share.
-  const fieldTemplate = templateId || singleTemplate(scopeItems.map((item) => byJob.get(item.jobId)!));
+  // Documents are only used for the example questions; the chat always asks across all confirmed documents.
   useEffect(() => {
-    if (!enabled || !fieldTemplate) { setFieldNames([]); return; }
+    if (!enabled) return;
     let stopped = false;
-    void structuredClient.fields(fieldTemplate)
-      .then((page) => { if (!stopped) setFieldNames(page.items); })
-      .catch(() => { if (!stopped) setFieldNames([]); });
+    void structuredClient.documents()
+      .then((page) => { cachedDocuments = page.items; if (!stopped) setDocuments(page.items); })
+      .catch(() => undefined);
     return () => { stopped = true; };
-  }, [enabled, fieldTemplate]);
+  }, [enabled]);
+
   // Example questions come from the user's own documents and field names, never a fixed form.
-  const exampleDocuments = useMemo(() => (scopeItems.length > 0 ? scopeItems.map((item) => byJob.get(item.jobId)!) : allDocuments).slice(0, 2), [scopeItems, byJob, allDocuments]);
+  const exampleDocuments = useMemo(() => (documents ?? []).slice(0, 2), [documents]);
   useEffect(() => {
     if (!enabled || turns.length > 0) return;
     const missing = [...new Set(exampleDocuments.map((document) => document.templateId))].filter((id) => !(id in suggestionFields));
@@ -131,25 +97,16 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
     if (!text || busy || !enabled) return;
     askStore.set({ draft: "" });
     if (answering) askStore.replyText(text);
-    else askStore.ask(text, scopeItems);
+    else askStore.ask(text, []);
   };
-  const toggleScope = (jobId: string) => {
-    askStore.set((current) => ({
-      scope: current.scope.includes(jobId)
-        ? current.scope.filter((id) => id !== jobId)
-        : current.scope.length >= MAX_SCOPE ? current.scope : [...current.scope, jobId],
-    }));
+  // Images go to the template guess and then the reading queue; the review screen is never opened for them.
+  const addImages = (list: FileList | File[] | null | undefined) => {
+    if (!list) return false;
+    return chatReadings.add([...list], turns[turns.length - 1]?.id ?? null) > 0;
   };
-  const insertField = (name: FieldName) => {
-    const words = name.kind === "column" && name.tableTitle ? `${name.tableTitle}の${name.label}` : name.label;
-    askStore.set((current) => ({ draft: current.draft + words }));
-    setScopeOpen(false);
-    inputRef.current?.focus();
-  };
-
   // Keep the newest message in view inside the conversation (the page itself does not jump).
   const last = turns[turns.length - 1];
-  const scrollKey = `${turns.length}:${last?.pending ? 1 : 0}:${last?.result ? 1 : 0}:${last?.error ? 1 : 0}`;
+  const scrollKey = `${turns.length}:${last?.pending ? 1 : 0}:${last?.result ? 1 : 0}:${last?.error ? 1 : 0}:${readings.map((reading) => reading.state[0]).join("")}`;
   const scrolledOnce = useRef(false);
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -157,7 +114,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
     // Coming back to the page jumps straight to the latest message; new messages glide in.
     // A finished answer is shown from its question down, so a long answer is read from the top.
     const bottom = list.scrollHeight - list.clientHeight;
-    const asked = [...list.querySelectorAll<HTMLElement>(".ask-msg.user")].pop();
+    const asked = [...list.querySelectorAll<HTMLElement>(".ask-msg.user:not(.image)")].pop();
     const top = asked && !last?.pending ? Math.min(bottom, asked.offsetTop - 12) : bottom;
     list.scrollTo({ top: Math.max(top, 0), behavior: scrolledOnce.current ? "smooth" : "instant" });
     scrolledOnce.current = true;
@@ -191,28 +148,27 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const voiceConnected = enabled && status.voiceConnected;
   const listening = voiceState.mode !== "stopped";
   const latestId = last?.id ?? null;
-  const placeholder = !enabled ? "質問は利用できません"
+  const placeholder = !enabled ? "チャットは利用できません"
     : answering ? "選択肢にない場合は、ここに書いて送ってください"
-    : scopeItems.length > 0 ? "選んだ書類について質問を入力"
-    : "例：書類名や番号と、知りたい欄の名前を入れて質問";
+    : "メッセージを入力";
+  const turnIds = new Set(turns.map((turn) => turn.id));
+  const readingViews = (turnId: number | null) => readings
+    .filter((reading) => turnId === null
+      ? reading.afterTurnId === null || !turnIds.has(reading.afterTurnId)
+      : reading.afterTurnId === turnId)
+    .map((reading) => <ReadingView key={reading.id} reading={reading} onOpenReview={onOpenReview} />);
 
   return (
     <div className="ask-page" ref={pageRef}>
       <header className="ask-header">
-        <div>
-          <h1>チャット</h1>
-          <p>確定した書類の内容を、ふだんの言葉で聞けます。答えには根拠の欄の画像が付きます。</p>
-        </div>
-        <div className="ask-header-actions">
-          <button type="button" className="secondary compact ask-scope-toggle" onClick={() => setScopeOpen(true)}>
-            <FiFilter aria-hidden="true" />対象{scopeItems.length > 0 ? `（${scopeItems.length}）` : ""}
-          </button>
-          {turns.length > 0 && (
-            <button type="button" className="secondary compact" disabled={busy} onClick={() => askStore.clear()}>
+        <h1>チャット</h1>
+        {(turns.length > 0 || readings.length > 0) && (
+          <div className="ask-header-actions">
+            <button type="button" className="secondary compact" disabled={busy} onClick={() => { askStore.clear(); chatReadings.clear(); }}>
               <FiPlus aria-hidden="true" />新しい会話
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </header>
 
       {status === "unavailable" && (
@@ -226,78 +182,30 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       )}
 
       <div className={evidence ? "ask-layout with-evidence" : "ask-layout"}>
-        {scopeOpen && <button type="button" className="ask-sheet-backdrop" aria-label="対象の選択を閉じる" onClick={() => setScopeOpen(false)} />}
-        <aside className={scopeOpen ? "ask-scope open" : "ask-scope"} aria-label="対象の書類">
-          <div className="ask-panel-head">
-            <h2>対象の書類</h2>
-            <button type="button" className="ask-icon-button ask-scope-close" onClick={() => setScopeOpen(false)} aria-label="対象の選択を閉じる"><FiX aria-hidden="true" /></button>
-          </div>
-          <p className="ask-panel-lead">{scopeItems.length > 0 ? `${scopeItems.length}件を選択中。選んだ書類の中から答えます。` : "選ばなければ、すべての確定済み書類から探します。"}</p>
-          {templates.length > 1 && (
-            <label className="ask-template">
-              <span>テンプレート</span>
-              <select value={templateId} disabled={!enabled} onChange={(event) => askStore.set({ templateId: event.target.value })}>
-                <option value="">すべて</option>
-                {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-              </select>
-            </label>
-          )}
-          <label className="ask-filter">
-            <FiSearch aria-hidden="true" />
-            <input type="search" value={filter} placeholder="書類名・番号・名前で絞り込み" disabled={!enabled} onChange={(event) => askStore.set({ filter: event.target.value })} />
-          </label>
-          {documentsError && (
-            <p className="ask-inline-error" role="alert">{documentsError}<button type="button" className="link-button" onClick={() => void loadDocuments()}>再取得</button></p>
-          )}
-          {enabled && documents === null && !documentsError && <p className="ask-panel-lead">書類を読み込んでいます…</p>}
-          {enabled && documents !== null && visible.length === 0 && (
-            <p className="ask-panel-lead">{allDocuments.length === 0 ? "確定済みの書類はまだありません。読み取り結果を確定するとチャットで聞けます。" : "条件に合う書類はありません。"}</p>
-          )}
-          <ul className="ask-document-list">
-            {visible.map((document) => {
-              const checked = scope.includes(document.jobId);
-              const identity = document.identity.filter((item) => item.value).map((item) => `${item.label} ${item.value}`).join("・");
-              return (
-                <li key={document.jobId} className={checked ? "selected" : undefined}>
-                  <label className="ask-document">
-                    <input type="checkbox" checked={checked} disabled={!checked && scope.length >= MAX_SCOPE} onChange={() => toggleScope(document.jobId)} />
-                    <span>
-                      <strong>{document.documentName ?? "（名称なし）"}</strong>
-                      {identity && <small>{identity}</small>}
-                      <small className="ask-document-meta">{document.templateName} · {new Date(document.confirmedAt).toLocaleDateString("ja-JP")}確定{document.seriesVersion > 1 ? ` · 版${document.seriesVersion}` : ""}</small>
-                    </span>
-                  </label>
-                  <button type="button" className="ask-icon-button" onClick={() => onOpenReview(document.jobId)} aria-label={`${document.documentName ?? "書類"}を開く`} title="書類を開く">
-                    <FiExternalLink aria-hidden="true" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          {scopeItems.length > 0 && <button type="button" className="ghost compact" onClick={() => askStore.set({ scope: [] })}>選択をすべて外す</button>}
-          {fieldNames.length > 0 && (
-            <div className="ask-fields">
-              <h3>聞ける欄<small>押すと入力欄に入ります</small></h3>
-              <div className="ask-chip-row">
-                {fieldNames.map((name) => (
-                  <button key={`${name.kind}:${name.tableTitle ?? ""}:${name.label}`} type="button" className="ask-chip" onClick={() => insertField(name)}
-                    title={name.kind === "column" ? `表「${name.tableTitle}」の列` : "欄"}>
-                    {name.label}{name.kind === "column" && <small>表</small>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </aside>
-
-        <section className="ask-chat" aria-label="チャット">
+        <section
+          className={dragging ? "ask-chat dropping" : "ask-chat"}
+          aria-label="チャット"
+          onDragOver={(event) => {
+            if (![...event.dataTransfer.types].includes("Files")) return;
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+          onDrop={(event) => {
+            if (![...event.dataTransfer.types].includes("Files")) return;
+            event.preventDefault();
+            setDragging(false);
+            addImages(event.dataTransfer.files);
+          }}
+        >
+          {dragging && <div className="ask-drop-hint" aria-hidden="true"><FiImage />画像を置くと読み取ります</div>}
           <div className="ask-messages" ref={listRef} role="log" aria-live="polite">
-            {turns.length === 0
+            {turns.length === 0 && readings.length === 0
               ? (
                 <div className="ask-welcome">
                   <span className="ask-welcome-icon" aria-hidden="true"><FiMessageSquare /></span>
                   <h2>何を調べますか？</h2>
-                  <p>書類の名前や番号と、知りたい欄の名前を入れて聞いてください。合計・件数・最大・最小や、日付から今日までの経過も求められます。</p>
+                  <p className="ask-welcome-hint">記入した書類の画像を置くと、テンプレートを見分けて読み取ります。</p>
                   {suggestions.length > 0 && (
                     <div className="ask-suggestions">
                       {suggestions.map((suggestion) => (
@@ -305,10 +213,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                       ))}
                     </div>
                   )}
-                  {documents !== null && <small>確定済みの書類 {allDocuments.length}件{scopeItems.length > 0 ? `のうち、選んだ${scopeItems.length}件` : ""}が対象です</small>}
                 </div>
               )
-              : turns.map((turn) => (
+              : [readingViews(null), ...turns.map((turn) => [
                 <TurnView
                   key={turn.id}
                   turn={turn}
@@ -319,8 +226,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                   onRetry={() => askStore.retry(turn.id)}
                   onShowEvidence={(item) => askStore.set({ evidence: item })}
                   onOpenReview={onOpenReview}
-                />
-              ))}
+                />,
+                ...readingViews(turn.id),
+              ])]}
           </div>
 
           <form className="ask-composer" onSubmit={(event) => { event.preventDefault(); submit(draft); }}>
@@ -330,16 +238,6 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                 <button type="button" className="link-button" onClick={() => askStore.set({ replyMode: !replyMode })}>
                   {answering ? "新しい質問にする" : "回答として送る"}
                 </button>
-              </div>
-            )}
-            {!answering && scopeItems.length > 0 && (
-              <div className="ask-scope-bar" aria-label="選んだ書類">
-                {scopeItems.map((item) => (
-                  <span key={item.jobId} className="ask-scope-chip">
-                    <FiFileText aria-hidden="true" />{item.label}
-                    <button type="button" onClick={() => toggleScope(item.jobId)} aria-label={`${item.label}を対象から外す`}><FiX aria-hidden="true" /></button>
-                  </span>
-                ))}
               </div>
             )}
             <div className="ask-input-row">
@@ -352,12 +250,32 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                 placeholder={placeholder}
                 disabled={!enabled}
                 onChange={(event) => askStore.set({ draft: event.target.value })}
+                onPaste={(event) => {
+                  if (addImages(event.clipboardData.files)) event.preventDefault();
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
                   event.preventDefault();
                   submit(draft);
                 }}
               />
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(event) => { addImages(event.target.files); event.target.value = ""; }}
+              />
+              <button
+                type="button"
+                className="ask-round-button ask-attach"
+                aria-label="書類の画像を読み取る"
+                title="書類の画像を読み取る"
+                onClick={() => fileRef.current?.click()}
+              >
+                <FiImage aria-hidden="true" />
+              </button>
               {voiceConnected && <VoiceMeter read={voice.meter.read} active={voiceState.mode === "listening"} speaking={voiceState.message === "聞き取り中…"} />}
               {voiceConnected && (
                 <button
@@ -375,13 +293,11 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                 <FiArrowUp aria-hidden="true" />
               </button>
             </div>
-            <p className="ask-composer-foot" role="status" aria-live="polite">
-              {voiceState.caption
-                ? <span className="ask-caption">{voiceState.caption}</span>
-                : voiceState.message
-                  ? <span>{voiceState.message}</span>
-                  : <span>Enterで送信 · Shift+Enterで改行{busy ? " · 回答を待っています" : ""}</span>}
-            </p>
+            {(voiceState.caption || voiceState.message) && (
+              <p className="ask-composer-foot" role="status" aria-live="polite">
+                {voiceState.caption ? <span className="ask-caption">{voiceState.caption}</span> : <span>{voiceState.message}</span>}
+              </p>
+            )}
           </form>
         </section>
 
@@ -391,15 +307,6 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       </div>
     </div>
   );
-}
-
-function fold(value: string): string {
-  return value.normalize("NFKC").toLowerCase();
-}
-
-function singleTemplate(documents: DocumentSummary[]): string {
-  const ids = new Set(documents.map((document) => document.templateId));
-  return ids.size === 1 ? [...ids][0] : "";
 }
 
 function documentLabel(document: DocumentSummary): string {
@@ -595,5 +502,113 @@ function EvidencePanel({ evidence, onClose, onOpenReview }: { evidence: Evidence
       <button type="button" className="primary compact" onClick={() => onOpenReview(evidence.jobId, evidence.targetPath)}><FiExternalLink aria-hidden="true" />書類でこの欄を確認・修正</button>
       <a className="ask-evidence-link" href={evidenceHref(evidence)} target="_blank" rel="noopener">新しいタブで開く</a>
     </aside>
+  );
+}
+
+function ReadingView({ reading, onOpenReview }: { reading: ChatReading; onOpenReview: (jobId: string) => void }) {
+  const queue = useReadingQueue();
+  const queued = reading.jobId ? queue.find((item) => item.jobId === reading.jobId) ?? null : null;
+  const preview = chatReadings.preview(reading.id);
+  const hasFile = chatReadings.hasFile(reading.id);
+  const failed = reading.state === "failed" || (queued !== null && ["FAILED", "INTERRUPTED"].includes(queued.status));
+  return (
+    <>
+      <div className="ask-msg user image">
+        {preview
+          ? <img className="ask-image" src={preview} alt={reading.fileName} />
+          : <div className="ask-bubble"><FiImage aria-hidden="true" /> {reading.fileName}</div>}
+      </div>
+      <div className={`ask-msg bot reading${reading.state === "choosing" ? " clarifying" : ""}${failed ? " failed" : ""}`}>
+        <span className="ask-avatar" aria-hidden="true">AI</span>
+        <div className="ask-bubble">
+          {reading.state === "classifying" && <p className="ask-reading-status" role="status"><Spinner />どのテンプレートの書類か確かめています…</p>}
+          {reading.state === "choosing" && (
+            <>
+              <p className="ask-answer">
+                {reading.candidates.length === 0
+                  ? "使用中のテンプレートと一致しませんでした。この書類のテンプレートを作成してから、もう一度送ってください。"
+                  : reading.matched ? "どのテンプレートで読み取りますか？"
+                  : "はっきり一致するテンプレートがありませんでした。近いものを選ぶと読み取ります。"}
+              </p>
+              {!hasFile && reading.candidates.length > 0 && <p className="ask-reading-note">画面を再読み込みしたため、画像をもう一度送ってください。</p>}
+              {reading.candidates.length > 0 && (
+                <div className="ask-template-cards" role="group" aria-label="テンプレートを選ぶ">
+                  {reading.candidates.map((candidate) => (
+                    <button
+                      key={candidate.templateVersionId}
+                      type="button"
+                      className="ask-template-card"
+                      disabled={!hasFile}
+                      onClick={() => chatReadings.choose(reading.id, candidate)}
+                    >
+                      <img src={`${candidate.thumbnailUrl}?width=240`} alt="" loading="lazy" />
+                      <span>{candidate.templateName}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div><button type="button" className="link-button" onClick={() => chatReadings.dismiss(reading.id)}>{reading.candidates.length === 0 ? "閉じる" : "読み取らない"}</button></div>
+            </>
+          )}
+          {reading.state === "starting" && <p className="ask-reading-status" role="status"><Spinner />「{reading.templateName}」で読み取りを始めています…</p>}
+          {reading.state === "queued" && (
+            <QueuedStatus
+              reading={reading}
+              status={queued?.status ?? "QUEUED"}
+              progress={queued?.progressPercent ?? 0}
+              error={queued?.errorMessage ?? null}
+              onOpenReview={onOpenReview}
+            />
+          )}
+          {reading.state === "failed" && (
+            <div className="ask-failed">
+              <p role="alert"><FiAlertTriangle aria-hidden="true" />{reading.error}</p>
+              <div className="ask-reading-actions">
+                {hasFile && (
+                  <button type="button" className="secondary compact" onClick={() => chatReadings.retry(reading.id)}>
+                    <FiRefreshCw aria-hidden="true" />もう一度試す
+                  </button>
+                )}
+                <button type="button" className="link-button" onClick={() => chatReadings.dismiss(reading.id)}>閉じる</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** A reading sent to the queue: its progress, then a link to review it (never opened automatically). */
+function QueuedStatus({ reading, status, progress, error, onOpenReview }: {
+  reading: ChatReading;
+  status: string;
+  progress: number;
+  error: string | null;
+  onOpenReview: (jobId: string) => void;
+}) {
+  const name = `「${reading.templateName}」`;
+  if (status === "REVIEW_REQUIRED" || status === "CONFIRMED") {
+    return (
+      <div className="ask-reading-done">
+        <p className="ask-answer">
+          <FiCheck aria-hidden="true" />
+          {status === "CONFIRMED" ? `${name}で読み取り、確定済みです。` : `${name}で読み取りました。右上の「読み取り状況」から確認できます。`}
+        </p>
+        {reading.jobId && (
+          <button type="button" className="secondary compact" onClick={() => onOpenReview(reading.jobId!)}>
+            <FiExternalLink aria-hidden="true" />{status === "CONFIRMED" ? "結果を開く" : "確認する"}
+          </button>
+        )}
+      </div>
+    );
+  }
+  if (status === "FAILED" || status === "INTERRUPTED" || status === "CANCELLED") {
+    return <p role="alert" className="ask-reading-error"><FiAlertTriangle aria-hidden="true" />{error ?? `${name}で読み取れませんでした。`}</p>;
+  }
+  return (
+    <p className="ask-reading-status" role="status">
+      <Spinner />{name}で読み取っています{progress > 0 ? `（${progress}%）` : "（順番待ち）"}。終わると右上の「読み取り状況」に入ります。
+    </p>
   );
 }

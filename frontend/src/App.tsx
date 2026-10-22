@@ -9,9 +9,12 @@ const ShelfPage = lazy(() => import("./pages/ShelfPage").then(module => ({ defau
 import type { ShelfSelection } from "./pages/ShelfPage";
 import { ItemJoinEditorHost } from "./components/TemplateItemJoinEditor";
 import { DocumentNameEditorHost } from "./components/TemplateDocumentNameEditor";
+import { TemplateMemoryHost } from "./components/TemplateMemoryDialog";
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
 import { Spinner } from "./components/Spinner";
+import { ReadingQueueMenu } from "./components/ReadingQueueMenu";
+import { readingQueue, useReadingQueuePolling, type QueuedReading } from "./readingQueue";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
@@ -20,7 +23,7 @@ type Page = "ocr" | "review" | "job" | "ask" | "shelf";
 type ReviewReturn = "ocr" | "ask" | "shelf";
 const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "チャットへ戻る", shelf: "書類棚へ戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
-type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean };
+type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean; action?: () => void };
 const RECENT_KEY = "document-ocr-recent-jobs";
 const ATTENTION_STATUSES = new Set([
   "CREATED",
@@ -188,6 +191,25 @@ export default function App() {
     setMonitoredJobId(job.id);
     setPage("job");
   };
+  const openQueuedReading = (item: QueuedReading) => {
+    if (page === "review" && reviewJobId === item.jobId) return;
+    const open = () => {
+      if (item.status === "REVIEW_REQUIRED" || item.status === "CONFIRMED") {
+        openReview(item.jobId);
+        return;
+      }
+      setNavigationGuard(null);
+      setMonitoredJobId(item.jobId);
+      setPage("job");
+    };
+    // The menu is reachable from every page: leaving unsaved work asks first, like the side menu.
+    if (navigationGuard) {
+      setPendingNavigation({ page: item.status === "REVIEW_REQUIRED" ? "review" : "job", guard: navigationGuard, action: open });
+      return;
+    }
+    open();
+  };
+  useReadingQueuePolling();
   const applyNavigation = (nextPage: Page) => {
     if (nextPage === page) return;
     if (nextPage !== "review") {
@@ -329,8 +351,28 @@ export default function App() {
         />}
         {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={() => { void refreshJobs(); navigateTo(reviewReturn); }}
           onConfirmed={({ templateId, documentName }) => {
-            // A confirmed document goes on the shelf: show its template's documents (newest first).
             void refreshJobs();
+            // A document from the reading queue: go on to the next one waiting for review.
+            const queued = readingQueue.snapshot().some((item) => item.jobId === reviewJobId);
+            if (queued) {
+              readingQueue.setStatus(reviewJobId, "CONFIRMED");
+              const next = readingQueue.nextReview(reviewJobId);
+              const waiting = readingQueue.snapshot().filter((item) => item.status === "REVIEW_REQUIRED").length;
+              const running = readingQueue.running().length;
+              if (next) {
+                openReview(next.jobId);
+                showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました`,
+                  message: `次の書類「${next.fileName}」を開きました（確認待ち あと${waiting}件${running > 0 ? `・読み取り中 ${running}件` : ""}）。` });
+                return;
+              }
+              if (running > 0) {
+                applyNavigation("ocr");
+                showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました`,
+                  message: `残り${running}件は読み取り中です。終わったものから確認できます。` });
+                return;
+              }
+            }
+            // A confirmed document goes on the shelf: show its template's documents (newest first).
             updateShelfSelection({ templateId: templateId || null, jobId: null, query: "" });
             applyNavigation("shelf");
             showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました` });
@@ -346,14 +388,23 @@ export default function App() {
         />}
         </Suspense>
       </main>
+      <ReadingQueueMenu onOpen={openQueuedReading} />
       <ToastViewport />
       <ItemJoinEditorHost />
       <DocumentNameEditorHost />
+      <TemplateMemoryHost />
       {pendingNavigation && (
         <NavigationConfirmDialog
           guard={pendingNavigation.guard}
           onCancel={() => setPendingNavigation(null)}
           onConfirm={() => {
+            if (pendingNavigation.action) {
+              const action = pendingNavigation.action;
+              setPendingNavigation(null);
+              setNavigationGuard(null);
+              action();
+              return;
+            }
             if (pendingNavigation.resetOcrWorkspace) {
               setPendingNavigation(null);
               setNavigationGuard(null);

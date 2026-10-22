@@ -51,6 +51,12 @@
 .voice-pill button { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; border: 1px solid transparent; background: transparent; color: #334155; font-size: 16px; cursor: pointer; }
 .voice-pill button:hover:not(:disabled) { background: #eef2f7; }
 .voice-pill button:disabled { color: #a3adba; cursor: not-allowed; }
+.voice-pill .voice-text-toggle.is-on { background: #e0ecf6; color: #1f5f8b; }
+.voice-text { display: flex; align-items: flex-end; gap: 6px; width: min(340px, calc(100vw - 24px)); padding: 6px; border-radius: 14px; background: #ffffffee; border: 1px solid #cbd5e1; box-shadow: 0 6px 20px #0f172a2e; backdrop-filter: blur(4px); }
+.voice-text textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; font: inherit; font-size: 14px; line-height: 1.45; padding: 4px 6px; color: #1e293b; }
+.voice-text:focus-within { border-color: #1f5f8b; }
+.voice-text button { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; border: 0; background: #1f5f8b; color: #fff; font-size: 15px; cursor: pointer; }
+.voice-text button:disabled { background: #cbd5e1; cursor: not-allowed; }
 .voice-pill .voice-grip { width: 24px; color: #94a3b8; cursor: grab; touch-action: none; }
 .voice-overlay.is-dragging .voice-grip { cursor: grabbing; }
 .voice-pill .voice-mic { width: 42px; height: 42px; background: #1f5f8b; color: #fff; font-size: 18px; position: relative; }

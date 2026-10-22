@@ -118,7 +118,9 @@ class PlanningCatalog:
             return
         row, column = self.coordinates(mention)
         cell = self.targets[ref].get("recordCell") or {}
-        pool = self.pool(mention, row=row or cell.get("rowNumber"), column=column)
+        pool = self.pool(
+            mention, row=row or cell.get("rowNumber"), column=column, other_tables="include"
+        )
         self.unambiguous(ref, pool, mention)
 
     def names(self, ref: str) -> set[str]:
@@ -158,7 +160,14 @@ class PlanningCatalog:
         table_ref: str | None = None,
         table_mention: str | None = None,
         kind: str = "field",
+        other_tables: str = "ask",
     ) -> list[str]:
+        """Cells an address may mean.
+
+        ``other_tables``: when the recent table has no cell of the named column, cells of
+        that name in other tables are offered as a question ("ask"), or, for checking a
+        choice the user already made from that question, included ("include").
+        """
         # Explicit table names override history, but never a manual scope restriction.
         text = normalized(table_mention or mention)
         explicit = {
@@ -201,6 +210,19 @@ class PlanningCatalog:
             ]
             if independent:
                 result = independent
+            else:
+                # Another table is never switched to silently: its cells of that name become
+                # the choices of a question (2026-10-22), not a pool the planner picks from.
+                elsewhere = [
+                    r
+                    for r in self._pool(None, row, column, kind)
+                    if (self.targets[r].get("recordCell") or {}).get("tableId") != table_id
+                    and self.names(r) & mentioned
+                ]
+                if elsewhere and other_tables == "include":
+                    result = elsewhere
+                elif elsewhere:
+                    raise PlanningIssue("target", tuple(elsewhere[:5]))
         return result
 
     def column_rows(self, mention: str) -> tuple[str, ...] | None:

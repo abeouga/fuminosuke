@@ -16,9 +16,9 @@ test("releases previews on replacement and unmount", () => {
   const first = new File(["a"], "first.png", { type: "image/png" });
   const second = new File(["b"], "second.png", { type: "image/png" });
   const onChange = vi.fn();
-  const { rerender, unmount } = render(<OcrImagePicker file={first} onChange={onChange} />);
+  const { rerender, unmount } = render(<OcrImagePicker files={[first]} onChange={onChange} />);
   expect(screen.getByRole("img")).toHaveAttribute("src", "blob:first");
-  rerender(<OcrImagePicker file={second} onChange={onChange} />);
+  rerender(<OcrImagePicker files={[second]} onChange={onChange} />);
   expect(revoke).toHaveBeenCalledWith("blob:first");
   expect(screen.getByRole("img")).toHaveAttribute("src", "blob:second");
   expect(create).toHaveBeenCalledTimes(2);
@@ -28,7 +28,7 @@ test("releases previews on replacement and unmount", () => {
 
 test("cancelled or invalid file choices preserve the current file", () => {
   const onChange = vi.fn();
-  render(<OcrImagePicker file={new File(["a"], "kept.png", { type: "image/png" })} onChange={onChange} />);
+  render(<OcrImagePicker files={[new File(["a"], "kept.png", { type: "image/png" })]} onChange={onChange} />);
   const input = screen.getByLabelText("帳票画像を置き換える");
   fireEvent.change(input, { target: { files: [] } });
   expect(onChange).not.toHaveBeenCalled();

@@ -133,7 +133,6 @@ class TemplateFieldHintView(ApiModel):
     keywords: list[str]
     keywords_enabled: bool
     keywords_forced: bool
-    instruction: str
 
 
 class TemplateFieldHintSettingsView(ApiModel):
@@ -147,7 +146,6 @@ class TemplateFieldHintUpdate(ApiModel):
     keywords: list[str] = Field(default_factory=list, max_length=500)
     keywords_enabled: bool = True
     keywords_forced: bool = False
-    instruction: str = Field(default="", max_length=300)
 
 
 class TemplateFieldHintSettingsUpdate(ApiModel):
@@ -626,7 +624,7 @@ class TemplateItemJoinMember(ApiModel):
 class TemplateItemJoinItem(ApiModel):
     id: str | None = None
     name: str = Field(max_length=200)
-    kind: Literal["join", "order"] = "join"
+    kind: Literal["join", "order", "sections"] = "join"
     separator: str = Field(default="", max_length=10)
     members: list[TemplateItemJoinMember] = Field(max_length=100)
 
@@ -642,10 +640,20 @@ class TemplateItemSection(ApiModel):
     members: list[TemplateItemSectionMember]
 
 
+class TemplateItemBlock(ApiModel):
+    """A table, a heading or items under no heading, in form order (「結果の表示順」)."""
+
+    kind: Literal["record", "parent", "independent"]
+    title: str
+    key: str
+    paths: list[str]
+
+
 class TemplateItemJoinsView(ApiModel):
     items: list[TemplateItemJoinItem]
     suggestions: list[TemplateItemJoinItem] = Field(default_factory=list)
     sections: list[TemplateItemSection] = Field(default_factory=list)
+    blocks: list[TemplateItemBlock] = Field(default_factory=list)
 
 
 class TemplateItemJoinsUpdate(ApiModel):
@@ -743,6 +751,60 @@ def replace_template_field_settings(
         expected_revision=payload.expected_revision,
     )
     return TemplateFieldHintSettingsView.model_validate(result)
+
+
+class TemplateMemoryBox(ApiModel):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class TemplateMemoryItem(ApiModel):
+    id: str
+    label: str
+    rule: str
+    example_before: str | None
+    example_after: str | None
+    hit_count: int
+    updated_at: str
+    boxes: list[TemplateMemoryBox]
+
+
+class TemplateMemoryView(ApiModel):
+    template_id: str
+    items: list[TemplateMemoryItem]
+
+
+@router.get(
+    "/templates/{template_id}/memory",
+    response_model=TemplateMemoryView,
+    response_model_by_alias=True,
+)
+def get_template_memory(
+    request: Request,
+    template_id: str,
+    template_version_id: str = Query(alias="templateVersionId"),
+) -> TemplateMemoryView:
+    """Writing rules learned at confirmation, with the cells of each item."""
+    from app.services.template_field_memory_service import TemplateFieldMemoryService
+
+    return TemplateMemoryView.model_validate(
+        TemplateFieldMemoryService(request.app.state.database, request.app.state.storage)
+        .view(template_id, template_version_id)
+    )
+
+
+@router.delete(
+    "/templates/{template_id}/memory/{memory_id}", status_code=204, response_class=Response
+)
+def delete_template_memory(request: Request, template_id: str, memory_id: str) -> Response:
+    from app.services.template_field_memory_service import TemplateFieldMemoryService
+
+    TemplateFieldMemoryService(request.app.state.database, request.app.state.storage).delete(
+        template_id, memory_id
+    )
+    return Response(status_code=204)
 
 
 @router.delete(

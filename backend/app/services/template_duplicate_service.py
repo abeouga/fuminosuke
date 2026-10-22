@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import yaml
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from app.core.errors import AppError
 from app.db.models import (
@@ -24,6 +24,7 @@ from app.db.models import (
     TemplateDefinitionRevision,
     TemplateDisplayName,
     TemplateFieldHint,
+    TemplateFieldMemory,
     TemplateItemJoin,
     TemplateVersion,
 )
@@ -535,6 +536,21 @@ class TemplateDuplicateService(TemplateVersionService):
                     keywords_forced=source_hint.keywords_forced,
                     instruction=source_hint.instruction,
                 ))
+            if inspect(session.connection()).has_table(TemplateFieldMemory.__tablename__):
+                for source_memory in session.scalars(select(TemplateFieldMemory).where(
+                    TemplateFieldMemory.template_id == owner.id,
+                )):
+                    session.add(TemplateFieldMemory(
+                        template_id=template.id,
+                        target_patterns_json=[
+                            generic_targets.get(target, target)
+                            for target in source_memory.target_patterns_json
+                        ],
+                        field_label=source_memory.field_label, rule=source_memory.rule,
+                        example_before=source_memory.example_before,
+                        example_after=source_memory.example_after,
+                        hit_count=source_memory.hit_count,
+                    ))
             for source_name in session.scalars(select(TemplateDisplayName).where(
                 TemplateDisplayName.template_id == owner.id,
             )):

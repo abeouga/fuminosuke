@@ -121,3 +121,5 @@ class ResolvedInstruction:
     undo_operation_id: str | None = None
     retarget_operation_id: str | None = None
     retarget_handle: str | None = None
+    # A checked rewrite of existing values (column_rewrite), not a dialogue slot answer.
+    rewrite: bool = False

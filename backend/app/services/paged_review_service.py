@@ -22,6 +22,7 @@ from app.ocr.deterministic_mapper import assign_mapped_reading, get_mapped_readi
 from app.services.paged_document_snapshot import load_document_snapshot
 from app.services.paged_workbook import ADAPTER as OUTPUT_ADAPTER
 from app.services.print_layout_service import digest
+from app.services.review_block_order import with_blocks
 from app.services.template_mutation import begin_immediate
 from app.validation.business_validators import DeterministicValidator
 
@@ -261,7 +262,11 @@ class PagedReviewService:
             **metadata,
             "jobId": job.id,
             "revision": stored.revision,
-            "reviewStructure": snapshot.get("reviewStructure"),
+            "reviewStructure": with_blocks(
+                snapshot.get("reviewStructure"),
+                (snapshot.get("config") or {}).get("fieldMappings"),
+                snapshot.get("layout"),
+            ),
             "pages": result_pages,
             "confirmed": job.status == "CONFIRMED",
             "documentName": stored.document_name,

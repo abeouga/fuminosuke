@@ -10,6 +10,7 @@ import { TemplatePrintFiles } from "./TemplatePrintFiles";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "./TemplateItemJoinEditor";
 import { openDocumentNameEditor } from "./TemplateDocumentNameEditor";
+import { openTemplateMemory } from "./TemplateMemoryDialog";
 import { Spinner } from "./Spinner";
 
 export type ReadingTemplateCard = {
@@ -106,6 +107,7 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                             onFields={() => openTemplateWorkspace("manage", version.id, "fields")}
                             onJoins={() => openItemJoinEditor(template.id, version.id)}
                             onDocumentName={() => openDocumentNameEditor(template.id, template.name)}
+                            onMemory={() => openTemplateMemory(template.id, template.name, version)}
                           />
                           <button
                             type="button"
@@ -138,13 +140,14 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
 }
 
 /** 「編集」: what to edit — the form's structure, the reading settings, or how items are shown. */
-function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins, onDocumentName }: {
+function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins, onDocumentName, onMemory }: {
   templateName: string;
   disabled: boolean;
   onStructure: () => void;
   onFields: () => void;
   onJoins: () => void;
   onDocumentName: () => void;
+  onMemory: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -184,7 +187,11 @@ function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoin
           </button>
           <button type="button" role="menuitem" onClick={choose(onFields)}>
             <strong>項目の読み取り設定</strong>
-            <small>欄ごとに候補語や読み方の指示を付けます。</small>
+            <small>欄ごとに候補語を付けます。</small>
+          </button>
+          <button type="button" role="menuitem" onClick={choose(onMemory)}>
+            <strong>メモリ</strong>
+            <small>確定した書類から覚えた書き方のルールと、その欄を見ます。</small>
           </button>
           <button type="button" role="menuitem" onClick={choose(onDocumentName)}>
             <strong>ファイル名の付け方</strong>

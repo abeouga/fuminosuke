@@ -25,6 +25,7 @@ from app.db.session import Database
 from app.domain.field_targets import is_supported_field_path
 from app.domain.template_config import parse_template_config
 from app.layout_analysis.models import LayoutCell, LayoutDefinition
+from app.services.review_block_order import with_blocks
 from app.services.review_display_structure import build_review_display_structure
 from app.storage.local_storage import LocalStorageService
 
@@ -33,7 +34,7 @@ MAX_MEMBERS = 30
 MAX_TEXT = 30
 MAX_LINES = 3
 MAX_SEPARATOR = 5
-KIND_NAMES = {"join": "まとめた項目", "order": "順番"}
+KIND_NAMES = {"join": "まとめた項目", "order": "順番", "sections": "結果の表示順"}
 # Printed text that opens around the next item: 「号（　番地）」 → 「（」 goes with 番地.
 _OPENING = "(（「『[［〔【<＜"
 
@@ -117,11 +118,13 @@ class TemplateItemJoinService:
             _require_template(session, template_id)
             sections: list[dict[str, Any]] = []
             suggestions: list[dict[str, Any]] = []
+            blocks: list[dict[str, Any]] = []
             if template_version_id:
-                sections, suggestions = self._analysis(
-                    _version(session, template_id, template_version_id)
-                )
+                version = _version(session, template_id, template_version_id)
+                sections, suggestions = self._analysis(version)
+                blocks = self._blocks(version)
             return {
+                "blocks": blocks,
                 "items": _joins(session, template_id),
                 "suggestions": suggestions,
                 "sections": [
@@ -209,6 +212,52 @@ class TemplateItemJoinService:
                 "kind": "join",
                 "separator": AI_SEPARATORS[str(choice)],
                 "members": section["textMembers"],
+            })
+        return result
+
+    def _blocks(self, version: TemplateVersion) -> list[dict[str, Any]]:
+        """The result's blocks in form order, named for 「結果の表示順」."""
+        if self._storage is None or not version.layout_json:
+            return []
+        try:
+            config = parse_template_config(
+                self._storage.read_bytes(version.config_relative_path).decode("utf-8")
+            )
+            layout = LayoutDefinition.model_validate(version.layout_json)
+        except Exception:
+            return []
+        serialized = [
+            mapping.model_dump(mode="json", by_alias=True)
+            for mapping in config.field_mappings
+            if mapping.enabled
+        ]
+        structure = build_review_display_structure(layout, serialized)
+        titles = {
+            str(section.get("id")): str(section.get("title") or "")
+            for kind in ("recordSections", "parentSections")
+            for section in structure.get(kind, [])
+            if isinstance(section, dict)
+        }
+        labels = {
+            str(field.get("id")): str(field.get("label") or "")
+            for field in structure.get("fields", [])
+            if isinstance(field, dict)
+        }
+        result: list[dict[str, Any]] = []
+        shown = with_blocks(structure, serialized, layout)
+        assert isinstance(shown, dict)
+        for block in shown["blocks"]:
+            if not block["paths"]:
+                continue
+            if block["kind"] == "independent":
+                names = [labels.get(i, "") for i in block["fieldIds"] if labels.get(i)]
+                more = "…" if len(names) > 3 else ""
+                title = f"見出しのない項目（{'、'.join(names[:3])}{more}）"
+            else:
+                title = titles.get(str(block["id"])) or "名称未設定"
+            result.append({
+                "kind": block["kind"], "title": title, "key": block["paths"][0],
+                "paths": block["paths"],
             })
         return result
 
@@ -419,12 +468,14 @@ def _joins(session: Session, template_id: str) -> list[dict[str, Any]]:
 def _validate(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if len(items) > MAX_JOINS:
         raise _invalid("items", f"まとめ方と順番は合わせて{MAX_JOINS}件までです。")
-    used: dict[str, set[str]] = {"join": set(), "order": set()}
+    used: dict[str, set[str]] = {"join": set(), "order": set(), "sections": set()}
     result: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         kind = str(item.get("kind") or "join")
         if kind not in used:
             raise _invalid(f"items.{index}.kind", "まとめ方の種類を確認できません。")
+        if kind == "sections" and used["sections"]:
+            raise _invalid(f"items.{index}.kind", "結果の表示順は1つだけ保存できます。")
         name = " ".join(str(item.get("name") or "").split())
         if not name or len(name) > 100:
             raise _invalid(

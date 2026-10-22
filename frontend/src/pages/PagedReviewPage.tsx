@@ -5,11 +5,15 @@ import { api } from "../api";
 import { displayName } from "../userMessages";
 import {
   AnchoredReviewPopover,
+  ReviewPaint,
+  ReviewPenSurface,
+  useReviewPaint,
   ReviewChecklists,
   ReviewJoins,
   ReviewRenaming,
   checklistOptionsByPath,
   buildReviewDisplayModel,
+  reviewDisplayBlocks,
   CellStatusPopover,
   MarkStatusPopover,
   markPopoverIsWide,
@@ -162,6 +166,8 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
     const stop = onItemJoinsSaved((savedTemplateId, items) => { if (active && savedTemplateId === templateId) setItemJoins(items); });
     return () => { active = false; stop(); };
   }, [templateId]);
+  // Only this page's tables and headings; blocks keep the form order of the whole document.
+  const displayBlocks = useMemo(() => reviewDisplayBlocks(displayModel, result?.reviewStructure, itemJoins), [displayModel, result?.reviewStructure, itemJoins]);
   const joinContext = useMemo(() => ({
     byPath: joinByPath(itemJoins),
         orders: displayOrders(itemJoins),
@@ -172,6 +178,11 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
     try { setItemNames((await api.renameItem(templateId, entry.path, name || null)).names); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "項目名を変更できませんでした。"); }
   };
+  // The check pen paints traced cells green; it never changes a reading or its 要確認.
+  const [pen, setPen] = useState(false);
+  // Ending the check pen goes back to 記入欄 (the segments show nothing chosen while it is on).
+  const changePen = (on: boolean) => { setPen(on); if (!on) { setInteractionMode("edit"); setSelectedId(null); } };
+  const { painted, paint } = useReviewPaint(page ? `${jobId}.${page.pageId}` : null);
   const warningPaths = useMemo(() => new Set(pageEntries
     .filter((entry) => entry.value.status === "uncertain" || Boolean(entry.value.reviewReason))
     .map((entry) => entry.path)), [pageEntries]);
@@ -415,12 +426,25 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
               if (mode === "reorder") setSelectedId(null);
             }}
             onNextWarning={selectNextWarning}
+            penActive={pen && !result.confirmed}
+            onPenChange={changePen}
           />
-          <ReviewChecklists.Provider value={checklistOptionsByPath(pagePreviews)}><ReviewRenaming.Provider value={interactionMode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><div className="ocr-edit-tables paged-review-results">
-            {displayModel.recordSections.map((section) => (
+          <ReviewChecklists.Provider value={checklistOptionsByPath(pagePreviews)}><ReviewRenaming.Provider value={interactionMode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={(path) => { const entry = pageEntries.find((item) => item.path === path); if (entry) selectEntry(entry); }} onExit={() => changePen(false)}><div className="ocr-edit-tables paged-review-results">
+            {displayBlocks.map((block) => block.kind === "record" ? (
               <GenericRecordReviewTable
-                key={section.id}
-                section={section}
+                key={block.key}
+                section={block.section}
+                after={block.attached && (
+                  <KeyValueReviewTable
+                    entries={block.attached.entries}
+                    selectedPath={selectedEntry?.path ?? null}
+                    warningPaths={warningPaths}
+                    choicePaths={choicePaths}
+                    confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode !== "edit"}
+                    onSelect={selectEntry}
+                    onEdit={editEntry}
+                  />
+                )}
                 selectedPath={selectedEntry?.path ?? null}
                 warningPaths={warningPaths}
                 choicePaths={choicePaths}
@@ -430,11 +454,22 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
                 onEdit={editEntry}
                 onMoveRow={moveRecordRow}
               />
-            ))}
-            {displayModel.parentSections.map((section) => (
-              <ReviewTableSection key={section.id} title={section.title} joinPaths={sectionItemPaths(section.entries)}>
+            ) : block.kind === "parent" ? (
+              <ReviewTableSection key={block.key} title={block.section.title} joinPaths={sectionItemPaths(block.section.entries)}>
                 <KeyValueReviewTable
-                  entries={section.entries}
+                  entries={block.section.entries}
+                  selectedPath={selectedEntry?.path ?? null}
+                  warningPaths={warningPaths}
+                  choicePaths={choicePaths}
+                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode !== "edit"}
+                  onSelect={selectEntry}
+                  onEdit={editEntry}
+                />
+              </ReviewTableSection>
+            ) : (
+              <ReviewTableSection key={block.key} title="独立項目">
+                <IndependentReviewGroups
+                  groups={block.groups}
                   selectedPath={selectedEntry?.path ?? null}
                   warningPaths={warningPaths}
                   choicePaths={choicePaths}
@@ -444,21 +479,8 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
                 />
               </ReviewTableSection>
             ))}
-            {displayModel.independentEntries.length > 0 && (
-              <ReviewTableSection title="独立項目">
-                <IndependentReviewGroups
-                  groups={displayModel.independentGroups}
-                  selectedPath={selectedEntry?.path ?? null}
-                  warningPaths={warningPaths}
-                  choicePaths={choicePaths}
-                  confirmed={result.confirmed || lifecycleBusy || lifecycleUncertain || interactionMode !== "edit"}
-                  onSelect={selectEntry}
-                  onEdit={editEntry}
-                />
-              </ReviewTableSection>
-            )}
-          </div></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider>
-          {!result.confirmed && interactionMode === "edit" && selected && selectedEntry && selected.markRecognitionMode !== "checklist" && (() => {
+          </div></ReviewPenSurface></ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider>
+          {!result.confirmed && !pen && interactionMode === "edit" && selected && selectedEntry && selected.markRecognitionMode !== "checklist" && (() => {
             const markPreview = selected.mappingType === "mark"
               ? pagePreviews.find(preview => preview.mappingId === selected.mappingId) : undefined;
             return (
@@ -468,13 +490,11 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
                       entry={{ ...selectedEntry, label: reviewEntryLabel(displayModel, selectedEntry) }}
                       preview={markPreview}
                       confirmed={busy || lifecycleBusy || lifecycleUncertain}
-                      onClose={() => setSelectedId(null)}
                       onChange={(patch) => edit(selected.mappingId, pageFieldPatch(patch))}
                     />
                   : <CellStatusPopover
                       entry={{ ...selectedEntry, label: reviewEntryLabel(displayModel, selectedEntry) }}
                       confirmed={lifecycleBusy || lifecycleUncertain}
-                      onClose={() => setSelectedId(null)}
                       onChange={(patch) => edit(selected.mappingId, pageFieldPatch(patch))}
                     />}
               </AnchoredReviewPopover>

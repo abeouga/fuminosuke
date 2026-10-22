@@ -1,4 +1,6 @@
-"""Per-item reading settings of a template series (2026-10-19).
+"""Per-item reading settings of a template series (2026-10-19): keywords.
+
+The reading instruction is the item's memory since 2026-10-22 (template_field_memory_service).
 
 An item is one field, or every row cell of a table column (the screen groups them).
 Settings belong to the template series like the former candidate sets: saving does
@@ -22,7 +24,6 @@ from app.db.mutation import require_revision, touch_template_version
 from app.db.session import Database
 from app.domain.template_candidates import (
     MAX_FIELD_HINT_COUNT,
-    MAX_FIELD_INSTRUCTION_LENGTH,
     MAX_FIELD_KEYWORD_COUNT,
     MAX_FIELD_KEYWORD_LENGTH,
     clean_candidate_text,
@@ -90,19 +91,49 @@ class TemplateFieldHintService:
 
     @staticmethod
     def snapshot(session: Session, template_id: str) -> dict[str, object]:
-        if not inspect(session.connection()).has_table(TemplateFieldHint.__tablename__):
-            return {SNAPSHOT_KEY: [], SNAPSHOT_HASH_KEY: None}
-        hints = [
-            {
-                "targetPatterns": list(row.target_patterns_json),
-                "label": row.field_label,
-                "keywords": list(row.keywords_json),
-                "keywordsEnabled": bool(row.keywords_enabled),
-                "keywordsForced": bool(row.keywords_forced),
-                "instruction": row.instruction,
-            }
-            for row in _rows(session, template_id)
-        ]
+        """Keywords of the settings and, as the reading instruction, each item's memory.
+
+        2026-10-22: the instruction is no longer typed; it is the rules the memory learned
+        (``TemplateFieldMemoryService``). Targets of one keyword item with different
+        memories become separate entries; memory-only targets get entries without keywords.
+        """
+        from app.services.template_field_memory_service import TemplateFieldMemoryService
+
+        instructions = TemplateFieldMemoryService.instructions(session, template_id)
+        has_hints = inspect(session.connection()).has_table(TemplateFieldHint.__tablename__)
+        hints: list[dict[str, object]] = []
+        covered: set[str] = set()
+        for row in _rows(session, template_id) if has_hints else []:
+            groups: dict[str | None, list[str]] = {}
+            for target in row.target_patterns_json:
+                groups.setdefault(instructions.get(target), []).append(target)
+                covered.add(target)
+            for instruction, targets in groups.items():
+                hints.append(
+                    {
+                        "targetPatterns": targets,
+                        "label": row.field_label,
+                        "keywords": list(row.keywords_json),
+                        "keywordsEnabled": bool(row.keywords_enabled),
+                        "keywordsForced": bool(row.keywords_forced),
+                        "instruction": instruction,
+                    }
+                )
+        memory_only: dict[str, list[str]] = {}
+        for target, instruction in sorted(instructions.items()):
+            if target not in covered:
+                memory_only.setdefault(instruction, []).append(target)
+        for instruction, targets in memory_only.items():
+            hints.append(
+                {
+                    "targetPatterns": targets,
+                    "label": "",
+                    "keywords": [],
+                    "keywordsEnabled": False,
+                    "keywordsForced": False,
+                    "instruction": instruction,
+                }
+            )
         if not hints:
             return {SNAPSHOT_KEY: [], SNAPSHOT_HASH_KEY: None}
         canonical = json.dumps(
@@ -146,7 +177,6 @@ def _settings(session: Session, template_id: str, version: TemplateVersion) -> d
                 "keywords": list(row.keywords_json),
                 "keywordsEnabled": bool(row.keywords_enabled),
                 "keywordsForced": bool(row.keywords_forced),
-                "instruction": row.instruction or "",
             }
             for row in _rows(session, template_id)
         ],
@@ -193,16 +223,7 @@ def _prepare(
             seen.add(target)
             targets.append(target)
         keywords = _keywords(item.get("keywords", []), f"{prefix}.keywords")
-        raw_instruction = item.get("instruction") or ""
-        if not isinstance(raw_instruction, str):
-            raise _invalid(f"{prefix}.instruction", "読み取り指示は文字で入力してください。")
-        instruction = raw_instruction.strip()
-        if len(instruction) > MAX_FIELD_INSTRUCTION_LENGTH:
-            raise _invalid(
-                f"{prefix}.instruction",
-                f"読み取り指示は{MAX_FIELD_INSTRUCTION_LENGTH}文字以内で入力してください。",
-            )
-        if not keywords and not instruction:
+        if not keywords:
             continue  # nothing set: the item has no settings
         prepared.append(
             {
@@ -211,7 +232,6 @@ def _prepare(
                 "keywords_json": keywords,
                 "keywords_enabled": item.get("keywordsEnabled", True) is not False,
                 "keywords_forced": item.get("keywordsForced") is True,
-                "instruction": instruction or None,
             }
         )
     return prepared

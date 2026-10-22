@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { displayOrders, joinByPath, joinedText, sortByOrder, type ItemJoin } from "../itemJoins";
+import { displayOrders, joinByPath, joinedText, sortBlocks, sortByOrder, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved } from "../components/TemplateItemJoinEditor";
 import { FiArrowLeft, FiCheck, FiCheckSquare, FiDownload, FiEdit3, FiExternalLink, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiX } from "react-icons/fi";
 import { showToast } from "../components/Toast";
@@ -10,8 +10,10 @@ import {
   structuredClient,
   type DocumentPage,
   type DocumentSummary,
+  type HeadingCell,
   type StructuredDocument,
   type StructuredReading,
+  type StructuredTable,
 } from "../structured/client";
 import { Spinner } from "../components/Spinner";
 
@@ -284,6 +286,23 @@ function readingPlace(reading: StructuredReading, tableTitle: string | null) {
   return reading.rowNumber ? `${tableTitle ?? reading.section ?? ""} ${reading.rowNumber}行目・${reading.label}` : reading.label;
 }
 
+type ShelfLine = StructuredReading | { join: ItemJoin; readings: StructuredReading[] };
+/** A table, or a heading (or items under no heading) with its lines. */
+type ItemGroup = { name: string; fieldIds: string[] };
+type ShelfBlock = { key: string; table: StructuredTable; lines?: ShelfLine[]; groups?: ItemGroup[] } | { key: string; name: string; lines: ShelfLine[]; groups?: ItemGroup[] };
+const firstReading = (line: ShelfLine) => "join" in line ? line.readings[0] : line;
+/** A selection box's name without its printed choices: 「区分（高・特・繁殖）」 → 「区分」. */
+function readingLabel(reading: StructuredReading): string {
+  if (!reading.choice) return reading.label;
+  const bare = reading.label.replace(/\s*[（(][^（）()]*[・、,，/／][^（）()]*[）)]\s*$/, "").trim();
+  return bare || reading.label;
+}
+/** 「登録No.の区分（…）」 under 「登録No.」 reads 「区分（…）」; a bare bracket keeps the whole name. */
+function subLabel(label: string, group: string): string {
+  const rest = label.startsWith(group) ? label.slice(group.length).replace(/^[の\s・]+/, "") : "";
+  return rest && !/^[（(]/.test(rest) ? rest : label;
+}
+
 function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry, onOpenReview }: {
   summary: DocumentSummary;
   folderName: string;
@@ -293,7 +312,7 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
   onRetry: () => void;
   onOpenReview: (jobId: string, field: string | null) => void;
 }) {
-  const [picked, setPicked] = useState<{ id: string; fromImage: boolean } | null>(null);
+  const [picked, setPicked] = useState<{ id: string; fromImage: boolean; heading?: boolean } | null>(null);
   const document = detail.document;
   const byId = useMemo(() => new Map(document?.fields.map((reading) => [reading.fieldId, reading]) ?? []), [document]);
   const tableTitles = useMemo(() => new Map(document?.tables.map((table) => [table.id, table.title]) ?? []), [document]);
@@ -315,32 +334,104 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
     return () => { active = false; stop(); };
   }, [summary.templateId]);
   // Items joined into one value (「調査場所」) are one line at their first item.
-  const shownSections = useMemo(() => {
+  const linesOf = useCallback((readings: StructuredReading[]) => {
     const byPath = joinByPath(joins);
-    return sections.map(([name, readings]) => {
-      const placed = new Set<ItemJoin>();
-      const lines: Array<StructuredReading | { join: ItemJoin; readings: StructuredReading[] }> = [];
-      for (const reading of readings) {
-        const join = byPath.get(reading.targetPath);
-        const members = join ? join.members.flatMap((member) => readings.filter((item) => item.targetPath === member.targetPath)) : [];
-        if (!join || members.length < 2) { lines.push(reading); continue; }
-        if (placed.has(join)) continue;
-        placed.add(join);
-        lines.push({ join, readings: members });
+    const placed = new Set<ItemJoin>();
+    const lines: ShelfLine[] = [];
+    for (const reading of readings) {
+      const join = byPath.get(reading.targetPath);
+      const members = join ? join.members.flatMap((member) => readings.filter((item) => item.targetPath === member.targetPath)) : [];
+      if (!join || members.length < 2) { lines.push(reading); continue; }
+      if (placed.has(join)) continue;
+      placed.add(join);
+      lines.push({ join, readings: members });
+    }
+    return sortByOrder(lines, (line) => "join" in line ? line.readings[0].targetPath : line.targetPath, displayOrders(joins));
+  }, [joins]);
+  // Blocks from the top of the form (or the saved block order); older servers: fields, then tables.
+  const shownBlocks = useMemo((): ShelfBlock[] => {
+    const tables = document?.tables ?? [];
+    if (!document?.blocks?.length) return [
+      ...sections.map(([name, readings]) => ({ key: `fields:${name}`, name, lines: linesOf(readings) })),
+      ...tables.map((table) => ({ key: `table:${table.id}`, table })),
+    ];
+    const result: ShelfBlock[] = [];
+    const shown = new Set<string>();
+    // Readings outside tables in the block's order (an item name's items kept together).
+    const inBlockOrder = (ids: readonly string[]) => ids
+      .map((id) => document.fields.find((reading) => reading.fieldId === id && reading.tableId === null))
+      .filter((reading): reading is StructuredReading => reading !== undefined);
+    for (const block of sortBlocks(document.blocks, joins)) {
+      if (block.kind === "record") {
+        const table = tables.find((item) => item.id === block.id);
+        // The heading's items outside the table's rows (「導入年月日・金額」) go with the table.
+        const attached = inBlockOrder(block.attachedFieldIds ?? []);
+        if (table) { result.push({ key: `table:${table.id}`, table, lines: attached.length ? linesOf(attached) : undefined, groups: block.itemGroups }); shown.add(table.id); }
+        continue;
       }
-      const sorted = sortByOrder(lines, (line) => "join" in line ? line.readings[0].targetPath : line.targetPath, displayOrders(joins));
-      return [name, sorted] as const;
-    });
-  }, [joins, sections]);
-  const current = picked ? byId.get(picked.id) ?? null : null;
+      const readings = inBlockOrder(block.fieldIds);
+      if (!readings.length) continue;
+      const name = block.kind === "parent" ? readings[0].section ?? "項目" : "基本項目";
+      result.push({ key: `fields:${block.kind}:${block.id ?? block.paths[0] ?? result.length}`, name, lines: linesOf(readings), groups: block.itemGroups });
+    }
+    for (const table of tables) if (!shown.has(table.id)) result.push({ key: `table:${table.id}`, table });
+    return result;
+  }, [document, joins, linesOf, sections]);
+  const current = picked && !picked.heading ? byId.get(picked.id) ?? null : null;
+  // A heading or item name picked on the image highlights what it names on the right.
+  const heading = picked?.heading ? document?.headings?.find((item) => item.cellId === picked.id) ?? null : null;
+  const headingFields = new Set(heading?.kind === "item" ? heading.fieldIds : []);
+  const headsSection = (name: string) => heading?.section === name;
+  const headsTable = (id: string) => heading?.kind === "table" && heading.tableIds.includes(id);
+  const headsColumn = (tableId: string, columnId: string) => heading?.kind === "column" && heading.columnId === columnId && heading.tableIds.includes(tableId);
   const valueRefs = useRef(new Map<string, HTMLButtonElement>());
+  const valuesPane = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (picked?.fromImage) valueRefs.current.get(picked.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!picked?.fromImage) return;
+    if (picked.heading) valuesPane.current?.querySelector(".heading-hit")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    else valueRefs.current.get(picked.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [picked]);
   const value = (reading: StructuredReading) => <ReadingValue key={reading.fieldId} reading={reading} active={current?.fieldId === reading.fieldId}
     buttonRef={(element) => { if (element) valueRefs.current.set(reading.fieldId, element); else valueRefs.current.delete(reading.fieldId); }}
     onPick={() => setPicked({ id: reading.fieldId, fromImage: false })} />;
 
+  // Items outside tables are a 2-column table (name, value) framed like the tables; no header row.
+  const fieldsView = (lines: ShelfLine[], groups: readonly ItemGroup[] = []) => {
+    // Items under one item name (「登録No.」) share a first cell spanning their rows.
+    const groupOf = new Map(groups.flatMap((group) => group.fieldIds.map((id) => [id, group] as const)));
+    const span = new Map<ItemGroup, number>();
+    for (const line of lines) {
+      const group = groupOf.get(firstReading(line).fieldId);
+      if (group) span.set(group, (span.get(group) ?? 0) + 1);
+    }
+    const nested = [...span.values()].some((count) => count >= 2);
+    const started = new Set<ItemGroup>();
+    const nameCells = (line: ShelfLine, label: string) => {
+      const group = groupOf.get(firstReading(line).fieldId);
+      if (!nested) return <th scope="row">{label}</th>;
+      if (!group || (span.get(group) ?? 0) < 2) return <th scope="row" colSpan={2}>{label}</th>;
+      const first = !started.has(group);
+      started.add(group);
+      return <>{first && <th scope="rowgroup" rowSpan={span.get(group)} className="shelf-item-group">{group.name}</th>}<th scope="row" className="shelf-item-sub">{subLabel(label, group.name)}</th></>;
+    };
+    return (
+      <div className="shelf-table-wrap shelf-fields">
+        <table className="shelf-table shelf-kv-table">
+          <tbody>{lines.map((line) => "join" in line
+            ? <tr key={`join:${line.join.name}`} className={`shelf-joined${line.readings.some((item) => headingFields.has(item.fieldId)) ? " heading-hit" : ""}`}>
+              {nameCells(line, line.join.name)}
+              <td><button type="button" className={`shelf-value${line.readings.some((item) => item.fieldId === current?.fieldId) ? " active" : ""}`}
+                title="原本の欄を表示" onClick={() => setPicked({ id: line.readings[0].fieldId, fromImage: false })}>
+                {joinedText(line.join.members, (path) => line.readings.find((item) => item.targetPath === path)?.value, line.join.separator ?? "") || <em>空欄</em>}
+                {line.readings.some((item) => item.status === "uncertain") && <small className="shelf-uncertain">要確認</small>}
+              </button></td>
+            </tr>
+            : <tr key={line.fieldId} className={headingFields.has(line.fieldId) ? "heading-hit" : undefined}>{nameCells(line, readingLabel(line))}<td>{value(line)}</td></tr>)}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
   return <article className="shelf-document">
     <header className="shelf-document-head">
       <button type="button" className="ghost compact shelf-back" onClick={onBack}><FiArrowLeft aria-hidden="true" />{backLabel}</button>
@@ -363,46 +454,44 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
       : <div className="shelf-document-body">
         <section className="shelf-viewer-pane" aria-label="原本">
           <PageViewer pages={document.pages ?? []} readings={document.fields} picked={current}
-            onPick={(reading) => setPicked({ id: reading.fieldId, fromImage: true })} />
+            headings={document.headings ?? []} pickedHeading={heading}
+            onPick={(reading) => setPicked({ id: reading.fieldId, fromImage: true })}
+            onPickHeading={(item) => setPicked({ id: item.cellId, fromImage: true, heading: true })} />
           {current
             ? <PickedField reading={current} place={readingPlace(current, current.tableId ? tableTitles.get(current.tableId) ?? null : null)}
               onOpen={() => onOpenReview(summary.jobId, current.targetPath)} />
-            : <p className="shelf-viewer-note">値か原本の枠を押すと、対応する場所を強調します。</p>}
+            : heading ? <p className="shelf-picked-heading" aria-live="polite">{headingText(heading, document, byId)}</p>
+            : <p className="shelf-viewer-note">値か原本の枠（見出し・項目名も）を押すと、対応する場所を強調します。</p>}
         </section>
-        <section className="shelf-values" aria-label="読み取り値">
-          {shownSections.map(([name, lines]) => <section key={name} className="shelf-section">
-            <h3>{name}</h3>
-            <div className="shelf-fields">
-              {lines.map((line) => "join" in line
-                ? <div key={`join:${line.join.name}`} className="shelf-field shelf-joined"><span>{line.join.name}</span>
-                  <button type="button" className={`shelf-value${line.readings.some((item) => item.fieldId === current?.fieldId) ? " active" : ""}`}
-                    title="原本の欄を表示" onClick={() => setPicked({ id: line.readings[0].fieldId, fromImage: false })}>
-                    {joinedText(line.join.members, (path) => line.readings.find((item) => item.targetPath === path)?.value, line.join.separator ?? "") || <em>空欄</em>}
-                    {line.readings.some((item) => item.status === "uncertain") && <small className="shelf-uncertain">要確認</small>}
-                  </button></div>
-                : <div key={line.fieldId} className="shelf-field"><span>{line.label}</span>{value(line)}</div>)}
-            </div>
-          </section>)}
-          {document.tables.map((table) => <section key={table.id} className="shelf-section">
-            <h3>{table.title}</h3>
+        <section ref={valuesPane} className="shelf-values" aria-label="読み取り値">
+          {shownBlocks.map((block) => "table" in block
+            ? <section key={block.key} className={`shelf-section${headsTable(block.table.id) ? " heading-hit" : ""}`}>
+            <h3>{block.table.title}</h3>
             <div className="shelf-table-wrap">
               <table className="shelf-table">
-                <thead><tr><th scope="col" className="shelf-row-number">行</th>{table.columns.map((column) => <th key={column.id} scope="col">{column.label}</th>)}</tr></thead>
-                <tbody>{table.rows.map((row) => <tr key={row.id}>
+                <thead><tr><th scope="col" className="shelf-row-number">行</th>{block.table.columns.map((column) => <th key={column.id} scope="col" className={headsColumn(block.table.id, column.id) ? "heading-hit" : undefined}>{column.label}</th>)}</tr></thead>
+                <tbody>{block.table.rows.map((row) => <tr key={row.id}>
                   <th scope="row" className="shelf-row-number">{row.rowNumber}</th>
-                  {table.columns.map((column) => {
+                  {block.table.columns.map((column) => {
                     const fieldId = row.cells.find((cell) => cell.columnId === column.id)?.fieldId;
                     const reading = fieldId ? byId.get(fieldId) : undefined;
-                    return <td key={column.id}>{reading ? value(reading) : null}</td>;
+                    return <td key={column.id} className={headsColumn(block.table.id, column.id) ? "column-hit" : undefined}>{reading ? value(reading) : null}</td>;
                   })}
                 </tr>)}</tbody>
               </table>
             </div>
+            {block.lines && fieldsView(block.lines, block.groups)}
+          </section>
+            : <section key={block.key} className={`shelf-section${headsSection(block.name) ? " heading-hit" : ""}`}>
+            <h3>{block.name}</h3>
+            {fieldsView(block.lines, block.groups)}
           </section>)}
           {document.extraFields.length > 0 && <section className="shelf-section">
             <h3>その他の読み取り値</h3>
-            <div className="shelf-fields">
-              {document.extraFields.map((extra) => <div key={extra.key} className="shelf-field"><span>{extra.label}</span><span className="shelf-value static">{extra.value ?? <em>空欄</em>}</span></div>)}
+            <div className="shelf-table-wrap shelf-fields">
+              <table className="shelf-table shelf-kv-table">
+                <tbody>{document.extraFields.map((extra) => <tr key={extra.key}><th scope="row">{extra.label}</th><td><span className="shelf-value static">{extra.value ?? <em>空欄</em>}</span></td></tr>)}</tbody>
+              </table>
             </div>
           </section>}
         </section>
@@ -423,11 +512,14 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
 }
 
 /** The aligned page image with every read cell outlined; the picked cell is highlighted. */
-function PageViewer({ pages, readings, picked, onPick }: {
+function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, onPickHeading }: {
   pages: DocumentPage[];
   readings: StructuredReading[];
   picked: StructuredReading | null;
+  headings: HeadingCell[];
+  pickedHeading: HeadingCell | null;
   onPick: (reading: StructuredReading) => void;
+  onPickHeading: (heading: HeadingCell) => void;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -477,6 +569,13 @@ function PageViewer({ pages, readings, picked, onPick }: {
           <img src={page.imageUrl} alt={`${page.pageNumber}ページ目の原本`} draggable={false}
             onLoad={(event) => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
             onError={() => setFailed(true)} />
+          {size && headings.filter((item) => item.pageId === page.pageId).map((item) => {
+            const box = item.box;
+            return <button key={item.cellId} type="button" tabIndex={-1}
+              className={`shelf-heading-box${pickedHeading?.cellId === item.cellId ? " active" : ""}`}
+              style={{ left: `${(box.x / size.width) * 100}%`, top: `${(box.y / size.height) * 100}%`, width: `${(box.width / size.width) * 100}%`, height: `${(box.height / size.height) * 100}%` }}
+              aria-label="この見出しを選ぶ" onClick={() => onPickHeading(item)} />;
+          })}
           {size && shown.map((reading) => {
             const box = reading.box!;
             const active = picked?.fieldId === reading.fieldId;
@@ -488,6 +587,25 @@ function PageViewer({ pages, readings, picked, onPick }: {
         </div>}
     </div>
   </div>;
+}
+
+/** What a picked heading names, in words. */
+function headingText(heading: HeadingCell, document: StructuredDocument, byId: Map<string, StructuredReading>): string {
+  const tables = document.tables.filter((table) => heading.tableIds.includes(table.id));
+  switch (heading.kind) {
+    case "column": {
+      const column = tables[0]?.columns.find((item) => item.id === heading.columnId);
+      return `列「${column?.label ?? "名称未設定"}」（${tables[0]?.title ?? "表"}）`;
+    }
+    case "table":
+      return `表の見出し「${tables.map((table) => table.title).join("」「")}」`;
+    case "section":
+      return `見出し「${heading.section}」`;
+    default: {
+      const names = [...new Set(heading.fieldIds.map((id) => byId.get(id)?.label).filter(Boolean))];
+      return `項目名「${names.join("」「") || "名称未設定"}」`;
+    }
+  }
 }
 
 function PickedField({ reading, place, onOpen }: { reading: StructuredReading; place: string; onOpen: () => void }) {

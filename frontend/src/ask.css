@@ -1,4 +1,4 @@
-/* 質問ページ（確定済みデータへの質問）：対象・会話・根拠の3領域。会話は画面の高さに収め、内側だけをスクロールする。 */
+/* チャットページ（確定済みデータへの質問）：会話と根拠の2領域。会話は画面の高さに収め、内側だけをスクロールする。 */
 
 .ask-page{
   display:flex;
@@ -8,15 +8,15 @@
   height:var(--ask-height,calc(100dvh - 110px));
   min-height:520px;
 }
-.ask-header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.ask-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .ask-header h1{margin:0;color:var(--ui-text);font-size:26px;font-weight:800;line-height:1.3}
 .ask-header p{margin:4px 0 0;color:var(--ui-text-secondary);font-size:14px}
 .ask-header-actions{display:flex;gap:8px}
 .ask-header-actions button{gap:6px}
 .ask-page .notice{flex:none}
 
-.ask-layout{flex:1;min-height:0;display:grid;grid-template-columns:minmax(240px,290px) minmax(0,1fr);gap:16px}
-.ask-layout.with-evidence{grid-template-columns:minmax(220px,260px) minmax(0,1fr) minmax(280px,340px)}
+.ask-layout{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.ask-layout.with-evidence{grid-template-columns:minmax(0,1fr) minmax(280px,340px)}
 
 /* panels */
 .ask-scope,.ask-evidence-panel{
@@ -182,7 +182,7 @@
 .ask-header .ask-scope-toggle{display:none}
 
 @media (max-width:1180px){
-  .ask-layout.with-evidence{grid-template-columns:minmax(220px,260px) minmax(0,1fr)}
+  .ask-layout.with-evidence{grid-template-columns:minmax(0,1fr)}
   .ask-evidence-panel{position:fixed;top:16px;right:16px;bottom:16px;z-index:45;width:min(380px,calc(100vw - 32px));box-shadow:0 18px 50px #172a3a40}
 }
 @media (max-width:980px){
@@ -209,4 +209,28 @@
 @media (prefers-reduced-motion:reduce){
   .ask-typing i,.ask-mic.listening{animation:none}
   .ask-messages{scroll-behavior:auto}
+}
+
+/* 画像の読み取り：テンプレートの判別と候補のカード */
+.ask-chat{position:relative}
+.ask-chat.dropping .ask-messages{outline:2px dashed var(--ui-primary);outline-offset:-10px}
+.ask-drop-hint{position:absolute;top:45%;left:0;right:0;z-index:2;display:flex;justify-content:center;align-items:center;gap:8px;color:var(--ui-primary-dark);font-size:16px;font-weight:700;pointer-events:none}
+.ask-welcome-hint{margin:0;color:var(--ui-text-secondary);font-size:13px}
+.ask-msg.user.image{max-width:min(60%,280px)}
+.ask-image{display:block;max-width:100%;max-height:220px;border:1px solid var(--ui-border);border-radius:12px 12px 4px 12px;background:#fff;object-fit:contain;box-shadow:0 4px 12px #1d354514}
+.ask-reading-status{display:flex;align-items:center;gap:8px;margin:0;color:var(--ui-text-secondary);font-size:14px}
+.ask-reading-note{margin:0;color:var(--ui-warning);font-size:13px}
+.ask-reading-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--ui-danger,#b4412b);font-size:14px}
+.ask-reading-done,.ask-reading-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.ask-reading-done .ask-answer{display:flex;align-items:center;gap:6px;margin:0}
+.ask-template-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,160px));gap:10px}
+.ask-template-card{display:grid;gap:8px;min-height:0;padding:8px;border:1px solid #c8d8e4;border-radius:12px;background:#fff;color:var(--ui-text);font-size:13px;font-weight:700;line-height:1.4;text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
+.ask-template-card img{width:100%;height:120px;border-radius:8px;background:#f3f6f8;object-fit:contain}
+.ask-template-card span{overflow-wrap:anywhere}
+.ask-template-card:hover:not(:disabled){border-color:var(--ui-primary);box-shadow:0 6px 16px #23699e24;transform:translateY(-1px)}
+.ask-template-card:disabled{opacity:.5;cursor:default}
+.ask-attach{background:transparent;color:var(--ui-text-secondary)}
+.ask-attach:hover{background:var(--ui-primary-soft);color:var(--ui-primary)}
+@media (max-width:640px){
+  .ask-template-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
 }

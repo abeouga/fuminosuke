@@ -10,7 +10,7 @@ import { useInteractionContext } from "../assistant/useInteractionContext";
 import type { AssistantSnapshot } from "../assistant/contracts";
 import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
-import { AnchoredReviewPopover, ReviewChecklists, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, sectionItemPaths, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
+import { AnchoredReviewPopover, ReviewPaint, ReviewPenSurface, RegionPreviewFlyIn, useReviewPaint, ReviewChecklists, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, reviewDisplayBlocks, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, sectionItemPaths, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
 import type { Artifact, DocumentIdentity, FieldReading, OcrDocument, OcrResult } from "../types";
 import { displayName } from "../userMessages";
 import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
@@ -74,6 +74,12 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
       ? { selected: voiceTableId, select: (tableId: string | null) => { void editingStore.changeScope(tableId).catch(e => setError(e instanceof Error ? e.message : "対象の表を切り替えられませんでした。")); } }
       : null, [editingEnabled, editingStatus.context, editingStatus.state, editingStatus.pending, voiceTableId, editingStore]);
     const reviewRoot = useRef<HTMLDivElement>(null);
+    const pageImage = useRef<HTMLImageElement>(null);
+    // The check pen paints traced cells green; it never changes a reading or its 要確認.
+    const [pen, setPen] = useState(false);
+    // Ending the check pen goes back to 記入欄 (the segments show nothing chosen while it is on).
+    const changePen = (on: boolean) => { setPen(on); if (!on) { setMode("edit"); setSelected(null); } };
+    const { painted, paint } = useReviewPaint(jobId);
     // Saved / failed notes are small corner notifications; they never push the page down.
     useEffect(() => {
         if (!message) return;
@@ -195,6 +201,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         catch (reason) { setError(reason instanceof Error ? reason.message : "項目名を変更できませんでした。"); }
     };
     const display = useMemo(() => buildReviewDisplayModel(entries, previews, result?.reviewStructure, itemNames), [entries, previews, result?.reviewStructure, itemNames]);
+    const blocks = useMemo(() => reviewDisplayBlocks(display, result?.reviewStructure, itemJoins), [display, result?.reviewStructure, itemJoins]);
     const byName = new Map(artifacts.map(item => [item.name, item.url])), fullImage = byName.get("alignedSource") ?? byName.get("normalizedSource");
     const selectedEntry = entries.find(entry => entry.path === selected), selectedPreview = previews.find(preview => preview.targetPath === selected);
     const warningPaths = new Set(entries.filter(entry => entry.value.status === "uncertain" || entry.value.reviewReason).map(entry => entry.path));
@@ -453,24 +460,25 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     <div className="review-assistant-workspace"><div className="generic-review-workspace"><section className="generic-review-source">
       <label className={`field-label document-name-field${nameWanted && !name.trim() ? " is-wanted" : ""}`}>書類名<input key={nameWanted} ref={nameInput} value={name} maxLength={180} disabled={locked} placeholder="書類名を入力してください" onChange={event => setName(event.target.value)}/></label>
       {/* The selected cell's crop floats over the page image, so the image itself never moves. */}
-      <div className="ocr-page-preview-frame">{fullImage && <div className="ocr-page-preview"><button type="button" className="ocr-page-preview-open" title="押すと画面いっぱいに表示" onClick={() => setZoomed(true)}><img src={fullImage} alt="読み取った帳票全体"/></button></div>}
-        {selectedPreview && <figure className="ocr-region-preview"><img src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}/><figcaption>{reviewEntryContext(display, selectedEntry)}</figcaption></figure>}</div>
-    </section><section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} onNextWarning={() => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); }}/>
-      <VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{display.recordSections.map(section => <GenericRecordReviewTable key={section.id} section={section} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
+      <div className="ocr-page-preview-frame">{fullImage && <div className="ocr-page-preview"><button type="button" className="ocr-page-preview-open" title="押すと画面いっぱいに表示" onClick={() => setZoomed(true)}><img ref={pageImage} src={fullImage} alt="読み取った帳票全体"/></button></div>}
+        {selectedPreview && <RegionPreviewFlyIn key={selectedPreview.targetPath} src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}
+          caption={reviewEntryContext(display, selectedEntry)} box={selectedEntry?.value.boundingBox ?? selectedPreview.boundingBox} pageImage={pageImage}/>}</div>
+    </section><section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} penActive={pen && !result.confirmed} onPenChange={changePen} onNextWarning={() => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); }}/>
+      <VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={setSelected} onExit={() => changePen(false)}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{blocks.map(block => block.kind === "record" ? <GenericRecordReviewTable key={block.key} section={block.section} after={block.attached && <KeyValueReviewTable entries={block.attached.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/>} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
                 if (!locked)
                     setDraft(current => current ? swapGenericRecordRowsAtFixedRegions(current, section, from, to) : current);
-            }}/>)}
-        {display.parentSections.map(section => <ReviewTableSection key={section.id} title={section.title} joinPaths={sectionItemPaths(section.entries)}><KeyValueReviewTable entries={section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
-        {display.independentEntries.length > 0 && <ReviewTableSection title="独立項目"><IndependentReviewGroups groups={display.independentGroups} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>}
-      </div></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>{!result.confirmed && selectedEntry && mode === "edit" && selectedPreview?.markRecognitionMode !== "checklist" && <AnchoredReviewPopover path={selectedEntry.path} wide={selectedPreview?.mappingType === "mark" && markPopoverIsWide(selectedPreview)} onClose={() => setSelected(null)}>
+            }}/>
+        : block.kind === "parent" ? <ReviewTableSection key={block.key} title={block.section.title} joinPaths={sectionItemPaths(block.section.entries)}><KeyValueReviewTable entries={block.section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>
+        : <ReviewTableSection key={block.key} title="独立項目"><IndependentReviewGroups groups={block.groups} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
+      </div></ReviewPenSurface></ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>{!result.confirmed && !pen && selectedEntry && mode === "edit" && selectedPreview?.markRecognitionMode !== "checklist" && <AnchoredReviewPopover path={selectedEntry.path} wide={selectedPreview?.mappingType === "mark" && markPopoverIsWide(selectedPreview)} onClose={() => setSelected(null)}>
         {selectedPreview?.mappingType === "mark"
-          ? <MarkStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} preview={selectedPreview} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)} onClose={() => setSelected(null)}/>
-          : <CellStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)} onClose={() => setSelected(null)}/>}</AnchoredReviewPopover>}
+          ? <MarkStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} preview={selectedPreview} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>
+          : <CellStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>}</AnchoredReviewPopover>}
     </section></div>
     {editingEnabled && <ReviewAiFocus rootRef={reviewRoot} focus={editingStatus.focus} context={editingStatus.context} viewRevision={result.revision} />}
     {/* Voice input and undo float over the form image like on the template screen; results speak in its bubble. */}
     {editingEnabled ? <EditingControls store={editingStore} pageScope={{ mode: "all", pageId: null }} tableSelector={false}
-      voiceOnly floatingAnchor=".generic-review-source .ocr-page-preview"
+      voiceOnly textInstructions floatingAnchor=".generic-review-source .ocr-page-preview"
       selectedEntities={selected?.startsWith("fields.") ? [selected.slice(7)] : []} selectionEpoch={assistantInteraction.selectionEpoch}
       manualActive={dirty || inlineDirty || busy || Boolean(conflict)}
       disabled={result.confirmed ? "確定済みです。再編集で音声入力を使用できます。" : contextError ? "帳票との対応情報を取得できません。" : null}

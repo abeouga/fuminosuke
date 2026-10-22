@@ -1,5 +1,7 @@
 # OCR Safety Contract
 
+2026-10-22：**意図的なOCR contract変更**（§4.6追記）。読み取り指示を「メモリ」に置き換えた。単一ページの結果を確定すると、OCRが読んだ値（`raw_candidate_json`）と確定値が違う文字の欄から、GPT-6 Luna（Responses 1回、台帳purpose `template.memory`）が書き方のルールだけを作り、テンプレート系列の `template_field_memories` に保存する（値そのもの・読み違いは覚えない）。欄（表の列は全行）のルールをつないだ文が、新規受付の `templateFieldHints[].instruction` になる。受付時に固定し受付済みjobは不変。指示の送り方・候補語・mapping・crop・association・revision・確定・出力は不変。
+
 2026-10-21：**意図的なOCR contract変更**（§13.2新設）。印刷された選択肢の欄（`markRecognitionMode=automatic`/`manual`）を、チェックリスト・記号と同じく欄全体の切り抜きをproviderで読む方式に変えた。選択肢の文字を候補として渡し（`candidateType=mark_choice`）、丸・チェック・線・塗りつぶしのどれでも印の付いた選択肢を候補順に「・」で返す。候補に一致しない記入（例：選択肢の横に書いた文字）は値をそのまま `raw` に残して `uncertain`（`MARK_CHOICE_UNRESOLVED`）にし、人が確認する。選択肢ごとの画像差分（`mark_detector`）は送信の判断に使わず診断のみ、`manual` の「送らず人が選ぶ」は廃止。ページ別でも同じ扱いで受け付ける。prompt version `mapped-compact-v4`。mapping・crop・association・revision・確定・出力は不変。あわせてテンプレート作成時に、選択欄の印字をモデルで読んで選択肢を作る `POST …/layout/mark-options/suggest`（テンプレート画像だけを送る、保存しない）を追加。詳細は§13.2。
 
 2026-10-20：**意図的なOCR contract変更**（§12.4の対応範囲）。ページ別（印刷ページあり）のテンプレートで、記号の欄（`markRecognitionMode=symbol`、○◎×△等の候補から1つ）を受け付ける。チェックリストと同じく受付時の検証済みページ切り抜き全体を読み、候補の矩形は切り抜き全体（`job_page_service.page_config`）。従来は受付時に `PRINT_PAGE_CONFIG_UNSUPPORTED` で拒否していた設定だけが対象で、既存の文字・番号・チェックリストの対応関係・crop・mappingは不変。印刷された選択肢の画像差分判定（automatic/manual）と複合項目は引き続きページ別では未対応。あわせて、選択肢0件のチェック欄は枠全体の1つのチェック枠（`<markSetId>_box`）として読み取り設定を組み立てる（従来は有効化できなかった設定のみ）。記入欄のひも付け（writeInTargetPath）はチェックリスト以外では読み込み時に外す（同日、記号の欄も対象に追加：§13.1.1）。
@@ -1028,6 +1030,7 @@ F08（191欄）は途中版で差分0。値の取り違え・欄の対応違い�
   `keywordMode` と `readingInstructionSha256` を追加した。prompt versionは `mapped-compact-v3`。
 - 音声のOCR修正では、受付時の候補語（使う設定）を対象範囲の欄について文字起こしのkeywordsへ加える。
 - paged書類には適用しない。
+- 2026-10-22 メモリ：読み取り指示は人が入力せず、確定時に覚えた書き方のルール（`template_field_memories`、1件＝欄又は表の列の保存先の一覧＋ルール1文）から作る。`TemplateFieldHintService.snapshot` が欄ごとのルール（使われた回数の多い順、300字まで）を「。」でつなぎ `instruction` にする。候補語の設定がない欄もメモリがあればhintを作る（keywordsなし）。学習は確定の保存後に別処理で行い、確定の成否・応答を変えない。候補語が寄せた値（`KEYWORD_ABSORBED`）・空欄化・空欄からの記入・選択欄・番号欄は対象外。同じ確定（job・revision）は一度だけ学習する。移行時に既存の読み取り指示を各欄のメモリ1件へ移した（`template_field_hints.instruction` 列は残すが読み書きしない）。
 
 検証（複製データ、同じ画像で実OCR 5回・API 25回、保存した読み取りの再照合）は
 [項目の読み取り設定](template-field-settings-2026-10-19.md)。日付の指示は4回とも全行で点区切り、取り違え・対応不一致0。

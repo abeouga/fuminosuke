@@ -1,7 +1,7 @@
 import { logDetail, userText } from "./userMessages";
 import { authenticatedFetch, csrfHeaders } from "./auth/transport";
 import type { TemplateAuthoringUpdate, TemplateAuthoringView } from "./assistant/generatedAuthoring";
-import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplatePackageActivation, TemplatePackageOperation } from "./types";
+import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplateMemory, TemplatePackageActivation, TemplatePackageOperation } from "./types";
 import type { ItemJoin, ItemJoinSettings } from "./itemJoins";
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
@@ -19,6 +19,19 @@ export type SeriesCandidate = {
     identity: { label: string; value: string | null }[];
     selectable: boolean;
     reason: string | null;
+};
+/** Which in-use template an image was filled on; decided only when exactly one matched. */
+export type TemplateClassification = {
+    decidedTemplateVersionId: string | null;
+    candidates: {
+        templateId: string;
+        templateName: string;
+        templateVersionId: string;
+        thumbnailUrl: string;
+        matched: boolean;
+        score: number;
+    }[];
+    checkedTemplateCount: number;
 };
 export class ApiError extends Error {
     code: string;
@@ -239,6 +252,11 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ corners }),
     }),
+    classifyTemplate: (file: File) => {
+        const body = new FormData();
+        body.set("file", file);
+        return request<TemplateClassification>("/template-classifications", { method: "POST", body });
+    },
     createOcr: async (templateVersionId: string, file: File, enabled: boolean, idempotencyKey: string, predecessorJobId?: string) => {
         const body = new FormData();
         body.set("templateVersionId", templateVersionId);
@@ -303,6 +321,8 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ templateVersionId, expectedRevision, items }),
     }),
+    templateMemory: (templateId: string, templateVersionId: string) => request<TemplateMemory>(`/templates/${encodeURIComponent(templateId)}/memory?templateVersionId=${encodeURIComponent(templateVersionId)}`),
+    deleteTemplateMemory: (templateId: string, memoryId: string) => request<void>(`/templates/${encodeURIComponent(templateId)}/memory/${encodeURIComponent(memoryId)}`, { method: "DELETE" }),
     layout: (id: string) => request<LayoutDefinition>(`/template-versions/${id}/layout`),
     detectLayout: (id: string, expectedRevision: number) => templateMutation<LayoutDefinition>(`/template-versions/${id}/layout/detect`, expectedRevision, {
         method: "POST",

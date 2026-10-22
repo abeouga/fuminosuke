@@ -17,15 +17,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.db.models import PagedConfirmation, PagedReview, ProcessingJob
+from app.db.models import PagedConfirmation, PagedReview, ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType
 from app.domain.field_targets import field_key
 from app.domain.ocr_models import OcrDocument
 from app.editing.errors import reject
+from app.layout_analysis.models import LayoutDefinition
 from app.repositories.ocr_result_repository import OcrResultRepository
 from app.services.document_series import DocumentSeries
 from app.services.paged_document_snapshot import load_document_snapshot
+from app.services.review_block_order import version_layout, with_blocks
 from app.services.template_item_join_service import item_joins, joined_text
 from app.structured.contracts import SCHEMA_VERSION
 from app.structured.projection import project_values
@@ -213,10 +215,16 @@ class StructuredDocumentService:
         document = OcrDocument.model_validate(confirmed.confirmed_json).model_dump(
             mode="json", by_alias=True
         )
+        # Blocks from the top of the form, for the shelf (display only).
+        structure = with_blocks(
+            snapshot.get("reviewStructure"),
+            snapshot.get("fieldMappings"),
+            version_layout(session, job.template_version_id),
+        )
         body = project_values(
             document,
             mappings=snapshot.get("fieldMappings"),
-            structure=snapshot.get("reviewStructure"),
+            structure=structure,
             logical_ids=snapshot.get("logicalFieldIds"),
             identity_fields=config.get("documentIdentityFields"),
         )
@@ -229,7 +237,14 @@ class StructuredDocumentService:
             reading["box"] = _box(
                 document["fields"].get(reading["key"]), mappings.get(reading["fieldId"], {})
             )
+            reading["choice"] = mappings.get(reading["fieldId"], {}).get("mappingType") == "mark"
+        body["blocks"] = structure.get("blocks") if isinstance(structure, dict) else None
         image = page_image_url(job.id, None)
+        version = (
+            session.get(TemplateVersion, job.template_version_id)
+            if job.template_version_id
+            else None
+        )
         return {
             "schemaVersion": SCHEMA_VERSION,
             "jobId": job.id,
@@ -242,6 +257,10 @@ class StructuredDocumentService:
             "confirmedRevision": confirmed.ocr_result_revision,
             "thumbnailUrl": f"{image}/thumbnail",
             "pages": [{"pageId": None, "pageNumber": 1, "imageUrl": image}],
+            "headings": heading_cells(
+                version.layout_json if version is not None else None,
+                snapshot.get("reviewStructure"),
+            ),
             **body,
         }
 
@@ -288,10 +307,13 @@ class StructuredDocumentService:
                 if isinstance(label, str):
                     labels[key] = label
         config = snapshot["config"]
+        structure = with_blocks(
+            snapshot.get("reviewStructure"), config["fieldMappings"], snapshot.get("layout")
+        )
         body = project_values(
             {"fields": readings, "fieldLabels": labels},
             mappings=[m for m in config["fieldMappings"] if m.get("enabled", True)],
-            structure=snapshot.get("reviewStructure"),
+            structure=structure,
             logical_ids=snapshot.get("logicalFieldIds"),
             identity_fields=config.get("documentIdentityFields"),
             page_by_mapping=page_by_mapping,
@@ -300,6 +322,10 @@ class StructuredDocumentService:
             reading["box"] = _box(
                 readings.get(reading["key"]), mapping_by_id.get(reading["fieldId"], {})
             )
+            reading["choice"] = (
+                mapping_by_id.get(reading["fieldId"], {}).get("mappingType") == "mark"
+            )
+        body["blocks"] = structure.get("blocks") if isinstance(structure, dict) else None
         page_list = [
             {
                 "pageId": page["pageId"],
@@ -322,6 +348,72 @@ class StructuredDocumentService:
             "pages": page_list,
             **body,
         }
+
+
+def heading_cells(layout_json: object, structure: object) -> builtins.list[dict[str, Any]]:
+    """Where the headings, table titles, column names and item names are printed.
+
+    Positions come from the job's template version (a used version is never edited); what
+    each one names comes from the review structure fixed when the job was accepted. Display
+    only: a layout that no longer validates just yields no headings.
+    """
+    if not isinstance(layout_json, dict) or not layout_json or not isinstance(structure, dict):
+        return []
+    try:
+        layout = LayoutDefinition.model_validate(layout_json)
+    except ValueError:
+        return []
+    # Page-local virtual headings belong to paged templates only.
+    cells = {cell.id: cell for cell in layout.cells if cell.page_range is None}
+    relations = {relation.id: relation for relation in layout.relations}
+    sections = {section.id: section for section in layout.record_sections}
+    found: dict[str, dict[str, Any]] = {}
+
+    def add(cell_id: object, kind: str, **names: Any) -> dict[str, Any] | None:
+        cell = cells.get(cell_id) if isinstance(cell_id, str) else None
+        if cell is None:
+            return None
+        if cell.id not in found:
+            found[cell.id] = {
+                "cellId": cell.id,
+                "kind": kind,
+                "box": {"x": cell.x, "y": cell.y, "width": cell.width, "height": cell.height},
+                "pageId": None,
+                "section": None,
+                "tableIds": [],
+                "columnId": None,
+                "fieldIds": [],
+                **names,
+            }
+        return found[cell.id]
+
+    def records(value: object) -> builtins.list[dict[str, Any]]:
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    for table in records(structure.get("recordSections")):
+        section = sections.get(str(table.get("id")))
+        if section is not None:
+            heading = add(section.parent_label_cell_id, "table")
+            if heading is not None:
+                heading["tableIds"].append(table["id"])  # One heading may head two tables.
+        for column in records(table.get("columns")):
+            add(column.get("id"), "column", tableIds=[table["id"]], columnId=column.get("id"))
+    for parent in records(structure.get("parentSections")):
+        title = str(parent.get("title") or "項目")
+        heading = add(parent.get("id"), "section", section=title)
+        if heading is not None:
+            heading["section"] = title  # A table's heading may also head plain items.
+    for field in records(structure.get("fields")):
+        relation = relations.get(str(field.get("relationId")))
+        for label_id in relation.label_cell_ids if relation is not None else []:
+            heading = add(label_id, "item")
+            if (
+                heading is not None
+                and heading["kind"] == "item"
+                and field["id"] not in heading["fieldIds"]
+            ):
+                heading["fieldIds"].append(field["id"])
+    return builtins.list(found.values())
 
 
 def joined_fields(

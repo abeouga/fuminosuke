@@ -3,12 +3,13 @@ import { ApiError, api } from "../api";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { isJoin, type ItemJoin, type ItemJoinMember, type ItemSection } from "../itemJoins";
+import { isJoin, sortBlocks, type ItemBlock, type ItemJoin, type ItemJoinMember, type ItemSection } from "../itemJoins";
 import type { FieldMapping } from "../types";
 import { showToast } from "./Toast";
 import { Spinner } from "./Spinner";
 
-type Draft = ItemJoin & { key: string; kind: "join" | "order"; separator: string };
+type Draft = ItemJoin & { key: string; kind: "join" | "order" | "sections"; separator: string };
+const BLOCK_ORDER_NAME = "結果の表示順";
 type Suggestion = ItemJoin & { ai?: boolean };
 
 const SEPARATORS: Array<{ value: string; label: string }> = [
@@ -54,6 +55,7 @@ export function TemplateItemJoinEditor({
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [sections, setSections] = useState<ItemSection[]>([]);
+  const [blocks, setBlocks] = useState<ItemBlock[]>([]);
   const [saved, setSaved] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -91,8 +93,9 @@ export function TemplateItemJoinEditor({
       setDrafts(next);
       setSuggestions(settings.suggestions);
       setSections(settings.sections ?? []);
+      setBlocks(settings.blocks ?? []);
       setSaved(signature(next));
-      setSelected(next[0]?.key ?? null);
+      setSelected(next.find((draft) => draft.kind !== "sections")?.key ?? null);
     })().catch((error) => {
       if (!cancelled) setFeedback({ kind: "error", text: errorText(error, "項目のまとめ方を読み込めませんでした。") });
     }).finally(() => {
@@ -237,6 +240,29 @@ export function TemplateItemJoinEditor({
       setAsking(false);
     }
   };
+  /** 「結果の表示順」: the blocks of the result screen; dragging saves one "sections" order. */
+  const blockDraft = drafts.find((draft) => draft.kind === "sections");
+  const blocksInOrder = sortBlocks(blocks, blockDraft ? [blockDraft] : []);
+  const blockTitle = (key: string) => blocks.find((block) => block.key === key)?.title ?? "名称未設定";
+  const reorderBlocks = (keys: string[]) => {
+    const natural = blocks.map((block) => block.key);
+    // The form's own order needs no saved order.
+    const rest = drafts.filter((draft) => draft.kind !== "sections");
+    if (keys.join("|") === natural.join("|")) { setDrafts(rest); return; }
+    const members = keys.map((targetPath) => ({ targetPath, before: "", after: "" }));
+    setDrafts(blockDraft ? drafts.map((draft) => draft === blockDraft ? { ...draft, members } : draft)
+      : [...rest, { ...toDraft({ name: BLOCK_ORDER_NAME, kind: "sections", members: [] }), members }]);
+  };
+  const blockOrderPanel = blocks.length >= 2 && (
+    <section className="item-join-headings item-join-blocks" aria-label={BLOCK_ORDER_NAME}>
+      <div className="candidate-panel-heading compact">
+        <div><h2>{BLOCK_ORDER_NAME}</h2></div>
+        {blockDraft && <button type="button" className="ghost compact" onClick={() => reorderBlocks(blocks.map((block) => block.key))}>帳票の順に戻す</button>}
+      </div>
+      <p className="item-join-note">表・見出しを、確認画面・書類棚・一覧のXLSXに出す順に並べます。{blockDraft ? "" : "今は帳票の上から順（同じ高さは左から）です。"}</p>
+      <SortableList items={blocksInOrder.map((block) => block.key)} label={blockTitle} onReorder={reorderBlocks} />
+    </section>
+  );
   const close = () => {
     if (saving) return;
     if (dirty && !window.confirm("保存していない変更があります。破棄して閉じますか？")) return;
@@ -425,6 +451,9 @@ export function TemplateItemJoinEditor({
           : mappings.length > 0 && <p className="item-join-note">この見出しは設定できません。</p>}
         {!loading && focusSection && (
           <footer className="item-join-popover-actions">
+            <button type="button" className="ghost compact item-join-whole" disabled={saving}
+              title="表・見出しを出す順番など、全体の設定を開きます"
+              onClick={() => { if (dirty && !window.confirm("保存していない変更があります。破棄して開きますか？")) return; openItemJoinEditor(templateId, versionId); }}>全体の並び…</button>
             <button type="button" className="ghost compact" disabled={saving} onClick={close}>閉じる</button>
             <button type="button" className="primary compact" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
           </footer>
@@ -440,7 +469,7 @@ export function TemplateItemJoinEditor({
         <div>
           <span className="eyebrow">{templateName}</span>
           <h1>項目のまとめ方・順番</h1>
-          <p>見出しを選ぶと、中の欄の並び順を変えたり、1つの値にまとめたりできます。読み取りと修正は欄ごとのままです。</p>
+          <p>表・見出しを出す順番と、見出しの中の欄の並び順やまとめ方を変えられます。読み取りと修正は欄ごとのままです。</p>
         </div>
         {overlay && <button type="button" className="ghost" disabled={saving} onClick={close}>閉じる</button>}
       </header>
@@ -478,6 +507,7 @@ export function TemplateItemJoinEditor({
           </section>
 
           <aside className="candidate-control-panel">
+            {blockOrderPanel}
             <section className="item-join-headings" aria-label="見出し">
               <div className="candidate-panel-heading compact">
                 <div><h2>見出し</h2></div>
@@ -623,7 +653,7 @@ function toDraft(join: ItemJoin): Draft {
     // Unique even when the module is reloaded while drafts are on screen.
     key: `join-${Date.now().toString(36)}-${draftCounter}-${Math.random().toString(36).slice(2, 7)}`,
     name: join.name,
-    kind: isJoin(join) ? "join" : "order",
+    kind: isJoin(join) ? "join" : join.kind === "sections" ? "sections" : "order",
     separator: join.separator ?? "",
     members: join.members.map(({ targetPath, before, after }) => ({ targetPath, before: before ?? "", after: after ?? "" })),
   };

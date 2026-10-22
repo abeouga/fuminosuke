@@ -1,9 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { FiArrowRight, FiEdit2 } from "react-icons/fi";
+import { createContext, useCallback, type PointerEvent as ReactPointerEvent, type RefObject, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { FiArrowRight, FiEdit2, FiPenTool } from "react-icons/fi";
+import { privateLocalStorage } from "../auth/transport";
 import type { FieldReading, OcrFieldPreview, ReviewStructure, ReviewStructureField } from "../types";
 import { displayName } from "../userMessages";
 import { ITEM_JOIN_EDITING_VISIBLE } from "./TemplateItemJoinEditor";
-import { joinedText, orderMark, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
+import { joinedText, orderMark, sortBlocks, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
 
 /** `writeIn`: the 「その他（　）」 text a symbol/check box's item owns, shown on the same row. */
 export type ReadingEntry = { path: string; label: string; value: FieldReading; writeIn?: ReadingEntry;
@@ -62,6 +63,198 @@ function ChecklistBoxes({ labels, entry, confirmed, onEdit }: {
     );
   })}</span>;
 }
+/**
+ * Cells a person traced over with the check pen (shown green). Display only: the reading,
+ * its 要確認 status and reviewReason are never changed by it. Kept in this browser.
+ */
+export const ReviewPaint = createContext<ReadonlySet<string>>(new Set());
+
+export function useReviewPaint(storageKey: string | null) {
+  const key = storageKey ? `fuminosuke.reviewPaint.${storageKey}` : null;
+  const read = (): Set<string> => {
+    if (!key) return new Set();
+    try {
+      const stored: unknown = JSON.parse(privateLocalStorage.getItem(key) ?? "[]");
+      return new Set(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []);
+    } catch { return new Set(); }
+  };
+  const [painted, setPainted] = useState<ReadonlySet<string>>(read);
+  const [loadedKey, setLoadedKey] = useState(key);
+  if (loadedKey !== key) { setLoadedKey(key); setPainted(read()); }
+  const paint = useCallback((path: string, on: boolean) => setPainted((current) => {
+    if (current.has(path) === on) return current;
+    const next = new Set(current);
+    if (on) next.add(path); else next.delete(path);
+    if (key) {
+      try { privateLocalStorage.setItem(key, JSON.stringify([...next])); } catch { /* display only */ }
+    }
+    return next;
+  }), [key]);
+  return { painted, paint };
+}
+
+/**
+ * The check pen: dragging over result cells paints them green (a stroke that starts on a
+ * green cell takes the green off instead). Cell buttons and check boxes do not react meanwhile.
+ * Just hovering a cell (no stroke) reports it through `onHover`, so its crop can be shown.
+ */
+export function ReviewPenSurface({ active, painted, onPaint, onExit, onHover, children }: {
+  active: boolean;
+  painted: ReadonlySet<string>;
+  onPaint: (path: string, on: boolean) => void;
+  onExit?: () => void;
+  onHover?: (path: string) => void;
+  children: ReactNode;
+}) {
+  const stroke = useRef<{ pointerId: number; on: boolean | null; x: number; y: number; wrap: HTMLElement | null } | null>(null);
+  const scrollFrame = useRef<number | null>(null);
+  const hovered = useRef<string | null>(null);
+  useEffect(() => { if (!active) hovered.current = null; }, [active]);
+  useEffect(() => () => { if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current); }, []);
+  useEffect(() => {
+    if (!active || !onExit) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onExit(); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [active, onExit]);
+  const hit = (x: number, y: number) => {
+    const cell = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-review-path]");
+    const current = stroke.current;
+    const path = cell?.dataset.reviewPath;
+    if (!path || !current) return;
+    current.wrap = cell.closest<HTMLElement>(".ocr-edit-table-wrap") ?? current.wrap;
+    // The first cell decides whether this stroke paints or takes the green off.
+    if (current.on === null) current.on = !painted.has(path);
+    onPaint(path, current.on);
+  };
+  // Near an edge the table (or the page) scrolls on by itself, so cells cut off below can be
+  // painted too. The closer to the edge (or past it), the faster.
+  const autoScroll = () => {
+    scrollFrame.current = null;
+    const current = stroke.current;
+    if (!current) return;
+    const EDGE = 48, MAX = 20;
+    const speed = (distanceIn: number) => (distanceIn >= EDGE ? 0 : Math.round(MAX * Math.min(1, (EDGE - distanceIn) / EDGE)));
+    const push = (position: number, start: number, end: number) => speed(position - start) > 0 ? -speed(position - start) : speed(end - position);
+    let dy = 0, dx = 0, moved = false;
+    const wrap = current.wrap;
+    if (wrap) {
+      const rect = wrap.getBoundingClientRect();
+      const top = Math.max(rect.top, 0), bottom = Math.min(rect.bottom, window.innerHeight);
+      dy = push(current.y, top, bottom);
+      dx = push(current.x, Math.max(rect.left, 0), Math.min(rect.right, window.innerWidth));
+      const beforeTop = wrap.scrollTop, beforeLeft = wrap.scrollLeft;
+      if (dy || dx) wrap.scrollBy(dx, dy);
+      moved = wrap.scrollTop !== beforeTop || wrap.scrollLeft !== beforeLeft;
+    }
+    // Past what the table itself can scroll, the page scrolls when the pointer is at the window's edge.
+    const pageDy = push(current.y, 0, window.innerHeight);
+    if (pageDy) {
+      const page = document.scrollingElement ?? document.documentElement;
+      const before = page.scrollTop;
+      page.scrollBy(0, pageDy);
+      moved = moved || page.scrollTop !== before;
+    }
+    if (moved) hit(current.x, current.y);
+    scrollFrame.current = requestAnimationFrame(autoScroll);
+  };
+  // Painting selects nothing: the cell under the pointer when it lifts is not opened.
+  const end = (event: ReactPointerEvent) => {
+    if (stroke.current?.pointerId !== event.pointerId) return;
+    stroke.current = null;
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = null;
+  };
+  return (
+    <div
+      className={`review-pen-surface${active ? " is-pen" : ""}`}
+      onPointerDown={(event) => {
+        if (!active || event.button !== 0) return;
+        if (!(event.target instanceof Element) || !event.target.closest(".ocr-edit-table")) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        stroke.current = { pointerId: event.pointerId, on: null, x: event.clientX, y: event.clientY, wrap: event.target.closest<HTMLElement>(".ocr-edit-table-wrap") };
+        hit(event.clientX, event.clientY);
+        if (scrollFrame.current === null) scrollFrame.current = requestAnimationFrame(autoScroll);
+      }}
+      onPointerMove={(event) => {
+        const current = stroke.current;
+        if (!current) {
+          if (!active || !onHover || !(event.target instanceof Element)) return;
+          const path = event.target.closest<HTMLElement>(".ocr-edit-table [data-review-path]")?.dataset.reviewPath;
+          // Leaving a cell keeps the last crop, so it does not flicker between cells.
+          if (path && path !== hovered.current) { hovered.current = path; onHover(path); }
+          return;
+        }
+        if (current.pointerId !== event.pointerId) return;
+        // A quick stroke still marks every cell it passes over.
+        const steps = Math.max(1, Math.ceil(Math.hypot(event.clientX - current.x, event.clientY - current.y) / 8));
+        for (let step = 1; step <= steps; step += 1)
+          hit(current.x + ((event.clientX - current.x) * step) / steps, current.y + ((event.clientY - current.y) * step) / steps);
+        current.x = event.clientX; current.y = event.clientY;
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+    >
+      {children}
+    </div>
+  );
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/**
+ * The selected cell's crop, shown over a part of the page image as before. It flies out of
+ * the cell's place on the page (「シュン」) so one sees where it was cut from; the page itself
+ * never zooms. `box` is in the page image's own pixels.
+ */
+export function RegionPreviewFlyIn({ src, alt, caption, box, pageImage }: {
+  src: string;
+  alt: string;
+  caption: ReactNode;
+  box: Box | null;
+  pageImage: RefObject<HTMLImageElement | null>;
+}) {
+  const figure = useRef<HTMLElement>(null);
+  const image = useRef<HTMLImageElement>(null);
+  const [shown, setShown] = useState(false);
+  const played = useRef(false);
+  const play = useCallback(() => {
+    if (played.current) return;
+    played.current = true;
+    setShown(true);
+    const element = figure.current, crop = image.current, page = pageImage.current;
+    if (!element || !crop || !page || !box || !page.naturalWidth || !crop.naturalWidth) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const pageRect = page.getBoundingClientRect();
+    const scaleX = pageRect.width / page.naturalWidth, scaleY = pageRect.height / page.naturalHeight;
+    const from = { left: pageRect.left + box.x * scaleX, top: pageRect.top + box.y * scaleY, width: box.width * scaleX, height: box.height * scaleY };
+    if (from.width < 1 || from.height < 1) return;
+    // Where the crop is drawn inside its <img> (object-fit: contain).
+    const imgRect = crop.getBoundingClientRect();
+    const fit = Math.min(imgRect.width / crop.naturalWidth, imgRect.height / crop.naturalHeight);
+    const drawn = { width: crop.naturalWidth * fit, height: crop.naturalHeight * fit };
+    const content = { left: imgRect.left + (imgRect.width - drawn.width) / 2, top: imgRect.top + (imgRect.height - drawn.height) / 2, ...drawn };
+    const to = element.getBoundingClientRect();
+    const sx = from.width / content.width, sy = from.height / content.height;
+    const tx = from.left - to.left - (content.left - to.left) * sx, ty = from.top - to.top - (content.top - to.top) * sy;
+    element.animate([
+      { transform: `translate(${tx}px, ${ty}px) scale(${sx}, ${sy})`, opacity: 0.55, boxShadow: "0 0 0 2px #2468a2" },
+      { opacity: 1, offset: 0.35 },
+      { transform: "none", opacity: 1 },
+    ], { duration: 300, easing: "cubic-bezier(.16, 1, .3, 1)" });
+  }, [box, pageImage]);
+  useLayoutEffect(() => {
+    if (image.current?.complete && image.current.naturalWidth) play();
+  }, [play]);
+  return (
+    <figure ref={figure} className="ocr-region-preview" style={shown ? undefined : { opacity: 0 }}>
+      <img ref={image} src={src} alt={alt} onLoad={play} onError={() => setShown(true)} />
+      <figcaption>{caption}</figcaption>
+    </figure>
+  );
+}
+
 export function ReviewDraftBoundary({ children, onDirtyChange }: {
   children: ReactNode; onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -202,6 +395,8 @@ export function ReviewResultsToolbar({
   cellCount,
   onInteractionModeChange,
   onNextWarning,
+  penActive = false,
+  onPenChange,
 }: {
   interactionMode: ReviewInteractionMode;
   editingLocked: boolean;
@@ -210,12 +405,21 @@ export function ReviewResultsToolbar({
   cellCount: number;
   onInteractionModeChange: (mode: ReviewInteractionMode) => void;
   onNextWarning: () => void;
+  penActive?: boolean;
+  onPenChange?: (active: boolean) => void;
 }) {
+  // While the check pen is on, neither segment is chosen; choosing one ends the pen.
+  const shownMode = penActive ? null : interactionMode;
+  const chooseMode = (mode: ReviewInteractionMode) => {
+    if (penActive) onPenChange?.(false);
+    onInteractionModeChange(mode);
+  };
   return (
     <div className="field-toolbar">
       <div className="ocr-cell-legend">
-        <span><i className="legend-ok" />{confirmed ? "確定済み" : "読み取り候補"}</span>
+        <span><i className="legend-ok" />{confirmed ? "確定済み" : "候補"}</span>
         {!confirmed && <span><i className="legend-warning" />要確認</span>}
+        {!confirmed && onPenChange && <span><i className="legend-painted" />確認済み（ペン）</span>}
       </div>
       <div className="field-toolbar-actions">
         {/* 編集: a segmented control of what is edited (the values in the cells, or the item names).
@@ -226,22 +430,33 @@ export function ReviewResultsToolbar({
             <button
               type="button"
               role="radio"
-              className={interactionMode === "edit" ? "active" : ""}
-              aria-checked={interactionMode === "edit"}
+              className={shownMode === "edit" ? "active" : ""}
+              aria-checked={shownMode === "edit"}
               title="セルの内容を確認・修正"
               disabled={editingLocked && !confirmed}
-              onClick={() => onInteractionModeChange("edit")}
+              onClick={() => chooseMode("edit")}
             >記入欄</button>
             <button
               type="button"
               role="radio"
-              className={interactionMode === "rename" ? "active" : ""}
-              aria-checked={interactionMode === "rename"}
+              className={shownMode === "rename" ? "active" : ""}
+              aria-checked={shownMode === "rename"}
               title="項目名をクリックして表示名を変更（保存した値は変わりません）"
-              onClick={() => onInteractionModeChange("rename")}
+              onClick={() => chooseMode("rename")}
             >項目</button>
           </div>
         </div>
+        {!confirmed && onPenChange && (
+          <button
+            type="button"
+            className={`review-pen-toggle${penActive ? " active" : ""}`}
+            aria-pressed={penActive}
+            title={penActive ? "ペンをやめる（Esc）" : "確認したセルをなぞると緑になります（緑のセルからなぞると戻ります）"}
+            onClick={() => onPenChange(!penActive)}
+          >
+            <FiPenTool aria-hidden="true" />確認ペン
+          </button>
+        )}
         {!confirmed && (
           <button
             type="button"
@@ -366,26 +581,19 @@ export function AnchoredReviewPopover({
   );
 }
 
+/** The cell's dialog: only 「空欄にする」 (and the reading's other candidates); no item name. */
 export function CellStatusPopover({
   entry,
   confirmed,
   onChange,
-  onClose,
 }: {
   entry: ReadingEntry;
   confirmed: boolean;
   onChange: (patch: Partial<FieldReading>) => void;
-  onClose: () => void;
 }) {
-  const setStatus = (status: FieldReading["status"]) => {
-    onChange(status === "blank"
-      ? { status, raw: null, normalized: null, reviewReason: null }
-      : status === "uncertain"
-        ? { status, normalized: null, raw: entry.value.raw ?? "" }
-        : { status, raw: entry.value.raw ?? "", reviewReason: null });
-  };
   const current = entry.value.normalized ?? entry.value.raw;
   const choices = readingChoices(entry.value);
+  const blank = entry.value.status === "blank";
   // The value being replaced stays as a choice, so one click can go back to it.
   const choose = (value: string) => onChange({
     raw: value,
@@ -395,28 +603,12 @@ export function CellStatusPopover({
     alternatives: [...new Set([...(current ? [current] : []), ...entry.value.alternatives])].filter((item) => item !== value),
   });
   return (
-    <section className="ocr-cell-status-popover" aria-label="選択セルの判定">
-      <header>
-        <strong>{entry.label}</strong>
-        <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
-      </header>
+    <section className="ocr-cell-status-popover" aria-label={`${entry.label}の判定`}>
       <div role="group" aria-label={`${entry.label}の判定`}>
-        {/* 「不確実」 is not offered: the person decides 読めた or 空欄 (OCR may still mark a cell uncertain). */}
-        {([
-          ["readable", "読めた"],
-          ["blank", "空欄"],
-        ] as const).map(([status, label]) => (
-          <button
-            type="button"
-            key={status}
-            className={entry.value.status === status ? "active" : ""}
-            aria-pressed={entry.value.status === status}
-            disabled={confirmed}
-            onClick={() => setStatus(status)}
-          >
-            {label}
-          </button>
-        ))}
+        <button type="button" className={blank ? "active" : ""} aria-pressed={blank} disabled={confirmed || blank}
+          onClick={() => onChange({ status: "blank", raw: null, normalized: null, reviewReason: null })}>
+          {blank ? "空欄です" : "空欄にする"}
+        </button>
       </div>
       {choices.length > 0 && (
         <div className="ocr-cell-choices" role="group" aria-label={`${entry.label}の候補`}>
@@ -432,27 +624,25 @@ export function CellStatusPopover({
   );
 }
 
-/** A symbol box (○×) is decided like other cells: in a small popover beside it. */
+/** A symbol box (○×) is decided like other cells: its symbols and 「空欄にする」, no item name. */
 export function MarkStatusPopover({
   entry,
   preview,
   confirmed,
   onChange,
-  onClose,
 }: {
   entry: ReadingEntry;
   preview: OcrFieldPreview;
   confirmed: boolean;
   onChange: (patch: Partial<FieldReading>) => void;
-  onClose: () => void;
 }) {
   const labels = (preview.markOptions ?? []).map((option) => option.label);
   const multiple = preview.markSelectionMode === "multiple";
   const current = entry.value.normalized ?? entry.value.raw ?? "";
-  const parts = current.split("・").map((value) => value.trim()).filter(Boolean);
-  const selected = parts.filter((value) => labels.includes(value));
-  // The value read is made only of this box's choices (it can be accepted as read).
-  const valid = selected.length > 0 && selected.length === parts.length;
+  const blank = entry.value.status === "blank";
+  // Symbols shown as chosen are the ones a click adds to (an unsure reading starts from none).
+  const selected = entry.value.status === "readable"
+    ? current.split("・").map((value) => value.trim()).filter((value) => labels.includes(value)) : [];
   const apply = (next: string[]) => {
     const value = labels.filter((label) => next.includes(label)).join("・");
     onChange(value
@@ -462,22 +652,11 @@ export function MarkStatusPopover({
   const toggle = (label: string) => apply(multiple
     ? (selected.includes(label) ? selected.filter((value) => value !== label) : [...selected, label])
     : [label]);
-  // 「不確実」 is not offered here either (only 読めた / 空欄).
-  const statuses = [["readable", "読めた"], ["blank", "空欄"]] as const;
-  const setStatus = (status: FieldReading["status"]) => onChange(
-    status === "readable" ? { raw: current, normalized: current, status, reviewReason: null }
-      : status === "uncertain" ? { raw: entry.value.raw ?? null, normalized: null, status, reviewReason: "MANUAL_CHOICE_UNRESOLVED" }
-        : { raw: null, normalized: null, status, reviewReason: null },
-  );
   return (
-    <section className="ocr-cell-status-popover ocr-mark-status-popover" aria-label="選択セルの判定">
-      <header>
-        <strong>{entry.label}</strong>
-        <button type="button" aria-label="判定を閉じる" onClick={onClose}>×</button>
-      </header>
+    <section className="ocr-cell-status-popover ocr-mark-status-popover" aria-label={`${entry.label}の判定`}>
       <div className="ocr-mark-options" role="group" aria-label={`${entry.label}の記号`}>
         {labels.map((label) => {
-          const active = entry.value.status === "readable" && selected.includes(label);
+          const active = selected.includes(label);
           return (
             <button type="button" key={label} className={active ? "active" : ""} aria-pressed={active}
               disabled={confirmed} onClick={() => toggle(label)}>{label}</button>
@@ -486,19 +665,10 @@ export function MarkStatusPopover({
         {labels.length === 0 && <span>テンプレートに選択肢が設定されていません。</span>}
       </div>
       <div role="group" aria-label={`${entry.label}の判定`}>
-        {statuses.map(([status, label]) => (
-          <button
-            type="button"
-            key={status}
-            className={entry.value.status === status ? "active" : ""}
-            aria-pressed={entry.value.status === status}
-            disabled={confirmed || (status === "readable" && !valid)}
-            title={status === "readable" && !valid ? "記号を選んでください" : undefined}
-            onClick={() => setStatus(status)}
-          >
-            {label}
-          </button>
-        ))}
+        <button type="button" className={blank ? "active" : ""} aria-pressed={blank} disabled={confirmed || blank}
+          onClick={() => onChange({ raw: null, normalized: null, status: "blank", reviewReason: null })}>
+          {blank ? "空欄です" : "空欄にする"}
+        </button>
       </div>
     </section>
   );
@@ -603,7 +773,10 @@ export function GenericRecordReviewTable({
   onSelect,
   onEdit,
   onMoveRow,
+  after,
 }: {
+  /** Shown under the table in the same section (its heading's items outside the rows). */
+  after?: ReactNode;
   section: ReviewDisplayRecordSection;
   selectedPath: string | null;
   warningPaths: ReadonlySet<string>;
@@ -695,6 +868,7 @@ export function GenericRecordReviewTable({
           </tbody>
         </table>
       </div>
+      {after}
     </ReviewTableSection>
   );
 }
@@ -931,6 +1105,7 @@ export function ReviewValueCell({
   const marks = useContext(ReviewSeriesMarks);
   const added = marks?.added.has(entry.path) ?? false, carried = marks?.carried.has(entry.path) ?? false;
   const checklistLabels = useContext(ReviewChecklists).get(entry.path);
+  const painted = useContext(ReviewPaint).has(entry.path);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
   const reportInlineEdit = useContext(InlineEditActivity);
@@ -948,7 +1123,7 @@ export function ReviewValueCell({
   };
   return (
     <td
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}${hasChoices ? " ocr-cell-has-choices" : ""}`}
+      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}${hasChoices ? " ocr-cell-has-choices" : ""}${painted ? " ocr-cell-painted" : ""}`}
       data-review-path={entry.path}
     >
       {checklistLabels ? (
@@ -1134,6 +1309,59 @@ export function buildReviewDisplayModel(
     }
   });
   return { recordSections, parentSections, independentEntries, independentGroups };
+}
+
+export type ReviewDisplayBlock =
+  | { key: string; kind: "record"; section: ReviewDisplayRecordSection; attached?: ReviewDisplayModel["parentSections"][number] }
+  | { key: string; kind: "parent"; section: ReviewDisplayModel["parentSections"][number] }
+  | { key: string; kind: "independent"; groups: ReviewDisplayModel["independentGroups"] };
+
+/**
+ * The result's blocks in display order: the server's form order (from the top, a line
+ * left to right), then a saved block order. Without blocks (an older server): tables,
+ * headings, then items under no heading, as before.
+ */
+export function reviewDisplayBlocks(
+  display: ReviewDisplayModel,
+  structure: ReviewStructure | undefined | null,
+  joins: readonly ItemJoin[],
+): ReviewDisplayBlock[] {
+  const independentAll = display.independentGroups;
+  const blocks = structure?.blocks;
+  if (!blocks?.length) return [
+    ...display.recordSections.map((section) => ({ key: `record:${section.id}`, kind: "record" as const, section })),
+    ...display.parentSections.map((section) => ({ key: `parent:${section.id}`, kind: "parent" as const, section })),
+    ...(independentAll.length ? [{ key: "independent", kind: "independent" as const, groups: independentAll }] : []),
+  ];
+  const records = new Map(display.recordSections.map((section) => [section.id, section]));
+  const parents = new Map(display.parentSections.map((section) => [section.id, section]));
+  const runs = blocks.filter((block) => block.kind === "independent");
+  const runOfPath = new Map(runs.flatMap((block, index) => block.paths.map((path) => [path, index] as const)));
+  const groupsByRun = runs.map(() => [] as ReviewDisplayModel["independentGroups"]);
+  const extra: ReviewDisplayModel["independentGroups"] = [];
+  for (const group of independentAll) {
+    const run = group.entries.map((entry) => runOfPath.get(entry.path)).find((index) => index !== undefined);
+    (run === undefined ? extra : groupsByRun[run]).push(group);
+  }
+  const result: ReviewDisplayBlock[] = [];
+  for (const block of sortBlocks(blocks, joins)) {
+    if (block.kind === "record") {
+      const section = records.get(block.id ?? "");
+      // The heading's items outside the table's rows are shown with the table, not apart.
+      const attached = block.attachedId ? parents.get(block.attachedId) : undefined;
+      if (section) result.push({ key: `record:${section.id}`, kind: "record", section, attached: attached?.entries.length ? attached : undefined });
+      else if (attached?.entries.length) result.push({ key: `parent:${attached.id}`, kind: "parent", section: attached });
+    } else if (block.kind === "parent") {
+      const section = parents.get(block.id ?? "");
+      if (section) result.push({ key: `parent:${section.id}`, kind: "parent", section });
+    } else {
+      const groups = groupsByRun[runs.indexOf(block)];
+      if (groups.length) result.push({ key: `independent:${block.paths[0] ?? runs.indexOf(block)}`, kind: "independent", groups });
+    }
+  }
+  // Items the structure does not place (added later) go last, as before.
+  if (extra.length) result.push({ key: "independent:extra", kind: "independent", groups: extra });
+  return result;
 }
 
 /** Box field ID → the write-in field its item owns (「その他（　）」 next to ○× or □). */

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { FiMic, FiMove, FiRotateCcw, FiSquare, FiX } from "react-icons/fi";
+import { FiMessageSquare, FiMic, FiMove, FiRotateCcw, FiSend, FiSquare, FiX } from "react-icons/fi";
 import { VoiceMeter } from "../components/VoiceMeter";
 import { useCornerPin } from "../components/useCornerPin";
 
@@ -18,6 +18,8 @@ export type VoiceOverlayProps = {
   bubble: { key: string; tone: BubbleTone; text: string; sticky: boolean } | null;
   caption: string;
   extra?: ReactNode;
+  /** Typed instructions to the same AI as voice. The text is kept until the send succeeds. */
+  textInput?: { enabled: boolean; hint: string; onSubmit: (text: string) => Promise<void> };
 };
 
 /**
@@ -51,6 +53,17 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
     return () => window.clearTimeout(timer);
   }, [bubble?.key, bubble?.sticky, hovered]);
 
+  const [typing, setTyping] = useState(false), [draft, setDraft] = useState(""), [sending, setSending] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (typing) field.current?.focus(); }, [typing]);
+  const text = props.textInput;
+  const canSend = Boolean(text?.enabled && draft.trim() && !sending);
+  function send() {
+    if (!text || !canSend) return;
+    setSending(true);
+    text.onSubmit(draft.trim()).then(() => setDraft(""), () => undefined).finally(() => { setSending(false); field.current?.focus(); });
+  }
+
   const busy = thinking || props.starting;
   const live = props.speaking && props.caption;
   return createPortal(
@@ -64,6 +77,17 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
         {props.extra}
         {bubble && !live && !thinking && <button type="button" className="voice-bubble-close" aria-label="閉じる" onClick={() => setDismissed(bubble.key)}><FiX /></button>}
       </div>}
+      {text && typing && !dragging && <form className="voice-text" onSubmit={e => { e.preventDefault(); send(); }}>
+        <textarea ref={field} aria-label="AIへの指示" value={draft} maxLength={2000} rows={2}
+          placeholder={text.enabled ? "例：3行目の体重を500に" : text.hint}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); setTyping(false); return; }
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
+          }} />
+        <button type="submit" aria-label="送信" title={text.enabled ? "送信（Enter）" : text.hint} disabled={!canSend}><FiSend /></button>
+      </form>}
       <div className="voice-pill">
         <button type="button" className="voice-grip" aria-label="音声入力の位置を移動（ドラッグ又は矢印キー）" title="ドラッグで四隅へ移動"
           {...grip}><FiMove /></button>
@@ -71,6 +95,8 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
           ? <button type="button" className={`voice-mic is-on${busy ? " is-busy" : ""}${props.speaking ? " is-speaking" : ""}`} aria-label="音声入力を停止" title="音声入力を停止" onClick={props.onStop}><FiSquare /></button>
           : <button type="button" className={`voice-mic${thinking ? " is-busy" : ""}`} aria-label="音声入力" title={props.canStart ? "音声入力" : props.startHint} disabled={!props.canStart} onClick={props.onStart}><FiMic /></button>}
         {props.listening && <VoiceMeter read={props.meter} active speaking={props.speaking} />}
+        {text && <button type="button" className={`voice-text-toggle${typing ? " is-on" : ""}`} aria-label="文字で指示" aria-pressed={typing} title="文字で指示"
+          onClick={() => setTyping(open => !open)}><FiMessageSquare /></button>}
         <button type="button" className="voice-undo" aria-label="元に戻す" title="元に戻す" disabled={!props.canUndo} onClick={props.onUndo}><FiRotateCcw /></button>
       </div>
     </div>,

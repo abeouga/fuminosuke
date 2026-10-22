@@ -203,12 +203,60 @@ class TemplateFieldHint(Base):
     keywords_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     keywords_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     keywords_forced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # No longer read or written (2026-10-22): the reading instruction is the item's memory
+    # (``template_field_memories``); kept so old rows stay readable for the migration.
     instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateFieldMemory(Base):
+    """A writing rule learned from corrections made before confirming (2026-10-22).
+
+    Rules only (e.g. thousands separated by a comma), never a document's own values. The
+    rules of an item are sent as its reading instruction; accepted jobs keep the rules
+    they were accepted with (``templateFieldHints``).
+    """
+
+    __tablename__ = "template_field_memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # One item: a field, or every row cell of a table column.
+    target_patterns_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    field_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    rule: Mapped[str] = mapped_column(String(200), nullable=False)
+    example_before: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    example_after: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class TemplateFieldMemoryRun(Base):
+    """A confirmation already learned from, so a re-confirmation is not learned twice."""
+
+    __tablename__ = "template_field_memory_runs"
+    __table_args__ = (
+        UniqueConstraint("job_id", "revision", name="uq_template_field_memory_runs_job"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    job_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
     )
 
 

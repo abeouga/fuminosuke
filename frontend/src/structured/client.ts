@@ -1,4 +1,5 @@
 import { authenticatedFetch } from "../auth/transport";
+import type { ReviewBlock } from "../types";
 import { EditingError } from "../editing/client";
 
 export type StructuredStatus = { contractVersion: "structured.v1"; enabled: boolean; qaConnected: boolean; voiceConnected: boolean };
@@ -19,6 +20,8 @@ export type StructuredReading = {
   raw: string | null; normalized: string | null; value: string | null; status: ReadingStatus; reviewReason: string | null;
   /** Aligned crop of the cell; absent from servers older than the document shelf. */
   cropUrl?: string | null;
+  /** A selection box (選択欄); older servers leave it out. */
+  choice?: boolean;
   /** The cell's rectangle on its page image (aligned-image pixels). */
   box?: Box | null;
 };
@@ -27,8 +30,17 @@ export type StructuredTable = {
   rows: { id: string; rowNumber: number; cells: { columnId: string; fieldId: string | null }[] }[];
 };
 export type ExtraReading = { key: string; label: string; raw: string | null; normalized: string | null; value: string | null; status: ReadingStatus };
+/** A printed heading, table title, column name or item name, and what it names. */
+export type HeadingCell = {
+  cellId: string; kind: "section" | "table" | "column" | "item"; box: Box; pageId: string | null;
+  section: string | null; tableIds: string[]; columnId: string | null; fieldIds: string[];
+};
 export type StructuredDocument = DocumentSummary & {
   fields: StructuredReading[]; tables: StructuredTable[]; extraFields: ExtraReading[]; pages?: DocumentPage[];
+  /** Tables, headings and items under no heading from the top of the form (older servers: none). */
+  blocks?: ReviewBlock[] | null;
+  /** Absent from servers older than heading highlighting. */
+  headings?: HeadingCell[];
 };
 export type QuestionChoice = { value: string; label: string };
 /** `optional`: the answer is already given; the choices only offer a different reading. */

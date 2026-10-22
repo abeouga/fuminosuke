@@ -19,6 +19,7 @@ from openpyxl.styles import (  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
 
 from app.core.errors import AppError
+from app.services.review_block_order import ordered_blocks, with_blocks
 from app.services.template_item_join_service import joined_text, ordered
 
 CellKind = Literal["text", "identifier", "integer", "decimal", "currency", "date"]
@@ -78,6 +79,7 @@ class ExcelExportService:
         confirmed_at: datetime | None = None,
         document_name: str | None = None,
         joins: list[dict[str, Any]] | None = None,
+        layout: object = None,
     ) -> ExcelTable:
         generic_data = self._mapping(document.get("genericData"))
         generic_title = generic_data.get("templateName")
@@ -102,7 +104,7 @@ class ExcelExportService:
                 detail="受付時の出力構造がありません。",
             )
         used_paths = self._append_review_structure(
-            rows, document, snapshot.get("reviewStructure"), mappings, joins or []
+            rows, document, snapshot.get("reviewStructure"), mappings, joins or [], layout
         )
         self._append_unbound_values(rows, document, used_paths, config_snapshot)
 
@@ -154,6 +156,7 @@ class ExcelExportService:
         structure: object,
         mappings: list[Any],
         joins: list[dict[str, Any]],
+        layout: object = None,
     ) -> set[str]:
         """Project accepted field IDs; labels and array positions never resolve values."""
 
@@ -167,6 +170,8 @@ class ExcelExportService:
 
         if not isinstance(structure, dict) or structure.get("schemaVersion") != 1:
             raise invalid()
+        structure = with_blocks(structure, mappings, layout)
+        assert isinstance(structure, dict)
         accepted: dict[str, str] = {}
         for mapping in mappings:
             if not isinstance(mapping, dict) or mapping.get("enabled") is False:
@@ -222,14 +227,17 @@ class ExcelExportService:
                 text if isinstance(text, str) else "",
             )
 
-        def append_fields(title: str, identifiers: object) -> None:
+        def append_fields(title: str | None, identifiers: object) -> None:
+            """Items as name/value rows; without ``title`` they continue the table above."""
             if not isinstance(identifiers, list):
                 raise invalid()
             if not identifiers:
                 return
+            if title is None and rows and rows[-1].kind == "blank":
+                rows.pop()
             rows.extend(
                 [
-                    ExcelRow("section", (self._text_cell(title),)),
+                    *([ExcelRow("section", (self._text_cell(title),))] if title else []),
                     ExcelRow("header", (self._text_cell("項目"), self._text_cell("値"))),
                 ]
             )
@@ -277,10 +285,7 @@ class ExcelExportService:
                     join_by_path[str(member.get("targetPath"))] = present
         orders = [join for join in joins if join.get("kind") == "order"]
 
-        append_fields("基本項目", structure.get("independentFieldIds"))
-        for section in self._records(structure.get("parentSections")):
-            append_fields(str(section.get("title") or "項目"), section.get("fieldIds"))
-        for section in self._records(structure.get("recordSections")):
+        def append_table(section: dict[str, Any]) -> None:
             columns = self._records(section.get("columns"))
             column_ids = [column.get("id") for column in columns]
             if (
@@ -315,6 +320,23 @@ class ExcelExportService:
                     )
                 )
             rows.append(ExcelRow("blank"))
+
+        # Blocks follow the form from the top (or the saved block order); display only.
+        sections = {
+            str(section.get("id")): section
+            for kind in ("parentSections", "recordSections")
+            for section in self._records(structure.get(kind))
+        }
+        for block in ordered_blocks(structure["blocks"], joins):
+            if block["kind"] == "record":
+                append_table(sections[str(block["id"])])
+                # Items of the table's heading outside its rows follow the table.
+                append_fields(None, list(block.get("attachedFieldIds") or []))
+            elif block["kind"] == "parent":
+                section = sections[str(block["id"])]
+                append_fields(str(section.get("title") or "項目"), section.get("fieldIds"))
+            else:
+                append_fields("基本項目", list(block["fieldIds"]))
         if visited != set(fields):
             raise invalid()
         return set(accepted.values())

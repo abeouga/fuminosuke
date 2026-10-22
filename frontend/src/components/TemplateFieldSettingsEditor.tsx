@@ -7,15 +7,14 @@ type FieldDraft = {
   keywordsText: string;
   keywordsEnabled: boolean;
   keywordsForced: boolean;
-  instruction: string;
 };
 
 /** One settable item: a single field, or every row cell of one table column. */
 type FieldItem = { key: string; label: string; patterns: string[]; mappings: FieldMapping[] };
 
-const EMPTY_DRAFT: FieldDraft = { keywordsText: "", keywordsEnabled: true, keywordsForced: false, instruction: "" };
+const EMPTY_DRAFT: FieldDraft = { keywordsText: "", keywordsEnabled: true, keywordsForced: false };
 
-/** Per-item reading settings: keywords and a reading instruction, saved to the template. */
+/** Per-item reading settings: keywords, saved to the template (the instruction is the memory). */
 export function TemplateFieldSettingsEditor({
   template,
   version,
@@ -129,7 +128,6 @@ export function TemplateFieldSettingsEditor({
             keywords: lines(value.keywordsText),
             keywordsEnabled: value.keywordsEnabled,
             keywordsForced: value.keywordsForced,
-            instruction: value.instruction.trim(),
           };
         });
       const saved = await api.saveTemplateFieldSettings(template.id, version.id, revision, payload);
@@ -151,7 +149,7 @@ export function TemplateFieldSettingsEditor({
         <div>
           <span className="eyebrow">{template.name}</span>
           <h1>項目の読み取り設定</h1>
-          <p>欄を選んで、出てくる語（候補語）や読み方の指示を付けます。</p>
+          <p>欄を選んで、出てくる語（候補語）を付けます。</p>
         </div>
         <button type="button" className="ghost" disabled={saving} onClick={close}>{closeLabel}</button>
       </header>
@@ -214,15 +212,6 @@ export function TemplateFieldSettingsEditor({
                       : "オフのときは参考だけ。候補と同じ語なら表記をそろえ、ほかは読み取ったまま残します。"}</small></span>
                   </label>
                 </div>}
-                <label className="field-label">読み取り指示
-                  <textarea
-                    value={draft.instruction}
-                    rows={3}
-                    maxLength={300}
-                    placeholder="例：「10-2-10」のように書かれた日付は「10.2.10」と書く"
-                    onChange={(event) => update({ instruction: event.target.value })}
-                  />
-                </label>
                 {hasContent(draft) && <button type="button" className="ghost compact field-setting-clear" onClick={() => update({ ...EMPTY_DRAFT })}>この欄の設定を消す</button>}
               </section>
             ) : (
@@ -244,10 +233,7 @@ export function TemplateFieldSettingsEditor({
                       onClick={() => select(item.key)}
                     >
                       <strong>{item.label}</strong>
-                      <span>{[
-                        count > 0 ? `候補語${count}語${value.keywordsEnabled ? value.keywordsForced ? "・寄せる" : "" : "・使わない"}` : null,
-                        value.instruction.trim() ? "読み取り指示あり" : null,
-                      ].filter(Boolean).join(" / ")}</span>
+                      <span>{`候補語${count}語${value.keywordsEnabled ? value.keywordsForced ? "・寄せる" : "" : "・使わない"}`}</span>
                     </button>
                   );
                 })}
@@ -299,19 +285,18 @@ function draftsFromSettings(saved: TemplateFieldSetting[], keyByPattern: Map<str
     keywordsText: item.keywords.join("\n"),
     keywordsEnabled: item.keywordsEnabled,
     keywordsForced: item.keywordsForced,
-    instruction: item.instruction,
   }]));
 }
 
 function hasContent(draft: FieldDraft | undefined) {
-  return Boolean(draft && (lines(draft.keywordsText).length > 0 || draft.instruction.trim()));
+  return Boolean(draft && (lines(draft.keywordsText).length > 0));
 }
 
 function signature(drafts: Record<string, FieldDraft>) {
   return JSON.stringify(Object.entries(drafts)
     .filter(([, item]) => hasContent(item))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => [key, lines(item.keywordsText), item.keywordsEnabled, item.keywordsForced, item.instruction.trim()]));
+    .map(([key, item]) => [key, lines(item.keywordsText), item.keywordsEnabled, item.keywordsForced]));
 }
 
 function lines(text: string) {

@@ -4,7 +4,18 @@ import asyncio
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Header,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from pydantic import ConfigDict, Field
 
@@ -120,6 +131,22 @@ async def list_series_candidates(
     return SeriesCandidateList.model_validate({"items": items})
 
 
+@router.post("/template-classifications")
+async def classify_template(
+    request: Request, file: Annotated[UploadFile, File()],
+) -> dict[str, Any]:
+    """Which in-use template this image was filled on (nothing is stored)."""
+    from app.services.template_classification_service import TemplateClassificationService
+
+    upload = await read_upload(file, request.app.state.settings.storage.max_upload_bytes)
+    service = TemplateClassificationService(
+        get_database(request), request.app.state.storage, request.app.state.settings,
+    )
+    return await asyncio.to_thread(
+        service.classify, upload.content, upload.declared_media_type,
+    )
+
+
 @router.post(
     "/ocr-jobs",
     response_model=JobAccepted,
@@ -206,13 +233,29 @@ def reopen_ocr_result(request: Request, job_id: str, body: OcrReopenRequest):
 @router.post(
     "/ocr-jobs/{job_id}/confirm", response_model=OcrResultResponse, response_model_by_alias=True
 )
-def confirm_ocr_result(request: Request, job_id: str, body: OcrConfirmationRequest):
-    return get_ocr_result_service(request).confirm(
+def confirm_ocr_result(
+    request: Request, job_id: str, body: OcrConfirmationRequest, background: BackgroundTasks
+):
+    result = get_ocr_result_service(request).confirm(
         job_id,
         base_revision=body.base_revision,
         document_name=body.document_name,
         accept_identity_mismatch=body.accept_identity_mismatch,
     )
+    # 2026-10-22: learn writing rules from the corrections (memory) after the response;
+    # never shown and never affects the confirmation.
+    from app.ai.api_budget import ApiBudget
+    from app.api.dependencies import get_app_settings
+    from app.services.template_field_memory_service import TemplateFieldMemoryService
+
+    database = request.app.state.database
+    background.add_task(
+        TemplateFieldMemoryService(database, request.app.state.storage).learn,
+        job_id,
+        get_app_settings(request),
+        ApiBudget(database),
+    )
+    return result
 
 
 @router.get("/ocr-jobs/{job_id}/export", response_class=FileResponse)
