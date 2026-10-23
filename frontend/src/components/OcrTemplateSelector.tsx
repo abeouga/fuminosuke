@@ -11,7 +11,7 @@ import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "./TemplateItemJoinEditor";
 import { openDocumentNameEditor } from "./TemplateDocumentNameEditor";
 import { openTemplateMemory } from "./TemplateMemoryDialog";
-import { Spinner } from "./Spinner";
+import { ImageSpinner, Spinner } from "./Spinner";
 
 export type ReadingTemplateCard = {
   template: Template;
@@ -63,9 +63,9 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                         >
                           <span className="ocr-template-card-visual">
                             {(preview?.loading || (Boolean(preview?.url) && !previewImageState[previewKey]))
-                              && <span className="ocr-template-card-skeleton" aria-hidden="true" />}
+                              && <ImageSpinner />}
                             {(!preview?.loading && (!preview?.url || previewImageState[previewKey] === "failed"))
-                              && <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>}
+                              && <ImageSpinner />}
                             {preview?.url && (
                               <img
                                 key={previewKey}

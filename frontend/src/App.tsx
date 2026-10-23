@@ -12,7 +12,7 @@ import { DocumentNameEditorHost } from "./components/TemplateDocumentNameEditor"
 import { TemplateMemoryHost } from "./components/TemplateMemoryDialog";
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
-import { Spinner } from "./components/Spinner";
+import { ImageSpinner, Spinner } from "./components/Spinner";
 import { ReadingQueueMenu } from "./components/ReadingQueueMenu";
 import { readingQueue, useReadingQueuePolling, type QueuedReading } from "./readingQueue";
 
@@ -21,7 +21,7 @@ const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ def
 
 type Page = "ocr" | "review" | "job" | "ask" | "shelf";
 type ReviewReturn = "ocr" | "ask" | "shelf";
-const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "チャットへ戻る", shelf: "書類棚へ戻る" };
+const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "チャットへ戻る", shelf: "ライブラリへ戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean; action?: () => void };
 const RECENT_KEY = "document-ocr-recent-jobs";
@@ -226,6 +226,8 @@ export default function App() {
       window.history.replaceState({}, "", url);
     }
     setNavigationGuard(null);
+    // The shelf keeps its open document only for a review opened from it; other pages start it over.
+    if (nextPage !== "shelf" && nextPage !== "review") setShelfSelection({ templateId: null, jobId: null, query: "" });
     if (nextPage === "ocr") {
       void refreshJobs();
       setTemplateWorkspaceRequest(null);
@@ -311,15 +313,16 @@ export default function App() {
         <nav id="main-menu" aria-label="メインメニュー">
           <NavButton active={page === "ask" || (page === "review" && reviewReturn === "ask")} icon="ask" label="チャット" onClick={() => navigateTo("ask")} />
           <NavButton active={page === "ocr" || (page === "review" && reviewReturn === "ocr")} icon="ocr" label="読み取り" onClick={openReadingRoot} />
-          <NavButton active={page === "shelf" || (page === "review" && reviewReturn === "shelf")} icon="shelf" label="書類棚" onClick={() => navigateTo("shelf")} />
+          <NavButton active={page === "shelf" || (page === "review" && reviewReturn === "shelf")} icon="shelf" label="ライブラリ" onClick={() => navigateTo("shelf")} />
         </nav>
+        <ReadingQueueMenu onOpen={openQueuedReading} />
         <div className="side-footer" role="status">
           <span className={health ? "status-dot ok" : "status-dot"} />
           <span>{health ? "接続中" : "接続待ち"}</span>
         </div>
       </aside>
       <main className="main-content">
-        <Suspense fallback={<section className="panel" aria-busy="true"><p role="status">画面を準備しています。</p></section>}>
+        <Suspense fallback={<div className="page-spinner" aria-busy="true"><ImageSpinner label="画面を読み込んでいます" /></div>}>
         {templateLoadFailed && (
           <aside className="notice danger persistent-system-notice" role="alert">
             <div>
@@ -349,7 +352,7 @@ export default function App() {
           onTemplateNavigationGuardChange={updateTemplateGuard}
           templateSelectionFooter={<PendingJobs health={health} jobs={jobs} onOpenJob={openJob} />}
         />}
-        {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={() => { void refreshJobs(); navigateTo(reviewReturn); }}
+        {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={(discarded) => { void refreshJobs(); if (discarded) applyNavigation(reviewReturn); else navigateTo(reviewReturn); }}
           onConfirmed={({ templateId, documentName }) => {
             void refreshJobs();
             // A document from the reading queue: go on to the next one waiting for review.
@@ -388,7 +391,6 @@ export default function App() {
         />}
         </Suspense>
       </main>
-      <ReadingQueueMenu onOpen={openQueuedReading} />
       <ToastViewport />
       <ItemJoinEditorHost />
       <DocumentNameEditorHost />

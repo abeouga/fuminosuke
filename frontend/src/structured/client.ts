@@ -42,10 +42,16 @@ export type StructuredDocument = DocumentSummary & {
   /** Absent from servers older than heading highlighting. */
   headings?: HeadingCell[];
 };
-export type QuestionChoice = { value: string; label: string };
+/** A document choice also carries its form and identity (`detail`) and a picture. */
+export type QuestionChoice = { value: string; label: string; detail?: string | null; thumbnailUrl?: string | null };
 /** `optional`: the answer is already given; the choices only offer a different reading. */
 export type Clarification = { questionId: string; kind: string; message: string; choices: QuestionChoice[]; optional: boolean };
-export type AnswerTable = { columns: string[]; rows: (string | null)[][] };
+export type AnswerTable = {
+  columns: string[];
+  rows: (string | null)[][];
+  /** The cell each row was read from (same order as rows); absent in answers saved before it existed. */
+  sources?: { jobId: string; fieldId: string | null }[];
+};
 export type Evidence = {
   jobId: string; documentName: string | null; fieldId: string | null; targetPath: string | null;
   label: string; raw: string | null; value: string | null; status: string; interpretedAs: string | null;
@@ -59,7 +65,15 @@ export type QuestionResult = {
   modelCalls: number; documents: { jobId: string; documentName: string | null }[];
 };
 /** A reply carries either one of the offered choices (`value`) or the user's own words (`text`). */
-export type QuestionRequest = { text: string; replyTo?: { questionId: string; value?: string; text?: string }; documentIds?: string[] };
+export type QuestionRequest = {
+  text: string; replyTo?: { questionId: string; value?: string; text?: string }; documentIds?: string[];
+  /** The conversation's last answer (its documents and question), to fill in a follow-up. */
+  context?: QuestionContext;
+};
+export type QuestionContext = { documentIds: string[]; previous: string | null };
+/** Where a question was sent from in the chat; only written to the local chat log. */
+export type ChatClient = { conversationId: string; turnId: number; recovered?: boolean };
+export type ChatTurnRecord = { turnId: number; text: string; reply: boolean; state: string | null; answer: string | null; pending: boolean };
 
 const base = "/api/v2/structured";
 
@@ -85,25 +99,12 @@ export const structuredClient = {
   document: (jobId: string) => request<StructuredDocument>(`/documents/${encodeURIComponent(jobId)}`),
   fields: (templateId: string) => request<{ items: FieldName[] }>(`/fields?templateId=${encodeURIComponent(templateId)}`),
   // Fields added later (notes, optional) default to empty so an older server still renders.
-  ask: (body: QuestionRequest) => request<QuestionResult>("/questions", body).then((result) => ({
+  ask: (body: QuestionRequest, client?: ChatClient) => request<QuestionResult>("/questions", client ? { ...body, client } : body).then((result) => ({
     ...result,
     notes: result.notes ?? [],
     question: result.question ? { ...result.question, optional: result.question.optional ?? false } : null,
   })),
+  /** Tell the local chat log about removed exchanges (best effort; never blocks the chat). */
+  logRemoved: (conversationId: string, turns: ChatTurnRecord[]) =>
+    request<unknown>("/events", { type: "remove", conversationId, turns }).catch(() => undefined),
 };
-
-/** Review link for one evidence cell: the review page selects the field by its target path. */
-export function evidenceHref(evidence: Evidence): string {
-  const params = new URLSearchParams({ job: evidence.jobId });
-  if (evidence.targetPath) params.set("field", evidence.targetPath);
-  return `?${params.toString()}`;
-}
-
-/** Answer table as CSV text (RFC 4180 quoting) for the clipboard. */
-export function tableCsv(table: AnswerTable): string {
-  const cell = (value: string | null) => {
-    const text = value ?? "";
-    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  };
-  return [table.columns, ...table.rows].map((row) => row.map(cell).join(",")).join("\r\n");
-}

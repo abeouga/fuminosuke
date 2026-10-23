@@ -53,10 +53,9 @@
 .voice-pill button:disabled { color: #a3adba; cursor: not-allowed; }
 .voice-pill .voice-text-toggle.is-on { background: #e0ecf6; color: #1f5f8b; }
 .voice-text { display: flex; align-items: flex-end; gap: 6px; width: min(340px, calc(100vw - 24px)); padding: 6px; border-radius: 14px; background: #ffffffee; border: 1px solid #cbd5e1; box-shadow: 0 6px 20px #0f172a2e; backdrop-filter: blur(4px); }
-.voice-text textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent; font: inherit; font-size: 14px; line-height: 1.45; padding: 4px 6px; color: #1e293b; }
 .voice-text:focus-within { border-color: #1f5f8b; }
-.voice-text button { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; border: 0; background: #1f5f8b; color: #fff; font-size: 15px; cursor: pointer; }
-.voice-text button:disabled { background: #cbd5e1; cursor: not-allowed; }
+.voice-text > button { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; border: 0; background: #1f5f8b; color: #fff; font-size: 15px; cursor: pointer; }
+.voice-text > button:disabled { background: #cbd5e1; cursor: not-allowed; }
 .voice-pill .voice-grip { width: 24px; color: #94a3b8; cursor: grab; touch-action: none; }
 .voice-overlay.is-dragging .voice-grip { cursor: grabbing; }
 .voice-pill .voice-mic { width: 42px; height: 42px; background: #1f5f8b; color: #fff; font-size: 18px; position: relative; }
@@ -90,3 +89,37 @@
 @keyframes voice-dot { 0%, 80%, 100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
 @keyframes voice-bubble-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .voice-bubble { animation: none; } .voice-pill .voice-mic::before, .voice-pill .voice-mic::after, .voice-dots i { animation-duration: 3s; } }
+/* A result cell dragged onto the AI toolbar is quoted in the typed instruction. */
+.voice-overlay.is-drop-armed .voice-pill { border-color: #1f5f8b; box-shadow: 0 0 0 3px #1f5f8b33, 0 6px 20px #0f172a2e; }
+.voice-overlay.is-drop-over .voice-pill { background: #e0ecf6; box-shadow: 0 0 0 5px #1f5f8b55, 0 6px 20px #0f172a2e; transform: scale(1.06); }
+.voice-pill { transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
+.voice-drop-hint { margin: 0; padding: 6px 10px; border-radius: 10px; background: #1f5f8b; color: #fff; font-size: 12px; }
+/* The dragged cell is pulled out of the table like a puzzle piece; its place stays as a hole. */
+.ai-drag-piece { cursor: grabbing; pointer-events: none; transform: rotate(-2deg) scale(1.05); transform-origin: 30% 50%; box-shadow: 0 14px 28px #0f172a40, 0 3px 8px #0f172a2e; outline: 2px solid #1f5f8b; animation: ai-piece-lift .14s ease-out; background: #fff; }
+@keyframes ai-piece-lift { from { transform: none; box-shadow: none; } }
+.is-ai-draggable { cursor: grab; }
+td.is-ai-dragging, th.is-ai-dragging, td[data-ai-gathered] { background: repeating-linear-gradient(135deg, #eef2f7 0 6px, #e2e8f0 6px 12px) !important; box-shadow: inset 0 2px 6px #0f172a30 !important; color: transparent !important; }
+td.is-ai-dragging > *, th.is-ai-dragging > *, td[data-ai-gathered] > * { visibility: hidden; }
+/* The cells an item owns slide onto the lifted piece and stack behind it like cards. */
+.ai-drag-face { position: relative; }
+.ai-drag-card { position: absolute; inset: 0; border: 1px solid #94a3b8; box-shadow: 0 2px 6px #0f172a26; transition: transform .18s ease-out; }
+.ai-gather-layer { position: fixed; inset: 0; pointer-events: none; z-index: 998; }
+.ai-gather-card { position: fixed; transform-origin: 0 0; box-shadow: 0 8px 18px #0f172a33; will-change: transform; }
+/* The typed instruction: dropped cells sit inside the sentence as chips, coloured like the cell. */
+.ai-field { flex: 1; min-width: 0; min-height: 44px; max-height: 132px; overflow-y: auto; padding: 5px 6px; font: inherit; font-size: 14px; line-height: 1.7; color: #1e293b; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.ai-field.is-empty::before { content: attr(data-placeholder); color: #94a3b8; pointer-events: none; }
+.ai-field[contenteditable="false"] { color: #94a3b8; cursor: not-allowed; }
+.ai-chip { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; margin: 0 2px; padding: 0 7px; border-radius: 6px; border: 1px solid #b7d9c4; background: #dff0e6; color: #1e293b; font-size: 13px; line-height: 1.5; vertical-align: baseline; white-space: nowrap; user-select: none; cursor: default; animation: ai-chip-in .22s cubic-bezier(.2, 1.4, .4, 1); }
+.ai-chip small { font-size: 10.5px; color: #5b6b7c; }
+.ai-chip.is-warning { background: #fff4d6; border-color: #f1cf72; }
+.ai-chip.is-blank { background: #f1f5f9; border-color: #dbe2ea; color: #475569; }
+.ai-chip.is-group { background: #ede9fe; border-color: #ddd6fe; color: #4c1d95; }
+.ai-chip.is-group small { color: #6d5bb0; }
+.ai-chip:hover { box-shadow: 0 0 0 2px #1f5f8b55; }
+@keyframes ai-chip-in { from { opacity: 0; transform: translateY(4px) scale(.8); } }
+/* While a chip is hovered, the cell it stands for lights up in the table. */
+td.is-ai-chip-source { box-shadow: inset 0 0 0 2px #1f5f8b, 0 0 0 3px #1f5f8b33 !important; }
+/* The field is the drop target while a cell is being dragged. */
+.voice-overlay.is-drop-armed .voice-text { border-color: #1f5f8b; border-style: dashed; }
+.voice-overlay.is-drop-over .voice-text { background: #e0ecf6ee; }
+@media (prefers-reduced-motion: reduce) { .ai-chip { animation: none; } .voice-pill { transition: none; } .voice-overlay.is-drop-over .voice-pill { transform: none; } .ai-drag-piece { animation: none; } }

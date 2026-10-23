@@ -208,6 +208,10 @@ export const api = {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ baseRevision, reviewedPageIds, documentName }),
     }),
+    cancelReopenPages: (id: string, baseRevision: number) => request<PagedReviewResult>(`/ocr-jobs/${id}/page-review/cancel-reopen`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseRevision }),
+    }),
     reopenPages: (id: string, baseRevision: number) => request<PagedReviewResult>(`/ocr-jobs/${id}/page-review/reopen`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ baseRevision }),
@@ -374,6 +378,7 @@ export const api = {
         }),
     }),
     reopenResult: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),
+    cancelReopen: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/cancel-reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),
     retry: (id: string, revision: number | null | undefined) => request<Job>(`/jobs/${id}/retry${revision == null ? "" : `?expectedRevision=${revision}`}`, { method: "POST" }),
     cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
     /** Deletes a read document (a confirmed one only with `confirm`); its files go too. */

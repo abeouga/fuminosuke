@@ -7,6 +7,10 @@ export type PagedReviewResult = {
   jobId: string;
   revision: number;
   confirmed: boolean;
+  /** Re-edited after a confirmation; the last confirmation is kept until it is confirmed again. */
+  reopened?: boolean;
+  /** The saved pages or name differ from that confirmation. */
+  changedSinceConfirmed?: boolean;
   documentName?: string | null;
   documentMetadata?: {
     proposedName: string | null;

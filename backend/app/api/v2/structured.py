@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Query, Request, WebSocket
+from fastapi import APIRouter, Depends, Query, Request, Response, WebSocket
 
 from app.ai.api_budget import ApiBudget
 from app.api.dependencies import get_app_settings, get_database
 from app.api.editing_transport import EditingRoute, local_request
+from app.core.errors import AppError
 from app.editing.errors import reject
 from app.structured.contracts import (
+    ChatEvent,
     DocumentList,
     FieldNameList,
     QuestionRequest,
@@ -120,7 +126,101 @@ async def ask(request: Request, body: QuestionRequest) -> dict[str, Any]:
         if body.reply_to is not None
         else None
     )
-    return await runtime(request).ask(body.text, reply, body.document_ids)
+    started = time.monotonic()
+    try:
+        context = (
+            {"documentIds": body.context.document_ids, "previous": body.context.previous}
+            if body.context is not None
+            else None
+        )
+        result = await runtime(request).ask(body.text, reply, body.document_ids, context)
+    except Exception as error:
+        chat_log(request, question_line(body, started, error=error))
+        raise
+    chat_log(request, question_line(body, started, result=result))
+    return result
+
+
+@router.post("/events", dependencies=[Depends(enabled)], status_code=204)
+async def chat_event(request: Request, body: ChatEvent) -> Response:
+    """Chat actions the server does not otherwise see (removing an exchange), for the log only."""
+    chat_log(
+        request,
+        {
+            "type": body.type,
+            "conversationId": body.conversation_id,
+            "turns": [turn.model_dump(by_alias=True) for turn in body.turns],
+        },
+    )
+    return Response(status_code=204)
+
+
+def question_line(
+    body: QuestionRequest,
+    started: float,
+    result: dict[str, Any] | None = None,
+    error: Exception | None = None,
+) -> dict[str, Any]:
+    line: dict[str, Any] = {
+        "type": "reply" if body.reply_to is not None else "question",
+        **(
+            {
+                "conversationId": body.client.conversation_id,
+                "turnId": body.client.turn_id,
+                "recovered": body.client.recovered,
+            }
+            if body.client is not None
+            else {}
+        ),
+        "text": body.text,
+        "replyTo": body.reply_to.model_dump(by_alias=True, exclude_none=True)
+        if body.reply_to
+        else None,
+        "documentIds": body.document_ids,
+        "context": body.context.model_dump(by_alias=True) if body.context else None,
+        "ms": round((time.monotonic() - started) * 1000),
+    }
+    if result is not None:
+        question = result.get("question")
+        line["outcome"] = {
+            "state": result.get("state"),
+            "answer": result.get("answer"),
+            "question": question
+            and {
+                "questionId": question.get("questionId"),
+                "kind": question.get("kind"),
+                "message": question.get("message"),
+                "optional": question.get("optional"),
+                "choices": [
+                    {"value": choice.get("value"), "label": choice.get("label")}
+                    for choice in question.get("choices") or []
+                ],
+            },
+            "notes": result.get("notes"),
+            "caveats": result.get("caveats"),
+            "documents": result.get("documents"),
+            "evidence": len(result.get("evidence") or []),
+            "table": bool(result.get("table")),
+            "modelCalls": result.get("modelCalls"),
+        }
+    elif isinstance(error, AppError):
+        line["error"] = {"status": error.status, "code": error.code, "message": error.detail}
+    elif error is not None:
+        line["error"] = {"status": 500, "code": type(error).__name__, "message": str(error)[:500]}
+    return line
+
+
+def chat_log(request: Request, entry: dict[str, Any]) -> None:
+    """Opt-in local log (VOICE_TRANSCRIPT_LOG): chat questions, answers or errors, removals."""
+    settings = get_app_settings(request)
+    if not settings.voice.transcript_log:
+        return
+    line = {"at": datetime.now(UTC).isoformat(), **entry}
+    path = settings.storage.data_dir / "logs" / "chat-questions.jsonl"
+    with suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
 
 
 voice_router = APIRouter(prefix="/api/v2/structured", tags=["structured.v1.voice"])

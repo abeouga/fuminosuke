@@ -16,8 +16,8 @@ const RUNNING = new Set(["CREATED", "QUEUED", "PROCESSING"]);
 const PROBLEM = new Set(["FAILED", "INTERRUPTED"]);
 
 /**
- * The readings the user sent from this browser, floating at the top right of the window (below the
- * menu bar) while any are listed: they run one after another on the server while the user keeps
+ * The readings the user sent from this browser, shown in the menu bar (left of the connection
+ * status) while any are listed: they run one after another on the server while the user keeps
  * adding forms or reviews the ones already read. Opens downward as a list.
  */
 export function ReadingQueueMenu({ onOpen }: {
@@ -43,7 +43,6 @@ export function ReadingQueueMenu({ onOpen }: {
     const timer = window.setTimeout(() => setPulse(false), 900);
     return () => window.clearTimeout(timer);
   }, [signature]);
-  useFloatBelowMenuBar();
   useEffect(() => { if (open) void syncReadingQueue(); }, [open]);
   useEffect(() => { if (queue.length === 0) setOpen(false); }, [queue.length]);
   useEffect(() => {
@@ -155,22 +154,4 @@ function ProgressRing({ value, active, done }: { value: number; active: boolean;
       <b>{active ? "" : done > 0 ? done : <FiCheck />}</b>
     </span>
   );
-}
-
-/** Keeps the floating list just below the menu bar, whose height changes with the window width. */
-function useFloatBelowMenuBar() {
-  useEffect(() => {
-    const bar = document.querySelector<HTMLElement>(".side-nav");
-    if (!bar) return;
-    const place = () => {
-      // A tall bar is the side menu of a wide layout: float at the top of the window instead.
-      const height = bar.getBoundingClientRect().height;
-      const top = height > 160 ? 16 : Math.round(height) + 12;
-      document.documentElement.style.setProperty("--reading-float-top", `${top}px`);
-    };
-    place();
-    const observer = new ResizeObserver(place);
-    observer.observe(bar);
-    return () => observer.disconnect();
-  }, []);
 }

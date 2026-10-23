@@ -64,6 +64,8 @@ class OcrResultResponse(ApiModel):
     document_name: str
     # Present when the job was read as an update of a confirmed document (document_series).
     series: dict[str, Any] | None = None
+    reopened: bool = False
+    changed_since_confirmed: bool = False
 
 
 class OcrCorrectionRequest(ApiModel):
@@ -228,6 +230,15 @@ def save_ocr_corrections(request: Request, job_id: str, body: OcrCorrectionReque
 )
 def reopen_ocr_result(request: Request, job_id: str, body: OcrReopenRequest):
     return get_ocr_result_service(request).reopen(job_id, base_revision=body.base_revision)
+
+
+@router.post(
+    "/ocr-jobs/{job_id}/cancel-reopen",
+    response_model=OcrResultResponse,
+    response_model_by_alias=True,
+)
+def cancel_reopen_ocr_result(request: Request, job_id: str, body: OcrReopenRequest):
+    return get_ocr_result_service(request).cancel_reopen(job_id, base_revision=body.base_revision)
 
 
 @router.post(

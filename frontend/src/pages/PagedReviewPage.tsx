@@ -37,12 +37,14 @@ import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItem
 import { showToast } from "../components/Toast";
 import type { FieldReading, OcrFieldPreview } from "../types";
 import { Spinner } from "../components/Spinner";
+import { restoreAfterLeaving } from "../reviewLeave";
 
 type Drafts = Record<string, Record<string, PageFieldEdit>>;
 
 export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, templateNames = {}, closeLabel = "ホームへ" }: {
   jobId: string;
-  onClose: () => void;
+  /** `discarded`: the unsaved input was thrown away on purpose, so leaving does not ask again. */
+  onClose: (discarded?: boolean) => void;
   /** After all pages are confirmed (the app then shows the document shelf). */
   onConfirmed?: (confirmed: { templateId: string; documentName: string }) => void;
   closeLabel?: string;
@@ -107,6 +109,37 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
     return () => { onNavigationGuardChange?.(false); window.removeEventListener("beforeunload", guard); };
   }, [unsaved, inlineDirty, busy, onNavigationGuardChange]);
 
+  // A re-edit left without confirming goes back to the last confirmation (see ReviewPage).
+  const [leaveDialog, setLeaveDialog] = useState(false);
+  const reopenedUnchanged = Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
+    && !unsaved && !inlineDirty && !busy && !needsRefresh);
+  const leaveState = useRef({ reopenedUnchanged, revision: result?.revision ?? 0 });
+  leaveState.current = { reopenedUnchanged, revision: result?.revision ?? 0 };
+  useEffect(() => () => {
+    const state = leaveState.current;
+    if (state.reopenedUnchanged) restoreAfterLeaving(jobId, state.revision, true);
+  }, [jobId]);
+  async function restoreConfirmed() {
+    if (!result || inFlight.current) return;
+    inFlight.current = true; setBusy(true); setError(null);
+    try {
+      const restored = await api.cancelReopenPages(jobId, result.revision);
+      leaveState.current.reopenedUnchanged = false;
+      setResult(restored); setDocumentName(restored.documentName ?? ""); setDrafts({});
+      setLeaveDialog(false);
+      onClose(true);
+    } catch (reason) {
+      setLeaveDialog(false);
+      setError(reason instanceof Error ? reason.message : "確定済みの内容に戻せませんでした。");
+    } finally {
+      inFlight.current = false; setBusy(false);
+    }
+  }
+  function leave() {
+    if (!result?.reopened || result.confirmed) { onClose(); return; }
+    if (reopenedUnchanged) { void restoreConfirmed(); return; }
+    setLeaveDialog(true);
+  }
   const page = result?.pages.find((p) => p.pageId === pageId);
   const pageIndex = result?.pages.findIndex((p) => p.pageId === pageId) ?? -1;
   const selected = page?.fields.find((field) => field.mappingId === selectedId);
@@ -360,8 +393,9 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
     }
   }
   return <ReviewDraftBoundary onDirtyChange={setInlineDirty}><div className="page-stack review-page">
+    {leaveDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="paged-leave-title"><h2 id="paged-leave-title">確定しないで戻りますか？</h2><p>再編集で変えた内容は、まだ確定されていません。確定済みの内容に戻すと、ライブラリには前の内容のまま残ります。再編集中のままにすると、確定するまでライブラリに表示されません。</p><div className="page-actions"><button className="secondary" disabled={busy} onClick={() => setLeaveDialog(false)}>編集を続ける</button><button className="secondary" disabled={busy} onClick={() => { setLeaveDialog(false); onClose(); }}>再編集中のまま戻る</button><button className="primary" disabled={busy || needsRefresh} onClick={() => void restoreConfirmed()}>{busy ? <Spinner /> : null}確定済みの内容に戻す</button></div></section></div>}
     <header className="page-header split has-back">
-      <button className="ghost page-back" onClick={onClose}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
+      <button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
       <div><h1>読み取り結果を確認</h1>
         <p>全ページの画像と読み取り結果を確認・修正してから確定します。確定後にXLSXを取得できます。</p></div>
     </header>

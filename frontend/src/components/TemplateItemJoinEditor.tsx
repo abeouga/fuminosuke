@@ -259,7 +259,7 @@ export function TemplateItemJoinEditor({
         <div><h2>{BLOCK_ORDER_NAME}</h2></div>
         {blockDraft && <button type="button" className="ghost compact" onClick={() => reorderBlocks(blocks.map((block) => block.key))}>帳票の順に戻す</button>}
       </div>
-      <p className="item-join-note">表・見出しを、確認画面・書類棚・一覧のXLSXに出す順に並べます。{blockDraft ? "" : "今は帳票の上から順（同じ高さは左から）です。"}</p>
+      <p className="item-join-note">表・見出しを、確認画面・ライブラリ・一覧のXLSXに出す順に並べます。{blockDraft ? "" : "今は帳票の上から順（同じ高さは左から）です。"}</p>
       <SortableList items={blocksInOrder.map((block) => block.key)} label={blockTitle} onReorder={reorderBlocks} />
     </section>
   );
@@ -540,7 +540,7 @@ export function TemplateItemJoinEditor({
 
       {!loading && mappings.length > 0 && (
         <div className="decision-bar sticky candidate-save-bar">
-          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>確認画面・書類棚・一覧のXLSX・質問に使います。読み取り済みの書類にも反映されます。</p></div>
+          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>確認画面・ライブラリ・一覧のXLSX・質問に使います。読み取り済みの書類にも反映されます。</p></div>
           <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
         </div>
       )}

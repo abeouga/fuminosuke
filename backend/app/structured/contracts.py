@@ -199,11 +199,49 @@ class QuestionRequest(Contract):
     reply_to: QuestionReply | None = None
     # Documents the user picked on screen; the answer is looked up only among these.
     document_ids: list[str] | None = Field(default=None, min_length=1, max_length=20)
+    # The conversation's last answer, to fill in what a follow-up leaves out.
+    context: QuestionContext | None = None
+    # Where it was sent from in the chat, only for the local chat log (never used to answer).
+    client: ChatClient | None = None
+
+
+class QuestionContext(Contract):
+    # The documents the last answer was about (a question naming none is about them).
+    document_ids: list[str] = Field(default_factory=list, max_length=20)
+    # The question that answer was for.
+    previous: str | None = Field(default=None, max_length=2000)
+
+
+class ChatClient(Contract):
+    conversation_id: str = Field(min_length=1, max_length=100)
+    turn_id: int = Field(ge=0)
+    # Sent again on its own after the server forgot the open question.
+    recovered: bool = False
+
+
+class ChatTurnRecord(Contract):
+    turn_id: int = Field(ge=0)
+    text: str = Field(default="", max_length=2000)
+    reply: bool = False
+    state: str | None = Field(default=None, max_length=40)
+    answer: str | None = Field(default=None, max_length=4000)
+    pending: bool = False
+
+
+class ChatEvent(Contract):
+    """Something done in the chat that the server does not otherwise see (for the local log)."""
+
+    type: Literal["remove"]
+    conversation_id: str = Field(min_length=1, max_length=100)
+    turns: list[ChatTurnRecord] = Field(default_factory=list, max_length=60)
 
 
 class QuestionChoice(Contract):
     value: str
     label: str
+    # A document choice also says which form it is and when it was confirmed, with its picture.
+    detail: str | None = None
+    thumbnail_url: str | None = None
 
 
 class Clarification(Contract):
@@ -215,9 +253,16 @@ class Clarification(Contract):
     optional: bool = False
 
 
+class AnswerRowSource(Contract):
+    job_id: str
+    field_id: str | None = None
+
+
 class AnswerTable(Contract):
     columns: list[str]
     rows: list[list[str | None]]
+    # The cell each row was read from (same order as rows).
+    sources: list[AnswerRowSource] = Field(default_factory=list)
 
 
 class Evidence(Contract):

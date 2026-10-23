@@ -12,6 +12,9 @@ from app.core.config import RegistrationSettings
 from app.core.errors import AppError
 from app.domain.quality import RegistrationQuality
 
+# Shortest printed run treated as a ruled line in the local edge check.
+RULED_LINE_PX = 25
+
 
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
@@ -42,6 +45,10 @@ class TemplateAligner:
     def __init__(self, settings: RegistrationSettings) -> None:
         self._settings = settings
 
+    @property
+    def settings(self) -> RegistrationSettings:
+        return self._settings
+
     def align(
         self,
         source_rgb: NDArray[np.uint8],
@@ -52,11 +59,27 @@ class TemplateAligner:
         # Preserve the pixels and acceptance of every previously successful path.
         # Recovery uses reciprocal matches, not a lower inlier-ratio threshold.
         try:
-            return self._align_legacy(source_rgb, template_rgb)
+            legacy = self._align_legacy(source_rgb, template_rgb)
         except AppError as exc:
             if exc.code != "LOW_REGISTRATION_CONFIDENCE":
                 raise
             legacy_diagnostics = exc.metadata
+        else:
+            # A bent page can pass the global edge overlap while one side of the form is
+            # a column off. Every grid cell and read field must keep its own printed edges.
+            local_scores = _local_template_edge_support(
+                legacy.aligned_rgb, template_rgb, validation_regions,
+            )
+            if not any(
+                score < self._settings.min_edge_overlap
+                for scores in local_scores.values() for score in scores
+            ):
+                return legacy
+            legacy_diagnostics = {
+                "rejectionReason": "LEGACY_LOCAL_SUPPORT_REJECTED",
+                "quality": legacy.quality.to_dict(),
+                "localTemplateEdgeSupport": local_scores,
+            }
         return self._recover_mutual(
             source_rgb, template_rgb, validation_regions, legacy_diagnostics,
         )
@@ -348,16 +371,35 @@ def _local_template_edge_support(
     aligned_rgb: NDArray[np.uint8],
     template_rgb: NDArray[np.uint8],
     regions: Sequence[tuple[int, int, int, int]],
+    in_frame: NDArray[np.bool_] | None = None,
 ) -> dict[str, list[float]]:
     """Check fixed print evidence independently of the ORB correspondences.
 
     Use the existing one-pixel edge tolerance. Directional template recall does
     not penalize additional handwriting; global symmetric overlap still applies.
     Sparse/blank areas are not evidence and cannot qualify the recovery alone.
+    For read fields, vertical and horizontal ruled-line edges are also scored separately
+    (each field takes the lowest): a shift along a ruled line keeps that line matched, so
+    a field a column off would otherwise still pass on its horizontal lines. `in_frame`
+    limits the evidence to printed edges that were photographed (curved-page registration).
     """
     source = cv2.Canny(cv2.cvtColor(aligned_rgb, cv2.COLOR_RGB2GRAY), 60, 160)
-    template = cv2.Canny(cv2.cvtColor(template_rgb, cv2.COLOR_RGB2GRAY), 60, 160) > 0
+    template_gray = cv2.cvtColor(template_rgb, cv2.COLOR_RGB2GRAY)
+    template = cv2.Canny(template_gray, 60, 160) > 0
+    if in_frame is not None:
+        # Keep a small border off the photo edge (the remap fills it with white).
+        template &= cv2.erode(in_frame.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
     supported = template & (cv2.dilate(source, np.ones((3, 3), np.uint8)) > 0)
+    # Only the edges of long ruled lines: printed characters (and any writing left in
+    # the template image) are not shifted-line evidence.
+    ink = (template_gray < 160).astype(np.uint8)
+    near = np.ones((5, 5), np.uint8)
+    orientations = tuple(
+        template & (cv2.dilate(cv2.morphologyEx(ink, cv2.MORPH_OPEN, kernel), near) > 0)
+        for kernel in (
+            np.ones((RULED_LINE_PX, 1), np.uint8), np.ones((1, RULED_LINE_PX), np.uint8),
+        )
+    )
     height, width = template.shape
     grid = [
         (x * width // 3, y * height // 3, (x + 1) * width // 3, (y + 1) * height // 3)
@@ -370,8 +412,18 @@ def _local_template_edge_support(
     for key, boxes in (("grid", grid), ("fields", fields)):
         for x0, y0, x1, y1 in boxes:
             count = int(template[y0:y1, x0:x1].sum())
-            if count >= 32:
-                result[key].append(float(supported[y0:y1, x0:x1].sum()) / count)
+            if count < 32:
+                continue
+            scores = [float(supported[y0:y1, x0:x1].sum()) / count]
+            # Ruled lines decide whether a read field sits on its own cell; the coarse
+            # grid also holds template-only print (frames, stamps) and keeps the plain ratio.
+            for edges in orientations if key == "fields" else ():
+                oriented = int(edges[y0:y1, x0:x1].sum())
+                if oriented >= 32:
+                    scores.append(
+                        float((edges & supported)[y0:y1, x0:x1].sum()) / oriented,
+                    )
+            result[key].append(min(scores))
     return result
 
 

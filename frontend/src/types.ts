@@ -643,6 +643,10 @@ export type OcrResult = {
   documentName: string;
   /** Present when the job was read as an update of a confirmed document. */
   series?: OcrSeriesInfo | null;
+  /** Re-edited after a confirmation: the confirmed snapshot is kept until it is confirmed again. */
+  reopened?: boolean;
+  /** The saved values differ from that confirmed snapshot. */
+  changedSinceConfirmed?: boolean;
 };
 
 export type OcrSeriesInfo = {

@@ -65,6 +65,11 @@ def reopen_pages(request: Request, job_id: str, body: PageReopen) -> dict[str, A
     return PagedReviewService(request.app.state.database).reopen(job_id, body)
 
 
+@router.post("/ocr-jobs/{job_id}/page-review/cancel-reopen")
+def cancel_reopen_pages(request: Request, job_id: str, body: PageReopen) -> dict[str, Any]:
+    return PagedReviewService(request.app.state.database).cancel_reopen(job_id, body)
+
+
 def service(request: Request) -> JobPageService:
     return JobPageService(
         request.app.state.database, request.app.state.storage, request.app.state.settings

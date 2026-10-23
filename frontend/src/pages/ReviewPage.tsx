@@ -16,10 +16,15 @@ import { displayName } from "../userMessages";
 import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
 import { showToast } from "../components/Toast";
+import { Spinner } from "../components/Spinner";
+import { restoreAfterLeaving } from "../reviewLeave";
+import { ReviewAiDragProvider, type AiAttachment, type AiDragData } from "../components/ReviewAiDrag";
+import { ReviewFormActions, ReviewFormReveal, ReviewFormView, ReviewViewSwitch, readStoredReviewView, reducedMotion, storeReviewView, type ReviewView } from "../components/ReviewFormView";
 export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
 export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, closeLabel = "ホームへ", }: {
     jobId: string;
-    onClose: () => void;
+    /** `discarded`: the unsaved input was thrown away on purpose, so leaving does not ask again. */
+    onClose: (discarded?: boolean) => void;
     /** After 「内容を確定する」 succeeds (the app then shows the document shelf). */
     onConfirmed?: (confirmed: { templateId: string; documentName: string }) => void;
     /** Label of the back button (the page it returns to). */
@@ -40,6 +45,8 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     const [acceptMismatch, setAcceptMismatch] = useState(false), [addedOnly, setAddedOnly] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState(false), [paged, setPaged] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
+    // Leaving a re-edit that changed values: discard back to the confirmed version, or keep editing later.
+    const [leaveDialog, setLeaveDialog] = useState(false);
     // An automatic save runs while the person keeps typing; only other work locks the inputs.
     const [saving, setSaving] = useState(false);
     // 「この読み取りはあっていますか？」: 「次へ」 waits for the check.
@@ -77,9 +84,37 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     const pageImage = useRef<HTMLImageElement>(null);
     // The check pen paints traced cells green; it never changes a reading or its 要確認.
     const [pen, setPen] = useState(false);
+    // A result cell dropped on the AI toolbar, quoted into the typed instruction.
+    const [aiAttach, setAiAttach] = useState<{ key: number; attachment: AiAttachment } | null>(null);
     // Ending the check pen goes back to 記入欄 (the segments show nothing chosen while it is on).
     const changePen = (on: boolean) => { setPen(on); if (!on) { setMode("edit"); setSelected(null); } };
+    const nextWarning = () => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); };
     const { painted, paint } = useReviewPaint(jobId);
+    // 一覧 | 帳票: the chosen view is kept in this browser. On a narrow screen only the list fits.
+    const [view, setView] = useState<ReviewView>(readStoredReviewView);
+    const [formAllowed, setFormAllowed] = useState(() => window.matchMedia?.("(min-width: 1051px)").matches ?? true);
+    useEffect(() => {
+        const query = window.matchMedia?.("(min-width: 1051px)");
+        if (!query) return;
+        const listen = () => setFormAllowed(query.matches);
+        query.addEventListener("change", listen);
+        return () => query.removeEventListener("change", listen);
+    }, []);
+    const targetView: ReviewView = formAllowed ? view : "list";
+    // Switching: the list closes (to-form), then the cells appear over the form (form); back the
+    // other way the cells fade (to-list) while the list opens again.
+    const [stage, setStage] = useState<"list" | "to-form" | "form" | "to-list">(targetView === "form" ? "form" : "list");
+    useEffect(() => {
+        if ((targetView === "form" && stage === "form") || (targetView === "list" && stage === "list")) return;
+        const next = targetView === "form" ? "to-form" : "to-list";
+        setStage(next);
+        const timer = setTimeout(() => setStage(targetView), reducedMotion() ? 0 : 340);
+        return () => clearTimeout(timer);
+    }, [targetView, stage]);
+    const formStage = stage !== "list";
+    const chooseView = (next: ReviewView) => { setView(next); storeReviewView(next); if (next === "form" && mode === "rename") setMode("edit"); };
+    // 写真を見る / the right mouse button held: every cell on the form is clear.
+    const [revealed, setRevealed] = useState(false);
     // Saved / failed notes are small corner notifications; they never push the page down.
     useEffect(() => {
         if (!message) return;
@@ -155,6 +190,40 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         window.addEventListener("beforeunload", guard);
         return () => { onNavigationGuardChange?.(false); window.removeEventListener("beforeunload", guard); };
     }, [dirty, inlineDirty, busy, saving, assistantApplying, conflict, onNavigationGuardChange]);
+    // A re-edit left without confirming goes back to the confirmed version, so the document stays on
+    // the shelf. Without any change this happens silently, also when leaving by the side menu.
+    const reopenedUnchanged = Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
+        && !dirty && !inlineDirty && !busy && !saving && !assistantApplying && !conflict);
+    const leaveState = useRef({ reopenedUnchanged, revision: result?.revision ?? 0 });
+    leaveState.current = { reopenedUnchanged, revision: result?.revision ?? 0 };
+    useEffect(() => () => {
+        const state = leaveState.current;
+        if (state.reopenedUnchanged) restoreAfterLeaving(jobId, state.revision);
+    }, [jobId]);
+    async function restoreConfirmed() {
+        setBusy(true);
+        setError(null);
+        try {
+            const restored = await api.cancelReopen(jobId, result!.revision);
+            if (editingEnabled) await editingStore.acceptOwnRevision(restored.revision).catch(() => undefined);
+            leaveState.current.reopenedUnchanged = false;
+            accept(restored);
+            setLeaveDialog(false);
+            onClose(true);
+        }
+        catch (reason) {
+            setLeaveDialog(false);
+            setError(reason instanceof Error ? reason.message : "確定済みの内容に戻せませんでした。");
+        }
+        finally {
+            setBusy(false);
+        }
+    }
+    function leave() {
+        if (!result?.reopened || result.confirmed) { onClose(); return; }
+        if (reopenedUnchanged) { void restoreConfirmed(); return; }
+        setLeaveDialog(true);
+    }
     const entries = useMemo<ReadingEntry[]>(() => draft ? Object.entries(draft.fields).map(([key, value]) => ({ path: `fields.${key}`, value,
         label: displayName(result?.reviewStructure?.fields.find(field => field.targetPath === `fields.${key}`)?.label ?? draft.fieldLabels[key] ?? key) })) : [], [draft, result?.reviewStructure]);
     const previews = result?.fieldPreviews ?? [];
@@ -201,6 +270,19 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         catch (reason) { setError(reason instanceof Error ? reason.message : "項目名を変更できませんでした。"); }
     };
     const display = useMemo(() => buildReviewDisplayModel(entries, previews, result?.reviewStructure, itemNames), [entries, previews, result?.reviewStructure, itemNames]);
+    const aiDragEnabled = Boolean(editingEnabled) && !result?.confirmed && !pen && mode === "edit";
+    // 「売却子牛一覧 3行目 体重」: the table, row and column the instruction AI resolves names by.
+    const describeDrag = (data: AiDragData): AiAttachment | null => {
+        if (!data.path) {
+            const title = data.title ?? "", detail = data.detail ?? "";
+            return { kind: data.kind, quote: `「${[detail, title].filter(Boolean).join(" ")}」`, title, detail, value: data.kind === "column" ? "列全体" : "行全体", tone: "group" };
+        }
+        const entry = entries.find(item => item.path === data.path);
+        if (!entry) return null;
+        const parts = [...new Set(reviewEntryContext(display, entry).split(" · "))], value = entry.value.normalized ?? entry.value.raw;
+        return { kind: data.kind, quote: `「${parts.join(" ")}」`, title: parts.at(-1) ?? entry.label, detail: parts.slice(0, -1).join(" "),
+            value: value || "空欄", tone: warningPaths.has(entry.path) ? "warning" : value ? "ok" : "blank", path: entry.path };
+    };
     const blocks = useMemo(() => reviewDisplayBlocks(display, result?.reviewStructure, itemJoins), [display, result?.reviewStructure, itemJoins]);
     const byName = new Map(artifacts.map(item => [item.name, item.url])), fullImage = byName.get("alignedSource") ?? byName.get("normalizedSource");
     const selectedEntry = entries.find(entry => entry.path === selected), selectedPreview = previews.find(preview => preview.targetPath === selected);
@@ -356,10 +438,10 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     if (!result || !draft)
         return <section className="empty-state large"><p role={error ? "alert" : "status"}>{error ?? "結果を読み込んでいます…"}</p>
             {error && <button className="secondary" onClick={() => setLoadAttempt(value => value + 1)}>結果を再取得</button>}
-            <button className="ghost" onClick={onClose}><FiArrowLeft />{closeLabel}</button></section>;
+            <button className="ghost" onClick={() => onClose()}><FiArrowLeft />{closeLabel}</button></section>;
     if (!identityChecked && !result.confirmed)
         return <div className="page-stack identity-confirm-page">
-    <header className="page-header split has-back"><button className="ghost page-back" onClick={onClose}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">書類の確認</span><h1>この読み取りはあっていますか？</h1></div></header>
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">書類の確認</span><h1>この読み取りはあっていますか？</h1></div></header>
     <aside className="identity-template-card">
       <span className="identity-template-thumb">{fullImage ? <img src={fullImage.replace(/(\/artifacts\/[^/?]+)/, "$1/thumbnail")} alt="" decoding="async" onError={event => { event.currentTarget.hidden = true; }}/> : null}<FiFileText aria-hidden="true"/></span>
       <span className="identity-template-text"><small>使用テンプレート</small><strong>{templateNames[result.result.templateId] ?? "読み取り時のテンプレート"}</strong></span>
@@ -412,9 +494,12 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     </div>
   </div>;
     return <ReviewDraftBoundary key={recoveryDiscardEpoch} onDirtyChange={setInlineDirty}><div ref={reviewRoot} className="page-stack review-page">
-    <header className="page-header split has-back"><button className="ghost page-back" disabled={assistantApplying} onClick={onClose}><FiArrowLeft />{closeLabel}</button><div><h1>{result.confirmed ? "確定済みの読み取り結果" : "読み取り結果の確認・修正"}</h1></div><div className="page-actions">
-      {result.confirmed ? <><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
-      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => {
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={assistantApplying || busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div><h1>{result.confirmed ? "確定済みの読み取り結果" : "読み取り結果の確認・修正"}</h1></div>
+<div className="page-actions review-header-actions">
+      {result.confirmed ? <><span className="review-confirmed-name" title={result.documentName}>{result.documentName}</span><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
+      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />修正を保存</button>
+      {/* The document name sits right beside 「内容を確定する」, which needs it. */}
+      <label className={`document-name-field${nameWanted && !name.trim() ? " is-wanted" : ""}`}><span>書類名</span><input key={nameWanted} ref={nameInput} value={name} maxLength={180} disabled={locked} placeholder="書類名を入力" onChange={event => setName(event.target.value)}/></label><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => {
         // Without a name the name field glows and takes the focus instead of opening the dialog.
         if (!name.trim()) { setNameWanted(value => value + 1); return; }
         setConfirmDialog(true);
@@ -457,28 +542,45 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         }}>次の追加欄へ</button>
       </span>}
     </aside>}
-    <div className="review-assistant-workspace"><div className="generic-review-workspace"><section className="generic-review-source">
-      <label className={`field-label document-name-field${nameWanted && !name.trim() ? " is-wanted" : ""}`}>書類名<input key={nameWanted} ref={nameInput} value={name} maxLength={180} disabled={locked} placeholder="書類名を入力してください" onChange={event => setName(event.target.value)}/></label>
+    <ReviewAiDragProvider enabled={aiDragEnabled} describe={describeDrag} onDrop={attachment => setAiAttach(current => ({ key: (current?.key ?? 0) + 1, attachment }))}>
+    <div className="review-assistant-workspace"><VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}>
+    <div className={`generic-review-workspace${stage === "to-form" || stage === "form" ? " is-form" : ""}${stage === "to-form" || stage === "to-list" ? " is-switching" : ""}`}><section className="generic-review-source">
+      {/* 一覧 | 帳票 and, in 帳票 mode, 「写真を見る」 on the left; the check pen and 「次の要確認」 on the right. */}
+      {(formAllowed || formStage) && <div className="review-source-head">
+        <div className="review-source-head-start">
+          {formAllowed && <ReviewViewSwitch view={targetView} disabled={inlineDirty} onChange={chooseView} />}
+          {formStage && <ReviewFormReveal revealed={revealed} onReveal={setRevealed} />}
+        </div>
+        {formStage && <ReviewFormActions confirmed={result.confirmed} warningCount={warningPaths.size} penActive={pen && !result.confirmed} onPen={changePen} onNextWarning={nextWarning} />}
+      </div>}
       {/* The selected cell's crop floats over the page image, so the image itself never moves. */}
-      <div className="ocr-page-preview-frame">{fullImage && <div className="ocr-page-preview"><button type="button" className="ocr-page-preview-open" title="押すと画面いっぱいに表示" onClick={() => setZoomed(true)}><img ref={pageImage} src={fullImage} alt="読み取った帳票全体"/></button></div>}
-        {selectedPreview && <RegionPreviewFlyIn key={selectedPreview.targetPath} src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}
+      <div className="ocr-page-preview-frame">{fullImage && (formStage
+        ? <div className="ocr-page-preview review-form-preview"><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onExit={() => changePen(false)}>
+            <ReviewFormView src={fullImage} entries={entries} display={display} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} editable={!locked && mode === "edit"}
+              revealed={revealed} shown={stage === "form"} leaving={stage === "to-list"} onSelect={entry => setSelected(entry.path)} onEdit={editText} onReveal={setRevealed} />
+          </ReviewPenSurface></div>
+        : <div className="ocr-page-preview"><button type="button" className="ocr-page-preview-open" title="押すと画面いっぱいに表示" onClick={() => setZoomed(true)}><img ref={pageImage} src={fullImage} alt="読み取った帳票全体"/></button></div>)}
+        {stage === "list" && selectedPreview && <RegionPreviewFlyIn key={selectedPreview.targetPath} src={selectedPreview.artifactUrl} alt={`${selectedEntry?.label ?? "選択欄"}の切り出し画像`}
           caption={reviewEntryContext(display, selectedEntry)} box={selectedEntry?.value.boundingBox ?? selectedPreview.boundingBox} pageImage={pageImage}/>}</div>
-    </section><section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} penActive={pen && !result.confirmed} onPenChange={changePen} onNextWarning={() => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); }}/>
-      <VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={setSelected} onExit={() => changePen(false)}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{blocks.map(block => block.kind === "record" ? <GenericRecordReviewTable key={block.key} section={block.section} after={block.attached && <KeyValueReviewTable entries={block.attached.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/>} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
+    </section>{stage !== "form" && <section className="generic-review-results"><ReviewResultsToolbar interactionMode={mode} editingLocked={locked} confirmed={result.confirmed} warningCount={warningPaths.size} cellCount={entries.length} onInteractionModeChange={setMode} penActive={pen && !result.confirmed} onPenChange={changePen} onNextWarning={nextWarning}/>
+      <ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={setSelected} onExit={() => changePen(false)}><div className={`ocr-edit-tables${addedOnly ? " series-added-only" : ""}`}>{blocks.map(block => block.kind === "record" ? <GenericRecordReviewTable key={block.key} section={block.section} after={block.attached && <KeyValueReviewTable entries={block.attached.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/>} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked} interactionMode={mode} onSelect={entry => setSelected(entry.path)} onEdit={editText} onMoveRow={(section, from, to) => {
                 if (!locked)
                     setDraft(current => current ? swapGenericRecordRowsAtFixedRegions(current, section, from, to) : current);
             }}/>
         : block.kind === "parent" ? <ReviewTableSection key={block.key} title={block.section.title} joinPaths={sectionItemPaths(block.section.entries)}><KeyValueReviewTable entries={block.section.entries} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>
         : <ReviewTableSection key={block.key} title="独立項目"><IndependentReviewGroups groups={block.groups} selectedPath={selected} warningPaths={shownWarnings} choicePaths={choices} confirmed={locked || mode !== "edit"} onSelect={entry => setSelected(entry.path)} onEdit={editText}/></ReviewTableSection>)}
-      </div></ReviewPenSurface></ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>{!result.confirmed && !pen && selectedEntry && mode === "edit" && selectedPreview?.markRecognitionMode !== "checklist" && <AnchoredReviewPopover path={selectedEntry.path} wide={selectedPreview?.mappingType === "mark" && markPopoverIsWide(selectedPreview)} onClose={() => setSelected(null)}>
+      </div></ReviewPenSurface>
+    </section>}</div>
+    {/* The cell's dialog follows the selected cell in either view (it finds the cell by its path). */}
+    {!result.confirmed && !pen && selectedEntry && mode === "edit" && (stage === "list" || stage === "form") && selectedPreview?.markRecognitionMode !== "checklist" && <AnchoredReviewPopover path={selectedEntry.path} wide={selectedPreview?.mappingType === "mark" && markPopoverIsWide(selectedPreview)} onClose={() => setSelected(null)}>
         {selectedPreview?.mappingType === "mark"
           ? <MarkStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} preview={selectedPreview} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>
           : <CellStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>}</AnchoredReviewPopover>}
-    </section></div>
+    </ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>
     {editingEnabled && <ReviewAiFocus rootRef={reviewRoot} focus={editingStatus.focus} context={editingStatus.context} viewRevision={result.revision} />}
     {/* Voice input and undo float over the form image like on the template screen; results speak in its bubble. */}
     {editingEnabled ? <EditingControls store={editingStore} pageScope={{ mode: "all", pageId: null }} tableSelector={false}
-      voiceOnly textInstructions floatingAnchor=".generic-review-source .ocr-page-preview"
+      voiceOnly textInstructions floatingAnchor=".generic-review-source .ocr-page-preview" attach={aiAttach}
       selectedEntities={selected?.startsWith("fields.") ? [selected.slice(7)] : []} selectionEpoch={assistantInteraction.selectionEpoch}
       manualActive={dirty || inlineDirty || busy || Boolean(conflict)}
       disabled={result.confirmed ? "確定済みです。再編集で音声入力を使用できます。" : contextError ? "帳票との対応情報を取得できません。" : null}
@@ -509,7 +611,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         setDraft(result.result); setName(result.documentName); setError(null); setMessage("未保存の修正を破棄しました。");
         return true;
       },
-    }} />}</div>
+    }} />}</div></ReviewAiDragProvider>
     {editingEnabled && ["recovering", "saved_display_pending"].includes(editingStatus.state) && <section className="inline-warning" aria-label="修正保存の復旧">
       <p role="status">{editingStatus.message}</p>
       <button className="secondary" disabled={busy || inlineDirty} onClick={() => void recoverSaved()}>保存結果を再取得</button>
@@ -519,6 +621,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
       <img src={fullImage} alt="読み取った帳票全体（拡大）"/>
       <button type="button" className="ocr-page-lightbox-close" aria-label="閉じる" onClick={() => setZoomed(false)}>×</button>
     </div>}
+    {leaveDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="leave-title"><h2 id="leave-title">確定しないで戻りますか？</h2><p>再編集で変えた内容は、まだ確定されていません。確定済みの内容に戻すと、ライブラリには前の内容のまま残ります。再編集中のままにすると、確定するまでライブラリに表示されません。</p><div className="page-actions"><button className="secondary" disabled={busy} onClick={() => setLeaveDialog(false)}>編集を続ける</button><button className="secondary" disabled={busy} onClick={() => { setLeaveDialog(false); onClose(); }}>再編集中のまま戻る</button><button className="primary" disabled={busy || saving} onClick={() => void restoreConfirmed()}>{busy ? <Spinner /> : null}確定済みの内容に戻す</button></div></section></div>}
     {confirmDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">結果を確定しますか？</h2><p>確定することで、この内容がチャットで使えます。</p><div className="page-actions"><button className="secondary" onClick={() => setConfirmDialog(false)}>確認を続ける</button><button className="primary" onClick={() => void confirm()}><FiCheck />確定する</button></div></section></div>}
     {busy && <div className="review-confirm-loading-overlay" role="status"><div className="review-confirm-loading-card"><span className="review-confirm-loading-spinner"/><strong>保存状態を更新しています</strong></div></div>}
   </div></ReviewDraftBoundary>;

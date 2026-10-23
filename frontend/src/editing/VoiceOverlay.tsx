@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { FiMessageSquare, FiMic, FiMove, FiRotateCcw, FiSend, FiSquare, FiX } from "react-icons/fi";
+import { FiMessageSquare, FiMic, FiMove, FiPaperclip, FiRotateCcw, FiSend, FiSquare, FiX } from "react-icons/fi";
+import { InstructionField, type InstructionFieldHandle } from "./InstructionField";
 import { VoiceMeter } from "../components/VoiceMeter";
 import { useCornerPin } from "../components/useCornerPin";
+import { useAiDropTarget, type AiAttachment } from "../components/ReviewAiDrag";
 
 export type { Corner } from "../components/useCornerPin";
 
@@ -20,6 +22,8 @@ export type VoiceOverlayProps = {
   extra?: ReactNode;
   /** Typed instructions to the same AI as voice. The text is kept until the send succeeds. */
   textInput?: { enabled: boolean; hint: string; onSubmit: (text: string) => Promise<void> };
+  /** A result cell dropped on the toolbar, attached to the typed instruction; a new key adds it once. */
+  attach?: { key: number; attachment: AiAttachment } | null;
 };
 
 /**
@@ -53,21 +57,46 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
     return () => window.clearTimeout(timer);
   }, [bubble?.key, bubble?.sticky, hovered]);
 
-  const [typing, setTyping] = useState(false), [draft, setDraft] = useState(""), [sending, setSending] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
+  const [typing, setTyping] = useState(false), [draft, setDraft] = useState({ message: "", hasText: false }), [sending, setSending] = useState(false);
+  const field = useRef<InstructionFieldHandle>(null);
   useEffect(() => { if (typing) field.current?.focus(); }, [typing]);
   const text = props.textInput;
-  const canSend = Boolean(text?.enabled && draft.trim() && !sending);
+  // A cell dropped on the toolbar goes into the sentence as a chip, where the caret is.
+  const drop = useAiDropTarget();
+  // Only drops made while the toolbar is shown: one from before it (re)appeared is not added again.
+  const seenAttach = useRef(props.attach?.key);
+  useEffect(() => {
+    if (!props.attach || !text || props.attach.key === seenAttach.current) return;
+    seenAttach.current = props.attach.key;
+    pendingChip.current = props.attach.attachment;
+    setTyping(true);
+  }, [props.attach?.key]);
+  // The field may be mounting on this very render; the chip goes in once it is on the page.
+  const pendingChip = useRef<AiAttachment | null>(null);
+  useEffect(() => {
+    if (!typing || !pendingChip.current || !field.current) return;
+    field.current.insert(pendingChip.current); pendingChip.current = null;
+  }, [typing, props.attach?.key]);
+  // Hovering a chip shows the cell it stands for in the result table.
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hoveredPath) return;
+    const cell = document.querySelector<HTMLElement>(`td[data-review-path="${CSS.escape(hoveredPath)}"]`);
+    if (!cell) return;
+    cell.classList.add("is-ai-chip-source"); cell.scrollIntoView({ block: "nearest", inline: "nearest" });
+    return () => cell.classList.remove("is-ai-chip-source");
+  }, [hoveredPath]);
+  const canSend = Boolean(text?.enabled && draft.hasText && !sending);
   function send() {
     if (!text || !canSend) return;
     setSending(true);
-    text.onSubmit(draft.trim()).then(() => setDraft(""), () => undefined).finally(() => { setSending(false); field.current?.focus(); });
+    text.onSubmit(draft.message.trim().slice(0, 2000)).then(() => field.current?.clear(), () => undefined).finally(() => { setSending(false); field.current?.focus(); });
   }
 
   const busy = thinking || props.starting;
   const live = props.speaking && props.caption;
   return createPortal(
-    <div className={`voice-overlay is-${corner}${dragging ? " is-dragging" : ""}`} style={style} {...pin}
+    <div ref={drop.ref} className={`voice-overlay is-${corner}${dragging ? " is-dragging" : ""}${text && drop.armed ? " is-drop-armed" : ""}${text && drop.over ? " is-drop-over" : ""}`} style={style} {...pin}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {(bubble || live || thinking || props.extra) && !dragging && <div
         className={`voice-bubble is-${live || thinking ? "info" : bubble?.tone ?? "info"}`} role="status" aria-live="polite">
@@ -77,15 +106,11 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
         {props.extra}
         {bubble && !live && !thinking && <button type="button" className="voice-bubble-close" aria-label="閉じる" onClick={() => setDismissed(bubble.key)}><FiX /></button>}
       </div>}
+      {text && drop.armed && !typing && <p className="voice-drop-hint"><FiPaperclip aria-hidden />ここへドロップして文に入れる</p>}
       {text && typing && !dragging && <form className="voice-text" onSubmit={e => { e.preventDefault(); send(); }}>
-        <textarea ref={field} aria-label="AIへの指示" value={draft} maxLength={2000} rows={2}
-          placeholder={text.enabled ? "例：3行目の体重を500に" : text.hint}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => {
-            e.stopPropagation();
-            if (e.key === "Escape") { e.preventDefault(); setTyping(false); return; }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
-          }} />
+        <InstructionField ref={field} enabled={text.enabled}
+          placeholder={drop.armed ? "ここへドロップ" : text.enabled ? "例：3行目の体重を500に（欄をドロップして指せます）" : text.hint}
+          onChange={(message, hasText) => setDraft({ message, hasText })} onSend={send} onEscape={() => setTyping(false)} onHoverChip={setHoveredPath} />
         <button type="submit" aria-label="送信" title={text.enabled ? "送信（Enter）" : text.hint} disabled={!canSend}><FiSend /></button>
       </form>}
       <div className="voice-pill">

@@ -4,6 +4,7 @@ import { privateLocalStorage } from "../auth/transport";
 import type { FieldReading, OcrFieldPreview, ReviewStructure, ReviewStructureField } from "../types";
 import { displayName } from "../userMessages";
 import { ITEM_JOIN_EDITING_VISIBLE } from "./TemplateItemJoinEditor";
+import { AiDragTh, useAiDraggable } from "./ReviewAiDrag";
 import { joinedText, orderMark, sortBlocks, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
 
 /** `writeIn`: the 「その他（　）」 text a symbol/check box's item owns, shown on the same row. */
@@ -11,7 +12,7 @@ export type ReadingEntry = { path: string; label: string; value: FieldReading; w
   /** The template's own name when a person renamed the item on the result screen. */
   originalLabel?: string };
 
-const InlineEditActivity = createContext<(path: string, dirty: boolean) => void>(() => undefined);
+export const InlineEditActivity = createContext<(path: string, dirty: boolean) => void>(() => undefined);
 /** Update of a confirmed document: newly filled cells and cells kept from the previous version. */
 export const ReviewSeriesMarks = createContext<{ added: ReadonlySet<string>; carried: ReadonlySet<string> } | null>(null);
 /** Checklist fields (path → their check items): the result shows ☑/☐ boxes, not the stored text. */
@@ -35,7 +36,7 @@ function checkedItems(value: FieldReading): Set<string> {
 
 /** Check boxes toggled in place: a click checks or unchecks, no popover. */
 /** Check boxes only toggle: the cell is never selected and no dialog or crop opens. */
-function ChecklistBoxes({ labels, entry, confirmed, onEdit }: {
+export function ChecklistBoxes({ labels, entry, confirmed, onEdit }: {
   labels: readonly string[];
   entry: ReadingEntry;
   confirmed: boolean;
@@ -122,7 +123,7 @@ export function ReviewPenSurface({ active, painted, onPaint, onExit, onHover, ch
     const current = stroke.current;
     const path = cell?.dataset.reviewPath;
     if (!path || !current) return;
-    current.wrap = cell.closest<HTMLElement>(".ocr-edit-table-wrap") ?? current.wrap;
+    current.wrap = cell.closest<HTMLElement>(".ocr-edit-table-wrap, .review-form-viewport") ?? current.wrap;
     // The first cell decides whether this stroke paints or takes the green off.
     if (current.on === null) current.on = !painted.has(path);
     onPaint(path, current.on);
@@ -170,10 +171,11 @@ export function ReviewPenSurface({ active, painted, onPaint, onExit, onHover, ch
       className={`review-pen-surface${active ? " is-pen" : ""}`}
       onPointerDown={(event) => {
         if (!active || event.button !== 0) return;
-        if (!(event.target instanceof Element) || !event.target.closest(".ocr-edit-table")) return;
+        // The pen also traces the cells laid over the form image (帳票ビュー).
+        if (!(event.target instanceof Element) || !event.target.closest(".ocr-edit-table, .review-form-cells")) return;
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
-        stroke.current = { pointerId: event.pointerId, on: null, x: event.clientX, y: event.clientY, wrap: event.target.closest<HTMLElement>(".ocr-edit-table-wrap") };
+        stroke.current = { pointerId: event.pointerId, on: null, x: event.clientX, y: event.clientY, wrap: event.target.closest<HTMLElement>(".ocr-edit-table-wrap, .review-form-viewport") };
         hit(event.clientX, event.clientY);
         if (scrollFrame.current === null) scrollFrame.current = requestAnimationFrame(autoScroll);
       }}
@@ -802,14 +804,14 @@ export function GenericRecordReviewTable({
             <tr>
               <th scope="col">行</th>
               {section.columns.map((column) => (
-                <th scope="col" key={column.id}>{column.label}</th>
+                <AiDragTh scope="col" key={column.id} id={`column:${section.id}:${column.id}`} data={{ kind: "column", title: column.label, detail: section.title }}>{column.label}</AiDragTh>
               ))}
             </tr>
           </thead>
           <tbody>
             {section.rows.map((row, rowIndex) => (
               <tr key={row.id}>
-                <th scope="row" aria-label={`${rowIndex + 1}行目`}>
+                <AiDragTh scope="row" aria-label={`${rowIndex + 1}行目`} id={`row:${section.id}:${row.id}`} data={{ kind: "row", title: `${rowIndex + 1}行目`, detail: section.title }}>
                   <div className="ocr-row-heading">
                     <span>{rowIndex + 1}</span>
                     {interactionMode === "reorder" && (
@@ -835,7 +837,7 @@ export function GenericRecordReviewTable({
                       </span>
                     )}
                   </div>
-                </th>
+                </AiDragTh>
                 {section.columns.map((column) => {
                   const cell = row.cells.find((item) => item.columnId === column.id);
                   const entry = cell?.entry;
@@ -965,7 +967,7 @@ export function KeyValueReviewTable({
                 </tr>,
                 ...(open ? first.members.map((item, order) => (
                   <tr key={`join:${key}:${item.entry.path}`} className="ocr-join-member">
-                    <th scope="row"><span className="ocr-join-order">{orderMark(order)}</span><ReviewItemName entry={item.entry} /></th>
+                    <AiDragTh scope="row" id={`item:${item.entry.path}`} data={{ kind: "item", path: item.entry.path }}><span className="ocr-join-order">{orderMark(order)}</span><ReviewItemName entry={item.entry} /></AiDragTh>
                     {cell(item.entry)}
                     {wide && <><th aria-hidden="true" /><td className="ocr-empty-cell" /></>}
                   </tr>
@@ -977,7 +979,7 @@ export function KeyValueReviewTable({
             <tr key={index} className={plain[0].writeIn ? "ocr-write-in-row" : undefined}>
               {plain[0].writeIn
                 ? <>
-                    <th scope="row"><ReviewItemName entry={plain[0]} /></th>
+                    <AiDragTh scope="row" id={`item:${plain[0].path}`} data={{ kind: "item", path: plain[0].path }}><ReviewItemName entry={plain[0]} /></AiDragTh>
                     {cell(plain[0])}
                     <th scope="row" className="ocr-write-in-label" title={plain[0].writeIn.label}>記入</th>
                     {cell(plain[0].writeIn)}
@@ -1069,7 +1071,7 @@ function ReviewLabelAndCell({
 }) {
   return (
     <>
-      <th scope="row"><ReviewItemName entry={entry} /></th>
+      <AiDragTh scope="row" id={`item:${entry.path}`} data={{ kind: "item", path: entry.path }}><ReviewItemName entry={entry} /></AiDragTh>
       <ReviewValueCell
         entry={entry}
         selected={selected}
@@ -1109,6 +1111,7 @@ export function ReviewValueCell({
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
   const reportInlineEdit = useContext(InlineEditActivity);
+  const drag = useAiDraggable(`cell:${entry.path}`, { kind: "cell", path: entry.path }, editing), { ref: dragRef, ...dragListeners } = drag.handle;
   useEffect(() => {
     reportInlineEdit(entry.path, editing && editValue !== (value ?? ""));
     return () => reportInlineEdit(entry.path, false);
@@ -1123,8 +1126,9 @@ export function ReviewValueCell({
   };
   return (
     <td
-      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}${hasChoices ? " ocr-cell-has-choices" : ""}${painted ? " ocr-cell-painted" : ""}`}
+      className={`${warning ? "ocr-cell-warning" : "ocr-cell-ok"} ${selected ? "ocr-cell-selected" : ""}${added ? " ocr-cell-added" : ""}${carried ? " ocr-cell-carried" : ""}${hasChoices ? " ocr-cell-has-choices" : ""}${painted ? " ocr-cell-painted" : ""}${drag.dragging ? " is-ai-dragging" : ""}`}
       data-review-path={entry.path}
+      {...drag.holder}
     >
       {checklistLabels ? (
         <div className="ocr-checkbox-cell">
@@ -1152,8 +1156,10 @@ export function ReviewValueCell({
       ) : (
         <button
           type="button"
+          ref={dragRef}
+          {...dragListeners}
           aria-label={`${entry.label}：${value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}。${confirmed ? "画像を確認" : "選択して確認・編集"}`}
-          title={confirmed || choice ? undefined : "ダブルクリックで直接編集"}
+          title={confirmed || choice ? undefined : drag.active ? "ダブルクリックで直接編集・AIのツールバーへドラッグで指示に引用" : "ダブルクリックで直接編集"}
           onClick={() => onSelect(entry)}
           onDoubleClick={(event) => {
             if (confirmed) return;

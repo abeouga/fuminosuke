@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { displayOrders, joinByPath, joinedText, sortBlocks, sortByOrder, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved } from "../components/TemplateItemJoinEditor";
 import { FiArrowLeft, FiCheck, FiCheckSquare, FiDownload, FiEdit3, FiExternalLink, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiX } from "react-icons/fi";
@@ -15,7 +15,8 @@ import {
   type StructuredReading,
   type StructuredTable,
 } from "../structured/client";
-import { Spinner } from "../components/Spinner";
+import { ImageSpinner, Spinner } from "../components/Spinner";
+import { leftReviewsSettled } from "../reviewLeave";
 
 /** What the shelf shows; kept by the app so a review opened from here can come back to it. */
 export type ShelfSelection = { templateId: string | null; jobId: string | null; query: string };
@@ -38,7 +39,7 @@ export function documentTitle(doc: DocumentSummary): string {
 
 function errorText(reason: unknown, fallback: string): string {
   if (reason instanceof EditingError && reason.code === "STRUCTURED_NOT_CONFIRMED")
-    return "この書類は再編集中です。確認画面で確定すると、書類棚に戻ります。";
+    return "この書類は再編集中です。確認画面で確定すると、ライブラリに戻ります。";
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
@@ -53,14 +54,18 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
   const [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setListError(null);
-    try { setDocuments((await structuredClient.allDocuments()).items); }
+    try {
+      // A re-edit closed by the side menu is put back to its confirmed version first.
+      await leftReviewsSettled();
+      setDocuments((await structuredClient.allDocuments()).items);
+    }
     catch (reason) { setListError(errorText(reason, "書類の一覧を取得できませんでした。")); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
   const folderName = useCallback((doc: DocumentSummary) =>
-    templateNames[doc.templateId] || doc.templateName || "（名称未設定のテンプレート）", [templateNames]);
+    templateNames[doc.templateId] || doc.templateName || "（名称未設定）", [templateNames]);
   // Folders follow the list order (newest confirmation first), so a recently used template is on top.
   const folders = useMemo(() => {
     const byTemplate = new Map<string, Folder>();
@@ -155,11 +160,29 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
     });
   };
   const listing = Boolean(query || folder);
+  const heading = listing && !selected && Boolean(documents?.length);
 
   return <div className="page-stack shelf-page">
-    <header className="shelf-header">
-      <div><h1>書類棚</h1><p>確定済みの書類を、テンプレートごとに見られます。</p></div>
+    <main ref={mainRef} className="shelf-main">
       <div className="shelf-header-actions">
+        {heading && <div className="shelf-main-head">
+          {!query && <button type="button" className="ghost compact shelf-up" onClick={() => show({ templateId: null, jobId: null, query: "" })}>
+            <FiArrowLeft aria-hidden="true" />一覧</button>}
+          <h2>{query ? `「${query}」の検索結果` : folder?.name}</h2>
+          <span>{listed.length}件</span>
+        </div>}
+        {heading && listed.length > 0 && <div className="shelf-choose-actions">
+          {choosing
+            ? <>
+              <span className="shelf-chosen-count">{chosen.size}件を選択中</span>
+              <button type="button" className="ghost compact" onClick={() => setChosen(chosen.size === listed.length ? new Set() : new Set(listed.map((doc) => doc.jobId)))}>
+                {chosen.size === listed.length ? "選択を解除" : "すべて選択"}</button>
+              <button type="button" className="danger-button compact" disabled={chosen.size === 0} onClick={() => setAskDelete(true)}>
+                <FiTrash2 aria-hidden="true" />削除</button>
+              <button type="button" className="secondary compact" onClick={() => { setChoosing(false); setChosen(new Set()); }}>キャンセル</button>
+            </>
+            : <button type="button" className="secondary compact" onClick={() => setChoosing(true)}><FiCheckSquare aria-hidden="true" />選択</button>}
+        </div>}
         <label className="shelf-search">
           <FiSearch aria-hidden="true" />
           <input type="search" value={selection.query} placeholder="書類名・識別値で探す" aria-label="書類を探す"
@@ -167,18 +190,18 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
           {selection.query && <button type="button" className="shelf-search-clear" aria-label="検索を消す"
             onClick={() => onSelectionChange({ ...selection, query: "" })}><FiX aria-hidden="true" /></button>}
         </label>
-        <button type="button" className="secondary compact" disabled={loading} onClick={() => { cache.current.clear(); void load(); setRetry((n) => n + 1); }}>
-          <FiRefreshCw aria-hidden="true" />{loading ? <><Spinner />更新中…</> : "更新"}
+        <button type="button" className="secondary compact shelf-refresh" disabled={loading} aria-label={loading ? "更新中" : "更新"} title="更新"
+          onClick={() => { cache.current.clear(); void load(); setRetry((n) => n + 1); }}>
+          {loading ? <Spinner /> : <FiRefreshCw aria-hidden="true" />}
         </button>
       </div>
-    </header>
     {listError && <p className="error-box" role="alert">{listError}</p>}
     {documents === null && !listError && <p className="shelf-empty" role="status">書類を読み込んでいます。</p>}
     {documents?.length === 0 && <section className="shelf-empty-card">
       <FiFolder aria-hidden="true" />
-      <div><strong>確定済みの書類はまだありません</strong><p>読み取り結果を確認して確定すると、ここにテンプレートごとに並びます。</p></div>
+      <div><strong>確定済みの書類はまだありません</strong><p>読み取り結果を確認して確定すると、ここに並びます。</p></div>
     </section>}
-    {documents && documents.length > 0 && <main ref={mainRef} className="shelf-main">
+    {documents && documents.length > 0 && <>
       {selected
         ? <DocumentView key={selected.jobId} summary={selected} folderName={folderName(selected)}
           detail={detail?.jobId === selected.jobId ? detail : { jobId: selected.jobId }}
@@ -186,43 +209,25 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
           onBack={() => show({ ...selection, jobId: null })}
           onRetry={() => setRetry((n) => n + 1)} onOpenReview={onOpenReview} />
         : !listing
-          ? <section aria-label="テンプレート">
-            <div className="shelf-main-head"><h2>テンプレート</h2><span>{folders.length}種類・{documents.length}件</span></div>
-            <ul className="shelf-folder-grid">
+          ? <section aria-label="書類の種類">
+            <ul className="shelf-grid">
               {folders.map((item) => <li key={item.templateId}>
                 <FolderCard folder={item} onOpen={() => show({ templateId: item.templateId, jobId: null, query: "" })} />
               </li>)}
             </ul>
           </section>
           : <section aria-label="書類">
-            <div className="shelf-main-head">
-              {!query && <button type="button" className="ghost compact shelf-up" onClick={() => show({ templateId: null, jobId: null, query: "" })}>
-                <FiArrowLeft aria-hidden="true" />テンプレート</button>}
-              <h2>{query ? `「${query}」の検索結果` : folder?.name}</h2>
-              <span>{listed.length}件</span>
-              {listed.length > 0 && <div className="shelf-choose-actions">
-                {choosing
-                  ? <>
-                    <span className="shelf-chosen-count">{chosen.size}件を選択中</span>
-                    <button type="button" className="ghost compact" onClick={() => setChosen(chosen.size === listed.length ? new Set() : new Set(listed.map((doc) => doc.jobId)))}>
-                      {chosen.size === listed.length ? "選択を解除" : "すべて選択"}</button>
-                    <button type="button" className="danger-button compact" disabled={chosen.size === 0} onClick={() => setAskDelete(true)}>
-                      <FiTrash2 aria-hidden="true" />削除</button>
-                    <button type="button" className="secondary compact" onClick={() => { setChoosing(false); setChosen(new Set()); }}>キャンセル</button>
-                  </>
-                  : <button type="button" className="secondary compact" onClick={() => setChoosing(true)}><FiCheckSquare aria-hidden="true" />選択</button>}
-              </div>}
-            </div>
             {listed.length === 0 && <p className="shelf-empty">一致する書類はありません。</p>}
-            <ul className="shelf-grid">
-              {listed.map((doc) => <li key={doc.jobId}>
+            <ul className={`shelf-grid${query ? "" : " is-rising"}`}>
+              {listed.map((doc, index) => <li key={doc.jobId} style={{ "--rise-index": Math.min(index, 12) } as CSSProperties}>
                 <DocumentCard doc={doc} caption={query ? folderName(doc) : identityLine(doc)}
                   choosing={choosing} chosen={chosen.has(doc.jobId)}
                   onOpen={() => choosing ? toggleChosen(doc.jobId) : show({ ...selection, templateId: doc.templateId, jobId: doc.jobId })} />
               </li>)}
             </ul>
           </section>}
-    </main>}
+    </>}
+    </main>
     {askDelete && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="shelf-delete-title">
       <h2 id="shelf-delete-title">{chosenDocs.length}件の書類を削除しますか？</h2>
       <p>読み取り結果・元の画像・保存したXLSXも削除され、元に戻せません。{olderVersions ? "前の版がある書類は、前の版も削除します。" : ""}</p>
@@ -239,34 +244,32 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
 /** A template on the shelf: its newest document as a small stack of paper, the name and the count. */
 function FolderCard({ folder, onOpen }: { folder: Folder; onOpen: () => void }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const newest = folder.documents[0];
-  return <button type="button" className="shelf-folder-card" onClick={onOpen}>
-    <span className="shelf-folder-thumb" aria-hidden="true">
-      {folder.documents.length > 2 && <span className="shelf-folder-sheet backmost" />}
-      {folder.documents.length > 1 && <span className="shelf-folder-sheet back" />}
-      <span className="shelf-folder-sheet front">
-        {newest?.thumbnailUrl && !failed
-          ? <img src={newest.thumbnailUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
-          : <FiFileText />}
-      </span>
+  return <button type="button" className="shelf-card" onClick={onOpen}>
+    <span className="shelf-card-thumb">
+      {newest?.thumbnailUrl && !failed
+        ? <>{!loaded && <ImageSpinner />}<img src={newest.thumbnailUrl} alt="" loading="lazy" decoding="async" draggable={false} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} /></>
+        : <FiFileText aria-hidden="true" />}
     </span>
-    <span className="shelf-folder-body">
+    <span className="shelf-card-body">
       <strong>{folder.name}</strong>
-      <span className="shelf-folder-meta">
-        <span className="shelf-folder-count"><FiFolder aria-hidden="true" />{folder.documents.length}件</span>
-        {newest && <time dateTime={newest.confirmedAt}>最終 {dayFormat.format(new Date(newest.confirmedAt))}</time>}
-      </span>
+      <small>{folder.documents.length}件</small>
+      {newest && <span className="shelf-card-meta">
+        <time dateTime={newest.confirmedAt}>最終 {dayFormat.format(new Date(newest.confirmedAt))}</time>
+      </span>}
     </span>
   </button>;
 }
 
 function DocumentCard({ doc, caption, choosing, chosen, onOpen }: { doc: DocumentSummary; caption: string; choosing: boolean; chosen: boolean; onOpen: () => void }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   return <button type="button" className={`shelf-card${choosing ? " choosing" : ""}${chosen ? " chosen" : ""}`} onClick={onOpen}
     {...(choosing ? { role: "checkbox", "aria-checked": chosen } : {})}>
     <span className="shelf-card-thumb">
       {doc.thumbnailUrl && !failed
-        ? <img src={doc.thumbnailUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
+        ? <>{!loaded && <ImageSpinner />}<img src={doc.thumbnailUrl} alt="" loading="lazy" decoding="async" draggable={false} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} /></>
         : <FiFileText aria-hidden="true" />}
       {doc.kind === "paged" && <span className="shelf-card-badge">複数ページ</span>}
       {choosing && <span className="shelf-card-check" aria-hidden="true">{chosen && <FiCheck />}</span>}
@@ -512,14 +515,20 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
 }
 
 /** The aligned page image with every read cell outlined; the picked cell is highlighted. */
-function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, onPickHeading }: {
+export function PageViewer({ pages, readings, picked, headings, pickedHeading, marked = false, onPick, onPickHeading, title, actions }: {
   pages: DocumentPage[];
   readings: StructuredReading[];
   picked: StructuredReading | null;
   headings: HeadingCell[];
   pickedHeading: HeadingCell | null;
+  /** Every shown cell is highlighted (the chat's answer cells), the picked one most. */
+  marked?: boolean;
   onPick: (reading: StructuredReading) => void;
   onPickHeading: (heading: HeadingCell) => void;
+  /** Shown at the left of the tool row (the chat puts the document's name there). */
+  title?: ReactNode;
+  /** Shown after the zoom buttons (the chat's close button). */
+  actions?: ReactNode;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -533,7 +542,13 @@ function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, 
     const index = pages.findIndex((item) => item.pageId === (picked.pageId ?? null));
     if (index >= 0) setPageIndex(index);
   }, [picked, pages]);
-  useEffect(() => { setSize(null); setFailed(false); }, [page?.imageUrl]);
+  const image = useRef<HTMLImageElement>(null);
+  // A cached image may have loaded before this runs; then its size is taken from it rather than cleared.
+  useEffect(() => {
+    const loaded = image.current?.complete && image.current.naturalWidth > 0 ? image.current : null;
+    setSize(loaded && { width: loaded.naturalWidth, height: loaded.naturalHeight });
+    setFailed(false);
+  }, [page?.imageUrl]);
   // Bring the picked cell into the visible part of the image.
   useEffect(() => {
     const frame = scroller.current;
@@ -553,6 +568,7 @@ function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, 
   const zoomIndex = ZOOMS.indexOf(zoom);
   return <div className="shelf-viewer">
     <div className="shelf-viewer-tools">
+      {title !== undefined && <div className="shelf-viewer-title">{title}</div>}
       {pages.length > 1 && <div className="shelf-pages" role="group" aria-label="ページ">
         {pages.map((item, index) => <button key={item.pageId ?? index} type="button" className={index === pageIndex ? "active" : ""} aria-pressed={index === pageIndex}
           onClick={() => setPageIndex(index)}>{item.pageNumber}</button>)}
@@ -562,11 +578,13 @@ function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, 
         <span>{Math.round(zoom * 100)}%</span>
         <button type="button" aria-label="拡大" disabled={zoomIndex >= ZOOMS.length - 1} onClick={() => setZoom((z) => ZOOMS[Math.min(ZOOMS.indexOf(z) + 1, ZOOMS.length - 1)])}><FiPlus aria-hidden="true" /></button>
       </div>
+      {actions}
     </div>
     <div ref={scroller} className="shelf-viewer-scroll">
+      {!failed && !size && <ImageSpinner label="原本画像を読み込んでいます" />}
       {failed ? <p className="shelf-viewer-missing">原本画像を表示できません。</p>
         : <div className="shelf-page-stage" style={{ width: `${zoom * 100}%` }}>
-          <img src={page.imageUrl} alt={`${page.pageNumber}ページ目の原本`} draggable={false}
+          <img ref={image} src={page.imageUrl} alt={`${page.pageNumber}ページ目の原本`} draggable={false}
             onLoad={(event) => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
             onError={() => setFailed(true)} />
           {size && headings.filter((item) => item.pageId === page.pageId).map((item) => {
@@ -580,7 +598,7 @@ function PageViewer({ pages, readings, picked, headings, pickedHeading, onPick, 
             const box = reading.box!;
             const active = picked?.fieldId === reading.fieldId;
             return <button key={reading.fieldId} type="button" tabIndex={-1} data-field={reading.fieldId}
-              className={`shelf-box${active ? " active" : ""}${reading.value === null ? " blank" : ""}`}
+              className={`shelf-box${marked ? " marked" : ""}${active ? " active" : ""}${reading.value === null ? " blank" : ""}`}
               style={{ left: `${(box.x / size.width) * 100}%`, top: `${(box.y / size.height) * 100}%`, width: `${(box.width / size.width) * 100}%`, height: `${(box.height / size.height) * 100}%` }}
               title={`${reading.label}：${reading.value ?? "空欄"}`} aria-label={`${reading.label}を選ぶ`} onClick={() => onPick(reading)} />;
           })}
@@ -612,7 +630,7 @@ function PickedField({ reading, place, onOpen }: { reading: StructuredReading; p
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [reading.fieldId]);
   return <div className="shelf-picked" aria-live="polite">
-    {reading.cropUrl && !failed && <img src={reading.cropUrl} alt={`${place}の原本`} onError={() => setFailed(true)} />}
+    {reading.cropUrl && !failed && <img src={reading.cropUrl} alt={`${place}の原本`} draggable={false} onError={() => setFailed(true)} />}
     <div className="shelf-picked-text">
       <span>{place}</span>
       <strong>{reading.value ?? "空欄"}</strong>

@@ -4,11 +4,12 @@ import { v2client, type EditingStatus } from "./v2client";
 import { VoiceCapture } from "./voiceCapture";
 import { VoiceMeter } from "../components/VoiceMeter";
 import { VoiceOverlay, type BubbleTone } from "./VoiceOverlay";
+import type { AiAttachment } from "../components/ReviewAiDrag";
 import type { PageScope } from "./v2.generated";
 import type { SavedResource, WorkbenchStore } from "./workbenchStore";
 import "./editing.css";
 
-type Props = { store: WorkbenchStore; pageScope: PageScope; selectedEntities: string[]; selectionEpoch: number; manualActive: boolean; holdSelectionContext?: boolean; tableSelector?: boolean; voiceOnly?: boolean; textInstructions?: boolean; floatingAnchor?: string; disabled?: string | null; onSaved: (saved: SavedResource) => void | Promise<void> };
+type Props = { store: WorkbenchStore; pageScope: PageScope; selectedEntities: string[]; selectionEpoch: number; manualActive: boolean; holdSelectionContext?: boolean; tableSelector?: boolean; voiceOnly?: boolean; textInstructions?: boolean; floatingAnchor?: string; attach?: { key: number; attachment: AiAttachment } | null; disabled?: string | null; onSaved: (saved: SavedResource) => void | Promise<void> };
 export function EditingControls(props: Props) {
   const latest = useRef(props); latest.current = props;
   const audio = useMemo(() => new VoiceCapture(props.store), [props.store]);
@@ -102,6 +103,7 @@ export function EditingControls(props: Props) {
       onStart={() => run(async () => { await audio.start("continuous", props.pageScope, props.selectedEntities, table); void v2client.status().then(setCapabilities).catch(() => undefined); })}
       onStop={() => void audio.stop()}
       onUndo={() => run(async () => { undoneAt.current = performance.now(); const saved = await props.store.undoResource(); await latest.current.onSaved(saved); })}
+      attach={props.attach}
       textInput={props.textInstructions ? {
         enabled: !blocked && !active && Boolean(plannerAvailable) && state.pending < 2,
         hint: props.disabled || (capabilities && !plannerAvailable ? "AIへの指示は現在利用できません。" : active ? "音声入力を止めると文字で指示できます。" : blocked ? "手動の編集・保存が終わると使えます。" : "準備中です。"),

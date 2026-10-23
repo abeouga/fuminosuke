@@ -754,7 +754,7 @@ small{font-size:12px;line-height:1.5}
 .brand:hover{background:#f6fafc}
 .brand>span{width:40px;height:40px;flex:0 0 40px;border:0;border-radius:0;background:transparent;box-shadow:none}
 .brand>span img{display:block;width:40px;height:40px;object-fit:contain}
-.brand strong{color:#193e57;font:800 19px/1.2 "Yu Gothic UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;letter-spacing:.01em;white-space:nowrap}
+.brand strong{color:#16324a;font:400 23px/1.1 "Yuji Boku","HG正楷書体-PRO","HGS行書体","Yu Mincho","Hiragino Mincho ProN",serif;letter-spacing:.06em;white-space:nowrap;text-shadow:.4px 0 0 currentColor}
 .side-nav nav{gap:4px;padding:12px 10px}
 .side-nav nav button{
   position:relative;
@@ -2618,22 +2618,22 @@ svg:has(+ .busy-spinner){display:none}
 .ocr-image-grid-add { border-style: dashed !important; background: #fff !important; min-height: 140px; }
 .ocr-image-grid-add .ocr-image-target { position: absolute; inset: 0; }
 
-/* The readings sent from this browser (read one after another on the server), floating at the top right. */
+/* The readings sent from this browser (read one after another on the server), in the menu bar. */
 .reading-float {
-  position: fixed; top: var(--reading-float-top, 64px); right: 18px; z-index: 900;
-  display: grid; justify-items: end; gap: 8px;
+  position: relative; z-index: 900; flex: 0 0 auto; margin-left: auto;
+  display: grid; justify-items: end;
   animation: reading-float-in .28s cubic-bezier(.2, .9, .3, 1.2);
 }
 @keyframes reading-float-in { from { opacity: 0; transform: translateY(-8px) scale(.96); } to { opacity: 1; transform: none; } }
 .reading-float-pill {
   display: inline-flex; align-items: center; gap: 10px;
-  min-height: 0; padding: 6px 12px 6px 6px; border: 1px solid #ffffffb0; border-radius: 999px;
+  min-height: 0; padding: 3px 12px 3px 4px; border: 1px solid #10283d1a; border-radius: 999px;
   background: #ffffffd9; color: #1d2b36; text-align: left;
   backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4);
-  box-shadow: 0 10px 30px #10283d24, 0 1px 3px #10283d1a, inset 0 0 0 1px #10283d0d;
+  box-shadow: 0 1px 3px #10283d14;
   transition: transform .18s ease, box-shadow .18s ease;
 }
-.reading-float-pill:hover { transform: translateY(-1px); box-shadow: 0 14px 34px #10283d2e, 0 1px 3px #10283d1a, inset 0 0 0 1px #10283d14; }
+.reading-float-pill:hover { box-shadow: 0 4px 12px #10283d1f; }
 .reading-float-pill:focus-visible { outline: 2px solid #2468a2; outline-offset: 2px; }
 .reading-float-pill.pulse { animation: reading-float-pulse .9s ease-out; }
 @keyframes reading-float-pulse {
@@ -2656,6 +2656,7 @@ svg:has(+ .busy-spinner){display:none}
 .reading-float-ring b { position: relative; display: grid; place-items: center; font-size: 12px; color: #2f7a57; }
 .reading-float-ring b svg { width: 14px; height: 14px; }
 .reading-float-panel {
+  position: absolute; top: calc(100% + 8px); right: 0;
   width: min(380px, calc(100vw - 24px)); max-height: min(70vh, 560px);
   display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden;
   border: 1px solid #ffffffb0; border-radius: 18px;
@@ -2738,3 +2739,8 @@ button.reading-float-open { cursor: pointer; }
   .reading-float { right: 10px; }
   .reading-float-summary small { max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
 }
+/* 画像の読み込み中：画像の枠の中央に回る輪だけを出す。 */
+.image-spinner{position:absolute;inset:0;margin:auto;z-index:1;width:28px;height:28px;border:3px solid #9fb2bf;border-right-color:transparent;border-radius:50%;opacity:.8;animation:busy-spin .8s linear infinite;pointer-events:none}
+.page-spinner{position:relative;display:block;min-height:min(60vh,420px)}
+.page-spinner .image-spinner{width:36px;height:36px}
+@media (prefers-reduced-motion:reduce){.image-spinner{animation-duration:2.4s}}

@@ -91,6 +91,12 @@ class OcrResultService:
             if confirmed and confirmed.document_name
             else "",
             "series": DocumentSeries(session).review_info(job),
+            # Re-editing a confirmed document keeps its confirmed snapshot until it is confirmed
+            # again; the screen offers to go back to it when the user leaves without confirming.
+            "reopened": confirmed is not None and job.status != JobStatus.CONFIRMED.value,
+            "changedSinceConfirmed": confirmed is not None
+            and job.status != JobStatus.CONFIRMED.value
+            and stored.current_corrected_json != confirmed.confirmed_json,
         }
 
     @staticmethod
@@ -212,6 +218,36 @@ class OcrResultService:
             self._advance_lifecycle(session, stored, RevisionSource.REOPEN)
             job.status = JobStatus.REVIEW_REQUIRED.value
             job.confirmed_at = None
+            session.commit()
+            return self._response(session, job, stored)
+
+    def cancel_reopen(self, job_id: str, *, base_revision: int) -> dict[str, Any]:
+        """Leave a re-edit without confirming: back to the confirmed snapshot as it was.
+
+        Values edited since the re-edit are replaced by the confirmed values (a new revision);
+        the confirmation time, name and XLSX stay those of the earlier confirmation, so the
+        document keeps its place on the shelf. No learning runs, since nothing was confirmed.
+        """
+        with self._database.session() as session:
+            self._begin_mutation(session)
+            job, stored = self._load(session, job_id)
+            if job.status != JobStatus.REVIEW_REQUIRED.value:
+                raise self._error("INVALID_STATE_TRANSITION", "再編集中の結果だけ元に戻せます。")
+            if stored.revision != base_revision:
+                raise self._error("REVISION_CONFLICT", "最新結果を取得してください。")
+            repository = OcrResultRepository(session)
+            confirmed = repository.get_confirmed(job.id)
+            if confirmed is None:
+                raise self._error("CONFIRMED_SNAPSHOT_INVALID", "確定済みの内容がありません。")
+            DocumentSeries(session).require_no_successor(job, "再編集の取り消し")
+            if stored.current_corrected_json != confirmed.confirmed_json:
+                # Validation is derived from the image only, so it is kept as stored.
+                stored.current_corrected_json = confirmed.confirmed_json
+                session.flush()
+            self._advance_lifecycle(session, stored, RevisionSource.CONFIRM)
+            confirmed.ocr_result_revision = stored.revision
+            job.status = JobStatus.CONFIRMED.value
+            job.confirmed_at = confirmed.confirmed_at
             session.commit()
             return self._response(session, job, stored)
 

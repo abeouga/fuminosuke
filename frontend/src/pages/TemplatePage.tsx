@@ -39,7 +39,7 @@ import { useJobPoller } from "../hooks/useJobPoller";
 import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Artifact, DocumentIdentity, DocumentNameRule, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
 import { isEditingDraft, suggestedCopyName } from "../templateEditing";
-import { Spinner } from "../components/Spinner";
+import { ImageSpinner, Spinner } from "../components/Spinner";
 
 const MODES = [
   { id: "SINGLE_IMAGE_EXPERIMENTAL", number: "01", title: "記入済みの一枚から", copy: "記入済み帳票1枚を補正し、枠と読み取り欄を画面で設定します。", count: "記入済み・1枚" },
@@ -479,9 +479,9 @@ export function TemplatePage({
                     aria-pressed={selected} onClick={() => chooseCopySource(template)}>
                     <span className="ocr-template-card-visual">
                       {(preview?.loading || (Boolean(preview?.url) && !listedImageState[previewKey]))
-                        && <span className="ocr-template-card-skeleton" aria-hidden="true" />}
+                        && <ImageSpinner />}
                       {(!preview?.loading && (!preview?.url || listedImageState[previewKey] === "failed"))
-                        && <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>}
+                        && <ImageSpinner />}
                       {preview?.url && <img key={previewKey} src={preview.url} alt="" loading="lazy"
                         className={listedImageState[previewKey] === "loaded" ? "loaded" : ""}
                         onLoad={() => setListedImageState((current) => ({ ...current, [previewKey]: "loaded" }))}
@@ -614,9 +614,9 @@ export function TemplatePage({
                     templateId: template.id, version: primaryVersion, jobId: primaryVersion.sourceJobId, origin: "manage",
                   })}>
                   {(preview?.loading || (Boolean(preview?.url) && !listedImageState[previewKey]))
-                    && <span className="ocr-template-card-skeleton" aria-hidden="true" />}
+                    && <ImageSpinner />}
                   {(!preview?.loading && (!preview?.url || listedImageState[previewKey] === "failed"))
-                    && <span className="ocr-template-card-placeholder" aria-hidden="true">型</span>}
+                    && <ImageSpinner />}
                   {preview?.url && <img key={previewKey} src={preview.url} alt="" loading="lazy"
                     className={listedImageState[previewKey] === "loaded" ? "loaded" : ""}
                     onLoad={() => setListedImageState((current) => ({ ...current, [previewKey]: "loaded" }))}

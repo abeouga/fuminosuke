@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import PagedConfirmation, PagedReview, PagedReviewRevision, ProcessingJob
@@ -269,6 +269,7 @@ class PagedReviewService:
             ),
             "pages": result_pages,
             "confirmed": job.status == "CONFIRMED",
+            **PagedReviewService._reopen_state(session, job, stored),
             "documentName": stored.document_name,
             "confirmAvailable": job.status == "REVIEW_REQUIRED"
             and job.config_snapshot_json["jobPages"].get("schemaVersion") == 2,
@@ -423,6 +424,67 @@ class PagedReviewService:
             self._advance_state(session, stored, "REOPEN")
             job.status = "REVIEW_REQUIRED"
             job.confirmed_at = None
+            session.commit()
+            return self._response(job, pages, stored, session)
+
+    @staticmethod
+    def _last_confirmation(session: Session, job_id: str) -> PagedConfirmation | None:
+        return session.scalar(
+            select(PagedConfirmation)
+            .where(PagedConfirmation.job_id == job_id)
+            .order_by(PagedConfirmation.revision.desc())
+            .limit(1)
+        )
+
+    @staticmethod
+    def _reopen_state(
+        session: Session | None, job: ProcessingJob, stored: PagedReview
+    ) -> dict[str, bool]:
+        """Re-edited after a confirmation: whether the pages still equal that confirmation."""
+        if session is None or job.status == "CONFIRMED":
+            return {"reopened": False, "changedSinceConfirmed": False}
+        last = PagedReviewService._last_confirmation(session, job.id)
+        return {
+            "reopened": last is not None,
+            "changedSinceConfirmed": last is not None
+            and (last.pages_json != stored.current_pages_json
+                 or last.document_name != stored.document_name),
+        }
+
+    def cancel_reopen(self, job_id: str, body: PageReopen) -> dict[str, Any]:
+        """Leave a re-edit without confirming: back to the last confirmation as it was.
+
+        The confirmation is recorded again at the new revision with its own time and name,
+        so the document keeps its place on the shelf and its output stays the same.
+        """
+        with self.database.session() as session:
+            begin_immediate(session)
+            job, pages, stored = self._load(session, job_id)
+            self._require_revision(stored, body.base_revision)
+            if job.status != "REVIEW_REQUIRED":
+                raise print_error(
+                    "再編集中の結果だけ元に戻せます。", "INVALID_STATE_TRANSITION", 409
+                )
+            last = self._last_confirmation(session, job_id)
+            if last is None:
+                raise print_error(
+                    "確定済みの内容がありません。", "CONFIRMED_SNAPSHOT_INVALID", 409
+                )
+            stored.current_pages_json = copy.deepcopy(last.pages_json)
+            stored.document_name = last.document_name
+            self._advance_state(session, stored, "CONFIRM")
+            session.add(
+                PagedConfirmation(
+                    job_id=job_id,
+                    revision=stored.revision,
+                    snapshot_sha256=last.snapshot_sha256,
+                    pages_json=copy.deepcopy(last.pages_json),
+                    document_name=last.document_name,
+                    confirmed_at=last.confirmed_at,
+                )
+            )
+            job.status = "CONFIRMED"
+            job.confirmed_at = last.confirmed_at
             session.commit()
             return self._response(job, pages, stored, session)
 
