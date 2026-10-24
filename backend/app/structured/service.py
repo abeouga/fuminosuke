@@ -13,11 +13,19 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
-from app.db.models import PagedConfirmation, PagedReview, ProcessingJob, TemplateVersion
+from app.db.models import (
+    DocumentSeriesLink,
+    DocumentTemplateMove,
+    PagedConfirmation,
+    PagedReview,
+    ProcessingJob,
+    TemplateTrash,
+    TemplateVersion,
+)
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType
 from app.domain.field_targets import field_key
@@ -106,6 +114,27 @@ class StructuredDocumentService:
         for reading in document["fields"]:
             reading["cropUrl"] = field_crop_url(job_id, reading["fieldId"], reading["pageId"])
         return document
+
+    def list_stamp(self) -> tuple[Any, ...]:
+        """A cheap value that changes whenever ``list`` would: the confirmed jobs (and when
+        they were confirmed), template trash, document moves and series links. Lets a caller
+        keep the listed summaries instead of projecting every document again."""
+        with self._database.session() as session:
+            jobs = session.execute(
+                select(
+                    func.count(ProcessingJob.id),
+                    func.max(ProcessingJob.confirmed_at),
+                    func.max(ProcessingJob.id),
+                ).where(
+                    ProcessingJob.job_type == JobType.EXTRACT_DOCUMENT.value,
+                    ProcessingJob.status == JobStatus.CONFIRMED.value,
+                )
+            ).one()
+            counts = tuple(
+                session.execute(select(func.count()).select_from(table)).scalar_one()
+                for table in (TemplateTrash, DocumentTemplateMove, DocumentSeriesLink)
+            )
+        return (*jobs, *counts)
 
     def list(
         self, *, limit: int, template_id: str | None = None, query: str | None = None

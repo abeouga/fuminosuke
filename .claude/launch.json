@@ -426,6 +426,18 @@
         "set LLM_OCR_BACKEND_URL=http://127.0.0.1:8109&& npm --prefix C:/Users/hanam/Desktop/llm-ocr-deploy/frontend run dev -- --port 5209 --strictPort"
       ],
       "port": 5209
+    },
+    {
+      "name": "chat-scale-backend",
+      "runtimeExecutable": "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/.venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "D:/llm-ocr-archive/chat-scale-20261025/serve.py",
+        "D:/llm-ocr-archive/chat-scale-20261025/data",
+        "8120",
+        "5220",
+        "real"
+      ],
+      "port": 8120
     }
   ]
 }
