@@ -8,6 +8,7 @@ from collections import defaultdict
 from math import ceil
 from statistics import mean
 
+import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -106,7 +107,14 @@ async def infer_relationships_with_openai(
     key = settings.openai_api_key.get_secret_value().strip()
     if not model or not key:
         return fallback
-    client = AsyncOpenAI(api_key=key, timeout=float(settings.timeout_seconds), max_retries=0)
+    from app.ai.claude_bridge import bridged
+
+    client = AsyncOpenAI(
+        api_key=key,
+        timeout=float(settings.timeout_seconds),
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=bridged()),
+    )
     payload = {
         "cells": [cell.model_dump(mode="json", by_alias=True) for cell in cells],
         "geometry": [item.model_dump(mode="json", by_alias=True) for item in geometry],

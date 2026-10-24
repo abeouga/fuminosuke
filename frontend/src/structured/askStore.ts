@@ -64,6 +64,9 @@ const HISTORY_KEY = "fuminosuke-ask-history-v1";
 const MAX_TURNS = 60;
 const MAX_CONVERSATIONS = 50;
 const INTERRUPTED = "画面の再読み込みで回答を受け取れませんでした。もう一度送ってください。";
+export const STOPPED = "STOPPED";
+/** The running question's request, so the stop button can drop it. */
+const running = new Map<number, AbortController>();
 
 function newConversationId() {
   return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -161,6 +164,38 @@ function set(patch: Partial<AskState> | ((current: AskState) => Partial<AskState
   for (const listener of listeners) listener();
 }
 
+/**
+ * Another tab of this browser changed the history (a conversation removed or added there): take
+ * its list, so this tab does not write its older list back and bring removed conversations back.
+ * When the conversation shown here was removed there, this tab starts an empty one.
+ */
+function syncHistory(event: StorageEvent) {
+  if (event.storageArea !== window.localStorage || event.newValue === null || !event.key?.endsWith(HISTORY_KEY)) return;
+  if (event.newValue === JSON.stringify(state.history)) return;
+  const history = loadHistory();
+  const removedHere = state.history.some((item) => item.id === state.conversationId)
+    && !history.some((item) => item.id === state.conversationId) && !askStore.busy();
+  const keep = new Set(history.map((item) => item.id));
+  const viewers = Object.fromEntries(Object.entries(state.viewers).filter(([id]) => keep.has(id) || id === state.conversationId));
+  if (removedHere) {
+    state = { ...state, history, viewers, conversationId: newConversationId(), turns: [], viewer: null, replyMode: true };
+  } else {
+    // The shown conversation keeps this tab's turns (they may be newer) without moving in the list.
+    const mine = history.map((item) => item.id === state.conversationId ? { ...item, turns: state.turns } : item);
+    state = { ...state, history: mine, viewers };
+    if (!mine.some((item) => item.id === state.conversationId)) state = { ...state, history: withCurrent(state) };
+  }
+  try {
+    const { history: _history, viewer: _viewer, ...rest } = state;
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
+  } catch {
+    // The conversation still lives for this page visit.
+  }
+  for (const listener of listeners) listener();
+}
+
+if (typeof window !== "undefined") window.addEventListener("storage", syncHistory);
+
 function updateTurn(id: number, patch: Partial<Turn>) {
   set((current) => ({ turns: current.turns.map((turn) => turn.id === id ? { ...turn, ...patch } : turn) }));
 }
@@ -203,10 +238,21 @@ function recoveredRequest(turn: Turn): Turn["request"] | null {
 async function run(id: number, recovering = false) {
   const turn = state.turns.find((item) => item.id === id);
   if (!turn) return;
+  const controller = new AbortController();
+  running.set(id, controller);
   try {
-    const result = await structuredClient.ask(turn.request, { conversationId: state.conversationId, turnId: id, recovered: recovering });
+    const result = await structuredClient.ask(turn.request, { conversationId: state.conversationId, turnId: id, recovered: recovering }, controller.signal);
+    if (controller.signal.aborted) return;
     updateTurn(id, { result, pending: false, error: null, errorCode: null });
+    if (result.open) {
+      // 「はじめを出して」: the document itself, beside the chat (no cell picked on it).
+      const jobId = result.open;
+      const documentName = result.documents.find((item) => item.jobId === jobId)?.documentName ?? null;
+      set({ viewer: { jobId, documentName, evidence: [], focus: null } });
+    }
   } catch (error) {
+    // Stopped (or removed) while waiting: the turn already says so.
+    if (controller.signal.aborted) return;
     // The server forgot the open question (restart, or a long pause): ask the original
     // question again with the answer written into it, once, without bothering the user.
     const request = !recovering && error instanceof EditingError && error.code === "QA_QUESTION_EXPIRED" ? recoveredRequest(turn) : null;
@@ -217,6 +263,8 @@ async function run(id: number, recovering = false) {
     }
     const message = error instanceof EditingError ? error.message : "質問を処理できませんでした。接続を確認してもう一度送ってください。";
     updateTurn(id, { error: message, errorCode: error instanceof EditingError ? error.code : null, pending: false });
+  } finally {
+    if (running.get(id) === controller) running.delete(id);
   }
 }
 
@@ -285,6 +333,15 @@ export const askStore = {
     push(words, { text: "", replyTo: { questionId: open.question.questionId, text: words } }, open.turn.scope);
   },
 
+  /** Stop the question being answered: its request is dropped and the server cancels the work. */
+  stop() {
+    const turn = state.turns.find((item) => item.pending);
+    if (!turn) return;
+    running.get(turn.id)?.abort();
+    running.delete(turn.id);
+    updateTurn(turn.id, { pending: false, error: "回答を止めました。", errorCode: STOPPED });
+  },
+
   /** Send a failed turn again (an expired follow-up recovers through its original question). */
   retry(turnId: number) {
     const turn = state.turns.find((item) => item.id === turnId);
@@ -303,6 +360,8 @@ export const askStore = {
   removeTurn(turnId: number) {
     const target = state.turns.find((item) => item.id === turnId);
     if (!target) return;
+    running.get(turnId)?.abort();
+    running.delete(turnId);
     const reply = target.request.replyTo;
     const turns = state.turns
       .filter((item) => item.id !== turnId)

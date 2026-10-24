@@ -119,6 +119,19 @@ class OcrSettings(BaseModel):
     retry_uncertain_high_detail: bool = False
     max_concurrency: int = Field(default=2, ge=1, le=4)
     paddle_presence_audit_enabled: bool = False
+    # 2026-10-24: Responses requests are answered by Claude unless set back to "openai".
+    # Decisions and speech recognition stay on OpenAI either way.
+    responses_provider: Literal["openai", "claude"] = "openai"
+    anthropic_api_key: SecretStr | None = None
+    claude_model: str = "claude-sonnet-5-5"
+    # 2026-10-24: AI_LIMITS_ENABLED=false removes the shared call limit, the per-document call
+    # limit and the daily voice time. The ledger still records every call.
+    limits_enabled: bool = True
+    call_limit: int = Field(default=1224, ge=1)
+
+
+# Per-document OpenAI calls when limits are off; a runaway guard, not a quota.
+UNLIMITED_CALLS_PER_JOB = 1000
 
 
 class LoggingSettings(BaseModel):
@@ -190,6 +203,13 @@ class RawSettings(BaseSettings):
     )
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_api_key_file: Path | None = Field(default=None, validation_alias="OPENAI_API_KEY_FILE")
+    ai_responses_provider: Literal["openai", "claude"] = Field(
+        default="openai", validation_alias="AI_RESPONSES_PROVIDER"
+    )
+    anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    claude_model: str = Field(default="claude-sonnet-5-5", validation_alias="CLAUDE_MODEL")
+    ai_limits_enabled: bool = Field(default=True, validation_alias="AI_LIMITS_ENABLED")
+    ai_call_limit: int = Field(default=1224, validation_alias="AI_CALL_LIMIT")
     voice_provider: Literal["openai", "disabled"] = Field(
         default="openai", validation_alias="VOICE_PROVIDER"
     )
@@ -363,12 +383,19 @@ class Settings:
                 max_concurrency=raw.openai_max_concurrency,
                 paddle_presence_audit_enabled=raw.paddle_presence_audit_enabled,
                 reasoning_effort=raw.openai_reasoning_effort,
-                max_calls_per_job=raw.openai_max_calls_per_job,
+                max_calls_per_job=raw.openai_max_calls_per_job
+                if raw.ai_limits_enabled
+                else UNLIMITED_CALLS_PER_JOB,
                 max_output_tokens=raw.openai_max_output_tokens,
                 timeout_seconds=raw.openai_timeout_seconds,
                 max_retries=raw.openai_max_retries,
                 prompt_version=raw.openai_prompt_version,
                 schema_version=raw.openai_schema_version,
+                responses_provider=raw.ai_responses_provider,
+                anthropic_api_key=raw.anthropic_api_key,
+                claude_model=raw.claude_model,
+                limits_enabled=raw.ai_limits_enabled,
+                call_limit=raw.ai_call_limit,
             ),
             logging=LoggingSettings(level=raw.app_log_level.upper(), file=log_file),
             voice=VoiceSettings(

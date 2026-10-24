@@ -29,6 +29,7 @@ from app.services.document_series import DocumentSeries
 from app.services.paged_document_snapshot import load_document_snapshot
 from app.services.review_block_order import version_layout, with_blocks
 from app.services.template_item_join_service import item_joins, joined_text
+from app.services.template_trash_service import document_owners
 from app.structured.contracts import SCHEMA_VERSION
 from app.structured.projection import project_values
 
@@ -92,7 +93,13 @@ class StructuredDocumentService:
                     "STRUCTURED_DOCUMENT_NOT_FOUND", "指定された読み取り結果が見つかりません。", 404
                 )
             _, versions = DocumentSeries(session).view()
-            document = self._with_series(self._project(job), versions)
+            document = self._with_owner(
+                self._with_series(self._project(job), versions), document_owners(session)
+            )
+            if document is None:  # Its template is in the trash.
+                raise reject(
+                    "STRUCTURED_DOCUMENT_NOT_FOUND", "指定された読み取り結果が見つかりません。", 404
+                )
             document["joinedFields"] = joined_fields(
                 document["fields"], item_joins(session, document["templateId"])
             )
@@ -110,13 +117,19 @@ class StructuredDocumentService:
         with self._database.session() as session:
             # Only the newest confirmed version of a document series is listed.
             superseded, versions = DocumentSeries(session).view()
+            owners = document_owners(session)
             for job in self._confirmed_jobs(session):
                 if job.id in superseded:
                     continue
                 try:
-                    document = self._with_series(self._project(job), versions)
+                    projected = self._with_owner(
+                        self._with_series(self._project(job), versions), owners
+                    )
                 except AppError:
                     continue  # Not confirmed by the authoritative check; never listed.
+                if projected is None:
+                    continue  # Its template is in the trash.
+                document = projected
                 if template_id and document["templateId"] != template_id:
                     continue
                 if needle is not None and not self._matches(document, needle):
@@ -177,6 +190,20 @@ class StructuredDocumentService:
         haystack = [document.get("documentName")]
         haystack.extend(item.get("value") for item in document["identity"])
         return any(isinstance(text, str) and needle in _fold(text) for text in haystack)
+
+    @staticmethod
+    def _with_owner(
+        document: dict[str, Any], owners: tuple[dict[str, str], set[str], dict[str, str]]
+    ) -> dict[str, Any] | None:
+        """The template a document is shown under (moved when its own was deleted)."""
+        moves, trashed, names = owners
+        template_id = moves.get(document["jobId"], document["templateId"])
+        if template_id in trashed:
+            return None
+        if template_id == document["templateId"]:
+            return document
+        return {**document, "templateId": template_id,
+                "templateName": names.get(template_id, document["templateName"])}
 
     @staticmethod
     def _with_series(

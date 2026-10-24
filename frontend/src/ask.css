@@ -75,6 +75,7 @@
 .ask-msg.bot .ask-bubble{display:grid;gap:12px;min-width:0;padding:14px 16px;border:1px solid var(--ui-border);border-radius:4px 16px 16px 16px;background:#fff;box-shadow:0 3px 10px #1d35450a}
 .ask-msg.bot.clarifying .ask-bubble{border-color:#9bbbd2}
 .ask-msg.bot.failed .ask-bubble{border-color:#efc9c0;background:#fffaf9}
+.ask-msg.bot.stopped .ask-failed p{color:var(--ui-text-muted)}
 .ask-answer{margin:0;color:var(--ui-text);font-size:18px;font-weight:700;line-height:1.8;overflow-wrap:anywhere}
 .ask-msg.bot.unanswerable .ask-answer{color:var(--ui-text-secondary);font-weight:600}
 .ask-notes{display:grid;gap:3px;margin:0;padding:8px 11px;border-radius:9px;background:var(--ui-primary-soft);color:#1d4e73;font-size:15px;line-height:1.7;list-style:none}
@@ -116,9 +117,10 @@
 .ask-caveats strong{display:flex;align-items:flex-start;gap:6px}
 .ask-caveats ul{margin:4px 0 0;padding-left:20px}
 .ask-caveats summary{margin-top:4px;padding-left:20px;font-weight:700;cursor:pointer}
-.ask-doc-links{display:flex;flex-wrap:wrap;gap:14px;padding-top:10px;border-top:1px dashed var(--ui-border)}
-.ask-doc-links .link-button{gap:5px}
-.ask-doc-links .link-button.active{font-weight:800;text-decoration:underline}
+/* 回答の中の書類名：押すと右に書類を開く文中のリンク（旧「〇〇を見る」の代わり） */
+.md-link{display:inline;min-height:0;margin:0;padding:0;border:0;background:none;font:inherit;color:var(--ui-primary);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ui-primary) 40%,transparent);text-underline-offset:3px;cursor:pointer}
+.md-link:hover,.md-link.active{text-decoration-color:currentColor}
+.md-link:focus-visible{outline:2px solid var(--ui-primary);outline-offset:2px;border-radius:3px}
 
 .ask-failed{display:grid;gap:10px;justify-items:start}
 .ask-failed p{display:flex;gap:7px;margin:0;color:var(--ui-danger);font-size:16px}
@@ -143,6 +145,8 @@
 .ask-send{background:var(--ui-primary);color:#fff}
 .ask-send:hover:not(:disabled){background:var(--ui-primary-dark)}
 .ask-send:disabled{background:#c9d4dd;cursor:default}
+/* 回答中は送信ボタンが停止ボタン（塗りの四角）になる */
+.ask-stop-mark{display:block;width:12px;height:12px;border-radius:2.5px;background:currentColor}
 .ask-mic{background:#eef3f7;color:var(--ui-text-secondary)}
 .ask-mic:hover{background:#e1eaf1}
 .ask-mic.listening{background:#fdecea;color:#a23b2e;animation:ask-pulse 1.4s infinite}
@@ -204,6 +208,10 @@
 .ask-reading-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--ui-danger,#b4412b);font-size:14px}
 .ask-reading-done,.ask-reading-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
 .ask-reading-done .ask-answer{display:flex;align-items:center;gap:6px;margin:0}
+.ask-confirmed-mark{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;margin-left:auto;border-radius:50%;background:#22c55e;color:#fff;box-shadow:0 2px 8px #22c55e59;animation:ask-confirmed-pop .32s cubic-bezier(.2,.9,.3,1.3)}
+.ask-confirmed-mark svg{width:20px;height:20px;stroke-width:3.2}
+@keyframes ask-confirmed-pop{from{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.ask-confirmed-mark{animation:none}}
 .ask-template-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,160px));gap:10px}
 .ask-template-card{display:grid;gap:8px;min-height:0;padding:8px;border:1px solid #c8d8e4;border-radius:12px;background:#fff;color:var(--ui-text);font-size:13px;font-weight:700;line-height:1.4;text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
 .ask-template-card img{width:100%;height:120px;border-radius:8px;background:#f3f6f8;object-fit:contain}
@@ -228,10 +236,11 @@
 .ask-history-new{display:flex;align-items:center;gap:10px;min-height:46px;padding:0 16px;border:0;border-radius:999px;background:#fff;color:var(--ui-text);font-size:15px;font-weight:700;box-shadow:0 2px 8px #1d35450f;cursor:pointer;transition:box-shadow .2s,transform .2s}
 .ask-history-new:hover:not(:disabled){box-shadow:0 6px 18px #4f8df72e;transform:translateY(-1px)}
 .ask-history-new:disabled{opacity:.5;cursor:default}
-.ask-history-scroll{flex:1;min-height:0;overflow-y:auto;display:grid;align-content:start;gap:14px;padding:0 2px}
+.ask-history-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:14px;padding:0 2px}
 .ask-history-empty{margin:8px 10px;color:var(--ui-text-muted);font-size:14px}
 .ask-history-group h2{margin:0 0 4px;padding:0 10px;color:var(--ui-text-muted);font-size:12px;font-weight:700;letter-spacing:.04em}
-.ask-history-group ul{display:grid;gap:2px;margin:0;padding:0;list-style:none}
+.ask-history-group{min-width:0}
+.ask-history-group ul{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0;padding:0;list-style:none}
 .ask-history-group li{position:relative;display:flex;align-items:center;border-radius:999px;transition:background-color .15s}
 .ask-history-group li:hover{background:#e6edf4}
 .ask-history-group li.active{background:#dbe7fb}
@@ -299,6 +308,15 @@
 @keyframes ask-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @keyframes ask-user-in{from{opacity:0;transform:translate(16px,6px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes ask-reveal{from{opacity:0;transform:translateY(6px);filter:blur(4px)}to{opacity:1;transform:none;filter:none}}
+.nav-ask-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:7px;background:linear-gradient(150deg,#2f6f9f,#173f60);box-shadow:0 1px 4px #173f6033;font-style:normal}
+.nav-ask-mark b{color:#fff;font-family:"Yuji Boku","HG正楷書体-PRO","HGS行書体","Yu Mincho",serif;font-size:14px;font-weight:400;line-height:1;text-shadow:.3px 0 0 currentColor}
+/* ヘッダーのチャット：開いている間は入力欄と同じく流れるグラデーションの枠 */
+/* 背景の位置を毎フレーム描き直すとがくつくため、2周期分のグラデーションの層を transform で横に流す（1周期＝ボタンの幅でつなぎ目なし） */
+.deploy-shell .side-nav nav button.nav-ask.active{position:relative;isolation:isolate;overflow:hidden;border:0;padding:7px 13px;background:transparent;box-shadow:none;color:#24356a}
+.deploy-shell .side-nav nav button.nav-ask.active::before{content:"";position:absolute;top:0;bottom:0;left:0;z-index:-2;width:200%;background:linear-gradient(90deg,#4f8df7,#9b72f2 17%,#e8758f 33%,#4f8df7 50%,#9b72f2 67%,#e8758f 83%,#4f8df7);will-change:transform;animation:ask-nav-flow 3s linear infinite}
+.deploy-shell .side-nav nav button.nav-ask.active::after{content:"";position:absolute;inset:2px;z-index:-1;border-radius:6px;background:#eef3fe}
+@keyframes ask-nav-flow{from{transform:translate3d(0,0,0)}to{transform:translate3d(-50%,0,0)}}
+@media (prefers-reduced-motion:reduce){.deploy-shell .side-nav nav button.nav-ask.active::before{animation:none}}
 @keyframes ask-flow{from{background-position:0% 50%}to{background-position:240% 50%}}
 @keyframes ask-shimmer{from{background-position:100% 0}to{background-position:-200% 0}}
 @keyframes ask-spin{to{transform:rotate(360deg)}}
@@ -328,7 +346,14 @@
 
 /* 回答：Markdownの本文と、読み方の注記を浮かべる「i」 */
 .ask-answer-row{display:flex;align-items:flex-start;gap:8px;min-width:0}
+/* The rows below the answer animate in (each its own layer), so lift the answer row — and while
+   the notes are open the whole message, over the next one — or the notes slip under buttons. */
+.ask-msg.bot:not(.pending) .ask-bubble>.ask-answer-row{position:relative;z-index:2}
+.ask-msg.bot:has(.ask-info:hover),.ask-msg.bot:has(.ask-info-button:focus-visible){position:relative;z-index:5}
 .ask-answer-row .ask-answer{flex:1;min-width:0;font-weight:500}
+/* 書類の外の質問への一般的な回答：書類の値ではないことを回答の上で示す */
+.ask-general-badge{display:inline-flex;align-items:center;gap:6px;margin:0 0 8px;padding:3px 10px;border-radius:999px;background:#eef2f7;color:#4a5b6d;font-size:13px;font-weight:600}
+.ask-general-badge svg{flex:none}
 .ask-answer>*{margin:0}
 .ask-answer>*+*{margin-top:.6em}
 .ask-answer strong{color:#0f3a5c;font-weight:800;background:linear-gradient(transparent 62%,#cfe3f5 62%);padding:0 1px}
@@ -404,8 +429,47 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 .ask-document-panel.switched{animation:ask-rise .45s cubic-bezier(.2,.8,.2,1)}
 @media (prefers-reduced-motion:reduce){.ask-document-panel.switched{animation:none}}
 
-/* 回答の下の×：そのやり取りを会話から消す（待っている間は取り消し） */
-.ask-remove-turn{grid-column:2;justify-self:start;display:grid;place-items:center;width:28px;height:28px;min-height:0;margin-top:-8px;padding:0;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,color .15s,border-color .15s}
+/* 回答の右下のごみ箱：そのやり取りを会話から消す（回答を待っている間は出さない） */
+.ask-remove-turn{grid-column:2;justify-self:end;display:grid;place-items:center;width:28px;height:28px;min-height:0;margin-top:-8px;padding:0;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,color .15s,border-color .15s}
 .ask-msg.bot:hover .ask-remove-turn,.ask-remove-turn:focus-visible{opacity:1}
 .ask-remove-turn:hover{border-color:#efc9c0;background:#fff1ee;color:#b5432f}
 .ask-remove-turn svg{width:15px;height:15px}
+
+/* 背景と中身の色を分ける：外側（--ui-canvas）＝濃い灰青、会話の欄＝薄い灰青、回答・入力＝白 */
+.ask-chat{border-color:#c2cdd7;box-shadow:0 1px 2px #1d354514,0 8px 24px #1d354512}
+.ask-messages{background:#eef2f6}
+.ask-msg.bot .ask-bubble{border-color:#d2dbe3;box-shadow:0 1px 2px #1d354512,0 4px 14px #1d35450f}
+.ask-composer{border-top-color:#d2dbe3}
+.ask-history,.ask-rail{border-color:#c2cdd7;background:#f6f8fa}
+.ask-document-panel{border-color:#c2cdd7}
+
+/* Images attached to the message box: read only when the message is sent. */
+.ask-attachments{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0 4px;list-style:none}
+.ask-attachment{position:relative;width:72px;height:72px;border:1px solid #c8d8e4;border-radius:12px;background:#f3f6f8;animation:ask-attach-in .2s ease-out}
+.ask-attachment img{width:100%;height:100%;border-radius:11px;object-fit:cover;-webkit-user-drag:none}
+.ask-attachment-remove{position:absolute;top:-7px;right:-7px;display:grid;place-items:center;width:24px;height:24px;min-height:0;padding:0;border:2px solid #fff;border-radius:50%;background:#33475b;color:#fff;font-size:13px;cursor:pointer}
+.ask-attachment-remove:hover{background:#1f2f3e}
+@keyframes ask-attach-in{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:none}}
+
+/* An image that looks like a later photo of a sheet not confirmed yet: what to do with it. */
+.ask-continuation{display:grid;gap:12px}
+.ask-continuation-earlier{display:flex;align-items:center;gap:12px;max-width:420px;padding:8px;border:1px solid #c8d8e4;border-radius:12px;background:#fff}
+.ask-continuation-earlier img,.ask-continuation-thumb{flex:none;width:56px;height:72px;border-radius:8px;background:#f3f6f8;object-fit:contain}
+.ask-continuation-thumb{display:grid;place-items:center;color:var(--ui-text-muted);font-size:22px}
+.ask-continuation-earlier span{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}
+.ask-continuation-earlier small{color:var(--ui-text-secondary);font-size:13px}
+.ask-continuation-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.ask-continuation-option{display:grid;align-content:start;gap:4px;min-height:0;padding:12px 14px;border:1px solid #c8d8e4;border-radius:12px;background:#fff;color:var(--ui-text);font:inherit;text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
+.ask-continuation-option b{font-size:15px}
+.ask-continuation-option small{color:var(--ui-text-secondary);font-size:13px;line-height:1.5}
+.ask-continuation-option:hover{border-color:var(--ui-primary);box-shadow:0 6px 16px #23699e24;transform:translateY(-1px)}
+.ask-continuation-option.is-recommended{border-color:var(--ui-primary);background:#f2f8fc}
+.ask-reading-waiting{display:grid;gap:10px}
+.ask-reading-replaced{color:var(--ui-text-muted)}
+@media (prefers-reduced-motion:reduce){.ask-attachment{animation:none}.ask-continuation-option:hover{transform:none}}
+.ask-reading-origin{margin:0;color:var(--ui-text-secondary);font-size:13px}
+/* Images sent from the chat: from the message box into the conversation, then into 「読み取り状況」 (chatFlights.ts). */
+.chat-flight-layer{position:fixed;inset:0;z-index:1200;pointer-events:none}
+.chat-flight-paper{position:fixed;overflow:hidden;border:1px solid #d3dbe2;border-radius:12px;background:#fff;box-shadow:0 10px 26px #10283d2e,0 2px 6px #10283d1a;will-change:transform,opacity,left,top}
+.chat-flight-paper img{width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-drag:none}
+.ask-msg.is-flying-in{visibility:hidden}

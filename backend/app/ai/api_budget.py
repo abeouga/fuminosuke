@@ -35,16 +35,23 @@ def preserve_reservation_error() -> Iterator[None]:
         raise
 
 
+# Reported as the limit/remaining while limits are off, so "remaining < n" checks never refuse.
+UNLIMITED = 1_000_000_000
+
+
 class ApiBudget:
     """Commit a reservation before each actual HTTP send, across all AI providers."""
 
     # 2026-10-13: 500 calls authorized from 424 already used; keep the ledger intact.
     # 2026-10-17: 300 calls authorized from 445 already used (AI template drafts).
-    limit = 1224
-
+    # 2026-10-24: the limit is AI_CALL_LIMIT (default 1224); AI_LIMITS_ENABLED=false removes it.
     def __init__(self, database: Database) -> None:
+        from app.core.config import get_settings
+
         self.database = database
         self.shared = database.api_budget
+        ocr = get_settings().ocr
+        self.limit = ocr.call_limit if ocr.limits_enabled else UNLIMITED
 
     def status(self) -> dict[str, int]:
         if self.shared is not None:
@@ -71,7 +78,7 @@ class ApiBudget:
             session.flush()
             return identity
         used = session.scalar(select(func.max(ApiCallLedger.ordinal))) or 0
-        if used >= self.limit:
+        if self.limit != UNLIMITED and used >= self.limit:
             raise refused(
                 f"外部AI APIの許可枠{self.limit}回に達しました。追加利用の承認が必要です。",
                 "AI_API_BUDGET_EXHAUSTED",
@@ -102,7 +109,12 @@ class ApiBudget:
                 if row is not None:
                     row.state = "RESPONSE" if response.is_success else "ERROR"
 
-        # A lost connection/crash remains RESERVED and still consumes a call.
+        from app.ai.claude_bridge import bridged
+
+        # A lost connection/crash remains RESERVED and still consumes a call. The reservation
+        # is made here once, whether the Responses request is then answered by OpenAI or Claude.
         return httpx.AsyncClient(
-            event_hooks={"request": [sending], "response": [received]}, follow_redirects=False
+            event_hooks={"request": [sending], "response": [received]},
+            follow_redirects=False,
+            transport=bridged(),
         )

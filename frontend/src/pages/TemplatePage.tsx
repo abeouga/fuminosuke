@@ -5,7 +5,7 @@ import { templateEditingStore, type LoadedManualView } from "../editing/workbenc
 import { reconcileOwnSave } from "../editing/reconcile";
 import { TemplateAnalysisStore } from "../editing/templateAnalysisStore";
 import { TemplateAnalysisStatus } from "../editing/TemplateAnalysisStatus";
-import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiChevronDown, FiCopy, FiFileText, FiImage, FiGrid, FiPrinter, FiX } from "react-icons/fi";
+import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiChevronDown, FiCopy, FiFileText, FiImage, FiGrid, FiPrinter, FiTrash2, FiX } from "react-icons/fi";
 import { ApiError, api, createIdempotencyKey } from "../api";
 import { AssistantPanel } from "../assistant/AssistantPanel";
 import { EditingControls } from "../editing/EditingControls";
@@ -33,6 +33,7 @@ import {
   type LayoutWorkflowStep,
 } from "../components/LayoutEditor";
 import { TemplateFieldSettingsEditor } from "../components/TemplateFieldSettingsEditor";
+import { TemplateDeleteDialog, TemplateTrashPanel } from "../components/TemplateTrash";
 import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
 import { showToast } from "../components/Toast";
 import { useJobPoller } from "../hooks/useJobPoller";
@@ -99,7 +100,8 @@ export function TemplatePage({
   const [message, setMessage] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<TemplateWorkspace | null>(initialWorkspace ?? null);
   const [templateFilter, setTemplateFilter] = useState<TemplateListFilter>("current");
-  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [deletingTemplate, setDeletingTemplate] = useState<Template | null>(null);
+  const [showingTrash, setShowingTrash] = useState(false);
   const [candidateEditor, setCandidateEditor] = useState<{
     template: Template;
     version: TemplateVersion;
@@ -338,34 +340,6 @@ export function TemplatePage({
       }}
     />;
   }
-  const deleteTemplate = async (template: Template) => {
-    if (deletingTemplateId || !window.confirm(
-      `「${template.name}」を読み取り一覧から削除しますか？\n\n未使用の場合は完全に削除され、既存書類で使用中の場合は履歴を保つためアーカイブされます。`,
-    )) {
-      return;
-    }
-    const deletingId = template.id;
-    const templateName = template.name;
-    setDeletingTemplateId(deletingId);
-    setMessage(null);
-    try {
-      const result = await api.deleteTemplate(deletingId);
-      await refresh();
-      showToast({
-        tone: "success",
-        title: result.outcome === "archived"
-          ? "テンプレートを読み取り一覧から削除しました"
-          : "テンプレートを削除しました",
-        message: result.outcome === "archived"
-          ? "既存書類の履歴を保つため、テンプレート本体はアーカイブされています。"
-          : `「${templateName}」と保存済み設定を削除しました。`,
-      });
-    } catch (error) {
-      setMessage(errorMessage(error, "テンプレートを削除できませんでした。"));
-    } finally {
-      setDeletingTemplateId((current) => (current === deletingId ? null : current));
-    }
-  };
   const copyTemplate = async (source: Template, version: TemplateVersion) => {
     creatingRef.current = true;
     setBusy(true); setMessage(null);
@@ -585,7 +559,9 @@ export function TemplatePage({
           <div><h2>確認・修正するテンプレートを選択</h2></div>
           <p>{draftCount > 0 ? `${draftCount}件の作業途中テンプレートがあります。` : "作業途中のテンプレートはありません。"}</p>
         </div>
+        {showingTrash ? <TemplateTrashPanel onClose={() => setShowingTrash(false)} onRestored={async () => { await refresh(); }} /> : <>
         <div className="template-list-toolbar">
+          <button type="button" className="ghost compact template-trash-open" onClick={() => setShowingTrash(true)}><FiTrash2 aria-hidden="true" />ごみ箱</button>
           <label className="field-label">表示する状態<select value={templateFilter} onChange={(event) => setTemplateFilter(event.target.value as TemplateListFilter)}>
             <option value="current">作業途中・使用中</option>
             <option value="draft">作業途中のみ</option>
@@ -601,7 +577,7 @@ export function TemplatePage({
             const editing = Boolean(draft && isEditingDraft(draft));
             const status = editing ? "draft" : active ? "active" : "history";
             const statusLabel = editing ? "作業途中" : active ? "使用中" : "過去のテンプレート";
-            const isDeletingCurrentTemplate = deletingTemplateId === template.id;
+            const isDeletingCurrentTemplate = deletingTemplate?.id === template.id;
             const thumbnailVersion = primaryVersion ?? versions[0];
             const preview = thumbnailVersion ? listedPreviewFor(thumbnailVersion) : undefined;
             const previewKey = thumbnailVersion ? templatePreviewKey(thumbnailVersion) : "";
@@ -687,12 +663,11 @@ export function TemplatePage({
                   <button
                     type="button"
                     className="danger-button compact"
-                    disabled={Boolean(deletingTemplateId) || openingReview}
-                    onClick={() => void deleteTemplate(template)}
+                    disabled={Boolean(deletingTemplate) || openingReview}
+                    onClick={() => setDeletingTemplate(template)}
                   >
-                    {isDeletingCurrentTemplate ? <><Spinner />削除中…</> : "削除"}
+                    削除
                   </button>
-                  {isDeletingCurrentTemplate && <small><Spinner />削除処理中…</small>}
                   {!primaryVersion?.sourceJobId && <small>元画像がないため編集できません</small>}
                   {!primaryVersion && <small>編集できる設定がありません</small>}
                 </div>
@@ -707,6 +682,10 @@ export function TemplatePage({
             </div>
           )}
         </div>
+        </>}
+        {deletingTemplate && <TemplateDeleteDialog template={deletingTemplate} templates={templates}
+          onClose={() => setDeletingTemplate(null)}
+          onDeleted={async () => { setDeletingTemplate(null); try { await refresh(); } catch { /* The next load shows it. */ } }} />}
       </section>
     </div>
   );

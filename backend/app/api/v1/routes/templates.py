@@ -55,6 +55,7 @@ from app.services.template_authoring_service import TemplateAuthoringService
 from app.services.template_definition_service import TemplateDefinitionService
 from app.services.template_field_hint_service import TemplateFieldHintService
 from app.services.template_management_service import TemplateManagementService
+from app.services.template_trash_service import TemplateTrashService
 from app.template_packages.activation_service import TemplatePackageActivationService
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,24 @@ class TemplateView(ApiModel):
 
 
 class TemplateDeleteResponse(ApiModel):
-    outcome: Literal["deleted", "archived"]
+    outcome: Literal["trashed"]
+
+
+class TemplateDeleteImpactView(ApiModel):
+    documents: int
+    confirmed_documents: int
+
+
+class TemplateTrashItemView(ApiModel):
+    template_id: str
+    name: str
+    trashed_at: datetime
+    documents: int
+    source_job_id: str | None
+
+
+class TemplateTrashView(ApiModel):
+    items: list[TemplateTrashItemView]
 
 
 class TemplateDuplicateRequest(ApiModel):
@@ -812,12 +830,48 @@ def delete_template_memory(request: Request, template_id: str, memory_id: str) -
     response_model=TemplateDeleteResponse,
     response_model_by_alias=True,
 )
-def delete_template(request: Request, template_id: str) -> TemplateDeleteResponse:
-    outcome = TemplateManagementService(
-        request.app.state.database,
-        request.app.state.storage,
-    ).delete_template(template_id)
-    return TemplateDeleteResponse(outcome=outcome)
+def delete_template(
+    request: Request,
+    template_id: str,
+    move_to: str | None = Query(default=None, alias="moveTo", max_length=36),
+) -> TemplateDeleteResponse:
+    """Moves the template to the trash; its documents go with it or to ``moveTo``."""
+    _trash(request).trash(template_id, move_to)
+    return TemplateDeleteResponse(outcome="trashed")
+
+
+def _trash(request: Request) -> TemplateTrashService:
+    return TemplateTrashService(request.app.state.database, request.app.state.storage)
+
+
+@router.get(
+    "/templates/{template_id}/delete-impact",
+    response_model=TemplateDeleteImpactView,
+    response_model_by_alias=True,
+)
+def template_delete_impact(request: Request, template_id: str) -> TemplateDeleteImpactView:
+    return TemplateDeleteImpactView.model_validate(_trash(request).impact(template_id))
+
+
+@router.get("/template-trash", response_model=TemplateTrashView, response_model_by_alias=True)
+def list_template_trash(request: Request) -> TemplateTrashView:
+    return TemplateTrashView.model_validate({"items": _trash(request).list()})
+
+
+@router.post(
+    "/template-trash/{template_id}/restore", status_code=204, response_class=Response
+)
+def restore_template(request: Request, template_id: str) -> Response:
+    _trash(request).restore(template_id)
+    return Response(status_code=204)
+
+
+@router.delete("/template-trash/{template_id}", status_code=204, response_class=Response)
+def purge_template(request: Request, template_id: str) -> Response:
+    """Deletes the template and the documents still shown under it, for good."""
+    jobs = get_job_service(request)
+    _trash(request).purge(template_id, lambda job_id: jobs.delete(job_id, confirm=True))
+    return Response(status_code=204)
 
 
 @router.post(

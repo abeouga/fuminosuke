@@ -24,9 +24,13 @@ from app.structured.contracts import (
     StructuredStatus,
 )
 from app.structured.decisions import OpenAIDecisions
+from app.structured.general import OpenAIGeneral
 from app.structured.qa import QuestionEngine
 from app.structured.service import StructuredDocumentService
 from app.structured.voice import QuestionVoice
+
+# How often a running question checks whether the browser stopped it.
+STOP_POLL_SECONDS = 0.25
 
 
 def enabled(request: Request) -> None:
@@ -39,8 +43,11 @@ def runtime(request: Request) -> QuestionEngine:
         settings = get_app_settings(request)
         database = get_database(request)
         chooser = OpenAIDecisions(settings, ApiBudget(database))
+        writer = OpenAIGeneral(settings, ApiBudget(database))
         request.app.state.structured_data = QuestionEngine(
-            StructuredDocumentService(database), chooser if chooser.configured else None
+            StructuredDocumentService(database),
+            chooser if chooser.configured else None,
+            writer=writer if writer.configured else None,
         )
     return cast(QuestionEngine, request.app.state.structured_data)
 
@@ -133,7 +140,17 @@ async def ask(request: Request, body: QuestionRequest) -> dict[str, Any]:
             if body.context is not None
             else None
         )
-        result = await runtime(request).ask(body.text, reply, body.document_ids, context)
+        work = asyncio.ensure_future(
+            runtime(request).ask(body.text, reply, body.document_ids, context)
+        )
+        # The chat's stop button drops the request: the work still running (an AI call, or the
+        # next one) is cancelled instead of finishing for nobody.
+        while not work.done():
+            await asyncio.wait({work}, timeout=STOP_POLL_SECONDS)
+            if not work.done() and await request.is_disconnected():
+                work.cancel()
+                raise reject("QA_STOPPED", "質問を止めました。", 409)
+        result = work.result()
     except Exception as error:
         chat_log(request, question_line(body, started, error=error))
         raise
@@ -202,6 +219,8 @@ def question_line(
             "evidence": len(result.get("evidence") or []),
             "table": bool(result.get("table")),
             "modelCalls": result.get("modelCalls"),
+            "general": result.get("general"),
+            "open": result.get("open"),
         }
     elif isinstance(error, AppError):
         line["error"] = {"status": error.status, "code": error.code, "message": error.detail}

@@ -1,7 +1,7 @@
 import { logDetail, userText } from "./userMessages";
 import { authenticatedFetch, csrfHeaders } from "./auth/transport";
 import type { TemplateAuthoringUpdate, TemplateAuthoringView } from "./assistant/generatedAuthoring";
-import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplateMemory, TemplatePackageActivation, TemplatePackageOperation } from "./types";
+import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteImpact, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplateMemory, TemplatePackageActivation, TemplatePackageOperation, TemplateTrashItem } from "./types";
 import type { ItemJoin, ItemJoinSettings } from "./itemJoins";
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
@@ -152,7 +152,12 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
     }),
-    deleteTemplate: (id: string) => request<TemplateDeleteResult>(`/templates/${id}`, { method: "DELETE" }),
+    deleteTemplate: (id: string, moveTo?: string) => request<TemplateDeleteResult>(
+        `/templates/${encodeURIComponent(id)}${moveTo ? `?moveTo=${encodeURIComponent(moveTo)}` : ""}`, { method: "DELETE" }),
+    templateDeleteImpact: (id: string) => request<TemplateDeleteImpact>(`/templates/${encodeURIComponent(id)}/delete-impact`),
+    templateTrash: () => request<{ items: TemplateTrashItem[] }>("/template-trash"),
+    restoreTemplate: (id: string) => request<void>(`/template-trash/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+    purgeTemplate: (id: string) => request<void>(`/template-trash/${encodeURIComponent(id)}`, { method: "DELETE" }),
     inspectTemplatePackageExport: (body: {
         templateId: string;
         templateVersionId: string;
@@ -260,6 +265,15 @@ export const api = {
         const body = new FormData();
         body.set("file", file);
         return request<TemplateClassification>("/template-classifications", { method: "POST", body });
+    },
+    /** Whether the image is a later photo of the given readings' sheets (nothing is stored). */
+    compareContinuations: (file: File, jobIds: string[]) => {
+        const body = new FormData();
+        body.set("file", file);
+        body.set("jobIds", jobIds.join(","));
+        return request<{
+            items: { jobId: string; similarity: number | null; continuation: boolean }[];
+        }>("/document-continuations", { method: "POST", body });
     },
     createOcr: async (templateVersionId: string, file: File, enabled: boolean, idempotencyKey: string, predecessorJobId?: string) => {
         const body = new FormData();

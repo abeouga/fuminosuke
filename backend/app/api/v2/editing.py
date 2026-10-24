@@ -87,6 +87,8 @@ async def status(request: Request) -> dict[str, Any]:
 
 def voice_seconds_remaining(request: Request) -> int | None:
     database = get_database(request)
+    if not get_app_settings(request).ocr.limits_enabled:
+        return None  # no daily voice time while AI limits are off
     if "editing_voice_streams" not in inspect(database.engine).get_table_names():
         return None
     from app.editing.infrastructure.voice_stream import used_today

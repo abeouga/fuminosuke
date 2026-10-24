@@ -39,7 +39,7 @@ export function documentTitle(doc: DocumentSummary): string {
 
 function errorText(reason: unknown, fallback: string): string {
   if (reason instanceof EditingError && reason.code === "STRUCTURED_NOT_CONFIRMED")
-    return "この書類は再編集中です。確認画面で確定すると、ライブラリに戻ります。";
+    return "この書類は再編集中です。確認画面で確定すると、ライブラリに表示されます。";
   return reason instanceof Error && reason.message ? reason.message : fallback;
 }
 
@@ -165,6 +165,15 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
   return <div className="page-stack shelf-page">
     <main ref={mainRef} className="shelf-main">
       <div className="shelf-header-actions">
+        {!listing && !selected && <div className="shelf-pick-head">
+          <span className="ocr-template-heading-icon shelf-pick-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M3.5 6.5a1 1 0 0 1 1-1h4.75l2 2h8.25a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" />
+              <path d="M3.5 10h17" />
+            </svg>
+          </span>
+          <h2>閲覧する書類のテンプレートを選ぶ</h2>
+        </div>}
         {heading && <div className="shelf-main-head">
           {!query && <button type="button" className="ghost compact shelf-up" onClick={() => show({ templateId: null, jobId: null, query: "" })}>
             <FiArrowLeft aria-hidden="true" />一覧</button>}

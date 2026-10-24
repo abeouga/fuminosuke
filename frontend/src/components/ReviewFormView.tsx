@@ -7,7 +7,7 @@
  * measuring is needed; its text is sized from the box height in container units (cqw).
  */
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
-import { FiArrowRight, FiFileText, FiList, FiPenTool } from "react-icons/fi";
+import { FiArrowRight, FiFileText, FiList } from "react-icons/fi";
 import { privateLocalStorage } from "../auth/transport";
 import { InlineEditActivity, ReviewChecklists, ReviewPaint, ReviewSeriesMarks, readingChoices, reviewEntryContext, type ReadingEntry, type ReviewDisplayModel } from "./OcrReviewResults";
 import { useAiDraggable } from "./ReviewAiDrag";
@@ -52,13 +52,11 @@ export function ReviewFormReveal({ revealed, onReveal }: { revealed: boolean; on
 }
 
 /** The check pen and 「次の要確認」 of 帳票 mode (the list's toolbar is closed with the list). */
-export function ReviewFormActions({ confirmed, warningCount, penActive, onPen, onNextWarning }: {
-  confirmed: boolean; warningCount: number; penActive: boolean; onPen: (on: boolean) => void; onNextWarning: () => void;
+export function ReviewFormActions({ confirmed, warningCount, onNextWarning }: {
+  confirmed: boolean; warningCount: number; onNextWarning: () => void;
 }) {
   if (confirmed) return null;
   return <div className="review-form-actions" role="toolbar" aria-label="帳票ビューの操作">
-    <button type="button" className={`review-pen-toggle${penActive ? " active" : ""}`} aria-pressed={penActive}
-      title={penActive ? "ペンをやめる（Esc）" : "確認した欄をなぞると緑になります（緑の欄からなぞると戻ります）"} onClick={() => onPen(!penActive)}><FiPenTool aria-hidden="true" />確認ペン</button>
     <button type="button" className="secondary compact" disabled={warningCount === 0} onClick={onNextWarning}><FiArrowRight aria-hidden="true" />次の要確認（{warningCount}件）</button>
   </div>;
 }
@@ -189,7 +187,8 @@ function FormCell({ entry, page, selected, warning, choice, confirmed, editable,
               setEditValue(value ?? "");
               setEditing(true);
             }}><span>{text}</span></button>}
-    {(warning || hasChoices) && !editing && <i className="review-form-flag" aria-hidden="true">{warning ? "要確認" : "候補"}</i>}
+    {/* 要確認 and 候補 outrank the 追加 tag of an update's newly read field. */}
+    {(warning || hasChoices || added) && !editing && <i className={`review-form-flag${!warning && !hasChoices ? " is-added" : ""}`} aria-hidden="true">{warning ? "要確認" : hasChoices ? "候補" : "追加"}</i>}
   </div>;
 }
 

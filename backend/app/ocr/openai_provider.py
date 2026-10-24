@@ -554,9 +554,11 @@ class OpenAIOcrProvider:
                 for index, item in enumerate(filtered_batch.items)
             ],
         }
+        # The Claude bridge answers Responses requests; record the model that actually answered.
+        answered = response.model if str(response.model).startswith("claude") else model
         return _TranscriptionResponse(
             batch=filtered_batch,
-            model_id=model,
+            model_id=answered,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             estimated_cost=_estimate_cost(model, input_tokens, output_tokens),

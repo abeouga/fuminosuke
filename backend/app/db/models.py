@@ -159,6 +159,51 @@ class TemplateDocumentName(Base):
     )
 
 
+class TemplateTrash(Base):
+    """A template moved to the trash, with what is needed to put it back.
+
+    While here the template has ``archived_at`` set and its documents are hidden from the
+    shelf and the chat. ``version_statuses_json``: ``{versionId: status}`` before the move.
+    ``purged_at`` hides an emptied entry whose versions are still used by documents moved
+    to another template (those rows cannot be deleted).
+    """
+
+    __tablename__ = "template_trash"
+
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), primary_key=True
+    )
+    trashed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    active_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    version_statuses_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DocumentTemplateMove(Base):
+    """A document shown under another template (chosen when its template was deleted).
+
+    Display grouping only: the job keeps its accepted template version, snapshot, readings
+    and crops; only the shelf folder and the chat's template name follow ``template_id``.
+    """
+
+    __tablename__ = "document_template_moves"
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("processing_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    template_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    from_template_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    moved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class TemplateItemJoin(Base):
     """Items shown as one value on the result screen and the list XLSX (e.g. an address).
 

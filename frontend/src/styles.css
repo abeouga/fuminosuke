@@ -709,7 +709,7 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
   --ui-primary-soft:#e7f1f8;
   --ui-surface:#ffffff;
   --ui-surface-muted:#f5f7f9;
-  --ui-canvas:#eef2f5;
+  --ui-canvas:#e2e8ee;
   --ui-border:#cbd5de;
   --ui-border-strong:#98a8b6;
   --ui-text:#172431;
@@ -2287,12 +2287,11 @@ small{font-size:12px;line-height:1.5}
 .document-name-details[open] { display:grid; gap:8px; }
 .document-name-details>p { margin:4px 0 0; color:#536673; font-size:11px; font-weight:700; }
 .document-name-details label { font-size:11px; }
-/* 確定済みの書類の更新：追加分の強調と識別値の照合（2026-10-18） */
-.ocr-edit-table td.ocr-cell-added{background:#eaf6ee;box-shadow:inset 3px 0 0 #2f8f57}.ocr-edit-table td.ocr-cell-added small{color:#2f8f57;font-weight:700}
-.ocr-edit-table td.ocr-cell-carried small{color:#8a9893}
-.series-added-only td.ocr-cell-ok:not(.ocr-cell-added):not(.ocr-cell-selected),.series-added-only td.ocr-cell-carried:not(.ocr-cell-selected){opacity:.45}
-.series-review-notice,.series-identity-notice{display:grid;gap:6px}.series-identity-notice.warn,.series-review-warning{color:#8d4537}.series-identity-notice.warn{border-color:#e6c2b8;background:#fff5f2}
-.series-identity-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.series-added-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+/* 確定済みの書類の更新：追加した欄は緑の帯、前の版から引き継いだ欄は灰色（2026-10-18、2026-10-24に常時表示） */
+.ocr-edit-table td.ocr-cell-added{background:#d9f0e2;box-shadow:inset 3px 0 0 #1f8a4c}.ocr-edit-table td.ocr-cell-added small{color:#1f7040;font-weight:700}
+.ocr-edit-table td.ocr-cell-carried:not(.ocr-cell-selected):not(.ocr-cell-warning){background:#eef1f4;color:#6f7d88}.ocr-edit-table td.ocr-cell-carried:not(.ocr-cell-warning)>button{color:#66737e}.ocr-edit-table td.ocr-cell-carried small{color:#8a9893}
+.series-identity-notice{display:grid;gap:6px}.series-identity-notice.warn{color:#8d4537;border-color:#e6c2b8;background:#fff5f2}
+.series-identity-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .identity-previous{margin:0;font-size:12px;color:#52636f}.identity-previous.differs{color:#8d4537;font-weight:700}
 /* Voice input target table: the table name itself is the selector. */
 .voice-table-target { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
@@ -2744,3 +2743,70 @@ button.reading-float-open { cursor: pointer; }
 .page-spinner{position:relative;display:block;min-height:min(60vh,420px)}
 .page-spinner .image-spinner{width:36px;height:36px}
 @media (prefers-reduced-motion:reduce){.image-spinner{animation-duration:2.4s}}
+
+/* Template trash: the delete dialog and the trash list. */
+.template-trash-open{justify-self:start;align-self:end;display:inline-flex;align-items:center;gap:6px}
+.trash-dialog{width:min(600px,100%)}
+.trash-dialog h2{margin:0 0 8px;font-size:19px}
+.trash-dialog > p{margin:0 0 14px;color:#4a5f6c;line-height:1.6}
+.trash-note{display:flex;align-items:center;gap:8px;color:#5b6f7c;font-size:14px}
+.trash-error{margin:8px 0;padding:8px 12px;border-radius:8px;background:#fdecec;color:#a12828;font-size:14px}
+.trash-destination{margin:0 0 16px;padding:0;border:0;display:grid;gap:8px}
+.trash-destination legend{margin-bottom:8px;font-size:14px;line-height:1.6}
+.trash-targets{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:280px;overflow:auto}
+.trash-option{position:relative;display:flex;align-items:center;gap:12px;padding:10px 12px;border:1.5px solid #d4dfe6;border-radius:10px;cursor:pointer;background:#fff;transition:border-color .15s,background .15s}
+.trash-option:hover{border-color:#9fb7c6}
+.trash-option.is-selected{border-color:#2f6f8f;background:#f0f7fb}
+.trash-option input{position:absolute;opacity:0;pointer-events:none}
+.trash-option:has(input:focus-visible){outline:2px solid #2f6f8f;outline-offset:2px}
+.trash-option > span:last-of-type{display:grid;gap:2px;min-width:0}
+.trash-option b{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trash-option small{color:#617582;font-size:12.5px;line-height:1.5}
+.trash-check{margin-left:auto;flex:none;color:#2f6f8f;font-size:18px}
+.trash-thumb{flex:none;width:46px;height:58px;border-radius:6px;border:1px solid #d8e2e8;background:#f4f7f9;display:grid;place-items:center;overflow:hidden;color:#9aabb6}
+.trash-thumb img{width:100%;height:100%;object-fit:cover}
+.trash-panel{display:grid;gap:12px}
+.trash-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.trash-panel-head h3{margin:0;display:flex;align-items:center;gap:8px;font-size:17px}
+.trash-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.trash-item{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid #d8e2e8;border-radius:12px;background:#fff}
+.trash-item-main{flex:1;min-width:0;display:grid;gap:3px}
+.trash-item-main b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trash-item-main small{color:#617582}
+.trash-item-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.trash-item-actions button{display:inline-flex;align-items:center;gap:6px}
+@media (max-width:640px){.trash-item{flex-wrap:wrap}.trash-item-actions{width:100%}}
+.trash-option-wrap{position:relative}
+.trash-option-wrap .trash-option{padding-right:44px}
+.trash-targets{margin-left:18px;padding-left:12px !important;border-left:2px solid #d4dfe6;animation:trash-reveal .18s ease-out}
+@keyframes trash-reveal{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.trash-info{position:absolute;top:50%;right:12px;transform:translateY(-50%)}
+.trash-info button{width:26px;height:26px;padding:0;border-radius:50%;border:0;background:transparent;color:#6b8291;font-size:17px;cursor:pointer;display:grid;place-items:center}
+.trash-info button:hover,.trash-info button:focus-visible,.trash-info.is-open button{border-color:#2f6f8f;color:#2f6f8f}
+.trash-info [role=tooltip]{position:absolute;right:-6px;bottom:calc(100% + 8px);width:240px;padding:8px 10px;border-radius:8px;background:#1f2f3a;color:#fff;font-size:12.5px;line-height:1.55;box-shadow:0 6px 20px #12232e40;opacity:0;visibility:hidden;transition:opacity .15s;pointer-events:none;z-index:2}
+.trash-info:hover [role=tooltip],.trash-info:focus-within [role=tooltip],.trash-info.is-open [role=tooltip]{opacity:1;visibility:visible}
+@media (prefers-reduced-motion:reduce){.trash-targets{animation:none}}
+.trash-count{color:#1f6fd1}
+/* 読み取りを受け付けた直後の手順3：書類が右上の「読み取り状況」へ飛んでいく。 */
+.ocr-step-progress li.is-sending>span{animation:reading-send-step .9s ease-in-out infinite}
+.ocr-step-progress li.is-sending>span svg{width:13px;height:13px}
+@keyframes reading-send-step{0%,100%{box-shadow:0 0 0 0 #2468a255}60%{box-shadow:0 0 0 7px #2468a200}}
+.reading-send-panel{display:grid;justify-items:center;gap:16px;padding:34px 22px 30px}
+.reading-send-stage{position:relative;display:grid;place-items:center;width:100%;height:220px}
+.reading-send-slot{width:132px;height:176px}
+.reading-send-flight{position:fixed;inset:0;z-index:1200;pointer-events:none}
+.reading-send-paper{position:fixed;display:grid;place-items:center;overflow:hidden;border:1px solid #d3dbe2;border-radius:7px;background:white;box-shadow:0 10px 26px #10283d2e,0 2px 6px #10283d1a;will-change:transform,opacity}
+.reading-send-paper img{width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-drag:none}
+.reading-send-xlsx{font-size:15px;font-weight:700;color:#16805d}
+.reading-send-more{position:absolute;right:6px;bottom:6px;padding:2px 8px;border-radius:999px;background:#173f5fe6;color:white;font-size:12px;font-weight:700}
+.reading-send-check{position:absolute;display:grid;place-items:center;width:64px;height:64px;border-radius:50%;background:#16805d;color:white;box-shadow:0 8px 22px #16805d40;animation:reading-send-pop .42s cubic-bezier(.2,.9,.3,1.35)}
+.reading-send-check svg{width:34px;height:34px;stroke-width:3}
+@keyframes reading-send-pop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}
+.reading-send-text{display:grid;justify-items:center;gap:6px;text-align:center}
+.reading-send-text strong{font-size:17px;color:var(--ui-text,#1d2b36)}
+.reading-send-text small{font-size:13px;color:#5d6d79;opacity:0;transform:translateY(4px);transition:opacity .3s ease,transform .3s ease}
+.reading-send-text small.is-shown{opacity:1;transform:none}
+@media (prefers-reduced-motion: reduce){
+  .ocr-step-progress li.is-sending>span,.reading-send-check{animation:none}
+  .reading-send-text small{transition:none}
+}

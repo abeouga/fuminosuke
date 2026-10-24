@@ -84,7 +84,7 @@ class VoiceConnections:
             raise reject("VOICE_NOT_CONFIGURED", "音声APIの設定がありません。", 503)
         with self.runtime.sessions.database.transaction() as session:
             limit = self.settings.voice.daily_seconds
-            if used_today(session) + 300 > limit:
+            if self.settings.ocr.limits_enabled and used_today(session) + 300 > limit:
                 raise reject(
                     "VOICE_TIME_EXHAUSTED",
                     f"本日の音声入力時間の上限、{limit // 60}分に達しました。"

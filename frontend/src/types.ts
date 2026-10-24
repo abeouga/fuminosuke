@@ -29,7 +29,17 @@ export type Template = {
 };
 
 export type TemplateDeleteResult = {
-  outcome: "deleted" | "archived";
+  outcome: "trashed";
+};
+
+export type TemplateDeleteImpact = { documents: number; confirmedDocuments: number };
+
+export type TemplateTrashItem = {
+  templateId: string;
+  name: string;
+  trashedAt: string;
+  documents: number;
+  sourceJobId: string | null;
 };
 
 export type TemplatePackageAssetInspection = {

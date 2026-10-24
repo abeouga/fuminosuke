@@ -63,6 +63,10 @@ export type QuestionResult = {
   contractVersion: "structured.v1"; state: "answered" | "clarifying" | "unanswerable"; answer: string;
   table: AnswerTable | null; steps: AnswerStep[]; evidence: Evidence[]; caveats: string[]; notes: string[]; question: Clarification | null;
   modelCalls: number; documents: { jobId: string; documentName: string | null }[];
+  /** A general answer to a question the documents cannot answer (only values put in from them). */
+  general?: boolean;
+  /** The document the user asked to see (「はじめを出して」): opened beside the chat. */
+  open?: string | null;
 };
 /** A reply carries either one of the offered choices (`value`) or the user's own words (`text`). */
 export type QuestionRequest = {
@@ -77,10 +81,11 @@ export type ChatTurnRecord = { turnId: number; text: string; reply: boolean; sta
 
 const base = "/api/v2/structured";
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await authenticatedFetch(base + path, {
     method: body === undefined ? "GET" : "POST",
     credentials: "include",
+    ...(signal ? { signal } : {}),
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -99,7 +104,8 @@ export const structuredClient = {
   document: (jobId: string) => request<StructuredDocument>(`/documents/${encodeURIComponent(jobId)}`),
   fields: (templateId: string) => request<{ items: FieldName[] }>(`/fields?templateId=${encodeURIComponent(templateId)}`),
   // Fields added later (notes, optional) default to empty so an older server still renders.
-  ask: (body: QuestionRequest, client?: ChatClient) => request<QuestionResult>("/questions", client ? { ...body, client } : body).then((result) => ({
+  /** `signal` stops the question (the server cancels the work still running). */
+  ask: (body: QuestionRequest, client?: ChatClient, signal?: AbortSignal) => request<QuestionResult>("/questions", client ? { ...body, client } : body, signal).then((result) => ({
     ...result,
     notes: result.notes ?? [],
     question: result.question ? { ...result.question, optional: result.question.optional ?? false } : null,

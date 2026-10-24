@@ -353,31 +353,11 @@ export default function App() {
           templateSelectionFooter={<PendingJobs health={health} jobs={jobs} onOpenJob={openJob} />}
         />}
         {page === "review" && reviewJobId && <ReviewPage key={`${reviewJobId}:${reviewField ?? ""}`} jobId={reviewJobId} templateNames={templateNames} initialSelectedPath={reviewField} autoReopenConfirmed={reviewAutoReopen} requireIdentityConfirmation={reviewRequiresIdentityConfirmation} onNavigationGuardChange={updateReviewGuard} closeLabel={REVIEW_CLOSE_LABELS[reviewReturn]} onClose={(discarded) => { void refreshJobs(); if (discarded) applyNavigation(reviewReturn); else navigateTo(reviewReturn); }}
-          onConfirmed={({ templateId, documentName }) => {
+          onConfirmed={({ documentName }) => {
             void refreshJobs();
-            // A document from the reading queue: go on to the next one waiting for review.
-            const queued = readingQueue.snapshot().some((item) => item.jobId === reviewJobId);
-            if (queued) {
-              readingQueue.setStatus(reviewJobId, "CONFIRMED");
-              const next = readingQueue.nextReview(reviewJobId);
-              const waiting = readingQueue.snapshot().filter((item) => item.status === "REVIEW_REQUIRED").length;
-              const running = readingQueue.running().length;
-              if (next) {
-                openReview(next.jobId);
-                showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました`,
-                  message: `次の書類「${next.fileName}」を開きました（確認待ち あと${waiting}件${running > 0 ? `・読み取り中 ${running}件` : ""}）。` });
-                return;
-              }
-              if (running > 0) {
-                applyNavigation("ocr");
-                showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました`,
-                  message: `残り${running}件は読み取り中です。終わったものから確認できます。` });
-                return;
-              }
-            }
-            // A confirmed document goes on the shelf: show its template's documents (newest first).
-            updateShelfSelection({ templateId: templateId || null, jobId: null, query: "" });
-            applyNavigation("shelf");
+            // Confirming always returns to the chat; the next queued document is opened from the reading status menu.
+            if (readingQueue.snapshot().some((item) => item.jobId === reviewJobId)) readingQueue.setStatus(reviewJobId, "CONFIRMED");
+            applyNavigation("ask");
             showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました` });
           }} />}
         {page === "shelf" && <ShelfPage templateNames={templateNames} selection={shelfSelection} onSelectionChange={updateShelfSelection} onOpenReview={(id, field) => openReview(id, true, { returnTo: "shelf", field })} />}
@@ -519,13 +499,14 @@ function writeRecentJobIds(ids: string[]) {
 type SidebarIconName = "ocr" | "ask" | "shelf";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
-  return <button type="button" className={active ? "active" : ""} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
+  return <button type="button" className={`nav-${icon}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
 }
 
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
   if (name === "shelf") return <svg {...props}><path d="M3.5 6.5a1 1 0 0 1 1-1h4.75l2 2h8.25a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" /><path d="M3.5 10h17" /></svg>;
-  if (name === "ask") return <svg {...props}><path d="M4 5.5h16v10H9l-4 3.5v-3.5H4z" /><path d="M9.5 9.25a2.5 2.5 0 1 1 3.25 2.4c-.5.2-.75.6-.75 1.1M12 14.6h.01" /></svg>;
+  // チャットの回答のAIの印（ask-avatar）を小さくしたもの
+  if (name === "ask") return <i className="nav-ask-mark"><b>文</b></i>;
   return null;
 }

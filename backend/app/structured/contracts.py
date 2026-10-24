@@ -312,3 +312,7 @@ class QuestionResult(Contract):
     question: Clarification | None = None
     model_calls: int = Field(ge=0)
     documents: list[DocumentRef]
+    # A general answer to a question the documents cannot answer (only values put in from them).
+    general: bool = False
+    # The document the user asked to see (「はじめを出して」): opened beside the chat.
+    open: str | None = None

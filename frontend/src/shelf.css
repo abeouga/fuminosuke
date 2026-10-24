@@ -5,6 +5,14 @@
 .shelf-header h1{margin:0;color:var(--ui-text);font-size:26px;font-weight:800;line-height:1.3}
 .shelf-header p{margin:4px 0 0;color:var(--ui-text-secondary);font-size:14px}
 .shelf-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+/* 読み取りのテンプレート選択の見出しと同じく、下の要素と横線で区切る */
+.shelf-main>.shelf-header-actions{border-bottom:1px solid #c7cfd6;padding-bottom:14px}
+/* ライブラリの色は黄色（ヘッダーのボタンと見出しのフォルダ） */
+.shelf-pick-icon{border-color:#ecd28a;background:#fdf4d6;color:#b07d0a}
+.deploy-shell .side-nav nav button.nav-shelf>span:first-child{color:#c18a0c}
+.deploy-shell .side-nav nav button.nav-shelf:hover{border-color:#ecd28a;background:#fdf6df;color:#5c4206}
+.deploy-shell .side-nav nav button.nav-shelf.active{border-color:#e3c46a;background:#fcefc4;color:#5c4206;box-shadow:inset 0 -2px #d29b12}
+.deploy-shell .side-nav nav button.nav-shelf.active>span:first-child{color:#a87508}
 .shelf-refresh{width:38px;padding:0}
 .shelf-header-actions .compact{gap:6px}
 .shelf-search{position:relative;display:flex;align-items:center;width:320px;max-width:100%}
@@ -36,6 +44,8 @@
 .shelf-delete-list{margin:0 0 14px;padding-left:20px;color:var(--ui-text-secondary);font-size:13px;line-height:1.7}
 
 /* 書類カード */
+.shelf-pick-head{display:flex;align-items:center;gap:12px;margin-right:auto;min-width:0}
+.shelf-pick-head h2{margin:0;color:var(--ui-text);font-size:20px;font-weight:800;overflow-wrap:anywhere}
 .shelf-main-head{display:flex;align-items:center;gap:10px;margin-right:auto;min-width:0;flex-wrap:wrap}
 .shelf-main-head h2{margin:0;color:var(--ui-text);font-size:18px;font-weight:800;overflow-wrap:anywhere}
 .shelf-main-head span{color:var(--ui-text-muted);font-size:13px}
@@ -149,7 +159,7 @@
 @media (max-width:640px){
   .shelf-header-actions,.shelf-search{width:100%}
   .shelf-header-actions .shelf-search{flex:1;width:auto;min-width:160px}
-  .shelf-header-actions .shelf-main-head{flex-basis:100%}
+  .shelf-header-actions .shelf-main-head,.shelf-header-actions .shelf-pick-head{flex-basis:100%}
   .shelf-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .shelf-card-thumb{padding:8px 8px 0}
   .shelf-card-body{padding:8px 10px 10px}

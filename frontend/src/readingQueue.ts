@@ -15,10 +15,19 @@ export type QueuedReading = {
   progressPercent: number;
   errorMessage: string | null;
   addedAt: number;
+  /** The template it is read on (missing on readings listed before this was kept). */
+  templateId?: string;
+  /** The confirmed document this reading updates, when it was sent as an update. */
+  predecessorJobId?: string;
 };
+
+/** Optional details of a reading, used to recognise a later photo of the same sheet. */
+export type QueuedReadingOrigin = { templateId?: string; predecessorJobId?: string };
 
 const STORAGE_KEY = "fuminosuke.readingQueue";
 const RUNNING = new Set(["CREATED", "QUEUED", "PROCESSING"]);
+// Sent but not confirmed yet: a later photo of the same sheet may continue or replace it.
+const UNCONFIRMED = new Set([...RUNNING, "REVIEW_REQUIRED"]);
 const POLL_MS = 2500;
 
 let items: QueuedReading[] = read();
@@ -50,9 +59,10 @@ export const readingQueue = {
     return () => { listeners.delete(listener); };
   },
   snapshot: () => items,
-  add(jobId: string, fileName: string, templateName: string) {
+  add(jobId: string, fileName: string, templateName: string, origin: QueuedReadingOrigin = {}) {
     update([...items.filter((item) => item.jobId !== jobId), {
       jobId, fileName, templateName, status: "QUEUED", progressPercent: 0, errorMessage: null, addedAt: Date.now(),
+      ...origin,
     }]);
   },
   remove(jobId: string) {
@@ -70,6 +80,13 @@ export const readingQueue = {
     return items.find((item) => item.status === "REVIEW_REQUIRED" && item.jobId !== exceptJobId) ?? null;
   },
   running: () => items.filter((item) => RUNNING.has(item.status)),
+  /** The sent readings of this template that are not confirmed yet (newest first). */
+  unconfirmed(templateId: string, templateName: string) {
+    return items
+      .filter((item) => UNCONFIRMED.has(item.status)
+        && (item.templateId ? item.templateId === templateId : item.templateName === templateName))
+      .sort((a, b) => b.addedAt - a.addedAt);
+  },
 };
 
 export function useReadingQueue() {

@@ -149,6 +149,25 @@ async def classify_template(
     )
 
 
+@router.post("/document-continuations")
+async def compare_document_continuations(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    job_ids: Annotated[str, Form(alias="jobIds", min_length=1, max_length=400)],
+) -> dict[str, Any]:
+    """Whether this image is a later photo of the given readings' sheets (nothing is stored)."""
+    from app.services.document_continuation_service import DocumentContinuationService
+
+    upload = await read_upload(file, request.app.state.settings.storage.max_upload_bytes)
+    service = DocumentContinuationService(
+        get_database(request), request.app.state.storage, request.app.state.settings,
+    )
+    ids = [item.strip() for item in job_ids.split(",") if item.strip()]
+    return await asyncio.to_thread(
+        service.compare, upload.content, upload.declared_media_type, ids,
+    )
+
+
 @router.post(
     "/ocr-jobs",
     response_model=JobAccepted,

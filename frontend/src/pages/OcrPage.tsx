@@ -7,9 +7,12 @@ import {
   FiArrowRight,
   FiPlay,
   FiRefreshCw,
+  FiSend,
   FiX,
 } from "react-icons/fi";
+import { ReadingSendPanel, type SentReading } from "../components/ReadingSendPanel";
 import { ApiError, api, createIdempotencyKey } from "../api";
+import { TemplateDeleteDialog } from "../components/TemplateTrash";
 import { DocumentSeriesPicker, type SeriesSelection } from "../components/DocumentSeriesPicker";
 import { OcrPageBindings } from "../components/OcrPageBindings";
 import { TemplateNameEditor } from "../components/TemplateNameEditor";
@@ -117,6 +120,11 @@ export function OcrPage({
   const [predecessor, setPredecessor] = useState<SeriesSelection | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Images just handed to the reading queue: step 3 plays the send animation, then returns to step 2.
+  const [sent, setSent] = useState<SentReading | null>(null);
+  useEffect(() => () => {
+    sent?.images.forEach((url) => { if (url) URL.revokeObjectURL(url); });
+  }, [sent]);
   const { mappingPreview, mappingValid, mappingError, mappingResolvedVersionId, reloadMappings } = useOcrMappingPreview(versionId);
   const [previewImageState, setPreviewImageState] = useState<Record<string, "loaded" | "failed">>({});
   const [templatePreviewOpen, setTemplatePreviewOpen] = useState(false);
@@ -125,7 +133,7 @@ export function OcrPage({
   const [pageInputRisk, setPageInputRisk] = useState(false);
   const [templateWorkspace, setTemplateWorkspace] = useState<TemplateWorkspaceView | null>(null);
   const phoneDevice = usePhoneDevice();
-  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [deletingTemplate, setDeletingTemplate] = useState<Template | null>(null);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
   const creatingRef = useRef(false);
   const submissionGenerationRef = useRef(0);
@@ -204,39 +212,14 @@ export function OcrPage({
       editTarget,
     });
   };
-  const deleteTemplate = async (template: Template) => {
-    if (
-      deletingTemplateId
-      || !window.confirm(
-        `「${template.name}」を読み取り一覧から削除しますか？\n\n未使用の場合は完全に削除され、既存書類で使用中の場合は履歴を保つためアーカイブされます。`,
-      )
-    ) return;
-    setDeletingTemplateId(template.id);
-    try {
-      const result = await api.deleteTemplate(template.id);
-      await refreshTemplates();
-      if (template.versions.some((version) => version.id === versionId)) {
-        setSelectionInvalidated(true);
-        setVersionId("");
-        setStep(1);
-      }
-      showToast({
-        tone: "success",
-        title: result.outcome === "archived"
-          ? "テンプレートを読み取り一覧から削除しました"
-          : "テンプレートを削除しました",
-        message: result.outcome === "archived"
-          ? "既存書類の履歴を保つため、テンプレート本体はアーカイブされています。"
-          : `「${template.name}」と保存済み設定を削除しました。`,
-      });
-    } catch (error) {
-      showToast({
-        tone: "error",
-        title: "テンプレートを削除できませんでした",
-        message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
-      });
-    } finally {
-      setDeletingTemplateId((current) => current === template.id ? null : current);
+  const deleteTemplate = async (template: Template) => { setDeletingTemplate(template); };
+  const templateDeleted = async (template: Template) => {
+    setDeletingTemplate(null);
+    try { await refreshTemplates(); } catch { /* The next load shows it. */ }
+    if (template.versions.some((version) => version.id === versionId)) {
+      setSelectionInvalidated(true);
+      setVersionId("");
+      setStep(1);
     }
   };
   useEffect(() => {
@@ -249,6 +232,7 @@ export function OcrPage({
     submissionGenerationRef.current += 1;
     creatingRef.current = false;
     setBusy(false);
+    setSent(null);
     setTemplateWorkspace(null);
     setFiles([]);
     setJobId(null);
@@ -277,9 +261,9 @@ export function OcrPage({
   const { job, connectionLost, canRetry, retryBusy, retryPending, retryBlocked, retryJob, resetRetry } = useOcrJobProgress(
     jobId, activeVersion?.quality.printLayout != null, openReview,
   );
-  const currentStep = jobId ? 3 : step;
+  const currentStep = jobId || sent ? 3 : step;
   const startReading = async () => {
-    if (files.length === 0 || creatingRef.current || jobId) return;
+    if (files.length === 0 || creatingRef.current || jobId || sent) return;
     creatingRef.current = true;
     const generation = submissionGenerationRef.current;
     const templateName = activeSelection?.template.name ?? "テンプレート";
@@ -287,6 +271,7 @@ export function OcrPage({
     setBusy(true);
     let accepted = 0;
     let remaining = files;
+    const acceptedFiles: File[] = [];
     try {
       for (const item of files) {
         let key = keys.get(item);
@@ -299,9 +284,13 @@ export function OcrPage({
           files.length === 1 ? predecessor?.jobId : undefined,
         );
         rememberJob(created.jobId);
-        readingQueue.add(created.jobId, item.name, templateName);
+        readingQueue.add(created.jobId, item.name, templateName, {
+          templateId: activeSelection?.template.id,
+          predecessorJobId: files.length === 1 ? predecessor?.jobId : undefined,
+        });
         keys.delete(item);
         accepted += 1;
+        acceptedFiles.push(item);
         remaining = remaining.filter((kept) => kept !== item);
         if (generation === submissionGenerationRef.current) setFiles(remaining);
       }
@@ -319,6 +308,12 @@ export function OcrPage({
         if (accepted > 0) {
           setSeriesOpen(false);
           setPredecessor(null);
+          setSent({
+            id: Date.now(),
+            count: accepted,
+            images: acceptedFiles.slice(0, 3).map((item) => (
+              /\.xlsx$/i.test(item.name) ? null : URL.createObjectURL(item))),
+          });
         }
       }
     }
@@ -369,22 +364,24 @@ export function OcrPage({
         <nav className="ocr-breadcrumb" aria-label="パンくずリスト">
           <span>読み取り</span>
           <span aria-hidden="true">›</span>
-          <strong>{jobId ? "読み取り中" : step === 1 ? "テンプレート選択" : "画像を準備"}</strong>
+          <strong>{sent ? "読み取りに送信" : jobId ? "読み取り中" : step === 1 ? "テンプレート選択" : "画像を準備"}</strong>
         </nav>
       </header>
       <ol className="ocr-step-progress" aria-label="読み取り手順">
         {OCR_STEPS.map((item) => (
           <li
             key={item.number}
-            className={item.number < currentStep ? "completed" : item.number === currentStep ? "current" : ""}
+            className={`${item.number < currentStep ? "completed" : item.number === currentStep ? "current" : ""}${sent && item.number === 3 ? " is-sending" : ""}`}
             aria-current={item.number === currentStep ? "step" : undefined}
           >
-            <span>{item.number < currentStep ? "✓" : item.number}</span>
+            <span>{item.number < currentStep ? "✓" : sent && item.number === 3 ? <FiSend aria-hidden="true" /> : item.number}</span>
             <div><strong>{item.title}</strong><small>{item.caption}</small></div>
           </li>
         ))}
       </ol>
-      {jobId ? (
+      {sent ? (
+        <ReadingSendPanel key={sent.id} sent={sent} onDone={() => setSent(null)} />
+      ) : jobId ? (
         <OcrJobProgressPanel job={job} connectionLost={connectionLost} canRetry={canRetry} retryBusy={retryBusy} retryPending={retryPending} retryBlocked={retryBlocked} retryJob={retryJob} startNewReading={startNewReading} />
       ) : (
         <>
@@ -394,11 +391,14 @@ export function OcrPage({
                 previewFor={previewFor}
                 previewImageState={previewImageState}
                 setPreviewImageState={setPreviewImageState}
-                deletingTemplateId={deletingTemplateId}
+                deletingTemplateId={null}
                 openReadingSetup={openReadingSetup}
                 deleteTemplate={deleteTemplate}
                 openTemplateWorkspace={openTemplateWorkspace} />
             )}
+            {deletingTemplate && <TemplateDeleteDialog template={deletingTemplate} templates={templates}
+              onClose={() => setDeletingTemplate(null)}
+              onDeleted={() => templateDeleted(deletingTemplate)} />}
 
             {step === 2 && activeVersion?.quality.printLayout != null && (
               <OcrPageBindings key={versionId} versionId={versionId} templateId={activeSelection!.template.id}
