@@ -136,7 +136,11 @@ async def ask(request: Request, body: QuestionRequest) -> dict[str, Any]:
     started = time.monotonic()
     try:
         context = (
-            {"documentIds": body.context.document_ids, "previous": body.context.previous}
+            {
+                "documentIds": body.context.document_ids,
+                "previous": body.context.previous,
+                "previousAnswer": body.context.previous_answer,
+            }
             if body.context is not None
             else None
         )

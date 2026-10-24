@@ -210,6 +210,8 @@ class QuestionContext(Contract):
     document_ids: list[str] = Field(default_factory=list, max_length=20)
     # The question that answer was for.
     previous: str | None = Field(default=None, max_length=2000)
+    # That answer's text (what 「それ」 or a complaint is about).
+    previous_answer: str | None = Field(default=None, max_length=2000)
 
 
 class ChatClient(Contract):

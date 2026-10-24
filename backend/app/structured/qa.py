@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 from uuid import uuid4
 
@@ -79,8 +80,10 @@ _DEGRADABLE = {
 OPERATIONS: dict[str, str] = {
     "value": "欄の値をそのまま示す",
     "elapsed": "日付から今日までの経過期間（年・月）を求める。年齢・月齢・何か月・何年",
+    "date": "日付を西暦（又は和暦）の年月日に読み替えて示す",
     "days": "日付から今日までの日数を求める",
     "sum": "数値の合計",
+    "avg": "数値の平均",
     "count": "値が入っている件数",
     "max": "数値の最大",
     "min": "数値の最小",
@@ -88,8 +91,10 @@ OPERATIONS: dict[str, str] = {
 OPERATION_LABELS: dict[str, str] = {
     "value": "値をそのまま見る",
     "elapsed": "今日までの経過（年・月）",
+    "date": "日付として読む",
     "days": "今日までの日数",
     "sum": "合計",
+    "avg": "平均",
     "count": "件数",
     "max": "最大",
     "min": "最小",
@@ -102,6 +107,13 @@ TARGET_INSTRUCTIONS = (
     "質問の「父」「母」「子」などの続柄は、その対象から見た関係として読み、"
     "続柄の語を欄名に含む欄を選ぶ。「書類の対象そのものの欄」は、対象自身を聞いているときだけ選ぶ。"
     "直前の質問があれば、省略された内容はそこから補って読む。"
+    "「それ」「その子」などが直前の回答の表の行を指すときは、その行の列から選ぶ。"
+    "そのとき「その子の父」「その子の名前」などは、その行の中の列（父に当たる列など）であり、"
+    "書類の対象そのものの欄（書類の対象の父など）ではない。"
+    "表の行ごとの記録をまとめて求める質問（一覧・何頭・何件）は、その表の「全体」を選ぶ。"
+    "見出しの内容をまとめて求める質問は、その見出しの「欄すべて」を選ぶ。"
+    "行が決まっていて特定の列を求めていないときは、その表の「全体」を選ぶ。"
+    "合計・平均・最大・最小などの計算は、表の「全体」ではなく計算する列を選ぶ。"
     "対応する欄がなければnoneを選ぶ。"
 )
 PLURAL_INSTRUCTIONS = "質問が求めている欄の数を選ぶ。"
@@ -116,9 +128,17 @@ ALSO_INSTRUCTIONS = (
     "質問は二つの欄をまとめて求めている。一つ目の欄はもう選んである。"
     "質問が求めている、もう一つの欄を選ぶ。なければnoneを選ぶ。"
 )
-OPERATION_INSTRUCTIONS = "質問が求めている処理を一つ選ぶ。値を知りたいだけならvalue。"
+OPERATION_INSTRUCTIONS = (
+    "質問が求めている処理を一つ選ぶ。値を知りたいだけならvalue。"
+    "いちばん高い・多い・大きい・最高はmax、いちばん安い・少ない・小さいはmin、"
+    "平均はavg、合計・全部でいくらはsum、何件・何頭・何回・数はcount。"
+    "一覧・見せて・教えて、条件に合うものを聞く（「70万以上の子牛は」）はvalue。"
+    "年齢・何歳・何か月・年上や年下・いちばん若い・どれが古いはelapsed、何日たったはdays。"
+    "西暦で・和暦で・何年何月何日かを聞くのはdate。"
+)
 ROWS_INSTRUCTIONS = (
     "表の列を参照する場合、どの行を対象にするか選ぶ。特定の行を指しているなら該当行、"
+    "「それ」「その」が直前の回答の行を指すならその行、"
     "最新・直近ならlast、全体・一覧・各行ならall。読み取れなければall。"
 )
 SCOPE_INSTRUCTIONS = (
@@ -126,9 +146,17 @@ SCOPE_INSTRUCTIONS = (
     "list：書類の中身ではなく、確定した書類そのものについての質問。書類が何件・何枚あるか、"
     "ほかにどの書類（書類が記録している人・物・動物など）があるか、書類の一覧を求めている"
     "（例「何枚読み取った」「ほかに誰がいる」「〇〇以外に何がある」）。"
+    "書類1件が1頭・1人・1件の記録なら、それが何頭・何人・何件いるかもlist（例「牛は何頭いる」）。"
     "open：書類（画像）そのものを画面に出してほしい頼み（例「〇〇を出して」「見せて」「開いて」）。"
+    "表・欄・見出しの内容を見せてほしい（「〇〇の繁殖関係を見せて」「一覧を見せて」）はopenではない。"
     "general：書類には書かれていない一般的な知識・助言・手順・連絡先・対処法や、"
     "書かれた値の意味を求めている。"
+    "talk：情報を求める質問ではなく、あいさつ・お礼・相づち、前の回答への感想・指摘・不満、"
+    "このチャットで何ができるかを聞く会話（例「ありがとう」「なんで聞いてないことまで言うの」"
+    "「さっきの答え間違ってない？」「何ができるの」「使い方を教えて」）。"
+    "指摘の形でも別の欄や書類を求めている（「ちがう、母じゃなくて父」）ならtalkではなくdocument。"
+    "close：右に開いている書類を閉じてほしい頼み（例「書類を閉じて」「消して」）。"
+    "edit：書類の値を書き換え・修正してほしい頼み（例「毛色を黒に直して」「〇〇に変えて」）。"
     "document：上のどれでもなく、一つの書類に書かれた値や、その計算（合計・件数・年齢など）で"
     "答える質問。迷うときはdocument。"
 )
@@ -140,9 +168,80 @@ SCOPE_CHOICES = [
         "description": "確定した書類そのものの数や、ほかにどの書類があるか（一覧）を求めている",
     },
     {"value": "open", "description": "書類そのものを画面に出してほしい（出して・見せて・開いて）"},
+    {
+        "value": "talk",
+        "description": "あいさつ・お礼・前の回答への指摘や不満・できることを聞く会話",
+    },
+    {"value": "close", "description": "右に開いている書類を閉じてほしい"},
+    {"value": "edit", "description": "書類の値を書き換え・修正してほしい"},
 ]
 # Kinds answered without a document (general) or about the documents themselves.
-SCOPE_KINDS = ("general", "list", "open")
+SCOPE_KINDS = ("general", "list", "open", "talk", "close", "edit")
+CLOSED = "右の書類を閉じました。"
+NOT_EDITABLE = (
+    "チャットからは書類の値を書き換えられません。書類を右に開いたので、"
+    "ライブラリの「修正する」から確認画面で直してください。"
+)
+TEMPLATE_INSTRUCTIONS = (
+    "質問がどの種類の書類（テンプレート）についてか選ぶ。質問の言葉が、その種類の書類名・欄・表・"
+    "書類が記録している対象（人・動物・物など）に合うものを選ぶ。"
+    "どれにも当てはまらない、又は種類を問わない質問ならnone。"
+)
+# What is left of a question that only names another document (「じゃあ、はじめも」).
+_BARE = re.compile(
+    r"^(?:じゃあ|じゃ|では|なら|それなら|それで|で|あと|ほな)?[、,\s]*"
+    r"(?:は|も|の方は|のほうは|の場合は|だと|なら|では|はどう|は何|はなに)?"
+    r"(?:どう|どうなの|どうなる)?[？?。!！\s]*$"
+)
+# A name the question starts with (「さくらの毛色は」): checked against the documents.
+_LEADING_NAME = re.compile(
+    r"^\s*[「『]?([^\s、。，,？?！!「」『』の]{1,12})[」』]?\s*の(.*)$", re.S
+)
+# Kanji or katakana only: reads as a name even when nothing after it names a field (「時子の」).
+_NAME_LETTERS = re.compile(r"^[\u4e00-\u9fff\u30a0-\u30ffー々]{1,6}$")
+# A year in the question: 「令和5年」「R5年」「2023年」「今年」「去年」.
+_YEAR = re.compile(
+    r"(令和|平成|昭和|[RrHhSs])\s*(\d{1,2}|元)\s*年|(\d{4})\s*年|(今年|去年|昨年|一昨年|おととし)"
+)
+_ERA_START = {"令和": 2018, "r": 2018, "平成": 1988, "h": 1988, "昭和": 1925, "s": 1925}
+# A number condition: 「70万以上」「300kg未満」「50万円より高い」.
+_THRESHOLD = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)\s*(万)?\s*(?:円|kg|キロ|日|頭|件|回)?\s*"
+    r"(以上|以下|未満|を超える|超|より(?:大きい|高い|多い|上|小さい|安い|少ない|下))"
+)
+_COMPARE = {
+    "以上": "ge", "以下": "le", "未満": "lt", "を超える": "gt", "超": "gt",
+    "より大きい": "gt", "より高い": "gt", "より多い": "gt", "より上": "gt",
+    "より小さい": "lt", "より安い": "lt", "より少ない": "lt", "より下": "lt",
+}
+# 「何件ある」「何枚」: how many (of the documents, when no field fits).
+_HOW_MANY = re.compile(r"何\s*(?:件|枚|通|頭|人|個|部)|いくつ|どれくらい")
+_NEWEST = re.compile(r"最近|最新|新しい|直近|いちばん後|一番後")
+# 「高い順に」「安い順」: rows in order of a number.
+_ORDER = re.compile(
+    r"(高い|多い|大きい|重い|長い|新しい|遅い|安い|低い|少ない|小さい|軽い|短い|古い|早い)\s*順"
+)
+# 「はじめってどんな牛」「こよみについて教えて」「内容をまとめて」: the whole document.
+_OVERVIEW = re.compile(
+    r"について(?:教えて|知りたい)|どんな(?:\S{0,4})[？?]?\s*$|まとめて|概要|あらまし|全部教えて|詳しく"
+)
+# 「それ」「その」「3行目」「最初の」: words that point at a row.
+_POINTING = re.compile(
+    r"それ|その|そっち|この|あの|\d+\s*(?:行目|番目|産目|回目|頭目|つ目)|最初|最後|直近|最新"
+)
+# 「黒に直して」「〇〇に変えて」: a request to change a value (not done from the chat).
+_EDIT = re.compile(
+    r"(?:直して|直せ|変えて|変更して|修正して|書き換えて|訂正して)(?:ください|くれ|ほしい)?[。！!]?\s*$"
+)
+# 「西暦で」「和暦で」: a date said as a calendar date.
+_CALENDAR = re.compile(r"西暦|和暦|何年何月|年月日で")
+# Words that start a question about every document or about no name at all.
+_GENERIC_LEADS = {
+    "全部", "みんな", "皆", "全員", "それぞれ", "各", "この", "その", "あの", "どの", "今",
+    "今年", "去年", "昨年", "最近", "最後", "最初", "一番", "全体", "前回", "次", "うち",
+    "私", "自分", "書類", "ほか", "他", "牛", "子牛", "母牛", "子", "親", "父", "母",
+    "何", "なん", "なに", "誰", "だれ", "どこ", "どれ", "いつ", "どっち", "どちら", "何件", "何枚",
+}
 # 「黒2ってなんだよ」「〇〇とは」: the meaning of a written value, not the value again.
 _MEANING = re.compile(
     r"(?:って|とは|てのは|というのは)\s*(?:何|なに|なん|どういう)|どういう意味|意味は|何のこと|なんのこと"
@@ -174,8 +273,22 @@ def jst_today() -> date:
     return datetime.now(JST).date()
 
 
+_KANA = {code: code - 0x60 for code in range(0x30A1, 0x30F7)}
+
+
 def _fold(value: str) -> str:
-    return unicodedata.normalize("NFKC", value).casefold()
+    """For matching only: width, case and katakana/hiragana (「コヨミ」 is 「こよみ」) folded."""
+    return unicodedata.normalize("NFKC", value).casefold().translate(_KANA)
+
+
+def _compact(value: str) -> str:
+    """For matching a written value: folded, without spaces (「田中 太郎」 is 「田中太郎」)."""
+    return re.sub(r"\s+", "", _fold(value))
+
+
+def _core(label: str) -> str:
+    """A name without its bracketed part: 「繁殖者」 for the field 繁殖者 with a bracketed note."""
+    return re.sub(r"[（(][^）)]*[）)]", "", label).strip()
 
 
 @dataclass(slots=True)
@@ -265,6 +378,7 @@ class QuestionEngine:
         scope = tuple(dict.fromkeys(document_ids)) if document_ids else None
         follow = tuple((context or {}).get("documentIds") or ())
         previous: str | None = (context or {}).get("previous") or None
+        answered: str | None = (context or {}).get("previousAnswer") or None
         if reply is None:
             # 「いったん中止だ」 before a new question is not part of it.
             lines = text.splitlines()
@@ -328,55 +442,113 @@ class QuestionEngine:
             raise reject("INVALID_ARGUMENT", "質問を入力してください。", 422)
         notes: list[str] = []
         resolved = await self._documents(text, hint, forced, scope, notes, follow)
+        calls = 0
+        from_template: str | None = None
         if isinstance(resolved, Outcome):
-            if resolved.unnamed and self.chooser is not None:
-                # No document named and several fit: a question about none of them (「牛が逃げたら
-                # どうする」「今何枚読み取った」) is answered as such instead of asking which one.
-                scope_choices = self._scope_choices()
-                scope_question = {
-                    "name": "scope",
-                    "instructions": SCOPE_INSTRUCTIONS,
-                    "choices": scope_choices,
-                }
-                said = f"質問: {text}" + (f"\n直前の質問: {previous}" if previous else "")
-                said += "\n" + self._others_line(None, await self._summaries(scope))
-                answers, calls = await self._choose(said, [scope_question], notes)
-                decoded = (
-                    decode_choice(answers, "scope", {c["value"] for c in scope_choices})
-                    if answers
-                    else None
-                )
-                kind = decoded[0] if decoded is not None and decoded[1] >= CONFIDENT else None
-                if kind == "general":
-                    outcome, calls = await self._general(text, None, previous, notes, calls)
-                    return self._result(outcome, calls, [], text, {}, scope)
-                if kind == "list":
-                    outcome, used = await self._listing(None, scope, notes)
-                    return self._result(outcome, calls, used, text, {}, scope)
+            if not resolved.unnamed or self.chooser is None:
+                resolved.notes = notes + resolved.notes
+                return self._result(resolved, 0, [], text, forced, scope)
+            # No document named and several kinds fit: a question about none of them (「牛が逃げ
+            # たらどうする」「ありがとう」), about the documents themselves (「今何枚読み取った」),
+            # or about one kind of document (「牛は何頭」「給水の申込書の利用目的は」).
+            kind, template, calls = await self._unnamed(text, previous, answered, scope, notes)
+            if kind == "talk":
+                outcome, calls = await self._talk(text, previous, answered, calls)
+                return self._result(outcome, calls, [], text, {}, scope)
+            if kind == "close":
+                closed = Outcome("answered", CLOSED, open="")
+                return self._result(closed, calls, [], text, {}, scope)
+            if kind == "general":
+                outcome, calls = await self._general(text, None, previous, notes, calls)
+                return self._result(outcome, calls, [], text, {}, scope)
+            if kind == "list":
+                outcome, used = await self._listing(None, scope, notes, template, text)
+                return self._result(outcome, calls, used, text, {}, scope)
+            group = [
+                d for d in await self._summaries(scope) if template and d["templateId"] == template
+            ]
+            if not group:
                 resolved.notes = notes + resolved.notes
                 return self._result(resolved, calls, [], text, forced, scope)
-            resolved.notes = notes + resolved.notes
-            return self._result(resolved, 0, [], text, forced, scope)
+            loaded = [await asyncio.to_thread(self.service.get, s["jobId"]) for s in group]
+            if kind == "open" and len(loaded) > 1:
+                kind_name = _md(group[0].get("templateName") or "（名称なし）")
+                message = f"「{kind_name}」の書類は{len(loaded)}件あります。どれを開きますか。"
+                return self._result(
+                    Outcome(
+                        "clarifying",
+                        message,
+                        question={
+                            "kind": "document",
+                            "message": message,
+                            "choices": [self._document_choice(d) for d in loaded[:MAX_CHOICES]],
+                        },
+                        notes=notes,
+                    ),
+                    calls,
+                    [],
+                    text,
+                    forced,
+                    scope,
+                )
+            if kind == "open":
+                outcome = self._opened(loaded[0])
+                return self._result(outcome, calls, [self._ref(loaded[0])], text, {}, scope)
+            if len(loaded) > 1:
+                notes.append(
+                    f"「{group[0].get('templateName') or '（名称なし）'}」の書類"
+                    f"{len(loaded)}件について答えました。"
+                )
+            resolved = loaded
+            from_template = template
         documents = resolved
         primary = documents[0]
         refs = [self._ref(document) for document in documents]
+        asked = text
+        if reply is None and previous and await self._bare(text, documents):
+            # 「こよみは」 after 「はじめの毛色は」: the same question about this document.
+            asked = await self._without_names(previous)
+            notes.append(f"前の質問（{previous}）と同じことを答えました。")
+        elif reply is None and not forced and await self._bare(text, documents):
+            # 「こよみ」 alone: what the document holds.
+            forced = {"target": "overview", "operation": "value"}
         selection, calls, question, assumed = await self._select(
-            text, hint, primary, forced, notes, replied=reply is not None, previous=previous
+            asked,
+            hint,
+            primary,
+            forced,
+            notes,
+            replied=reply is not None,
+            previous=None if asked != text else previous,
+            answered=answered,
+            calls=calls,
         )
         selection["primary"] = primary["jobId"]
-        kind = selection.pop("scope", None)
+        kind = selection.pop("scope", "")
         about = selection.pop("about", None)
+        if kind == "talk":
+            outcome, calls = await self._talk(text, previous, answered, calls)
+            return self._result(outcome, calls, [], text, {}, scope)
+        if kind == "close":
+            return self._result(Outcome("answered", CLOSED, open=""), calls, [], text, {}, scope)
+        if kind == "edit":
+            # Values are corrected on the review screen only; the document is opened for it.
+            outcome = Outcome("answered", NOT_EDITABLE, open=primary["jobId"])
+            return self._result(outcome, calls, [self._ref(primary)], text, {}, scope)
         if kind == "general":
             outcome, calls = await self._general(text, primary, previous, notes, calls, about)
             return self._result(outcome, calls, [self._ref(primary)], text, {}, scope)
         if kind == "list":
-            outcome, used = await self._listing(primary, scope, notes)
+            outcome, used = await self._listing(primary, scope, notes, None, text)
             return self._result(outcome, calls, used, text, {}, scope)
         if kind == "open":
             # 「はじめを出して」: the document itself, opened beside the chat.
-            name = _md(primary.get("documentName") or "（名称なし）")
-            outcome = Outcome("answered", f"「{name}」を右に開きました。", open=primary["jobId"])
+            outcome = self._opened(primary)
             return self._result(outcome, calls, [self._ref(primary)], text, {}, scope)
+        if question is not None and from_template and _HOW_MANY.search(text):
+            listed_notes = [n for n in notes if "について答えました" not in n]
+            outcome, used = await self._listing(None, scope, listed_notes, from_template, text)
+            return self._result(outcome, calls, used, text, {}, scope)
         if question is not None:
             return self._result(
                 Outcome("clarifying", question["message"], question=question, notes=notes),
@@ -387,9 +559,11 @@ class QuestionEngine:
                 scope,
             )
         outcome, calls, used = await self._compute(
-            text, documents, selection, assumed, notes, calls, previous
+            asked, documents, selection, assumed, notes, calls, previous
         )
         outcome.notes = notes + outcome.notes
+        if selection.get("target", "").startswith(("table:", "section:")):
+            assumed.pop("operation", None)  # Rows / a heading are shown, not calculated.
         if outcome.question is None:
             for kind in ("target", "operation", "era"):
                 if assumed.get(kind):
@@ -466,6 +640,184 @@ class QuestionEngine:
         ][:20]
         return line + (f"。同じ種類の書類はほかに: {'、'.join(same)}" if same else "。")
 
+    @staticmethod
+    def _opened(document: dict[str, Any]) -> Outcome:
+        name = _md(document.get("documentName") or "（名称なし）")
+        return Outcome("answered", f"「{name}」を右に開きました。", open=document["jobId"])
+
+    async def _unnamed(
+        self,
+        text: str,
+        previous: str | None,
+        answered: str | None,
+        scope: tuple[str, ...] | None,
+        notes: list[str],
+    ) -> tuple[str, str | None, int]:
+        """What a question naming no document is: its kind and the kind of document (template)
+        it is about, chosen together in one model call."""
+        summaries = await self._summaries(scope)
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for summary in summaries:
+            groups.setdefault(summary["templateId"], []).append(summary)
+        template_choices = []
+        vocabulary: dict[str, set[str]] = {}
+        for template_id, group in groups.items():
+            try:
+                sample = await asyncio.to_thread(self.service.get, group[0]["jobId"])
+            except AppError:
+                continue
+            words = {_fold(_core(f["label"])) for f in sample["fields"]}
+            words |= {_fold(f.get("section") or "") for f in sample["fields"]}
+            words |= {_fold(t["title"]) for t in sample["tables"]}
+            words |= {_fold(c["label"]) for t in sample["tables"] for c in t["columns"]}
+            vocabulary[template_id] = {w for w in words if w}
+            names = "、".join(s.get("documentName") or "（名称なし）" for s in group[:6])
+            labels = "、".join(
+                dict.fromkeys(_core(f["label"]) for f in sample["fields"] if f["tableId"] is None)
+            )
+            tables = "、".join(t["title"] for t in sample["tables"])
+            headings = "、".join(
+                dict.fromkeys(
+                    f["section"]
+                    for f in sample["fields"]
+                    if f["tableId"] is None and f.get("section")
+                )
+            )
+            if headings:
+                labels = f"{headings[:80]}／{labels}"
+            template_choices.append(
+                {
+                    "value": template_id,
+                    "description": f"「{group[0].get('templateName') or '（名称なし）'}」"
+                    f"（書類{len(group)}件: {names}。欄: {labels[:160]}"
+                    + (f"。表: {tables}" if tables else "")
+                    + "）",
+                }
+            )
+        template_choices.append({"value": "none", "description": "どの種類とも決まらない"})
+        scope_choices = self._scope_choices()
+        questions = [
+            {"name": "scope", "instructions": SCOPE_INSTRUCTIONS, "choices": scope_choices},
+            {
+                "name": "template",
+                "instructions": TEMPLATE_INSTRUCTIONS,
+                "choices": template_choices,
+            },
+        ]
+        said = f"質問: {text}" + (f"\n直前の質問: {previous}" if previous else "")
+        if answered:
+            said += f"\n直前の回答: {answered[:600]}"
+        said += "\n" + self._others_line(None, summaries)
+        answers, calls = await self._choose(said, questions, notes)
+        allowed = {c["value"] for c in scope_choices}
+        decoded = decode_choice(answers, "scope", allowed) if answers else None
+        kind = "document"
+        if decoded is not None:
+            need = CONFIDENT if decoded[0] == "general" else 0.5
+            if decoded[0] != "document" and decoded[1] >= need:
+                kind = decoded[0]
+        picked = (
+            decode_choice(answers, "template", {c["value"] for c in template_choices})
+            if answers
+            else None
+        )
+        # A list asked of every document (「読み取った書類を一覧で」) is narrowed to one kind only
+        # when the question says so: the model's pick needs to be sure then.
+        need = CONFIDENT if kind == "list" else 0.4
+        template = picked[0] if picked and picked[0] != "none" and picked[1] >= need else None
+        named = self._template_by_name(text, summaries) or self._template_by_words(text, vocabulary)
+        return kind, named or template, calls
+
+    @staticmethod
+    def _template_by_words(text: str, vocabulary: dict[str, set[str]]) -> str | None:
+        """The form whose field, heading, table or column names hold the most words of the
+        question, when no other form holds as many (「牛は何頭」: 「牛」 is in 「母牛」)."""
+        words = {
+            w
+            for w in re.findall(r"[一-鿿゠-ヿー々]+", text)
+            if w not in {"書類", "一覧", "全部", "全体", "件数", "確定"} and not w.startswith("何")
+        }
+        scores = {
+            t: sum(1 for w in words if any(_fold(w) in n for n in names))
+            for t, names in vocabulary.items()
+        }
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if not ranked or ranked[0][1] == 0:
+            return None
+        if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
+            return None
+        return ranked[0][0]
+
+    @staticmethod
+    def _template_by_name(text: str, summaries: list[dict[str, Any]]) -> str | None:
+        """The form whose name shares the longest run of letters (3 or more) with the question,
+        when no other form comes close (「チェックリストの書類」, 「給水の申込書」)."""
+        folded = _fold(text)
+        best: dict[str, int] = {}
+        for summary in summaries:
+            name = _fold(summary.get("templateName") or "")
+            longest = 0
+            for i in range(len(folded)):
+                for j in range(i + longest + 1, len(folded) + 1):
+                    if folded[i:j] in name:
+                        longest = j - i
+                    else:
+                        break
+            best[summary["templateId"]] = longest
+        ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
+        if not ranked or ranked[0][1] < 3:
+            return None
+        if len(ranked) > 1 and ranked[1][1] > ranked[0][1] - 2:
+            return None
+        return ranked[0][0]
+
+    async def _talk(
+        self, text: str, previous: str | None, answered: str | None, calls: int
+    ) -> tuple[Outcome, int]:
+        """A reply to conversation (thanks, a complaint about the last answer, what the chat
+        can do): a few words, no document values."""
+        fallback = (
+            "わかりました。書類に書かれた値や、その合計・平均・件数・年齢、書類の一覧、"
+            "書類を開くことなら、聞いてもらえれば答えます。"
+        )
+        if self.writer is None or calls >= MODEL_CALL_LIMIT:
+            return Outcome("answered", fallback), calls
+        payload: dict[str, Any] = {"message": text, "today": self.today().isoformat()}
+        if previous and previous != text:
+            payload["previousQuestion"] = previous
+        if answered:
+            payload["previousAnswer"] = answered[:1000]
+        try:
+            self.writer.check_available()
+            written = await self.writer.write(payload, talk=True)
+        except AppError as error:
+            if error.code not in _DEGRADABLE:
+                raise
+            return Outcome("answered", fallback), calls + 1
+        body = _CONTACT.sub(
+            "（連絡先はお住まいの地域で確かめてください）", _LEFTOVER.sub("", written)
+        )
+        return Outcome("answered", body.strip() or fallback), calls + 1
+
+    async def _bare(self, text: str, documents: list[dict[str, Any]]) -> bool:
+        """Whether the question only names documents (「こよみは」「じゃあ、はじめも」)."""
+        folded = _fold(text)
+        named = False
+        for document in documents:
+            for name in sorted(self._names(document), key=len, reverse=True):
+                if _fold(name) in folded:
+                    folded = folded.replace(_fold(name), " ")
+                    named = True
+        return named and bool(_BARE.match(folded.strip()))
+
+    async def _without_names(self, question: str) -> str:
+        """A question with every document name taken out (asked again about another one)."""
+        folded = question
+        for summary in await self._summaries(None):
+            for name in sorted(self._names(summary), key=len, reverse=True):
+                folded = re.sub(re.escape(name), "", folded, flags=re.IGNORECASE)
+        return re.sub(r"^[\sのはも、,]+", "", folded).strip() or question
+
     def _scope_choices(self) -> list[dict[str, str]]:
         """The kinds of question; a general answer only when its model is set up."""
         return [c for c in SCOPE_CHOICES if c["value"] != "general" or self.writer is not None]
@@ -475,10 +827,16 @@ class QuestionEngine:
         primary: dict[str, Any] | None,
         scope: tuple[str, ...] | None,
         notes: list[str],
+        template: str | None = None,
+        text: str = "",
     ) -> tuple[Outcome, list[dict[str, Any]]]:
         """The confirmed documents themselves (「今何枚読み取った」「こよみの他に誰がいた」):
         counted from the list, the documents of ``primary``'s template first."""
-        summaries = await self._summaries(scope)
+        summaries = sorted(
+            await self._summaries(scope),
+            key=lambda s: str(s.get("confirmedAt") or ""),
+            reverse=True,
+        )
         total = len(summaries)
         notes.append("確定した書類だけを数えています（確認待ち・読み取り中のものは入りません）。")
         if total == 0:
@@ -491,27 +849,39 @@ class QuestionEngine:
             return f"**「{_md(name_of(summary))}」**"
 
         same: list[dict[str, Any]] = []
-        if primary is not None:
-            same = [s for s in summaries if s["templateId"] == primary["templateId"]]
+        kind_id = primary["templateId"] if primary is not None else template
+        if kind_id is not None:
+            same = [s for s in summaries if s["templateId"] == kind_id]
         if same:
-            template = _md(primary.get("templateName") or "（名称なし）") if primary else ""
-            others = [s for s in same if s["jobId"] != primary["jobId"]] if primary else []
-            own = _md(primary.get("documentName") or "（名称なし）") if primary else ""
-            answer = f"「{template}」で確定している書類は**{len(same)}件**です。"
-            answer += (
-                f"「{own}」のほかには" + "、".join(bold(s) for s in others) + "があります。"
-                if others
-                else f"「{own}」のほかにはありません。"
-            )
-            if total > len(same):
-                answer += f"ほかのテンプレートも合わせると、確定済みは全部で**{total}件**です。"
-            shown = [*same, *(s for s in summaries if s not in same)]
+            kind_name = _md(same[0].get("templateName") or "（名称なし）")
+            answer = f"「{kind_name}」で確定している書類は**{len(same)}件**です。"
+            if primary is not None:
+                others = [s for s in same if s["jobId"] != primary["jobId"]]
+                own = _md(primary.get("documentName") or "（名称なし）")
+                answer += (
+                    f"「{own}」のほかには" + "、".join(bold(s) for s in others) + "があります。"
+                    if others
+                    else f"「{own}」のほかにはありません。"
+                )
+            elif len(same) <= 10:
+                listed = "、".join(bold(s) for s in same)
+                answer = answer.removesuffix("です。") + f"で、{listed}です。"
+            shown = same
             used = [self._ref(s) for s in same[:20]]
         else:
             templates = len({s["templateId"] for s in summaries})
             answer = f"確定済みの書類は全部で**{total}件**です（テンプレート{templates}種類）。"
-            shown = sorted(summaries, key=lambda s: s.get("templateName") or "")
+            shown = summaries
             used = [self._ref(s) for s in summaries[:20]]
+        if _NEWEST.search(text) and shown:
+            newest = shown[0]
+            when = str(newest.get("confirmedAt") or "")[:10]
+            answer = (
+                f"いちばん最近確定したのは{bold(newest)}"
+                + (f"（{when}）" if when else "")
+                + "です。"
+                + answer
+            )
         shown = shown[:MAX_DOCUMENTS]
         table = {
             "columns": ["書類", "テンプレート", "確定日"],
@@ -534,6 +904,8 @@ class QuestionEngine:
         primary = pending.forced.get("primary")
         if pending.kind != "target" or primary is None:
             return True
+        if len(re.sub(r"[\s。、！!？?]", "", words)) <= 10:
+            return True  # 「番号のほう」「2つめ」: a few words read with the question.
         try:
             document = await asyncio.to_thread(self.service.get, primary)
         except AppError:
@@ -576,8 +948,21 @@ class QuestionEngine:
             if source:
                 folded = _fold(source)
                 matched = [s for s in summaries if self._mentions(folded, s)]
+                # 「12345は」: the document named 12345, not one whose number is 12345.
+                by_name = [
+                    s
+                    for s in matched
+                    if len((s.get("documentName") or "").strip()) >= 2
+                    and _fold(s["documentName"].strip()) in folded
+                ]
+                if by_name:
+                    matched = by_name
                 if matched:
                     break
+        if not matched:
+            unknown = await self._unknown_name(text, summaries)
+            if unknown is not None:
+                return unknown
         candidates = matched or summaries
         # A document updated since (its new version) is still the one talked about.
         followed = [s for s in candidates if s["jobId"] in follow or s.get("seriesId") in follow]
@@ -602,6 +987,14 @@ class QuestionEngine:
             first = [d for d in documents if d["jobId"] == primary_id]
             if first:
                 return first + [d for d in documents if d["jobId"] != primary_id]
+        # A value written in the question (「なみえはいくらで売れた」) keeps the documents with it.
+        valued = [d for d in documents if self._value_targets(d, hint or text)]
+        held: str | None = None
+        if valued and len(valued) < len(documents):
+            documents = valued
+            if len(documents) == 1:
+                return documents
+            held = self._value_targets(documents[0], hint or text)[0][1]
         # A field name in the question keeps only the documents that have such a field.
         named = [d for d in documents if self._mentioned_targets(d, text, hint)]
         if named:
@@ -609,6 +1002,12 @@ class QuestionEngine:
         if len({d["templateId"] for d in documents}) == 1:
             return documents  # Same form: the same field is answered for every document.
         message = self._document_question(documents, text, hint, bool(matched))
+        if held is not None:
+            pick = "どちらのことか" if len(documents) == 2 else "どれのことか"
+            count = len(documents)
+            message = (
+                f"「{_md(held)}」が書かれている書類が{count}件あります。{pick}選んでください。"
+            )
         return Outcome(
             "clarifying",
             message,
@@ -617,7 +1016,47 @@ class QuestionEngine:
                 "message": message,
                 "choices": [self._document_choice(d) for d in documents[:MAX_CHOICES]],
             },
-            unnamed=not matched and not followed,
+            unnamed=not matched and not followed and held is None,
+        )
+
+    async def _unknown_name(
+        self, text: str, summaries: list[dict[str, Any]]
+    ) -> Outcome | None:
+        """A question about a name no document has (「さくらの毛色は」): said so, instead of
+        answering it for every document. Only a name that starts the question is checked, and
+        only when it is nowhere in the documents (names, fields, tables, values, forms)."""
+        found = _LEADING_NAME.match(text)
+        if found is None or found.group(1) in _GENERIC_LEADS:
+            return None
+        name = _fold(found.group(1))
+        rest = _fold(found.group(2))
+        known: set[str] = set()
+        asked: set[str] = set()  # field, table and heading names: 「さくらの毛色」 names a field
+        for summary in summaries[:MAX_DOCUMENTS]:
+            known.update(_fold(n) for n in self._names(summary))
+            known.add(_fold(summary.get("templateName") or ""))
+            try:
+                document = await asyncio.to_thread(self.service.get, summary["jobId"])
+            except AppError:
+                continue
+            fields = {_fold(_core(t.label)) for t in self._targets(document)}
+            fields |= {_fold(_core(t.table)) for t in self._targets(document) if t.table}
+            fields |= {_fold(f.get("section") or "") for f in document["fields"]}
+            asked |= {w for w in fields if len(w) >= 2}
+            known |= fields
+            known.update(_compact(f["value"]) for f in document["fields"] if f["value"])
+        if not (_NAME_LETTERS.match(found.group(1)) or any(w in rest for w in asked)):
+            return None  # Not read as a name (「一番高いの」「さっきの答え」「何ができるの」).
+        if any(name in word or (len(word) >= 2 and word in name) for word in known if word):
+            return None
+        listed = "、".join(
+            f"「{_md(s.get('documentName') or '（名称なし）')}」" for s in summaries[:10]
+        )
+        more = f"など{len(summaries)}件" if len(summaries) > 10 else ""
+        return Outcome(
+            "unanswerable",
+            f"「{_md(found.group(1))}」という名前の書類は見つかりませんでした。"
+            f"確定済みの書類は{listed}{more}です。",
         )
 
     @classmethod
@@ -693,6 +1132,27 @@ class QuestionEngine:
             targets.append(
                 Target(f"extra:{extra['key']}", f"追加項目の欄「{extra['label']}」", extra["label"])
             )
+        targets.append(
+            Target(
+                "overview",
+                "書類全体のあらまし（この書類について教えて・内容をまとめて・どんな書類か）",
+                "書類全体",
+            )
+        )
+        # A heading's fields together (「利用目的は」「母の情報」).
+        sections: dict[str, list[str]] = {}
+        for reading in document["fields"]:
+            if reading["tableId"] is None and reading.get("section"):
+                sections.setdefault(reading["section"], []).append(reading["label"])
+        for name, labels in sections.items():
+            if len(labels) >= 2:
+                targets.append(
+                    Target(
+                        f"section:{name}",
+                        f"見出し「{name}」の欄すべて（{'、'.join(labels[:8])}）",
+                        f"{name}（見出し全体）",
+                    )
+                )
         for table in document["tables"]:
             for column in table["columns"]:
                 targets.append(
@@ -745,25 +1205,58 @@ class QuestionEngine:
             return titled or hits
         return []
 
-    def _written_pair(self, document: dict[str, Any], text: str) -> list[Target]:
-        """Two fields (not table columns) whose names are both written, each name fitting one
-        field; a name inside another written name does not count."""
+    def _written_heading(self, document: dict[str, Any], text: str) -> Target | None:
+        """A heading whose name (3 letters or more) is written (「利用目的は」「申込者は」)."""
         folded = _fold(text)
         for name in self._names(document):
             folded = folded.replace(_fold(name), " ")
         hits = [
             t
             for t in self._targets(document)
-            if t.table is None and len(t.label.strip()) >= 2 and _fold(t.label.strip()) in folded
+            if t.value.startswith("section:")
+            and len(t.value.removeprefix("section:")) >= 3
+            and _fold(t.value.removeprefix("section:")) in folded
+        ]
+        return hits[0] if len(hits) == 1 else None
+
+    def _written_fields(self, document: dict[str, Any], text: str) -> list[Target]:
+        """Two to six fields (not table columns) whose names are all written, each name fitting
+        one field; a name inside another written name does not count. A field naming the
+        document (its identity written with its value, 「受付番号CHK-002の」) is not asked."""
+        folded = _fold(text)
+        for name in self._names(document):
+            folded = folded.replace(_fold(name), " ")
+        naming = {
+            f"field:{i['fieldId']}"
+            for i in document["identity"]
+            if i.get("value")
+            and re.search(
+                re.escape(_fold(i["label"])) + r"[\s:：=は「『]*" + re.escape(_fold(i["value"])),
+                _fold(text),
+            )
+        }
+        hits = [
+            t
+            for t in self._targets(document)
+            if t.table is None
+            and t.value not in naming
+            and len(t.label.strip()) >= 2
+            and _fold(t.label.strip()) in folded
         ]
         labels = {_fold(t.label.strip()) for t in hits}
         kept = {x for x in labels if not any(x != y and x in y for y in labels)}
-        if len(kept) != 2:
+        if not 2 <= len(kept) <= 6:
             return []
         groups = [[t for t in hits if _fold(t.label.strip()) == label] for label in kept]
         if any(len(group) != 1 for group in groups):
             return []
-        return sorted((group[0] for group in groups), key=lambda t: folded.find(_fold(t.label)))
+        ordered = sorted((group[0] for group in groups), key=lambda t: folded.find(_fold(t.label)))
+        for first, second in pairwise(ordered):
+            start = folded.find(_fold(first.label)) + len(_fold(first.label))
+            between = folded[start : folded.find(_fold(second.label))]
+            if between.strip() == "の":
+                return []  # 「調査場所の住所」: one asked field, named with another.
+        return ordered
 
     async def _select(
         self,
@@ -775,22 +1268,53 @@ class QuestionEngine:
         *,
         replied: bool,
         previous: str | None = None,
+        answered: str | None = None,
+        calls: int = 0,
     ) -> tuple[dict[str, str], int, dict[str, Any] | None, dict[str, list[dict[str, str]]]]:
         targets = self._targets(document)
         by_value = {t.value: t for t in targets}
         selection = dict(forced)
         if selection.get("target") not in by_value:
             selection.pop("target", None)  # A pick from another document version.
-        if selection.get("also") not in by_value:
+        if any(v not in by_value for v in selection.get("also", "").split("\n") if v):
             selection.pop("also", None)
+        if not replied and _EDIT.search(text):
+            selection["scope"] = "edit"
+            return selection, calls, None, {}
         mentioned = [] if "target" in selection else self._mentioned_targets(document, text, hint)
-        pair = [] if "target" in selection else self._written_pair(document, hint or text)
-        if pair:
-            # Two field names written together (「名号と生年月日は」): both are answered.
-            selection["target"], selection["also"] = pair[0].value, pair[1].value
+        written_fields = (
+            [] if "target" in selection else self._written_fields(document, hint or text)
+        )
+        if written_fields:
+            # Field names written together (「名号と生年月日と毛色は」): all are answered.
+            selection["target"] = written_fields[0].value
+            selection["also"] = "\n".join(t.value for t in written_fields[1:])
             selection.setdefault("operation", "value")
         elif len(mentioned) == 1:
             selection["target"] = mentioned[0].value
+        elif (
+            len(mentioned) > 1
+            and len({t.table for t in mentioned}) == 1
+            and mentioned[0].table is not None
+            and len({t.label for t in mentioned}) == len(mentioned)
+        ):
+            # Columns of one table written together (「体重と価格」「平均日令と平均体重」).
+            in_order = sorted(mentioned, key=lambda t: _fold(hint or text).find(_fold(t.label)))
+            selection["target"] = in_order[0].value
+            selection["also"] = "\n".join(t.value for t in in_order[1:])
+        if (
+            "target" not in selection
+            and not mentioned
+            and _OVERVIEW.search(hint or text)
+            and not self._value_targets(document, hint or text)
+        ):
+            selection["target"] = "overview"
+            selection.setdefault("operation", "value")
+        if "target" not in selection and not mentioned:
+            heading = self._written_heading(document, hint or text)
+            if heading is not None:
+                selection["target"] = heading.value
+                selection.setdefault("operation", "value")
         found = self._value_targets(document, hint or text) or (
             self._value_targets(document, text) if hint else []
         )
@@ -800,27 +1324,21 @@ class QuestionEngine:
                 # 「黒2ってなんだよ」: what the written value means is not in the document.
                 selection["scope"] = "general"
                 selection["about"] = f"{written}\t{target.value}"
-                return selection, 0, None, {}
-            # A value written in the question (「みつえいだろう」「あきこ」): the field holding it,
-            # or the whole row of the table cell holding it.
+                return selection, calls, None, {}
+            # A value written in the question (「みつえいだろう」): the field holding it.
             if row is None:
                 selection["target"] = target.value
+                selection.setdefault("operation", "value")
                 notes.append(f"「{written}」が入っている欄で答えました。")
-            else:
-                selection["target"] = f"table:{row.split(':')[1]}"
-                selection["rows"] = row
-                notes.append(f"「{written}」が入っている行で答えました。")
-            selection.setdefault("operation", "value")
-        target_now = selection.get("target", "")
-        if target_now.startswith("column:") and "rows" not in selection:
-            # A column asked about with a value of one of its table's rows written
-            # (「あきこの価格」): that row.
-            table_id = target_now.split(":")[1]
-            rows_hit = {r for _, _, r in found if r is not None and r.split(":")[1] == table_id}
-            if len(rows_hit) == 1:
-                selection["rows"] = rows_hit.pop()
-                written = next(v for _, v, r in found if r == selection["rows"])
-                notes.append(f"「{written}」が入っている行で答えました。")
+        # Table cells holding a written value (「あきこ」「勝忠平ET」「オス」): the rows holding it,
+        # in the table the question is about (the one with the most such rows when unsure).
+        hit_rows: dict[str, tuple[str, set[str]]] = {}
+        for _, written, row in found:
+            if row is not None:
+                hit_rows.setdefault(row.split(":")[1], (written, set()))[1].add(row)
+        if len(hit_rows) == 1 and "target" not in selection and not mentioned:
+            only = next(iter(hit_rows))
+            self._rows_holding(selection, only, hit_rows[only], notes)
         assumed: dict[str, list[dict[str, str]]] = {}
         questions: list[dict[str, Any]] = []
         choices: list[dict[str, str]] = []
@@ -855,17 +1373,16 @@ class QuestionEngine:
         on_field = selection.get("target", "").startswith(("field:", "extra:"))
         if "rows" not in selection and rows and not on_field:
             questions.append({"name": "rows", "instructions": ROWS_INSTRUCTIONS, "choices": rows})
-        calls = 0
         low_target: str | None = None
         plural = False
         kind, kind_confidence = "document", 0.0
         operation_note: str | None = None
         if questions:
-            context = self._context(text, document, previous)
+            context = self._context(text, document, previous, answered)
             if any(q["name"] == "scope" for q in questions):
                 # Which other documents exist: 「こよみの他に誰が」 is about them, not a field.
                 context += "\n" + self._others_line(document, await self._summaries(None))
-            answers, calls = await self._choose(context, questions, notes)
+            answers, calls = await self._choose(context, questions, notes, calls)
             for question in questions:
                 name = question["name"]
                 decoded = decode_choice(answers, name, {c["value"] for c in question["choices"]})
@@ -897,18 +1414,75 @@ class QuestionEngine:
                             for k, v in OPERATION_LABELS.items()
                             if k != value
                         ]
-                        operation_note = (
-                            "書いてある値をそのまま出しています。"
-                            if value == "value"
-                            else f"「{OPERATION_LABELS[value]}」で計算しています。"
-                        )
-                        notes.append(operation_note)
+                        if value != "value":
+                            operation_note = f"「{OPERATION_LABELS[value]}」で計算しています。"
+                            notes.append(operation_note)
                 elif value is not None and confidence >= LENIENT and "rows" not in selection:
-                    selection["rows"] = value
+                    pointed = _POINTING.search(hint or text) or confidence >= CONFIDENT
+                    if not value.startswith("row:") or pointed:
+                        selection["rows"] = value
+        year = self._year_in(hint or text)
+        picked = selection.get("target", "")
+        if year is not None and kind == "document" and picked.startswith(("column:", "table:")):
+            # 「令和5年に売ったのは」: the rows whose date falls in that year.
+            dated_table = picked.split(":")[1]
+            column = self._date_column(document, dated_table, picked, hint or text)
+            if column is not None and selection.get("rows", "all") == "all":
+                selection["rows"] = f"year:{dated_table}:{column[0]}:{year[0]}"
+                selection["rowsSaid"] = f"{column[1]}が{year[1]}の"
+                notes.append(f"{column[1]}が{year[1]}の行で答えました。")
+        limit = _THRESHOLD.search(unicodedata.normalize("NFKC", hint or text))
+        picked = selection.get("target", "")
+        if limit is not None and kind == "document" and picked.startswith(("column:", "table:")):
+            # 「価格が70万以上の子牛」: the rows whose number in that column passes.
+            limit_table = picked.split(":")[1]
+            column = self._number_column(document, limit_table, picked, hint or text)
+            if column is not None and selection.get("rows", "all") == "all":
+                amount = Decimal(limit.group(1).replace(",", "")) * (10000 if limit.group(2) else 1)
+                op = _COMPARE[limit.group(3)]
+                selection["rows"] = f"cmp:{limit_table}:{column[0]}:{op}:{amount}"
+                said = f"{column[1]}が{self._format(amount)}{limit.group(3)}"
+                selection["rowsSaid"] = f"{said}の"
+                notes.append(f"{said}の行で答えました。")
+        ordered = _ORDER.search(hint or text)
+        if ordered is not None:
+            down = ordered.group(1) in {"高い", "多い", "大きい", "重い", "長い", "新しい", "遅い"}
+            selection["order"] = f"{'desc' if down else 'asc'}:{ordered.group(1)}"
+            selection["operation"] = "value"
+            assumed.pop("operation", None)
+        if hit_rows and kind == "document" and not selection.get("rows", "").startswith(
+            ("year:", "cmp:")
+        ):
+            picked = selection.get("target", "")
+            table_id = picked.split(":")[1] if picked.startswith(("column:", "table:")) else None
+            if table_id not in hit_rows and (not picked or table_id is not None):
+                # No target, or a table without the value: the table holding it.
+                table_id = max(hit_rows, key=lambda t: len(hit_rows[t][1]))
+                selection["target"] = f"table:{table_id}"
+                assumed.pop("target", None)
+            if table_id is not None and selection.get("rows", "all") == "all":
+                self._rows_holding(selection, table_id, hit_rows[table_id], notes)
+        row_table = (
+            selection["rows"].split(":")[1]
+            if selection.get("rows", "").startswith("row:")
+            else None
+        )
+        if "target" not in selection and (row_table or (low_target or "").startswith("table:")):
+            # 「こよみの5産目は」「子牛の合計は」: the table the model leaned to (or the table of
+            # the row it picked) is answered, said as a reading that can be changed.
+            selection["target"] = f"table:{row_table}" if row_table else low_target or ""
+            assumed["target"] = []
+        picked = selection.get("target", "")
+        if (
+            row_table
+            and picked.startswith(("column:", "table:"))
+            and picked.split(":")[1] != row_table
+        ):
+            selection["target"] = f"table:{row_table}"  # The row's own table.
         selection.setdefault("rows", "all")
         unsure = "target" not in selection or "target" in assumed
         if kind != "document" and (
-            kind_confidence >= CONFIDENT or (kind_confidence >= 0.5 and unsure)
+            kind_confidence >= CONFIDENT or (kind_confidence >= 0.5 and (unsure or kind == "talk"))
         ):
             # Not a question about the document's values: answered generally (its values put
             # in by the server), as the list of documents, or by opening the document — never
@@ -930,8 +1504,34 @@ class QuestionEngine:
                 selection["also"] = decoded[0]
                 if decoded[1] < CONFIDENT:
                     assumed.setdefault("target", [])
+        if _CALENDAR.search(hint or text) and selection.get("operation", "value") == "value":
+            selection["operation"] = "date"
+            assumed.pop("operation", None)
+        if (
+            "target" not in selection
+            and selection.get("operation") in {"elapsed", "days"}
+            and "operation" not in assumed
+        ):
+            # 「母牛はそれぞれ何歳」 with no field chosen: the one date the documents are told
+            # apart by (a birth date as identity) is what an age is counted from.
+            today = self.today()
+            own = [
+                f"field:{i['fieldId']}"
+                for i in document["identity"]
+                if i.get("fieldId") and date_readings(i.get("value"), today=today)
+            ]
+            if len(own) == 1 and own[0] in by_value:
+                selection["target"] = own[0]
+                assumed["target"] = []
         filled = {t.value for t in targets if self._has_value(document, t.value)}
-        ranked = self._ranked(targets, mentioned, low_target, filled)
+        near = sorted(
+            self._near(targets, document, hint or text), key=lambda t: t.value not in filled
+        )
+        ranked = [
+            t
+            for t in self._ranked(targets, [*mentioned, *near], low_target, filled)
+            if t.value != "overview"
+        ]
         if "target" not in selection:
             # Asked back: no calculation was made, so how it would have been made is not said.
             if operation_note in notes:
@@ -953,7 +1553,7 @@ class QuestionEngine:
             assumed["target"] = self._target_choices(
                 targets, [t for t in ranked if t not in (chosen, second)][:MAX_CHOICES]
             )
-            read = f"「{chosen.description}」" + (f"と「{second.description}」" if second else "")
+            read = f"「{self._said(chosen)}」" + (f"と「{self._said(second)}」" if second else "")
             notes.insert(0, f"{read}のことだと思って答えました。")
         return selection, calls, None, assumed
 
@@ -982,6 +1582,180 @@ class QuestionEngine:
             for t in shown
         ]
 
+    @staticmethod
+    def _said(target: Target) -> str:
+        """How a target is named to the user: 「売却子牛一覧の価格」, a whole table or heading."""
+        if target.value.startswith(("table:", "section:")):
+            return target.label
+        if target.table:
+            return f"{target.table}の{target.label}"
+        return target.label
+
+    @staticmethod
+    def _rows_holding(
+        selection: dict[str, str], table_id: str, hit: tuple[str, set[str]], notes: list[str]
+    ) -> None:
+        """The rows of a table holding a written value: the one row, or all of them."""
+        written, rows = hit
+        selection["rows"] = next(iter(rows)) if len(rows) == 1 else f"match:{table_id}:{written}"
+        QuestionEngine._note_once(notes, f"「{written}」が書かれている行で答えました。")
+
+    def _scoped_rows(
+        self, table: dict[str, Any], scope: str, by_id: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """The rows of a table a scope keeps: one row, the rows holding a written value, or the
+        rows whose date column falls in a year (``year:<table>:<column>:<year>``)."""
+        rows: list[dict[str, Any]] = table["rows"]
+        kind, _, rest = scope.partition(":")
+        if kind not in {"row", "match", "year", "cmp"}:
+            return rows
+        scoped_table, _, rest = rest.partition(":")
+        if scoped_table != table["id"]:
+            return []
+        if kind == "row":
+            return [r for r in rows if r["id"] == rest]
+        if kind == "match":
+            return [r for r in rows if self._holds(r, rest, by_id)]
+        if kind == "cmp":
+            column_id, op, amount = rest.split(":", 2)
+            bound = Decimal(amount)
+            kept = []
+            for row in rows:
+                cell = next((c for c in row["cells"] if c["columnId"] == column_id), None)
+                value = by_id[cell["fieldId"]]["value"] if cell and cell["fieldId"] else None
+                number = number_value(value) if value else None
+                if number is not None and {
+                    "ge": number >= bound,
+                    "le": number <= bound,
+                    "gt": number > bound,
+                    "lt": number < bound,
+                }[op]:
+                    kept.append(row)
+            return kept
+        column_id, _, year = rest.partition(":")
+        today = self.today()
+        kept = []
+        for row in rows:
+            cell = next((c for c in row["cells"] if c["columnId"] == column_id), None)
+            value = by_id[cell["fieldId"]]["value"] if cell and cell["fieldId"] else None
+            if any(d.value.year == int(year) for d in date_readings(value, today=today)):
+                kept.append(row)
+        return kept
+
+    def _year_in(self, text: str) -> tuple[int, str] | None:
+        """The year a question names (as a western year) and how it was written."""
+        found = _YEAR.search(unicodedata.normalize("NFKC", text))
+        if found is None:
+            return None
+        if found.group(4):
+            back = {"今年": 0, "去年": 1, "昨年": 1, "一昨年": 2, "おととし": 2}[found.group(4)]
+            return self.today().year - back, found.group(4)
+        if found.group(3):
+            return int(found.group(3)), f"{found.group(3)}年"
+        start = _ERA_START[found.group(1).lower() if len(found.group(1)) == 1 else found.group(1)]
+        number = 1 if found.group(2) == "元" else int(found.group(2))
+        return start + number, found.group(0)
+
+    def _number_column(
+        self, document: dict[str, Any], table_id: str, picked: str, text: str
+    ) -> tuple[str, str] | None:
+        """The number column a condition is about: the asked column, else the written one."""
+        table = next((t for t in document["tables"] if t["id"] == table_id), None)
+        if table is None:
+            return None
+        asked = picked.split(":")[2] if picked.startswith("column:") else None
+        written = [
+            (c["id"], c["label"])
+            for c in table["columns"]
+            if c["id"] == asked or _fold(_core(c["label"])) in _fold(text)
+        ]
+        return written[0] if len(written) == 1 else None
+
+    def _date_column(
+        self, document: dict[str, Any], table_id: str, picked: str, text: str
+    ) -> tuple[str, str] | None:
+        """The date column of a table to filter by year: the asked column when it holds dates,
+        else the one whose name is written, else the table's only date column."""
+        table = next((t for t in document["tables"] if t["id"] == table_id), None)
+        if table is None:
+            return None
+        by_id = {f["fieldId"]: f for f in document["fields"]}
+        today = self.today()
+        dated = []
+        for column in table["columns"]:
+            values = [
+                by_id[c["fieldId"]]["value"]
+                for r in table["rows"]
+                for c in r["cells"]
+                if c["columnId"] == column["id"] and c["fieldId"] and by_id[c["fieldId"]]["value"]
+            ]
+            readable = [v for v in values if date_readings(v, today=today)]
+            if values and len(readable) * 2 >= len(values):
+                dated.append((column["id"], column["label"]))
+        asked = picked.split(":")[2] if picked.startswith("column:") else None
+        for column in dated:
+            if column[0] == asked:
+                return column
+        written = [c for c in dated if _fold(_core(c[1])) in _fold(text)]
+        if len(written) == 1:
+            return written[0]
+        return dated[0] if len(dated) == 1 else None
+
+    @staticmethod
+    def _holds(row: dict[str, Any], written: str, by_id: dict[str, Any]) -> bool:
+        for cell in row["cells"]:
+            value = by_id[cell["fieldId"]]["value"] if cell["fieldId"] else None
+            if value and (
+                _fold(written) in _fold(value)
+                or _fold(written) in re.sub(r"[\W\d_]+", "", _fold(value))
+            ):
+                return True
+        return False
+
+    def _overview(self, documents: list[dict[str, Any]]) -> Outcome:
+        """What a document holds, in short: its filled fields and how many rows each table has."""
+        if len(documents) > 1:
+            names = "、".join(
+                f"「{_md(d.get('documentName') or '（名称なし）')}」" for d in documents
+            )
+            return Outcome(
+                "answered",
+                f"{names}のどれについてか、書類の名前を入れてもう一度聞いてください。",
+            )
+        document = documents[0]
+        name = _md(document.get("documentName") or "（名称なし）")
+        form = _md(document.get("templateName") or "")
+        lines = [f"「{name}」（{form}）に書かれている主な内容です。"]
+        shown = 0
+        for reading in document["fields"]:
+            if reading["tableId"] is not None or reading["value"] is None:
+                continue
+            if shown >= 12:
+                lines.append("- ほかにも欄があります（欄の名前で聞いてください）")
+                break
+            lines.append(f"- {_md(reading['label'])}：**{_md(reading['value'])}**")
+            shown += 1
+        for table in document["tables"]:
+            filled = [r for r in self._row_readings(document, table["id"], "all") if r.value]
+            if filled:
+                lines.append(f"- {_md(table['title'])}：**{len(filled)}件**")
+        outcome = Outcome("answered", "\n".join(lines))
+        outcome.evidence = [
+            self._evidence(r, False)
+            for f in document["fields"]
+            if f["tableId"] is None and f["value"] is not None
+            for r in self._readings(document, f"field:{f['fieldId']}", "all")
+        ][:12]
+        return outcome
+
+    def _section_fields(self, document: dict[str, Any], section: str) -> list[Target]:
+        ids = {
+            f"field:{f['fieldId']}"
+            for f in document["fields"]
+            if f["tableId"] is None and f.get("section") == section
+        }
+        return [t for t in self._targets(document) if t.value in ids]
+
     def _has_value(self, document: dict[str, Any], target: str) -> bool:
         return any(r.value is not None for r in self._readings(document, target, "all"))
 
@@ -996,16 +1770,29 @@ class QuestionEngine:
         (「あきこ」 for 「♀あきこ」), when they are at least two letters that are not digits:
         numbers, dates and marks in a table are too common to tell a row by.
         """
-        folded = _fold(text)
+        folded = _compact(text)
         for name in self._names(document):
-            folded = folded.replace(_fold(name), " ")
+            folded = folded.replace(_compact(name), " ")
+        # 「繁殖者」「繁殖関係」 hold the value 「繁殖」 but name a field or table: removed first.
+        names = {_core(t.label) for t in self._targets(document)}
+        names |= {_core(t.table) for t in self._targets(document) if t.table}
+        names |= {f.get("section") or "" for f in document["fields"]}
+        names.add(_core(document.get("templateName") or ""))
+        for name in sorted((n for n in names if len(n) >= 2), key=len, reverse=True):
+            folded = folded.replace(_compact(name), " ")
+        # 「オス」「メス」 written for the marks a table holds for them.
+        symbols = [
+            mark
+            for mark, words in (("♂", ("オス", "おす", "雄")), ("♀", ("メス", "めす", "雌")))
+            if any(word in text for word in words)
+        ]
         hits: list[tuple[Target, str, str | None]] = []
         for target in self._targets(document):
-            if target.table is not None:
+            if target.table is not None or target.value.startswith("section:"):
                 continue
             for reading in self._readings(document, target.value, "all"):
                 value = (reading.value or "").strip()
-                if len(_fold(value)) >= 2 and _fold(value) in folded:
+                if len(_compact(value)) >= 2 and _compact(value) in folded:
                     hits.append((target, value, None))
         by_id = {f["fieldId"]: f for f in document["fields"]}
         columns = {t.value: t for t in self._targets(document)}
@@ -1015,16 +1802,40 @@ class QuestionEngine:
                     if cell["fieldId"] is None:
                         continue
                     value = (by_id[cell["fieldId"]]["value"] or "").strip()
-                    words = re.sub(r"[\W\d_]+", "", _fold(value))
-                    if len(words) < 2 or (words not in folded and _fold(value) not in folded):
-                        continue
                     column = columns.get(f"column:{table['id']}:{cell['columnId']}")
-                    if column is not None:
-                        hits.append((column, words, f"row:{table['id']}:{row['id']}"))
+                    if column is None:
+                        continue
+                    place = f"row:{table['id']}:{row['id']}"
+                    for mark in symbols:
+                        if mark in value:
+                            hits.append((column, mark, place))
+                    words = re.sub(r"[\W\d_]+", "", _fold(value))
+                    if len(words) < 2 or (words not in folded and _compact(value) not in folded):
+                        continue
+                    shown = re.sub(r"[\W\d_]+", "", unicodedata.normalize("NFKC", value))
+                    hits.append((column, shown if _fold(shown) == words else words, place))
         if not hits:
             return []
         longest = max(len(v) for _, v, _ in hits)
         return [hit for hit in hits if len(hit[1]) == longest]
+
+    def _near(self, targets: list[Target], document: dict[str, Any], text: str) -> list[Target]:
+        """Fields whose name shares two letters in a row with the question (「登録」 in
+        「こよみの登録は」): the likely ones when a field must be asked back."""
+        folded = _fold(text)
+        for name in self._names(document):
+            folded = folded.replace(_fold(name), " ")
+        pairs = {
+            folded[i : i + 2]
+            for i in range(len(folded) - 1)
+            if not re.search(r"[\sぁ-ゖ？?、。!！]", folded[i : i + 2])
+        }
+        return [
+            t
+            for t in targets
+            if not t.value.startswith(("table:", "section:", "overview"))
+            and any(pair in _fold(t.label) for pair in pairs)
+        ]
 
     @staticmethod
     def _ranked(
@@ -1074,10 +1885,18 @@ class QuestionEngine:
             notes.append(note)
 
     @staticmethod
-    def _context(text: str, document: dict[str, Any], previous: str | None = None) -> str:
+    def _context(
+        text: str,
+        document: dict[str, Any],
+        previous: str | None = None,
+        answered: str | None = None,
+    ) -> str:
         lines = [f"質問: {text}"]
         if previous and previous != text:
             lines.append(f"直前の質問: {previous}")
+        if answered:
+            # 「それはいつ売った」「その子の父親は」: what 「それ」 points at is in the last answer.
+            lines.append(f"直前の回答: {answered[:600]}")
         lines.append(f"書類名: {document.get('documentName') or '（名称なし）'}")
         identity = "、".join(
             f"{i['label']}={i['value']}" for i in document["identity"] if i.get("value")
@@ -1199,15 +2018,20 @@ class QuestionEngine:
                     **place,
                 )
             ]
+        if target == "overview":
+            return []  # The whole document: answered by _overview, not as readings.
         if target.startswith("table:"):
             return self._row_readings(document, target.removeprefix("table:"), scope)
+        if target.startswith("section:"):
+            return [
+                reading
+                for field_target in self._section_fields(document, target.removeprefix("section:"))
+                for reading in self._readings(document, field_target.value, scope)
+            ]
         _, table_id, column_id = target.split(":", 2)
         table = next(t for t in document["tables"] if t["id"] == table_id)
         label = next(c["label"] for c in table["columns"] if c["id"] == column_id)
-        rows = table["rows"]
-        if scope.startswith("row:"):
-            _, scoped_table, row_id = scope.split(":", 2)
-            rows = [r for r in rows if scoped_table == table_id and r["id"] == row_id]
+        rows = self._scoped_rows(table, scope, by_id)
         readings: list[Reading] = []
         for row in rows:
             cell = next((c for c in row["cells"] if c["columnId"] == column_id), None)
@@ -1257,10 +2081,7 @@ class QuestionEngine:
             if len(table["rows"]) > 1
             else set()
         )
-        rows = table["rows"]
-        if scope.startswith("row:"):
-            _, scoped_table, row_id = scope.split(":", 2)
-            rows = [r for r in rows if scoped_table == table_id and r["id"] == row_id]
+        rows = self._scoped_rows(table, scope, by_id)
         readings: list[Reading] = []
         for row in rows:
             cells = self._row_cells(table, row, by_id, exclude=None)
@@ -1304,16 +2125,43 @@ class QuestionEngine:
         primary = documents[0]
         targets = {t.value: t for t in self._targets(primary)}
         chosen = targets[selection["target"]]
+        if chosen.value == "overview":
+            return self._overview(documents), calls, [self._ref(d) for d in documents[:20]]
         rows = selection.get("rows", "all")
-        second = targets.get(selection.get("also", ""))
+        extra = [targets[v] for v in selection.get("also", "").split("\n") if v in targets]
+        section = None
+        if chosen.value.startswith("section:"):
+            section = chosen.value.removeprefix("section:")
+            fields = self._section_fields(primary, section)
+            chosen, extra = fields[0], fields[1:]
         if (
-            second is not None
-            and len(documents) == 1
-            and selection.get("operation") == "value"
+            extra
+            and selection.get("operation") in {"value", None}
             and chosen.table is None
-            and second.table is None
-        ):
-            return self._pair(primary, chosen, second), calls, [self._ref(primary)]
+            and all(t.table is None for t in extra)
+        ) or (section and extra):
+            outcome, used = self._several(documents, [chosen, *extra], section)
+            return outcome, calls, used
+        if extra and chosen.table is not None and all(t.table == chosen.table for t in extra):
+            table_id = chosen.value.split(":")[1]
+            if selection.get("operation") in {"value", None}:
+                # Several columns shown: the table's rows, every column.
+                whole = {**selection, "target": f"table:{table_id}", "also": ""}
+                return await self._compute(text, documents, whole, assumed, notes, calls, previous)
+            # Several columns calculated (「平均日令と平均体重」): each one.
+            answers: list[str] = []
+            combined = Outcome("answered", "")
+            for column in [chosen, *extra]:
+                one = {**selection, "target": column.value, "also": ""}
+                part, calls, used = await self._compute(
+                    text, documents, one, assumed, [], calls, previous
+                )
+                answers.append(part.answer)
+                combined.evidence += part.evidence
+                combined.caveats += part.caveats
+                combined.table = part.table or combined.table
+            combined.answer = "".join(answers)
+            return combined, calls, used
         per_document: list[tuple[dict[str, Any], list[Reading]]] = []
         missing = 0
         for document in documents:
@@ -1338,10 +2186,10 @@ class QuestionEngine:
         noun = _md(f"{owner}の{chosen.label}")
         outcome = Outcome("answered", "")
         for reading in readings:
-            if reading.status == "uncertain":
+            if reading.status == "uncertain" and (reading.value or reading.row_number is None):
+                written = f"「{reading.raw}」" if reading.raw else "空欄"
                 outcome.caveats.append(
-                    f"{self._where(reading, multi)}の「{reading.raw}」は、"
-                    "読み取りに自信がありません。"
+                    f"{self._where(reading, multi)}の{written}は、読み取りに自信がありません。"
                 )
         if not readings or all(r.value is None for r in readings):
             outcome.state = "unanswerable"
@@ -1350,14 +2198,49 @@ class QuestionEngine:
                 if multi
                 else f"{noun}は**空欄**のようです。"
             )
+            condition = selection.get("rowsSaid") or (
+                f"「{rows.split(':', 2)[2]}」が書かれている" if rows.startswith("match:") else None
+            )
+            if condition:
+                outcome.answer = f"{_md(owner)}には、{_md(condition)}行はありませんでした。"
             # The blank cells themselves, so the user can check the paper.
             outcome.evidence = [
                 self._evidence(r, multi) for r in readings[:STEP_TERMS] if r.field_id
             ]
             return outcome, calls, used
+        if chosen.value.startswith("table:") and operation in {"sum", "avg", "max", "min"}:
+            prefix = f"column:{chosen.value.removeprefix('table:')}:"
+            numeric = [
+                t
+                for t in targets.values()
+                if t.value.startswith(prefix)
+                and any(
+                    number_value(r.value) is not None
+                    for r in self._readings(primary, t.value, rows)
+                )
+            ]
+            if len(numeric) == 1:
+                # The table's only number column (every document's, as for any column).
+                selection = {**selection, "target": numeric[0].value}
+                return await self._compute(
+                    text, documents, selection, assumed, notes, calls, previous
+                )
+            else:
+                word = OPERATION_LABELS[operation]
+                outcome.state = "clarifying"
+                outcome.answer = f"どの列の{word}ですか？"
+                outcome.question = {
+                    "kind": "target",
+                    "message": f"どの列の{word}ですか？",
+                    "choices": self._target_choices(list(targets.values()), numeric[:ASK_CHOICES]),
+                }
+                return outcome, calls, used
+        condition = selection.get("rowsSaid") or (
+            f"「{rows.split(':', 2)[2]}」が書かれている" if rows.startswith("match:") else None
+        )
         if chosen.value.startswith("table:"):
             self._rows(outcome, readings, multi, owner, operation)
-        elif operation in {"elapsed", "days"}:
+        elif operation in {"elapsed", "days", "date"}:
             outcome, calls = await self._dates(
                 outcome,
                 text,
@@ -1372,12 +2255,27 @@ class QuestionEngine:
                 noun,
                 previous,
             )
-        elif operation in {"sum", "max", "min", "count"}:
+        elif operation in {"sum", "avg", "max", "min", "count"}:
             self._numbers(outcome, readings, operation, multi, noun)
+        elif selection.get("order") and any(self._sort_key(r) is not None for r in readings):
+            direction, word = selection["order"].split(":", 1)
+            numbered = [r for r in readings if self._sort_key(r) is not None]
+            numbered.sort(key=lambda r: self._sort_key(r) or 0, reverse=direction == "desc")
+            first = numbered[0]
+            outcome.answer = (
+                f"{noun}を{_md(word)}順に並べました（{len(numbered)}件）。"
+                f"いちばん上は**{_md(first.value)}**で、{self._row_place(first, multi)}です。"
+            )
+            outcome.table = self._table(numbered, [chosen.label], lambda r: [r.value], multi)
+            readings = numbered
         else:
             self._values(outcome, readings, multi, noun, owner, latest=rows == "last")
         outcome.evidence = [self._evidence(r, multi) for r in readings if r.value is not None]
-        calculated = operation in {"elapsed", "days", "sum", "max", "min"}
+        if operation == "count" and condition:
+            filled = [r for r in readings if r.value is not None]
+            counted = self._per_document(filled) if multi else f"**{len(filled)}件**"
+            outcome.answer = f"{_md(owner)}で{_md(condition)}行は、{counted}です。"
+        calculated = operation in {"elapsed", "days", "sum", "avg", "max", "min"}
         if outcome.state == "unanswerable" and calculated:
             # The field has no date / number to calculate with: offer the fields that do.
             kind = "日付" if operation in {"elapsed", "days"} else "数値"
@@ -1399,32 +2297,77 @@ class QuestionEngine:
                 }
         return outcome, calls, used
 
-    def _pair(self, document: dict[str, Any], first: Target, second: Target) -> Outcome:
-        """Two fields asked together (「両親は」): both values in one answer."""
-        name = _md(document["documentName"] or "（名称なし）")
-        readings = [
-            reading
-            for target in (first, second)
-            for reading in self._readings(document, target.value, "all")
-        ]
-        said = [
-            f"{_md(r.label)}は**「{_md(r.value)}」**"
-            if r.value is not None
-            else f"{_md(r.label)}は**空欄**"
-            for r in readings
-        ]
-        outcome = Outcome("answered", f"「{name}」の" + "、".join(said) + "になっています。")
-        if all(r.value is None for r in readings):
-            outcome.state = "unanswerable"
-            labels = "も".join(_md(r.label) for r in readings)
-            outcome.answer = f"「{name}」の{labels}も**空欄**のようです。"
-        for reading in readings:
-            if reading.status == "uncertain":
-                outcome.caveats.append(
-                    f"{self._where(reading)}の「{reading.raw}」は、読み取りに自信がありません。"
-                )
-        outcome.evidence = [self._evidence(r, False) for r in readings if r.field_id]
-        return outcome
+    def _several(
+        self, documents: list[dict[str, Any]], chosen: list[Target], section: str | None
+    ) -> tuple[Outcome, list[dict[str, Any]]]:
+        """Several fields asked together (「両親は」「名号と生年月日と毛色」「利用目的は」).
+
+        One document: the values in one sentence (a heading's blank fields only named at the
+        end). Several documents of one form: a table, a column per field."""
+        primary = documents[0]
+        if len(documents) == 1:
+            name = _md(primary["documentName"] or "（名称なし）")
+            readings = [
+                reading
+                for target in chosen
+                for reading in self._readings(primary, target.value, "all")
+            ]
+            filled = [r for r in readings if r.value is not None]
+            shown = filled if section else readings
+            said = [
+                f"{_md(r.label)}は**「{_md(r.value)}」**"
+                if r.value is not None
+                else f"{_md(r.label)}は**空欄**"
+                for r in shown
+            ]
+            head = f"「{name}」の{_md(section)}は、" if section else f"「{name}」の"
+            outcome = Outcome("answered", head + "、".join(said) + "になっています。")
+            blanks = [r.label for r in readings if r.value is None]
+            if section and blanks and filled:
+                outcome.answer += f"（{_md('、'.join(blanks))}は空欄）"
+            if not filled:
+                outcome.state = "unanswerable"
+                labels = _md(section) if section else "も".join(_md(r.label) for r in readings)
+                outcome.answer = f"「{name}」の{labels}は**空欄**のようです。"
+            for reading in readings:
+                if reading.status == "uncertain":
+                    outcome.caveats.append(
+                        f"{self._where(reading)}の"
+                        + (f"「{reading.raw}」" if reading.raw else "空欄")
+                        + "は、読み取りに自信がありません。"
+                    )
+            outcome.evidence = [self._evidence(r, False) for r in readings if r.field_id]
+            return outcome, [self._ref(primary)]
+        rows: list[list[str | None]] = []
+        sources: list[dict[str, Any]] = []
+        evidence: list[dict[str, Any]] = []
+        used: list[dict[str, Any]] = []
+        for document in documents:
+            values: list[str | None] = []
+            first: str | None = None
+            for target in chosen:
+                mapped = target.value if document is primary else self._map_target(target, document)
+                readings = self._readings(document, mapped, "all") if mapped else []
+                value = readings[0].value if readings else None
+                values.append(value)
+                if readings and value is not None:
+                    first = first or readings[0].field_id
+                    evidence.append(self._evidence(readings[0], True))
+            rows.append([document.get("documentName") or "（名称なし）", *values])
+            sources.append({"jobId": document["jobId"], "fieldId": first})
+            used.append(self._ref(document))
+        what = _md(section) if section else "、".join(_md(t.label) for t in chosen)
+        outcome = Outcome(
+            "answered",
+            f"{len(documents)}件の書類の{what}を表にまとめました。",
+            table={
+                "columns": ["書類", *(t.label for t in chosen)],
+                "rows": rows,
+                "sources": sources,
+            },
+            evidence=evidence,
+        )
+        return outcome, used
 
     def _fitting_targets(self, document: dict[str, Any], *, dates: bool) -> list[Target]:
         """Fields with at least one value readable as a date (or as a number)."""
@@ -1437,6 +2380,8 @@ class QuestionEngine:
 
         fitting: list[Target] = []
         for target in self._targets(document):
+            if target.value.startswith(("section:", "table:")):
+                continue
             readings = self._readings(document, target.value, "all")
             if any(fits(r.value) for r in readings):
                 fitting.append(target)
@@ -1463,6 +2408,8 @@ class QuestionEngine:
             for target in self._targets(document):
                 if target.table is not None or len(slots) >= GENERAL_FIELD_LIMIT:
                     continue
+                if target.value.startswith("section:"):
+                    continue
                 readings = self._readings(document, target.value, "all")
                 if not readings or readings[0].value is None:
                     continue
@@ -1470,7 +2417,7 @@ class QuestionEngine:
                 slots[key] = readings[0]
                 description = self._model_description(document, target)
                 fields.append({"ref": "{{" + key + "}}", "field": description})
-        payload: dict[str, Any] = {"question": text}
+        payload: dict[str, Any] = {"question": text, "today": self.today().isoformat()}
         if previous and previous != text:
             payload["previousQuestion"] = previous
         if name:
@@ -1592,6 +2539,22 @@ class QuestionEngine:
         rows have no other column to tell them apart.
         """
         lead: list[str] = ["書類"] if multi else []
+        # A row with nothing written but a column filled in every row (its printed number) is
+        # an empty line of the form: left out.
+        constant = (
+            set.intersection(
+                *({n for n, v in r.row_cells if v is not None} for r in readings)
+            )
+            if len(readings) > 1
+            else set()
+        )
+        kept = [
+            r
+            for r in readings
+            if r.value is not None
+            or any(v is not None and n not in constant for n, v in r.row_cells)
+        ]
+        readings = kept or readings
         # In the source table's column order, keeping only columns with a value somewhere.
         order: list[str] = []
         filled: set[str] = set()
@@ -1671,6 +2634,8 @@ class QuestionEngine:
         subject = f"{_md(owner)}の{table}"
         if operation == "count":
             outcome.answer = f"{subject}に入っているのは**{len(filled)}件**です。"
+            if multi:
+                outcome.answer = f"{table}に入っているのは、{self._per_document(filled)}です。"
         elif len(filled) == 1 and not multi:
             said = "、".join(
                 f"{_md(name)}は**「{_md(value)}」**"
@@ -1725,34 +2690,90 @@ class QuestionEngine:
         if operation == "count":
             filled = [r for r in readings if r.value is not None]
             outcome.answer = f"{noun}が入っているのは**{len(filled)}件**です。"
+            if multi:
+                label_said = _md(readings[0].label)
+                outcome.answer = f"{label_said}が入っているのは、{self._per_document(filled)}です。"
         elif not numbers:
             outcome.state = "unanswerable"
             outcome.answer = f"{noun}には、数字として読める値が見当たりませんでした。"
         else:
             values = [n for _, n in numbers]
-            result = {"sum": sum(values, Decimal(0)), "max": max(values), "min": min(values)}[
-                operation
-            ]
-            word = {"sum": "合計", "max": "最大", "min": "最小"}[operation]
+            total = sum(values, Decimal(0))
+            result = {
+                "sum": total,
+                "avg": (total / len(values)).quantize(Decimal("0.01")),
+                "max": max(values),
+                "min": min(values),
+            }[operation]
+            word = {"sum": "合計", "avg": "平均", "max": "最大", "min": "最小"}[operation]
             amount = self._format(result)
+            # Where the largest / smallest is: the row (and document) it was read from.
+            at = [r for r, n in numbers if n == result] if operation in {"max", "min"} else []
+            where = f"で、{self._row_place(at[0], multi)}の値です" if len(at) == 1 else ""
+            if len(at) > 1:
+                where = f"で、{len(at)}件あります"
             outcome.answer = {
                 "sum": f"{noun}を合計すると**{amount}**になります（{len(values)}件分）。",
-                "max": f"{noun}でいちばん大きいのは**{amount}**です（{len(values)}件中）。",
-                "min": f"{noun}でいちばん小さいのは**{amount}**です（{len(values)}件中）。",
+                "avg": f"{noun}の平均は**{amount}**です（{len(values)}件分）。",
+                "max": f"{noun}でいちばん大きいのは**{amount}**{where}（{len(values)}件中）。",
+                "min": f"{noun}でいちばん小さいのは**{amount}**{where}（{len(values)}件中）。",
             }[operation]
+            if multi and operation in {"sum", "avg"}:
+                # 「書類ごとに」: each document's own sum (or average) as well.
+                each: dict[str, list[Decimal]] = {}
+                for reading, number in numbers:
+                    each.setdefault(reading.document_name or "（名称なし）", []).append(number)
+                parts = []
+                for owner_name, own in each.items():
+                    total_own = sum(own, Decimal(0))
+                    own_result = (
+                        total_own
+                        if operation == "sum"
+                        else (total_own / len(own)).quantize(Decimal("0.01"))
+                    )
+                    parts.append(f"「{_md(owner_name)}」は**{self._format(own_result)}**")
+                outcome.answer += "書類ごとには、" + "、".join(parts) + "です。"
             shown = [self._format(v) for v in values[:STEP_TERMS]]
             more = " …" if len(values) > STEP_TERMS else ""
-            joiner = " + " if operation == "sum" else "、"
+            joiner = " + " if operation in {"sum", "avg"} else "、"
             outcome.steps = [
                 {"label": "対象", "value": f"数値として読めた{len(values)}件"},
                 {
-                    "label": "計算" if operation == "sum" else "比べた値",
+                    "label": "計算" if operation in {"sum", "avg"} else "比べた値",
                     "value": joiner.join(shown) + more,
                 },
                 {"label": word, "value": self._format(result)},
             ]
         # The value as written is the column; how it was read as a number is not repeated.
         outcome.table = self._table(readings, [label], lambda r: [r.value], multi)
+
+    def _sort_key(self, reading: Reading) -> float | None:
+        """A reading's place in an order: its number, else its date (the latest reading)."""
+        number = number_value(reading.value)
+        if number is not None:
+            return float(number)
+        dates = date_readings(reading.value, today=self.today())
+        return float(max(d.value for d in dates).toordinal()) if dates else None
+
+    @staticmethod
+    def _per_document(readings: list[Reading]) -> str:
+        """How many rows each document has, and all of them together."""
+        counts: dict[str, int] = {}
+        for reading in readings:
+            name = reading.document_name or "（名称なし）"
+            counts[name] = counts.get(name, 0) + 1
+        said = "、".join(f"「{_md(name)}」が**{count}件**" for name, count in counts.items())
+        return f"{said}（合わせて{len(readings)}件）"
+
+    @staticmethod
+    def _row_place(reading: Reading, multi: bool) -> str:
+        """Where a row's value is: the table, the row and its first values."""
+        owner = f"「{_md(reading.document_name or '（名称なし）')}」の" if multi else ""
+        if reading.row_number is None:
+            return f"{owner}「{_md(reading.label)}」"
+        table = f"「{_md(reading.table_title)}」" if reading.table_title else "表の"
+        keys = f"（{_md('、'.join(reading.row_keys))}）" if reading.row_keys else ""
+        return f"{owner}{table}{reading.row_number}行目{keys}"
 
     @staticmethod
     def _some(readings: list[Reading]) -> str:
@@ -1821,6 +2842,7 @@ class QuestionEngine:
         if era is not None and ambiguous:
             outcome.caveats.append(f"年号が書いていない日付は{era}として読んでいます。")
         results: list[tuple[Reading, str]] = []
+        dated: dict[int, date] = {}
         for i, reading in enumerate(readings):
             if reading.value is None:
                 continue
@@ -1834,12 +2856,15 @@ class QuestionEngine:
                 )
                 continue
             chosen = options[0]
+            dated[id(reading)] = chosen.value
             reading.interpreted_as = chosen.label
             elapsed = elapsed_between(chosen.value, today)
             results.append(
                 (
                     reading,
-                    f"{(today - chosen.value).days}日"
+                    f"{chosen.value.year}年{chosen.value.month}月{chosen.value.day}日"
+                    if operation == "date"
+                    else f"{(today - chosen.value).days}日"
                     if operation == "days"
                     else f"{elapsed.label()}（{elapsed.total_months}か月）",
                 )
@@ -1848,6 +2873,15 @@ class QuestionEngine:
         if not results:
             outcome.state = "unanswerable"
             outcome.answer = f"{noun}には、日付として読める値が見当たりませんでした。"
+        elif operation == "date" and len(results) == 1:
+            reading, value = results[0]
+            where = noun if reading.row_number is None else (
+                f"{self._row_place(reading, True)}の{_md(reading.label)}"
+            )
+            outcome.answer = (
+                f"{where}は「{_md(reading.value)}」で、{_md(reading.interpreted_as or '')}、"
+                f"西暦では**{value}**です。"
+            )
         elif len(results) == 1 and results[0][0].row_number is None and not multi:
             reading, value = results[0]
             outcome.answer = (
@@ -1860,16 +2894,36 @@ class QuestionEngine:
                 {"label": "基準日（今日）", "value": today.isoformat()},
                 {"label": "経過" if operation == "elapsed" else "日数", "value": value},
             ]
+        elif len(results) == 1:
+            reading, value = results[0]
+            outcome.answer = (
+                f"{self._row_place(reading, True)}の{_md(reading.label)}は"
+                f"{_md(reading.interpreted_as or '')}なので、"
+                f"今日（{today.isoformat()}）で**{value}**になります。"
+            )
+        elif operation == "date":
+            outcome.answer = f"{noun}を西暦の日付にして、{len(results)}件分まとめました。"
         else:
             outcome.answer = (
                 f"{noun}から今日（{today.isoformat()}）までを、{len(results)}件分まとめました。"
             )
+            owners = {r.document_name for r, _ in results}
+            if multi and len(owners) == len(results):
+                # One date per document (「どっちが年上」「いちばん若いのは」): which one.
+                young = bool(re.search(r"若|新し|最近|後", text))
+                pick = max if young else min
+                chosen_one = pick(results, key=lambda item: dated[id(item[0])])
+                word = "いちばん最近なのは" if young else "いちばん前なのは"
+                outcome.answer += (
+                    f"{word}「{_md(chosen_one[0].document_name or '（名称なし）')}」"
+                    f"（{_md(chosen_one[0].interpreted_as or '')}、{chosen_one[1]}）です。"
+                )
             outcome.steps = [{"label": "基準日（今日）", "value": today.isoformat()}]
             if era is not None and ambiguous:
                 outcome.steps.append({"label": "年号のない日付", "value": f"{era}として読む"})
         outcome.table = self._table(
             readings,
-            [readings[0].label, "経過"],
+            [readings[0].label, "西暦" if operation == "date" else "経過"],
             lambda r: [r.value, by_reading.get(id(r))],
             multi,
         )

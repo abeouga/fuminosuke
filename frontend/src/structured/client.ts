@@ -65,7 +65,7 @@ export type QuestionResult = {
   modelCalls: number; documents: { jobId: string; documentName: string | null }[];
   /** A general answer to a question the documents cannot answer (only values put in from them). */
   general?: boolean;
-  /** The document the user asked to see (「はじめを出して」): opened beside the chat. */
+  /** The document the user asked to see (「はじめを出して」): opened beside the chat; "" closes it. */
   open?: string | null;
 };
 /** A reply carries either one of the offered choices (`value`) or the user's own words (`text`). */
@@ -74,7 +74,7 @@ export type QuestionRequest = {
   /** The conversation's last answer (its documents and question), to fill in a follow-up. */
   context?: QuestionContext;
 };
-export type QuestionContext = { documentIds: string[]; previous: string | null };
+export type QuestionContext = { documentIds: string[]; previous: string | null; previousAnswer?: string | null };
 /** Where a question was sent from in the chat; only written to the local chat log. */
 export type ChatClient = { conversationId: string; turnId: number; recovered?: boolean };
 export type ChatTurnRecord = { turnId: number; text: string; reply: boolean; state: string | null; answer: string | null; pending: boolean };

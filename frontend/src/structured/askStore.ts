@@ -249,6 +249,8 @@ async function run(id: number, recovering = false) {
       const jobId = result.open;
       const documentName = result.documents.find((item) => item.jobId === jobId)?.documentName ?? null;
       set({ viewer: { jobId, documentName, evidence: [], focus: null } });
+    } else if (result.open === "") {
+      set({ viewer: null });  // 「書類を閉じて」
     }
   } catch (error) {
     // Stopped (or removed) while waiting: the turn already says so.
@@ -287,7 +289,12 @@ function originText(turn: Turn): string {
 function conversationContext(): QuestionContext | undefined {
   const last = [...state.turns].reverse().find((turn) => !turn.pending && turn.result && turn.result.documents.length > 0);
   if (!last?.result) return undefined;
-  return { documentIds: last.result.documents.map((document) => document.jobId).slice(0, 20), previous: originText(last).slice(0, 2000) || null };
+  return {
+    documentIds: last.result.documents.map((document) => document.jobId).slice(0, 20),
+    previous: originText(last).slice(0, 2000) || null,
+    // What 「それ」 or a complaint (「聞いてないことまで言わないで」) refers to.
+    previousAnswer: last.result.answer.slice(0, 2000) || null,
+  };
 }
 
 function push(text: string, base: Turn["request"], scope: ScopeItem[]) {
