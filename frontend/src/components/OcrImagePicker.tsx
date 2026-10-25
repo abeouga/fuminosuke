@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FiCamera } from "react-icons/fi";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { prepareUploadImage } from "./phonePhoto";
 import { Spinner } from "./Spinner";
@@ -107,7 +108,7 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
               ? <><strong>記入済みExcel</strong><small>登録したテンプレートと同じセル配置のファイルを読み取ります。</small></>
               : previews.get(single) && <img src={previews.get(single)} alt="選択した帳票画像" />) : <>
               <span className="drop-icon" aria-hidden="true">＋</span>
-              <strong>{allowXlsx ? "帳票画像または記入済みExcelを選択" : LABEL}</strong>
+              <strong>{phoneDevice ? "保存した写真から選ぶ" : allowXlsx ? "帳票画像または記入済みExcelを選択" : LABEL}</strong>
               <small>PNG / JPEG / WebP / TIFF{allowXlsx ? " / XLSX" : ""}・最大20 MB{multiple ? `・まとめて${MAX_BATCH_FILES}件まで` : ""}</small>
             </>}
           </label>
@@ -118,15 +119,16 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
             if (inputRef.current) { inputRef.current.value = ""; inputRef.current.focus(); }
           }}><span aria-hidden="true">×</span></button>}
       </div>
-      {phoneDevice && <label className="secondary ocr-camera-button">
+      {/* On a phone the camera is the main way in (shown first); the picker above chooses saved photos. */}
+      {phoneDevice && <label className="primary ocr-camera-button">
         <input ref={cameraRef} type="file" accept={ACCEPT} capture="environment" aria-label="カメラで撮影"
           onChange={(event) => {
             select(Array.from(event.target.files ?? []));
             event.target.value = "";
           }} />
-        {multiple && files.length > 0 ? "続けて撮影" : "カメラで撮影"}
+        <FiCamera aria-hidden="true" />{multiple && files.length > 0 ? "続けて撮影" : "カメラで撮影"}
       </label>}
-      {phoneDevice && <p className="ocr-photo-tips">書類全体が写るように、なるべく真上から撮影してください。少し暗い・斜め・傾いた写真でも読み取れます。</p>}
+      {phoneDevice && <p className="ocr-photo-tips">真上から、書類全体が入るように撮影してください。</p>}
       {preparing && <p className="ocr-photo-tips" role="status"><Spinner />画像を準備しています…</p>}
       {single && <small className="ocr-image-name" title={single.name}>{single.name}</small>}
       {files.length > 1 && <small className="ocr-image-name">{files.length}件の書類を選択中（1枚が1件の書類として読み取られます）</small>}

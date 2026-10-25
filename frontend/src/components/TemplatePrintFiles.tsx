@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import { FaFileExcel, FaFilePdf } from "react-icons/fa";
 import { api } from "../api";
+import { PdfFileIcon, XlsxFileIcon } from "./FileIcons";
 import { Spinner } from "./Spinner";
 
 export function TemplatePrintFiles({ versionId, revision, sourceImport = false, disabled = false, disabledReason }: {
@@ -33,11 +33,11 @@ export function TemplatePrintFiles({ versionId, revision, sourceImport = false, 
   return <div aria-label={sourceImport ? "未記入の印刷用帳票" : "保存済みレイアウトの印刷用帳票"}>
     <button type="button" className="secondary compact template-print-button" disabled={disabled || Boolean(disabledReason) || busy !== null}
       title={disabledReason ?? (sourceImport ? "元の未記入XLSX" : "保存済みのページ境界を反映した帳票")}
-      onClick={() => void download("xlsx")}><FaFileExcel aria-hidden="true" className="template-print-icon-xlsx" />印刷用XLSX</button>
+      onClick={() => void download("xlsx")}><XlsxFileIcon aria-hidden="true" className="template-print-icon-xlsx" />印刷用XLSX</button>
     <button type="button" className="secondary compact template-print-button" disabled={disabled || Boolean(disabledReason) || busy !== null}
       title={disabledReason ?? (sourceImport ? "取込時に保存した未記入の1ページPDF"
         : "保存済みのページ境界を反映したPDF。変換環境によっては取得できません。")}
-      onClick={() => void download("pdf")}><FaFilePdf aria-hidden="true" className="template-print-icon-pdf" />印刷用PDF</button>
+      onClick={() => void download("pdf")}><PdfFileIcon aria-hidden="true" className="template-print-icon-pdf" />印刷用PDF</button>
     {disabledReason && <p className="muted">{disabledReason}</p>}
     {busy && <span role="status"><Spinner />印刷用{busy.toUpperCase()}を生成中…</span>}
     {success && <p role="status">{success}</p>}

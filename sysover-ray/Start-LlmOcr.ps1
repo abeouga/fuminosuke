@@ -11,6 +11,18 @@ if (-not $taskBackendUri.IsLoopback -or -not $taskFrontendUri.IsLoopback) {
 }
 
 # Overrides apply only to this launcher and its children; backend/.env is retained.
-$env:FRONTEND_ORIGINS = "http://localhost:$($taskFrontendUri.Port),http://127.0.0.1:$($taskFrontendUri.Port)"
+$taskOrigins = @("http://localhost:$($taskFrontendUri.Port)", "http://127.0.0.1:$($taskFrontendUri.Port)")
+# Phones on the same private network open http://<this PC>:<port>; only the frontend listens there.
+$taskLanAddresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -match '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)' } |
+    ForEach-Object { $_.IPAddress })
+foreach ($address in $taskLanAddresses) {
+    $taskOrigins += "http://$($address):$($taskFrontendUri.Port)"
+}
+$env:FRONTEND_ORIGINS = $taskOrigins -join ','
+if ($taskLanAddresses.Count -gt 0) {
+    $env:LLM_OCR_FRONTEND_HOST = '0.0.0.0'
+    foreach ($address in $taskLanAddresses) { Write-Host "Phone: http://$($address):$($taskFrontendUri.Port)" }
+}
 
 & (Join-Path $taskProjectRoot 'scripts\dev.ps1') -NoBrowser:$NoBrowser -BackendPort $taskBackendUri.Port -FrontendPort $taskFrontendUri.Port

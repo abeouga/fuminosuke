@@ -11,11 +11,23 @@ function storedCorner(key: string, fallback: Corner): Corner {
   } catch { return fallback; }
 }
 
-/** Height of the sticky step tabs above the preview; panels stay below them. */
+/** Height of the sticky bars above the preview (the step tabs, a phone's top bar); panels stay below them. */
 function stickyTop(): number {
+  const phoneBar = document.querySelector(".phone-top");
+  const phone = phoneBar instanceof HTMLElement ? phoneBar.offsetHeight : 0;
   const bar = document.querySelector(".layout-wizard-steps");
-  if (!(bar instanceof HTMLElement) || getComputedStyle(bar).position !== "sticky") return 0;
-  return (parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight;
+  if (!(bar instanceof HTMLElement) || getComputedStyle(bar).position !== "sticky") return phone;
+  return Math.max(phone, (parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight);
+}
+
+/** Height of a phone's bottom tabs and the review's confirm bar; panels stay above them. */
+function stickyBottom(): number {
+  let height = 0;
+  for (const selector of [".phone-tabs", ".review-phone-bar"]) {
+    const bar = document.querySelector(selector);
+    if (bar instanceof HTMLElement && getComputedStyle(bar).display !== "none") height += bar.offsetHeight;
+  }
+  return height;
 }
 
 /**
@@ -34,7 +46,7 @@ function dockFor(host: HTMLElement, corner: Corner): HTMLElement {
   layer.className = `corner-dock is-${corner}`;
   Object.assign(layer.style, {
     position: "sticky", height: "0", margin: "0", zIndex: "66", pointerEvents: "none",
-    ...(top ? { top: `${stickyTop()}px` } : { bottom: "0" }),
+    ...(top ? { top: `${stickyTop()}px` } : { bottom: `${stickyBottom()}px` }),
   });
   const stack = document.createElement("div");
   stack.className = "corner-stack";

@@ -11,9 +11,21 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # v1 creates the table from the current model, which already has these columns on a new DB.
+    inspector = sa.inspect(op.get_bind())
+    existing = {column["name"] for column in inspector.get_columns("template_item_joins")}
+    columns = [
+        column for column in (
+            sa.Column("kind", sa.String(10), nullable=False, server_default="join"),
+            sa.Column("separator", sa.String(10), nullable=False, server_default=""),
+        )
+        if column.name not in existing
+    ]
+    if not columns:
+        return
     with op.batch_alter_table("template_item_joins") as batch:
-        batch.add_column(sa.Column("kind", sa.String(10), nullable=False, server_default="join"))
-        batch.add_column(sa.Column("separator", sa.String(10), nullable=False, server_default=""))
+        for column in columns:
+            batch.add_column(column)
 
 
 def downgrade() -> None:

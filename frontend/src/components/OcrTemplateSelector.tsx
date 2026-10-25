@@ -91,7 +91,8 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                             <strong>{template.name}</strong>
                           </span>
                         </button>
-                        {version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE" && (
+                        {/* Printing the blank form is a PC task; a phone only reads. */}
+                        {!phoneDevice && version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE" && (
                           <div className="ocr-template-print-files">
                             <TemplatePrintFiles key={version.id} versionId={version.id} disabled={deleting}
                               sourceImport={version.quality.printLayout == null && version.quality.sourceType === "xlsx"}

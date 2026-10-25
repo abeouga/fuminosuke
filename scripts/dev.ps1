@@ -130,6 +130,13 @@ $frontendErr = Join-Path $logDir 'dev-frontend.err.log'
 
 Stop-StaleProjectServers
 
+# Local PostgreSQL (backend/data/postgres, created once by scripts/local-postgres.ps1 -Init).
+$pgData = Join-Path $backendDir 'data\postgres'
+if (Test-Path -LiteralPath (Join-Path $pgData 'PG_VERSION')) {
+    & (Join-Path $PSScriptRoot 'local-postgres.ps1') -Start
+    if ($LASTEXITCODE -ne 0) { throw 'Local PostgreSQL did not start.' }
+}
+
 Push-Location $backendDir
 try {
     & $alembic upgrade head
@@ -151,6 +158,8 @@ else {
     $backendPort = Find-FreeLocalPort 8000
     $frontendPort = Find-FreeLocalPort 5173
 }
+# LLM_OCR_FRONTEND_HOST=0.0.0.0 lets phones on the same network open the frontend; the backend stays on loopback behind the Vite proxy.
+$frontendHost = if ($env:LLM_OCR_FRONTEND_HOST) { $env:LLM_OCR_FRONTEND_HOST } else { '127.0.0.1' }
 $backendUrl = "http://127.0.0.1:$backendPort"
 $frontendUrl = "http://127.0.0.1:$frontendPort"
 
@@ -197,7 +206,7 @@ try {
     $previousBackendUrl = $env:LLM_OCR_BACKEND_URL
     $env:LLM_OCR_BACKEND_URL = $backendUrl
     try {
-        $frontend = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev','--','--host','127.0.0.1','--port',([string]$frontendPort),'--strictPort' -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr -PassThru
+        $frontend = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev','--','--host',$frontendHost,'--port',([string]$frontendPort),'--strictPort' -WorkingDirectory $frontendDir -WindowStyle Hidden -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr -PassThru
     }
     finally {
         if ($null -eq $previousBackendUrl) {

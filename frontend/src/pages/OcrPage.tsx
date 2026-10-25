@@ -29,6 +29,7 @@ import type { Template } from "../types";
 import { isEditingDraft } from "../templateEditing";
 import { Spinner } from "../components/Spinner";
 import { readingQueue } from "../readingQueue";
+import { findConfirmedMatch, type ConfirmedMatch } from "../confirmedMatch";
 
 type OcrStep = 1 | 2;
 const TemplatePage = lazy(() => import("./TemplatePage").then(module => ({ default: module.TemplatePage })));
@@ -118,6 +119,13 @@ export function OcrPage({
   // Optional: read the upload as the next version of a confirmed document the user picks.
   const [seriesOpen, setSeriesOpen] = useState(false);
   const [predecessor, setPredecessor] = useState<SeriesSelection | null>(null);
+  // Each chosen image is compared with the template's confirmed documents: a later photo of one of
+  // them is read as its next version without the user turning the update on.
+  const [matches, setMatches] = useState<Map<File, ConfirmedMatch | null | "checking">>(() => new Map());
+  // The file the update choice above was filled in for automatically (null: picked by the user).
+  const [autoFor, setAutoFor] = useState<File | null>(null);
+  const declinedRef = useRef(new Set<File>());
+  const matchGenerationRef = useRef(0);
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Images just handed to the reading queue: step 3 plays the send animation, then returns to step 2.
@@ -147,7 +155,55 @@ export function OcrPage({
     // A predecessor is chosen per template version; another version starts without one.
     setSeriesOpen(false);
     setPredecessor(null);
+    setAutoFor(null);
+    matchGenerationRef.current += 1;
+    setMatches(new Map());
   }, [versionId]);
+  useEffect(() => {
+    if (!versionId) return;
+    const generation = matchGenerationRef.current;
+    const pending = files.filter((item) => !matches.has(item) && !/\.xlsx$/i.test(item.name));
+    if (pending.length === 0) return;
+    setMatches((current) => new Map([...current, ...pending.map((item) => [item, "checking"] as const)]));
+    for (const item of pending) {
+      void findConfirmedMatch(item, versionId)
+        .catch(() => null)
+        .then((found) => {
+          if (generation === matchGenerationRef.current) setMatches((current) => new Map(current).set(item, found));
+        });
+    }
+  }, [files, matches, versionId]);
+  useEffect(() => {
+    // One image: the match fills the update choice, where the user can see or change it.
+    const only = files.length === 1 ? files[0] : null;
+    const found = only ? matches.get(only) : undefined;
+    if (autoFor && autoFor !== only) {
+      setAutoFor(null);
+      setSeriesOpen(false);
+      setPredecessor(null);
+      return;
+    }
+    if (!only || autoFor === only || seriesOpen || declinedRef.current.has(only)) return;
+    if (!found || found === "checking") return;
+    idempotencyKeyRef.current = null;
+    setAutoFor(only);
+    setSeriesOpen(true);
+    setPredecessor({ jobId: found.jobId, label: found.label, seriesVersion: found.seriesVersion });
+  }, [autoFor, files, matches, seriesOpen]);
+  const checking = files.some((item) => matches.get(item) === "checking");
+  // Several images: each is read as the update of the document it matched (one image per document).
+  const batchPredecessors = useMemo(() => {
+    const picked = new Map<File, ConfirmedMatch>();
+    if (files.length < 2) return picked;
+    const used = new Set<string>();
+    for (const item of files) {
+      const found = matches.get(item);
+      if (!found || found === "checking" || used.has(found.jobId) || declinedRef.current.has(item)) continue;
+      used.add(found.jobId);
+      picked.set(item, found);
+    }
+    return picked;
+  }, [files, matches]);
   // The template grid (step 1) shows every card's thumbnail; the selected version loads first.
   const previewVersions = useMemo(
     () => [...templateCards.map((card) => card.version)]
@@ -263,7 +319,7 @@ export function OcrPage({
   );
   const currentStep = jobId || sent ? 3 : step;
   const startReading = async () => {
-    if (files.length === 0 || creatingRef.current || jobId || sent) return;
+    if (files.length === 0 || creatingRef.current || jobId || sent || checking) return;
     creatingRef.current = true;
     const generation = submissionGenerationRef.current;
     const templateName = activeSelection?.template.name ?? "テンプレート";
@@ -274,6 +330,9 @@ export function OcrPage({
     const acceptedFiles: File[] = [];
     try {
       for (const item of files) {
+        const predecessorJobId = files.length === 1
+          ? (seriesOpen ? predecessor?.jobId : undefined)
+          : batchPredecessors.get(item)?.jobId;
         let key = keys.get(item);
         if (!key) { key = createIdempotencyKey("ocr"); keys.set(item, key); }
         const created = await api.createOcr(
@@ -281,12 +340,12 @@ export function OcrPage({
           item,
           ocrEnabledForSubmission,
           key,
-          files.length === 1 ? predecessor?.jobId : undefined,
+          predecessorJobId,
         );
         rememberJob(created.jobId);
         readingQueue.add(created.jobId, item.name, templateName, {
           templateId: activeSelection?.template.id,
-          predecessorJobId: files.length === 1 ? predecessor?.jobId : undefined,
+          predecessorJobId,
         });
         keys.delete(item);
         accepted += 1;
@@ -308,6 +367,7 @@ export function OcrPage({
         if (accepted > 0) {
           setSeriesOpen(false);
           setPredecessor(null);
+          setAutoFor(null);
           setSent({
             id: Date.now(),
             count: accepted,
@@ -446,7 +506,7 @@ export function OcrPage({
                   </figure>
                   <div className="ocr-reading-input-panel">
                     <div className="ocr-reading-file-picker">
-                      <OcrImagePicker key={versionId} files={files} multiple={!seriesOpen}
+                      <OcrImagePicker key={versionId} files={files} multiple={!seriesOpen || autoFor !== null}
                         allowXlsx={activeVersion?.mode === "SPREADSHEET_TEMPLATE" && !activeVersion.quality.printLayout}
                         onChange={setFiles} />
                     </div>
@@ -454,16 +514,35 @@ export function OcrPage({
                       <DocumentSeriesPicker
                         templateVersionId={versionId}
                         open={seriesOpen}
+                        automatic={autoFor !== null && autoFor === files[0]}
+                        checking={checking}
                         onOpenChange={(open) => {
                           idempotencyKeyRef.current = null;
+                          if (!open && files[0]) declinedRef.current.add(files[0]);
+                          setAutoFor(null);
                           setSeriesOpen(open);
                         }}
                         value={predecessor}
                         onChange={(next) => {
                           idempotencyKeyRef.current = null;
+                          setAutoFor(null);
                           setPredecessor(next);
                         }}
                       />
+                    )}
+                    {files.length > 1 && (checking || batchPredecessors.size > 0) && (
+                      <aside className="series-auto-notice" role="status">
+                        {checking
+                          ? <span><Spinner />確定済みの書類と照合しています…</span>
+                          : <>
+                              <strong>確定済みの書類の更新として読み込みます（{batchPredecessors.size}件）</strong>
+                              <ul>
+                                {[...batchPredecessors].map(([item, found]) => (
+                                  <li key={found.jobId}>{item.name} → 「{found.label}」の次の版</li>
+                                ))}
+                              </ul>
+                            </>}
+                      </aside>
                     )}
                     {textRecognitionToggleEnabled && <>
                       <label className="switch-row">
@@ -491,9 +570,9 @@ export function OcrPage({
                 </div>
                 <div className="ocr-step-actions ocr-step-actions-single">
                   <button type="button" className="primary"
-                    disabled={files.length === 0 || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
+                    disabled={files.length === 0 || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor) || checking}
                     onClick={() => void startReading()}>
-                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : `${ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}${files.length > 1 ? `（${files.length}件）` : ""}`}</button>
+                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : checking ? <><Spinner />確定済みの書類と照合中…</> : `${ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}${files.length > 1 ? `（${files.length}件）` : ""}`}</button>
                 </div>
               </section>
             )}

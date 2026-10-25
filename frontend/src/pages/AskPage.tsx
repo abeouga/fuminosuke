@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import {
   FiAlertTriangle,
   FiArrowUp,
@@ -32,10 +33,13 @@ import {
   type AnswerTable,
   type Evidence,
   type StructuredDocument,
+  type StructuredReading,
   type StructuredStatus,
 } from "../structured/client";
 import { QuestionVoiceCapture } from "../structured/voiceCapture";
 import { VoiceMeter } from "../components/VoiceMeter";
+import { isPhoneDevice } from "../hooks/usePhoneDevice";
+import { visibleHeight } from "../phone/phoneKeyboard";
 
 // Last known status, so coming back to the page shows it at once (refreshed on mount).
 let cachedStatus: StructuredStatus | null = null;
@@ -118,7 +122,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const state = useSyncExternalStore(askStore.subscribe, askStore.getSnapshot);
   const { turns, draft, replyMode, viewer, history, conversationId } = state;
   const [status, setStatus] = useState<StructuredStatus | null | "unavailable">(cachedStatus);
-  const [sidebar, setSidebarState] = useState(storedSidebar);
+  // A phone shows the history as a drawer on request; it starts closed and is not remembered.
+  const [phone] = useState(isPhoneDevice);
+  const [sidebar, setSidebarState] = useState(() => !phone && storedSidebar());
   const [split, setSplitState] = useState(storedSplit);
   // The answer-table row under the pointer: its cell is highlighted on the open document.
   const [hovered, setHovered] = useState<RowSource | null>(null);
@@ -128,6 +134,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   };
   const setSidebar = (open: boolean) => {
     setSidebarState(open);
+    if (phone) return;
     try { privateLocalStorage.setItem(SIDEBAR_KEY, open ? "open" : "closed"); } catch { /* per-viewer convenience only */ }
   };
   const pageRef = useRef<HTMLDivElement>(null);
@@ -184,13 +191,20 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const submit = (raw: string) => {
     const text = raw.trim();
     if (!canSend) return;
-    // Attached images are read first (template guess, then the reading queue), then the text is asked.
+    // Images and text sent together are one message with one answer: the text is answered and the
+    // images' readings (template guess, then the reading queue) are shown under that answer.
+    // Text that only asks for the images to be read gets a short reply here, without the AI.
     flights.current = captureAttachments();
-    chatReadings.send(turns[turns.length - 1]?.id ?? null);
-    if (!text || !enabled) return;
-    askStore.set({ draft: "" });
-    if (answering) askStore.replyText(text);
-    else askStore.ask(text, []);
+    const images = attachments.length;
+    const afterTurnId = turns[turns.length - 1]?.id ?? null;
+    let turnId: number | null = null;
+    if (text && images > 0 && (!enabled || asksToRead(text))) {
+      turnId = askStore.note(text, images > 1 ? `${images}枚の画像を読み取ります。` : "画像を読み取ります。");
+    } else if (text && enabled) {
+      turnId = answering ? askStore.replyText(text) : askStore.ask(text, []);
+    }
+    if (turnId !== null) askStore.set({ draft: "" });
+    chatReadings.send(afterTurnId, turnId);
   };
   // Dropped, pasted or picked images only go into the message box; the send button reads them.
   const addImages = (list: FileList | File[] | null | undefined) => {
@@ -224,12 +238,25 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       const top = page.getBoundingClientRect().top + window.scrollY;
       // The main area's bottom padding would push the page past the window; give it back.
       const bottom = parseFloat(getComputedStyle(page.parentElement ?? page).paddingBottom) || 0;
-      page.style.setProperty("--ask-height", `${Math.max(window.innerHeight - top - gap, 0)}px`);
-      page.style.marginBottom = `${Math.min(gap - bottom, 0)}px`;
+      // A phone's bottom tabs cover the end of the window (they hide while the keyboard is up).
+      const tabs = document.querySelector<HTMLElement>(".phone-tabs");
+      const covered = tabs && getComputedStyle(tabs).display !== "none" ? tabs.getBoundingClientRect().height : 0;
+      page.style.setProperty("--ask-height", `${Math.max(visibleHeight() - top - gap - covered, 0)}px`);
+      page.style.marginBottom = `${Math.min(gap + covered - bottom, 0)}px`;
     };
     fit();
     window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    // iOS shows the keyboard over the page and only shrinks the visual viewport.
+    window.visualViewport?.addEventListener("resize", fit);
+    // Showing or hiding the tabs (keyboard up or down) changes the room without resizing the window.
+    const shell = page.closest(".app-shell");
+    const watch = shell ? new MutationObserver(fit) : null;
+    if (shell) watch?.observe(shell, { attributes: true, attributeFilter: ["class"] });
+    return () => {
+      window.removeEventListener("resize", fit);
+      window.visualViewport?.removeEventListener("resize", fit);
+      watch?.disconnect();
+    };
   }, []);
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -252,7 +279,11 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   // Readings whose job a later image replaced (the job itself is gone).
   const replaced = new Set(readings.flatMap((reading) =>
     reading.outcome === "replaced" && reading.earlier ? [reading.earlier.jobId] : []));
+  // Images sent with a message are shown inside that message and its answer.
+  const inTurn = (reading: ChatReading) => reading.turnId != null && turnIds.has(reading.turnId);
+  const attachedTo = (turnId: number) => readings.filter((reading) => reading.turnId === turnId);
   const readingViews = (turnId: number | null) => readings
+    .filter((reading) => !inTurn(reading))
     .filter((reading) => turnId === null
       ? reading.afterTurnId === null || !turnIds.has(reading.afterTurnId)
       : reading.afterTurnId === turnId)
@@ -266,7 +297,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const switched = shownConversation.current !== conversationId;
   useEffect(() => { shownConversation.current = conversationId; }, [conversationId]);
   const startNew = () => { askStore.clear(); chatReadings.clear(); inputRef.current?.focus(); };
-  const narrow = () => window.matchMedia("(max-width: 900px)").matches;
+  const narrow = () => phone || window.matchMedia("(max-width: 900px)").matches;
+  const topTools = phone ? document.getElementById("phone-top-tools") : null;
 
   return (
     <div className="ask-page" ref={pageRef}>
@@ -280,11 +312,25 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
         <aside className="notice"><strong>AIが未接続です</strong><span>欄の名前を書いた質問には答えられます。それ以外は欄を選んで答えます。</span></aside>
       )}
 
+      {/* A phone keeps the history and the new conversation as icons in the top bar. */}
+      {phone && topTools && createPortal(
+        <>
+          <button type="button" className="phone-top-button" aria-label="履歴" title="履歴" onClick={() => setSidebar(true)}>
+            <FiClock aria-hidden="true" />
+          </button>
+          <button type="button" className="phone-top-button" aria-label="新しい会話" title="新しい会話"
+            disabled={busy || (turns.length === 0 && readings.length === 0)} onClick={startNew}>
+            <FiPlus aria-hidden="true" />
+          </button>
+        </>,
+        topTools,
+      )}
       <div className={`ask-layout${viewer ? " with-document" : ""}${sidebar ? " with-history" : " with-rail"}`}
         style={viewer ? { gridTemplateColumns: `${sidebar ? 284 : 72}px minmax(300px, ${split}fr) minmax(280px, ${1 - split}fr)` } : undefined}>
-        {/* Closed, the side bar shrinks to a rail of its icons instead of disappearing. */}
-        {!sidebar && (
-          <nav className="ask-rail" aria-label="会話の履歴">
+        {/* One panel whose width slides between the rail of icons (closed) and the history (open);
+            both stay mounted so opening and closing can animate. */}
+        <div className={sidebar ? "ask-side open" : "ask-side"}>
+          <nav className="ask-rail" aria-label="会話の履歴" inert={sidebar}>
             <button type="button" className="ask-icon-button" aria-label="履歴を開く" title="履歴を開く" onClick={() => setSidebar(true)}>
               <FiSidebar aria-hidden="true" />
             </button>
@@ -296,10 +342,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
               <FiClock aria-hidden="true" />
             </button>
           </nav>
-        )}
-        {sidebar && <button type="button" className="ask-history-backdrop" aria-label="履歴を閉じる" onClick={() => setSidebar(false)} />}
-        {sidebar && (
           <HistorySidebar
+            open={sidebar}
             history={history}
             currentId={conversationId}
             busy={busy}
@@ -308,7 +352,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             onOpen={(id) => { chatReadings.clear(); askStore.open(id); if (narrow()) setSidebar(false); }}
             onRemove={(id) => askStore.remove(id)}
           />
-        )}
+        </div>
+        <button type="button" className={sidebar ? "ask-history-backdrop show" : "ask-history-backdrop"} tabIndex={-1}
+          aria-hidden={!sidebar} aria-label="履歴を閉じる" onClick={() => setSidebar(false)} />
         <section
           className={dragging ? "ask-chat dropping" : "ask-chat"}
           aria-label="チャット"
@@ -331,7 +377,6 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
               ? (
                 <div className="ask-welcome">
                   <h2><span className="ask-welcome-hello">{greeting(new Date())}</span><span className="ask-welcome-ask">何を調べますか？</span></h2>
-                  <p className="ask-welcome-hint">記入した書類の画像を置くと、テンプレートを見分けて読み取ります。</p>
                 </div>
               )
               : [readingViews(null), ...turns.map((turn) => [
@@ -343,7 +388,10 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                   viewer={viewer}
                   onChoose={(choice) => askStore.choose(turn.id, choice)}
                   onRetry={() => askStore.retry(turn.id)}
-                  onRemove={() => askStore.removeTurn(turn.id)}
+                  onRemove={() => { askStore.removeTurn(turn.id); chatReadings.dismissTurn(turn.id); }}
+                  attached={attachedTo(turn.id)}
+                  replacedJobs={replaced}
+                  onOpenReview={onOpenReview}
                   onShowDocument={(next) => askStore.set({ viewer: next })}
                   onHoverRow={setHovered}
                 />,
@@ -465,8 +513,12 @@ function AnswerNotes({ notes }: { notes: string[] }) {
 /** A row's cell on the document; no cell for a row that is a document itself (the list of documents). */
 type RowSource = { jobId: string; fieldId: string | null };
 
-function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onShowDocument, onHoverRow }: {
+function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onShowDocument, onHoverRow, attached, replacedJobs, onOpenReview }: {
   turn: Turn;
+  /** Images sent with this message: shown in it, their readings under the answer. */
+  attached: ChatReading[];
+  replacedJobs: Set<string>;
+  onOpenReview: (jobId: string) => void;
   latest: boolean;
   busy: boolean;
   viewer: AskViewer | null;
@@ -486,17 +538,31 @@ function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onS
     evidence: (result?.evidence ?? []).filter((item) => item.jobId === jobId && item.fieldId),
     focus,
   });
+  const isReplaced = (reading: ChatReading) => reading.jobId !== null && replacedJobs.has(reading.jobId);
+  const readingBusy = attached.some((reading) => ["classifying", "comparing", "starting"].includes(reading.state));
   const documentNameOf = (jobId: string) => result?.evidence.find((item) => item.jobId === jobId)?.documentName
     ?? result?.documents.find((item) => item.jobId === jobId)?.documentName ?? null;
   return (
     <>
       <div className={turn.request.replyTo ? "ask-msg user reply" : "ask-msg user"}>
+        {attached.length > 0 && (
+          <div className="ask-turn-images">
+            {attached.map((reading) => (
+              <span key={reading.id} className="ask-turn-image">
+                <ReadingImage reading={reading} replaced={isReplaced(reading)} />
+              </span>
+            ))}
+          </div>
+        )}
         <div className="ask-bubble">{turn.text}</div>
         {!turn.request.replyTo && turn.scope.length > 0 && <small className="ask-msg-meta">対象：{turn.scope.map((item) => item.label).join("、")}</small>}
       </div>
       <div className={`ask-msg bot${result ? ` ${result.state}` : ""}${turn.error ? (turn.errorCode === STOPPED ? " stopped" : " failed") : ""}${turn.pending ? " pending" : ""}`}>
-        <AiAvatar thinking={turn.pending} />
+        <AiAvatar thinking={turn.pending || readingBusy} />
         <div className="ask-bubble">
+          {turn.local && (
+            <div className="ask-answer-row"><Markdown className="ask-answer" text={turn.local} /></div>
+          )}
           {turn.pending && (
             <div className="ask-thinking" role="status" aria-label="回答を準備しています"><i /><i /><i /></div>
           )}
@@ -591,6 +657,15 @@ function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onS
               )}
             </>
           )}
+          {attached.length > 0 && (
+            <div className="ask-turn-readings">
+              {attached.map((reading) => (
+                <div key={reading.id} className="ask-turn-reading">
+                  <ReadingBody reading={reading} onOpenReview={onOpenReview} replaced={isReplaced(reading)} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         {/* このやり取りを会話から消す。消したものは以後の文脈に使わない。回答を待っている間は出さない（止めるのは送信ボタン）。 */}
         {!turn.pending && (
@@ -675,20 +750,26 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
 }) {
   const [loaded, setDocument] = useState<StructuredDocument | null>(documentCache.get(viewer.jobId) ?? null);
   // Never the previous document for the moment after a switch: the new one's preview starts fresh.
-  const document = loaded?.jobId === viewer.jobId ? loaded : documentCache.get(viewer.jobId) ?? null;
+  const fetched = loaded?.jobId === viewer.jobId ? loaded : documentCache.get(viewer.jobId) ?? null;
+  // A reading not confirmed yet shows its aligned sheet only.
+  const imageOnly = useMemo(() => viewer.image ? {
+    fields: [] as StructuredReading[],
+    pages: [{ pageId: null, pageNumber: 1, imageUrl: `/api/v1/jobs/${encodeURIComponent(viewer.jobId)}/artifacts/alignedSource` }],
+  } : null, [viewer.image, viewer.jobId]);
+  const document = imageOnly ?? fetched;
   const [failed, setFailed] = useState(false);
   const [appear] = useState(entrance);
   useEffect(() => {
     const cached = documentCache.get(viewer.jobId);
     setDocument(cached ?? null);
     setFailed(false);
-    if (cached) return;
+    if (cached || viewer.image) return;
     let stopped = false;
     void structuredClient.document(viewer.jobId)
       .then((value) => { documentCache.set(viewer.jobId, value); if (!stopped) setDocument(value); })
       .catch(() => { if (!stopped) setFailed(true); });
     return () => { stopped = true; };
-  }, [viewer.jobId]);
+  }, [viewer.image, viewer.jobId]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", close);
@@ -723,6 +804,7 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
   );
 }
 
+/** An image sent alone: its own message, and its own answer with the reading's progress. */
 function ReadingView({ reading, onOpenReview, replaced }: {
   reading: ChatReading;
   onOpenReview: (jobId: string) => void;
@@ -731,10 +813,21 @@ function ReadingView({ reading, onOpenReview, replaced }: {
 }) {
   const queue = useReadingQueue();
   const queued = reading.jobId ? queue.find((item) => item.jobId === reading.jobId) ?? null : null;
-  const preview = chatReadings.preview(reading.id);
-  const hasFile = chatReadings.hasFile(reading.id);
   const failed = reading.state === "failed" || (queued !== null && ["FAILED", "INTERRUPTED"].includes(queued.status));
-  // Sent to the reading queue while on screen (not restored as queued): the image is thrown into 「読み取り状況」.
+  return (
+    <>
+      <div className="ask-msg user image"><ReadingImage reading={reading} replaced={replaced} /></div>
+      <div className={`ask-msg bot reading${reading.state === "choosing" || reading.state === "continuing" ? " clarifying" : ""}${failed ? " failed" : ""}`}>
+        <AiAvatar thinking={["classifying", "comparing", "starting"].includes(reading.state)} />
+        <div className="ask-bubble"><ReadingBody reading={reading} onOpenReview={onOpenReview} replaced={replaced} /></div>
+      </div>
+    </>
+  );
+}
+
+/** The sent image; once its reading is in the queue (not restored as queued), a copy is thrown into 「読み取り状況」. */
+function ReadingImage({ reading, replaced }: { reading: ChatReading; replaced: boolean }) {
+  const preview = chatReadings.preview(reading.id);
   const imageRef = useRef<HTMLImageElement>(null);
   const shownState = useRef(reading.state);
   useEffect(() => {
@@ -743,18 +836,24 @@ function ReadingView({ reading, onOpenReview, replaced }: {
     }
     shownState.current = reading.state;
   }, [reading.state, replaced]);
+  return preview
+    ? <img ref={imageRef} className="ask-image" src={preview} alt={reading.fileName} draggable={false} data-reading-image={reading.id} />
+    : <div className="ask-bubble"><FiImage aria-hidden="true" /> {reading.fileName}</div>;
+}
+
+/** What the reading of a sent image is doing: the template guess, a question, its progress or its result. */
+function ReadingBody({ reading, onOpenReview, replaced }: {
+  reading: ChatReading;
+  onOpenReview: (jobId: string) => void;
+  replaced: boolean;
+}) {
+  const queue = useReadingQueue();
+  const queued = reading.jobId ? queue.find((item) => item.jobId === reading.jobId) ?? null : null;
+  const hasFile = chatReadings.hasFile(reading.id);
   return (
-    <>
-      <div className="ask-msg user image">
-        {preview
-          ? <img ref={imageRef} className="ask-image" src={preview} alt={reading.fileName} draggable={false} data-reading-image={reading.id} />
-          : <div className="ask-bubble"><FiImage aria-hidden="true" /> {reading.fileName}</div>}
-      </div>
-      <div className={`ask-msg bot reading${reading.state === "choosing" || reading.state === "continuing" ? " clarifying" : ""}${failed ? " failed" : ""}`}>
-        <AiAvatar thinking={["classifying", "comparing", "starting"].includes(reading.state)} />
-        <div className="ask-bubble">
+        <>
           {reading.state === "classifying" && <p className="ask-reading-status" role="status"><Spinner />どのテンプレートの書類か確かめています…</p>}
-          {reading.state === "comparing" && <p className="ask-reading-status" role="status"><Spinner />確定前の書類の続きかどうか確かめています…</p>}
+          {reading.state === "comparing" && <p className="ask-reading-status" role="status"><Spinner />前に読み取った書類の続きかどうか確かめています…</p>}
           {reading.state === "continuing" && reading.earlier && <ContinuationQuestion reading={reading} earlier={reading.earlier} />}
           {reading.state === "waiting" && reading.earlier && (
             <div className="ask-reading-waiting">
@@ -807,7 +906,7 @@ function ReadingView({ reading, onOpenReview, replaced }: {
           {reading.state === "queued" && !replaced && reading.outcome && reading.earlier && (
             <p className="ask-reading-origin">
               {reading.outcome === "continued"
-                ? `確定した「${reading.earlier.fileName}」の続き（次の版）として読み取ります。`
+                ? `「${reading.earlier.fileName}」の続きとして読み取ります。`
                 : `「${reading.earlier.fileName}」の読み取りを置き換えました。`}
             </p>
           )}
@@ -833,9 +932,7 @@ function ReadingView({ reading, onOpenReview, replaced }: {
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </>
+        </>
   );
 }
 
@@ -843,39 +940,75 @@ const EARLIER_STATUS: Record<string, string> = {
   CREATED: "受付中", QUEUED: "順番待ち", PROCESSING: "読み取り中", REVIEW_REQUIRED: "確認待ち",
 };
 
+// Readings whose earlier sheet was already put in the side panel by itself (once each, not after it is closed).
+const shownEarlier = new Set<string>();
+
+const CONTINUATION_OPTIONS = [
+  { key: "continue", title: "続きとして読み取る", recommended: true,
+    note: "前の書類を確定したあと、その次の版として読み取ります。前に確定した欄は引き継ぎ、空欄だった欄だけを読みます。" },
+  { key: "replace", title: "前の読み取りを置き換える", recommended: false,
+    note: "前の読み取り（確定前に直した内容も）を削除し、この画像を読み取ります。" },
+  { key: "separate", title: "別の書類として読み取る", recommended: false,
+    note: "前の読み取りはそのまま残します。" },
+] as const;
+
 /** Asks what to do with an image that looks like a later photo of a sheet sent but not confirmed yet. */
 function ContinuationQuestion({ reading, earlier }: { reading: ChatReading; earlier: NonNullable<ChatReading["earlier"]> }) {
   const [thumbFailed, setThumbFailed] = useState(false);
-  const thumb = earlier.status === "REVIEW_REQUIRED" && !thumbFailed
+  const viewable = earlier.status === "REVIEW_REQUIRED";
+  const thumb = viewable && !thumbFailed
     ? `/api/v1/jobs/${encodeURIComponent(earlier.jobId)}/artifacts/alignedSource/thumbnail?width=240`
     : null;
+  const showing = useSyncExternalStore(askStore.subscribe, () => askStore.getSnapshot().viewer?.jobId === earlier.jobId);
+  const show = () => askStore.set({ viewer: { jobId: earlier.jobId, documentName: earlier.fileName, evidence: [], focus: null, image: true } });
+  useEffect(() => {
+    // The earlier sheet opens beside the question by itself, so the two can be compared (not over the chat on a narrow screen).
+    if (!viewable || shownEarlier.has(reading.id) || window.matchMedia("(max-width: 900px)").matches) return;
+    shownEarlier.add(reading.id);
+    show();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reading.id, viewable]);
+  const choose = (key: typeof CONTINUATION_OPTIONS[number]["key"]) => {
+    if (key === "continue") chatReadings.continueEarlier(reading.id);
+    else if (key === "replace") void chatReadings.replaceEarlier(reading.id);
+    else chatReadings.readSeparately(reading.id);
+  };
+  const card = (
+    <>
+      {thumb
+        ? <img src={thumb} alt="" loading="lazy" draggable={false} onError={() => setThumbFailed(true)} />
+        : <span className="ask-continuation-thumb" aria-hidden="true"><FiFileText /></span>}
+      <span><b>{earlier.fileName}</b><small>{earlier.templateName}・{EARLIER_STATUS[earlier.status] ?? "確定前"}</small></span>
+    </>
+  );
   return (
     <div className="ask-continuation">
-      <p className="ask-answer">
-        この画像は、読み取り状況にある<strong>確定前の「{earlier.fileName}」</strong>と同じ書類のようです（{EARLIER_STATUS[earlier.status] ?? "確定前"}）。どうしますか？
-      </p>
-      <div className="ask-continuation-earlier">
-        {thumb
-          ? <img src={thumb} alt="" loading="lazy" draggable={false} onError={() => setThumbFailed(true)} />
-          : <span className="ask-continuation-thumb" aria-hidden="true"><FiFileText /></span>}
-        <span><b>{earlier.fileName}</b><small>{earlier.templateName}・{EARLIER_STATUS[earlier.status] ?? "確定前"}</small></span>
-      </div>
+      <p className="ask-answer">この画像は前に読み取ったものと同じ書類のようです。</p>
+      {viewable
+        ? <button type="button" className={`ask-continuation-earlier is-viewable${showing ? " is-showing" : ""}`}
+            onClick={show} title="右に表示">{card}</button>
+        : <div className="ask-continuation-earlier">{card}</div>}
       <div className="ask-continuation-options" role="group" aria-label="この画像の扱い">
-        <button type="button" className="ask-continuation-option is-recommended" onClick={() => chatReadings.continueEarlier(reading.id)}>
-          <b>続きとして読み取る</b>
-          <small>前の書類を確定したあと、その次の版として読み取ります。前に確定した欄は引き継ぎ、空欄だった欄だけを読みます。</small>
-        </button>
-        <button type="button" className="ask-continuation-option" onClick={() => void chatReadings.replaceEarlier(reading.id)}>
-          <b>前の読み取りを置き換える</b>
-          <small>前の読み取り（確定前に直した内容も）を削除し、この画像を読み取ります。</small>
-        </button>
-        <button type="button" className="ask-continuation-option" onClick={() => chatReadings.readSeparately(reading.id)}>
-          <b>別の書類として読み取る</b>
-          <small>前の読み取りはそのまま残します。</small>
-        </button>
+        {CONTINUATION_OPTIONS.map(({ note: plain, ...option }) => {
+          // A confirmed document matched too: a reading made instead of the earlier one updates it.
+          const note = reading.confirmed && option.key !== "continue"
+            ? `${plain}確定済みの「${reading.confirmed.label}」の次の版として読み取ります。`
+            : plain;
+          return (
+          <button key={option.key} type="button" aria-label={`${option.title}。${note}`}
+            className={`ask-continuation-option${option.recommended ? " is-recommended" : ""}`}
+            onClick={() => choose(option.key)}>
+            <b>{option.title}</b>
+            <span className="ask-info ask-option-info" aria-hidden="true">
+              <span className="ask-info-button"><FiInfo /></span>
+              <span className="ask-info-pop">{note}</span>
+            </span>
+          </button>
+          );
+        })}
       </div>
       {reading.error && <p role="alert" className="ask-reading-error"><FiAlertTriangle aria-hidden="true" />{reading.error}</p>}
-      <div><button type="button" className="link-button" onClick={() => chatReadings.dismiss(reading.id)}>キャンセル（読み取らない）</button></div>
+      <div className="ask-continuation-cancel"><button type="button" className="link-button" onClick={() => chatReadings.dismiss(reading.id)}>キャンセル（読み取らない）</button></div>
     </div>
   );
 }
@@ -894,7 +1027,7 @@ function QueuedStatus({ reading, status, progress, error, onOpenReview }: {
       <div className="ask-reading-done">
         <p className="ask-answer">
           {status !== "CONFIRMED" && <FiCheck aria-hidden="true" />}
-          {status === "CONFIRMED" ? `${name}で読み取り、確定済みです。` : `${name}で読み取りました。右上の「読み取り状況」から確認できます。`}
+          {status === "CONFIRMED" ? `${name}で読み取り、確定済みです。` : `${name}で読み取りました。`}
         </p>
         {reading.jobId && (
           <button type="button" className="secondary compact" onClick={() => onOpenReview(reading.jobId!)}>
@@ -910,7 +1043,7 @@ function QueuedStatus({ reading, status, progress, error, onOpenReview }: {
   }
   return (
     <p className="ask-reading-status" role="status">
-      <Spinner />{name}で読み取っています{progress > 0 ? `（${progress}%）` : "（順番待ち）"}。終わると右上の「読み取り状況」に入ります。
+      <Spinner />{name}で読み取っています{progress > 0 ? `（${progress}%）` : "（順番待ち）"}
     </p>
   );
 }
@@ -918,6 +1051,12 @@ function QueuedStatus({ reading, status, progress, error, onOpenReview }: {
 /** The assistant's mark: the app's "文" on an ink-blue tile, ringed while it is working. */
 function AiAvatar({ thinking }: { thinking: boolean }) {
   return <span className={thinking ? "ask-avatar thinking" : "ask-avatar"} aria-hidden="true"><b>文</b></span>;
+}
+
+/** Text sent with images that only asks for them to be read (no question about the documents). */
+function asksToRead(text: string): boolean {
+  return /読み?取|よみと|読んで|よんで|読み?込|取り?込|とりこ|ＯＣＲ|OCR|スキャン/i.test(text)
+    && !/[?？]|何|なに|いくら|いくつ|どれ|どこ|だれ|誰|いつ|教えて|合計|平均/.test(text);
 }
 
 /** The welcome line follows the time of day. */
@@ -939,7 +1078,8 @@ function historyGroup(updatedAt: number, now: Date): string {
   return "それ以前";
 }
 
-function HistorySidebar({ history, currentId, busy, onClose, onNew, onOpen, onRemove }: {
+function HistorySidebar({ open, history, currentId, busy, onClose, onNew, onOpen, onRemove }: {
+  open: boolean;
   onClose: () => void;
   history: Conversation[];
   currentId: string;
@@ -957,7 +1097,7 @@ function HistorySidebar({ history, currentId, busy, onClose, onNew, onOpen, onRe
     else groups.push({ name, items: [item] });
   }
   return (
-    <nav className="ask-history" aria-label="会話の履歴">
+    <nav className="ask-history" aria-label="会話の履歴" inert={!open}>
       <button type="button" className="ask-icon-button ask-history-close" aria-label="履歴を閉じる" title="履歴を閉じる" onClick={onClose}>
         <FiSidebar aria-hidden="true" />
       </button>

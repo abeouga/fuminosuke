@@ -45,10 +45,12 @@ def create_database_engine(settings: DatabaseSettings) -> Engine:
     if make_url(settings.url).get_backend_name() == "sqlite":
         return create_sqlite_engine(settings)
     if make_url(settings.url).drivername != "postgresql+psycopg" or not settings.schema_name:
-        raise ValueError("PostgreSQL requires psycopg and an explicit tenant schema")
+        raise ValueError("PostgreSQL requires psycopg and an explicit schema")
+    # UTC keeps stored times meaning what the SQLite rows (naive UTC) meant.
     return create_engine(
         settings.url, pool_size=2, max_overflow=1, pool_pre_ping=True, pool_recycle=300,
-        connect_args={"options": f"-c search_path={settings.schema_name} -c lock_timeout=10000"},
+        connect_args={"options": f"-c search_path={settings.schema_name} -c lock_timeout=10000"
+                                 " -c timezone=UTC"},
     )
 
 

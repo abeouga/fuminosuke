@@ -1,12 +1,14 @@
 import { useSyncExternalStore } from "react";
 import { api, ApiError, createIdempotencyKey, type TemplateClassification } from "../api";
 import { readingQueue, syncReadingQueue } from "../readingQueue";
+import { findConfirmedMatch } from "../confirmedMatch";
 
 // Images put into the chat: first attached to the message box, sent with the send button. The server
 // then guesses the template, the user picks one only when it is unsure, and the reading is sent to the
 // reading queue (the review screen is never opened for them). When a sent but not yet confirmed reading
 // of the same template looks like an earlier photo of the same sheet, the user is asked first whether
-// the new photo continues it, replaces it or is another document.
+// the new photo continues it, replaces it or is another document. Otherwise, when it looks like a later
+// photo of a confirmed document of the same template, it is read as that document's next version.
 
 export type ChatCandidate = TemplateClassification["candidates"][number];
 
@@ -24,6 +26,8 @@ export type ChatReading = {
   id: string;
   /** The chat turn this image was added after (null: before any turn). */
   afterTurnId: number | null;
+  /** The turn sent together with this image (its text): shown in that turn's message and answer. */
+  turnId?: number | null;
   /** Images sent together are never asked about one another. */
   batch: string;
   fileName: string;
@@ -36,6 +40,8 @@ export type ChatReading = {
   templateName: string | null;
   /** The earlier reading it was compared with (asked about, waited for, or replaced). */
   earlier: EarlierReading | null;
+  /** The confirmed document it is a later photo of, found while the earlier reading is asked about. */
+  confirmed?: { jobId: string; label: string } | null;
   /** How it was finally sent: as the update of the earlier reading, or replacing it. */
   outcome: "continued" | "replaced" | null;
   jobId: string | null;
@@ -122,37 +128,65 @@ async function start(id: string, candidate: ChatCandidate, predecessorJobId?: st
   }
 }
 
-/** Starts the reading, unless an unconfirmed earlier reading looks like the same sheet: then asks. */
+type Match = Awaited<ReturnType<typeof findConfirmedMatch>>;
+
+function confirmedMatch(file: File, candidate: ChatCandidate): Promise<Match> {
+  // The comparison is only a convenience: without it the image is read as its own document.
+  return findConfirmedMatch(file, candidate.templateVersionId).catch(() => null);
+}
+
+/** Starts the reading, as the next version of the confirmed document it matched, if any. */
+function startAsUpdate(id: string, candidate: ChatCandidate, match: Match) {
+  if (!find(id)) return;
+  if (!match) return start(id, candidate);
+  patch(id, {
+    outcome: "continued",
+    earlier: {
+      jobId: match.jobId, fileName: match.label, templateName: candidate.templateName,
+      status: "CONFIRMED", predecessorJobId: null,
+    },
+  });
+  return start(id, candidate, match.jobId);
+}
+
+/**
+ * Starts the reading, unless an unconfirmed earlier reading looks like the same sheet: then asks.
+ * The confirmed documents are compared at the same time: a later photo of one is read as its next
+ * version (also when the earlier reading is replaced or kept apart).
+ */
 async function proceed(id: string, candidate: ChatCandidate) {
   const reading = find(id);
   const file = files.get(id);
   if (!reading || !file) return start(id, candidate);
+  patch(id, { state: "comparing", template: candidate, templateName: candidate.templateName, error: null, confirmed: null });
+  const confirmed = confirmedMatch(file, candidate);
   const sameBatch = new Set(readings.filter((item) => item.batch === reading.batch && item.jobId).map((item) => item.jobId));
   const pick = () => readingQueue.unconfirmed(candidate.templateId, candidate.templateName)
     .filter((item) => !sameBatch.has(item.jobId));
-  if (pick().length === 0) return start(id, candidate);
-  patch(id, { state: "comparing", template: candidate, templateName: candidate.templateName, error: null });
+  if (pick().length === 0) return startAsUpdate(id, candidate, await confirmed);
   try {
     // A reading confirmed in another tab is no longer "before confirmation".
     await syncReadingQueue(pick().map((item) => item.jobId));
     const queued = pick();
-    if (queued.length === 0) return start(id, candidate);
+    if (queued.length === 0) return startAsUpdate(id, candidate, await confirmed);
     const result = await api.compareContinuations(file, queued.map((item) => item.jobId));
     const best = result.items
       .filter((item) => item.continuation)
       .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))[0];
     const earlier = best ? queued.find((item) => item.jobId === best.jobId) : undefined;
-    if (!earlier || !find(id)) return start(id, candidate);
+    const match = await confirmed;
+    if (!find(id)) return;
+    if (!earlier) return startAsUpdate(id, candidate, match);
     patch(id, {
       state: "continuing",
+      confirmed: match && { jobId: match.jobId, label: match.label },
       earlier: {
         jobId: earlier.jobId, fileName: earlier.fileName, templateName: earlier.templateName,
         status: earlier.status, predecessorJobId: earlier.predecessorJobId ?? null,
       },
     });
   } catch {
-    // The comparison is only a convenience: without it the image is read as its own document.
-    if (find(id)) await start(id, candidate);
+    if (find(id)) await startAsUpdate(id, candidate, await confirmed);
   }
 }
 
@@ -251,12 +285,15 @@ export const chatReadings = {
     notify();
   },
 
-  /** Sends the attached images: each is classified and read (or asked about). */
-  send(afterTurnId: number | null) {
+  /**
+   * Sends the attached images: each is classified and read (or asked about). With `turnId` they belong
+   * to the message sent with them, and their reading is shown under that message's answer.
+   */
+  send(afterTurnId: number | null, turnId: number | null = null) {
     if (attachments.length === 0) return 0;
     const batch = createIdempotencyKey("ocr").slice(4);
     const sent = attachments.map((item): ChatReading => ({
-      id: item.id, afterTurnId, batch, fileName: item.fileName, state: "classifying", candidates: [], matched: false,
+      id: item.id, afterTurnId, turnId, batch, fileName: item.fileName, state: "classifying", candidates: [], matched: false,
       template: null, templateName: null, earlier: null, outcome: null, jobId: null, error: null,
       key: createIdempotencyKey("ocr"),
     }));
@@ -307,27 +344,36 @@ export const chatReadings = {
     }
     readingQueue.remove(earlier.jobId);
     patch(id, { outcome: "replaced" });
-    await start(id, template, earlier.predecessorJobId ?? undefined);
+    await start(id, template, earlier.predecessorJobId ?? reading.confirmed?.jobId ?? undefined);
   },
 
   /** Reads it as a document of its own, leaving the earlier reading as it is. */
   readSeparately(id: string) {
     const reading = find(id);
     if ((reading?.state !== "continuing" && reading?.state !== "waiting") || !reading.template) return;
-    void start(id, reading.template);
+    const { confirmed } = reading;
+    void startAsUpdate(id, reading.template, confirmed ? { ...confirmed, seriesVersion: 0, similarity: 0 } : null);
   },
 
   /** Retries a failed image: the template guess again, or the start with the template already picked. */
   retry(id: string) {
     const reading = find(id);
     if (!reading || reading.state !== "failed" || !files.has(id)) return;
-    patch(id, { state: "classifying", error: null, earlier: null, outcome: null });
+    patch(id, { state: "classifying", error: null, earlier: null, outcome: null, confirmed: null });
     void classify(id);
   },
 
   dismiss(id: string) {
     release(id);
     update(readings.filter((reading) => reading.id !== id));
+  },
+
+  /** Forgets the images sent with a turn removed from the conversation (their readings go on). */
+  dismissTurn(turnId: number) {
+    const gone = readings.filter((reading) => reading.turnId === turnId);
+    if (gone.length === 0) return;
+    gone.forEach((reading) => release(reading.id));
+    update(readings.filter((reading) => reading.turnId !== turnId));
   },
 
   hasFile: (id: string) => files.has(id),

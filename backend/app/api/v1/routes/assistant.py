@@ -22,13 +22,14 @@ from app.assistant.contracts import (
 from app.assistant.operations import refused
 from app.assistant.service import AssistantService
 from app.assistant.voice_service import VoiceService
+from app.core.config import local_host
 
 
 def local_request(request: Request) -> None:
     if getattr(request.app.state, "cloud_authenticated", False):
         return
     origin = request.headers.get("origin")
-    if request.url.hostname not in {"127.0.0.1", "localhost", "::1"} or (
+    if not local_host(request.url.hostname) or (
         origin is not None and origin not in get_app_settings(request).app.frontend_origins
     ):
         raise refused(

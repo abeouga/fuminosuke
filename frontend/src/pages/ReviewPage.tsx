@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FiArrowLeft, FiArrowRight, FiCheck, FiEdit2, FiEdit3, FiFileText, FiSave } from "react-icons/fi";
+import { isPhoneDevice } from "../hooks/usePhoneDevice";
+import { FiArrowLeft, FiArrowRight, FiCheck, FiEdit2, FiEdit3, FiFileText, FiRefreshCw, FiSave } from "react-icons/fi";
 import { ApiError, api } from "../api";
 import { AssistantPanel } from "../assistant/AssistantPanel";
 import { EditingControls } from "../editing/EditingControls";
@@ -18,6 +19,8 @@ import { onItemJoinsSaved, openItemJoinEditor } from "../components/TemplateItem
 import { showToast } from "../components/Toast";
 import { Spinner } from "../components/Spinner";
 import { restoreAfterLeaving } from "../reviewLeave";
+import { DiscardReading } from "../components/DiscardReading";
+import { ReviewPresenceDialog, useReviewPresence } from "../components/ReviewPresence";
 import { ReviewAiDragProvider, type AiAttachment, type AiDragData } from "../components/ReviewAiDrag";
 import { ReviewFormActions, ReviewFormReveal, ReviewFormView, ReviewViewSwitch, readStoredReviewView, reducedMotion, storeReviewView, type ReviewView } from "../components/ReviewFormView";
 export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
@@ -36,6 +39,8 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     templateNames?: Record<string, string>;
 }) {
     const [result, setResult] = useState<OcrResult | null>(null), [draft, setDraft] = useState<OcrDocument | null>(null);
+    // A phone shows the identity check with shorter wording.
+    const phone = isPhoneDevice();
     const [artifacts, setArtifacts] = useState<Artifact[]>([]), [identities, setIdentities] = useState<DocumentIdentity[]>([]);
     const [identityChecked, setIdentityChecked] = useState(!requireIdentityConfirmation), [contextError, setContextError] = useState(false);
     const [name, setName] = useState(""), [selected, setSelected] = useState<string | null>(initialSelectedPath);
@@ -200,7 +205,12 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     }, [dirty, inlineDirty, busy, saving, assistantApplying, conflict, onNavigationGuardChange]);
     // A re-edit left without confirming goes back to the confirmed version, so the document stays on
     // the shelf. Without any change this happens silently, also when leaving by the side menu.
-    const reopenedUnchanged = Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
+    // Another screen (another tab, the phone…) with this reading open is told before anything changes.
+    const presence = useReviewPresence(jobId, Boolean(result && !result.confirmed && !paged), () => setLoadAttempt(value => value + 1));
+    const elsewhere = presence.state === "other" || presence.state === "lost";
+    const presenceDialog = <ReviewPresenceDialog presence={presence} closeLabel={closeLabel} onClose={() => onClose(true)}/>;
+    // A screen that is not the one editing never puts back a re-edit the other screen is making.
+    const reopenedUnchanged = !elsewhere && Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
         && !dirty && !inlineDirty && !busy && !saving && !assistantApplying && !conflict);
     const leaveState = useRef({ reopenedUnchanged, revision: result?.revision ?? 0 });
     leaveState.current = { reopenedUnchanged, revision: result?.revision ?? 0 };
@@ -247,6 +257,8 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     }, [series, entries]);
     // An update of a confirmed document (not a re-edit of one): the screen is 「書類の更新」.
     const isUpdate = Boolean(series) && !result?.reopened;
+    // A confirmed document being edited again is not discarded here (leaving restores it instead).
+    const canDiscard = Boolean(result && !result.confirmed && !result.reopened);
     // An update keeps the earlier version's name: the field shows it, greyed out, and confirming sends it.
     const fixedName = isUpdate ? series?.predecessorDocumentName?.trim() || null : null;
     const sentName = (fixedName ?? name).trim();
@@ -454,7 +466,8 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
             <button className="ghost" onClick={() => onClose()}><FiArrowLeft />{closeLabel}</button></section>;
     if (!identityChecked && !result.confirmed)
         return <div className="page-stack identity-confirm-page">
-    <header className="page-header split has-back"><button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">{isUpdate ? "書類の更新" : "書類の確認"}</span><h1>この読み取りはあっていますか？</h1></div></header>
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">{isUpdate ? "書類の更新" : "書類の確認"}</span><h1>この読み取りはあっていますか？</h1></div>
+      {canDiscard && <div className="page-actions"><DiscardReading jobId={jobId} disabled={busy || saving} onDiscarded={() => onClose(true)}/></div>}</header>
     <aside className="identity-template-card">
       <span className="identity-template-thumb">{fullImage ? <img src={fullImage.replace(/(\/artifacts\/[^/?]+)/, "$1/thumbnail")} alt="" decoding="async" onError={event => { event.currentTarget.hidden = true; }}/> : null}<FiFileText aria-hidden="true"/></span>
       <span className="identity-template-text"><small>使用テンプレート</small><strong>{templateNames[result.result.templateId] ?? "読み取り時のテンプレート"}</strong></span>
@@ -469,7 +482,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
                         setContextError(true);
                     }
                 }}>再取得</button></aside> : <section className="identity-confirm-grid">
-      {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><h2>「{field.label}」はこの内容ですか？</h2></header>
+      {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><h2>{phone ? field.label : `「${field.label}」はこの内容ですか？`}</h2></header>
         <div className="identity-confirm-preview"><img src={previews.find(preview => preview.mappingId === field.mappingId)?.artifactUrl} alt={`${field.label}の読み取り範囲`}/></div>
         {series && (() => {
             const previous = series.predecessorIdentity.find(item => item.targetPath === field.targetPath);
@@ -503,18 +516,26 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
       <label className="identity-agree"><input type="checkbox" checked={identityAgreed} onChange={event => setIdentityAgreed(event.target.checked)}/><FiCheck aria-hidden="true"/>確認しました</label>
       <button className="primary" disabled={!identityAgreed || busy || saving || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}>次へ<FiArrowRight /></button>
     </div>
+    {presenceDialog}
   </div>;
-    return <ReviewDraftBoundary key={recoveryDiscardEpoch} onDirtyChange={setInlineDirty}><div ref={reviewRoot} className="page-stack review-page">
-    <header className="page-header split has-back"><button className="ghost page-back" disabled={assistantApplying || busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div><h1>{result.confirmed ? "確定済みの読み取り結果" : isUpdate ? "書類の更新" : "読み取り結果の確認・修正"}</h1></div>
-<div className="page-actions review-header-actions">
-      {result.confirmed ? <><span className="review-confirmed-name" title={result.documentName}>{result.documentName}</span><button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
-      <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />{isUpdate ? "更新を保存" : "修正を保存"}</button>
-      {/* The document name sits right beside 「内容を確定する」, which needs it. */}
+    // The document name sits right beside 「内容を確定する」, which needs it. A phone keeps both in a bar above the tabs.
+    const nameAndConfirm = <>
       <label className={`document-name-field${nameWanted && !sentName ? " is-wanted" : ""}${fixedName ? " is-fixed" : ""}`} title={fixedName ? "書類の更新では、前の版の書類名をそのまま使います" : undefined}><span>書類名</span><input key={nameWanted} ref={nameInput} value={fixedName ?? name} maxLength={180} disabled={locked || Boolean(fixedName)} readOnly={Boolean(fixedName)} placeholder="書類名を入力" onChange={event => setName(event.target.value)}/></label><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => {
         // Without a name the name field glows and takes the focus instead of opening the dialog.
         if (!sentName) { setNameWanted(value => value + 1); return; }
         setConfirmDialog(true);
-      }}><FiCheck />内容を確定する</button></>}</div></header>
+      }}><FiCheck />内容を確定する</button></>;
+    return <ReviewDraftBoundary key={recoveryDiscardEpoch} onDirtyChange={setInlineDirty}><div ref={reviewRoot} className="page-stack review-page">
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={assistantApplying || busy} onClick={leave}><FiArrowLeft />{phone ? "戻る" : closeLabel}</button><div><h1>{result.confirmed ? (phone ? result.documentName : "確定済みの読み取り結果") : isUpdate ? "書類の更新" : phone ? "読み取りの確認" : "読み取り結果の確認・修正"}</h1></div>
+<div className="page-actions review-header-actions">
+      {result.confirmed ? <>{!phone && <span className="review-confirmed-name" title={result.documentName}>{result.documentName}</span>}<button className="secondary" disabled={busy} onClick={() => void reopen()}><FiEdit3 />再編集</button><ExcelExportActions jobId={jobId} documentName={result.documentName}/></> : <>
+      {canDiscard && <DiscardReading jobId={jobId} disabled={busy || saving || assistantApplying} onDiscarded={() => onClose(true)}/>}
+      {/* Edits are saved by themselves; a button only when that stopped (it failed) or cannot run (editing API off). */}
+      {editingEnabled && assistantSaveError
+        ? <button className="secondary review-save-retry" disabled={locked || inlineDirty || saving} title={assistantSaveError} onClick={() => void save()}>{saving ? <Spinner /> : <FiRefreshCw />}もう一度保存</button>
+        : editingEnabled === false && <button className="secondary" disabled={locked || inlineDirty || !dirty} onClick={() => void save()}><FiSave />{isUpdate ? "更新を保存" : "修正を保存"}</button>}
+      {phone ? null : nameAndConfirm}</>}</div></header>
+    {phone && !result.confirmed && <div className="review-phone-bar">{nameAndConfirm}</div>}
     {conflict && <aside className="error-box"><strong>入力を保持しています</strong><p>最新結果を確認してから、退避した入力を復元できます。</p>
       <button className="secondary" onClick={async () => { const latest = await api.result(jobId); setConflict(current => current ? { ...current, latest } : current); accept(latest); }}>最新結果を表示</button>
       <button className="secondary" disabled={!conflict.latest || conflict.latest.confirmed || busy} onClick={async () => {
@@ -626,6 +647,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     {leaveDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="leave-title"><h2 id="leave-title">確定しないで戻りますか？</h2><p>再編集で変えた内容は、まだ確定されていません。確定済みの内容に戻すと、ライブラリには前の内容のまま残ります。再編集中のままにすると、確定するまでライブラリに表示されません。</p><div className="page-actions"><button className="secondary" disabled={busy} onClick={() => setLeaveDialog(false)}>編集を続ける</button><button className="secondary" disabled={busy} onClick={() => { setLeaveDialog(false); onClose(); }}>再編集中のまま戻る</button><button className="primary" disabled={busy || saving} onClick={() => void restoreConfirmed()}>{busy ? <Spinner /> : null}確定済みの内容に戻す</button></div></section></div>}
     {confirmDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">結果を確定しますか？</h2><p>確定することで、この内容がチャットで使えます。</p><div className="page-actions"><button className="secondary" onClick={() => setConfirmDialog(false)}>確認を続ける</button><button className="primary" onClick={() => void confirm()}><FiCheck />確定する</button></div></section></div>}
     {busy && <div className="review-confirm-loading-overlay" role="status"><div className="review-confirm-loading-card"><span className="review-confirm-loading-spinner"/><strong>保存状態を更新しています</strong></div></div>}
+    {presenceDialog}
   </div></ReviewDraftBoundary>;
 }
 type ReadingPathPair = {

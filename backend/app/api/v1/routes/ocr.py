@@ -84,6 +84,17 @@ class OcrReopenRequest(ApiModel):
     base_revision: int = Field(ge=1, strict=True)
 
 
+class ReviewPresenceRequest(ApiModel):
+    model_config = ConfigDict(extra="forbid")
+    viewer_id: str = Field(min_length=8, max_length=64)
+    take_over: bool = False
+
+
+class ReviewPresenceResponse(ApiModel):
+    held: bool
+    other_since: datetime | None = None
+
+
 class OcrConfirmationRequest(ApiModel):
     model_config = ConfigDict(extra="forbid")
     base_revision: int = Field(ge=1)
@@ -153,7 +164,7 @@ async def classify_template(
 async def compare_document_continuations(
     request: Request,
     file: Annotated[UploadFile, File()],
-    job_ids: Annotated[str, Form(alias="jobIds", min_length=1, max_length=400)],
+    job_ids: Annotated[str, Form(alias="jobIds", min_length=1, max_length=1000)],
 ) -> dict[str, Any]:
     """Whether this image is a later photo of the given readings' sheets (nothing is stored)."""
     from app.services.document_continuation_service import DocumentContinuationService
@@ -242,6 +253,33 @@ def save_ocr_corrections(request: Request, job_id: str, body: OcrCorrectionReque
     return get_ocr_result_service(request).correct(
         job_id, CorrectionValues(body.base_revision, body.fields, body.review_items)
     )
+
+
+@router.post(
+    "/ocr-jobs/{job_id}/review-presence",
+    response_model=ReviewPresenceResponse,
+    response_model_by_alias=True,
+)
+def claim_review_presence(request: Request, job_id: str, body: ReviewPresenceRequest):
+    """Tell a review screen whether another screen has this reading open (notice only)."""
+    from datetime import UTC
+
+    from app.services import review_presence
+
+    get_job_service(request).get(job_id)
+    presence = review_presence.claim(job_id, body.viewer_id, body.take_over)
+    since = presence.other_since
+    return ReviewPresenceResponse(
+        held=presence.held,
+        other_since=datetime.fromtimestamp(since, UTC) if since is not None else None,
+    )
+
+
+@router.post("/ocr-jobs/{job_id}/review-presence/release", status_code=204)
+def release_review_presence(job_id: str, body: ReviewPresenceRequest):
+    from app.services import review_presence
+
+    review_presence.release(job_id, body.viewer_id)
 
 
 @router.post(

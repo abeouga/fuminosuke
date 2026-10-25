@@ -21,7 +21,7 @@ from app.ai.api_budget import ApiBudget
 from app.ai.realtime_transcription import transcription_config, upstream_connection
 from app.api.v2.voice_contracts import Begin, Control, End, SegmentBegin, SegmentEnd
 from app.assistant.stream_models import VoiceStream
-from app.core.config import Settings
+from app.core.config import Settings, local_host
 from app.core.errors import AppError
 from app.db.models import utc_now
 from app.editing.domain.utterance import (
@@ -484,7 +484,7 @@ class VoiceConnections:
         try:
             if (
                 (not getattr(socket.app.state, "cloud_authenticated", False)
-                 and socket.url.hostname not in {"127.0.0.1", "localhost", "::1"})
+                 and not local_host(socket.url.hostname))
                 or socket.headers.get("origin") not in self.settings.app.frontend_origins
             ):
                 await socket.close(code=1008)

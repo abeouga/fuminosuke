@@ -138,6 +138,11 @@ class Registry:
         with self.connect() as db:
             return [str(row[0]) for row in db.execute("SELECT tenant_id FROM users WHERE active=1")]
 
+    def subject(self, tenant: str) -> str:
+        with self.connect() as db:
+            row = db.execute("SELECT subject FROM users WHERE tenant_id=?", (tenant,)).fetchone()
+        return str(row[0]) if row else ""
+
     def require_active(self, tenant: str) -> None:
         with self.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE tenant_id=? AND active=1",

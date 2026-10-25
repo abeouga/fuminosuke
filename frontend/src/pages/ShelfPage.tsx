@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { displayOrders, joinByPath, joinedText, sortBlocks, sortByOrder, type ItemJoin } from "../itemJoins";
 import { onItemJoinsSaved } from "../components/TemplateItemJoinEditor";
-import { FiArrowLeft, FiCheck, FiCheckSquare, FiDownload, FiEdit3, FiExternalLink, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiX } from "react-icons/fi";
+import { FiArrowLeft, FiCheck, FiCheckSquare, FiDownload, FiEdit3, FiFileText, FiFolder, FiMinus, FiPlus, FiRefreshCw, FiSearch, FiTrash2, FiX } from "react-icons/fi";
 import { showToast } from "../components/Toast";
 import { api } from "../api";
 import { ExcelExportActions } from "../components/ExcelExportActions";
@@ -174,6 +174,10 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
           </span>
           <h2>閲覧する書類のテンプレートを選ぶ</h2>
         </div>}
+        {selected && <div className="shelf-main-head">
+          <button type="button" className="ghost compact shelf-up" onClick={() => show({ ...selection, jobId: null })}>
+            <FiArrowLeft aria-hidden="true" />{query ? "検索結果" : folderName(selected)}</button>
+        </div>}
         {heading && <div className="shelf-main-head">
           {!query && <button type="button" className="ghost compact shelf-up" onClick={() => show({ templateId: null, jobId: null, query: "" })}>
             <FiArrowLeft aria-hidden="true" />一覧</button>}
@@ -190,7 +194,7 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
                 <FiTrash2 aria-hidden="true" />削除</button>
               <button type="button" className="secondary compact" onClick={() => { setChoosing(false); setChosen(new Set()); }}>キャンセル</button>
             </>
-            : <button type="button" className="secondary compact" onClick={() => setChoosing(true)}><FiCheckSquare aria-hidden="true" />選択</button>}
+            : <button type="button" className="secondary compact shelf-choose" onClick={() => setChoosing(true)}><FiCheckSquare aria-hidden="true" />選択</button>}
         </div>}
         <label className="shelf-search">
           <FiSearch aria-hidden="true" />
@@ -214,8 +218,6 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
       {selected
         ? <DocumentView key={selected.jobId} summary={selected} folderName={folderName(selected)}
           detail={detail?.jobId === selected.jobId ? detail : { jobId: selected.jobId }}
-          backLabel={query ? "検索結果" : folderName(selected)}
-          onBack={() => show({ ...selection, jobId: null })}
           onRetry={() => setRetry((n) => n + 1)} onOpenReview={onOpenReview} />
         : !listing
           ? <section aria-label="書類の種類">
@@ -227,7 +229,7 @@ export function ShelfPage({ templateNames, selection, onSelectionChange, onOpenR
           </section>
           : <section aria-label="書類">
             {listed.length === 0 && <p className="shelf-empty">一致する書類はありません。</p>}
-            <ul className={`shelf-grid${query ? "" : " is-rising"}`}>
+            <ul className={`shelf-list${query ? "" : " is-rising"}`}>
               {listed.map((doc, index) => <li key={doc.jobId} style={{ "--rise-index": Math.min(index, 12) } as CSSProperties}>
                 <DocumentCard doc={doc} caption={query ? folderName(doc) : identityLine(doc)}
                   choosing={choosing} chosen={chosen.has(doc.jobId)}
@@ -271,25 +273,26 @@ function FolderCard({ folder, onOpen }: { folder: Folder; onOpen: () => void }) 
   </button>;
 }
 
+/** A document inside a template: a wide row (small thumbnail, name, date), so the list reads differently from the template cards. */
 function DocumentCard({ doc, caption, choosing, chosen, onOpen }: { doc: DocumentSummary; caption: string; choosing: boolean; chosen: boolean; onOpen: () => void }) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  return <button type="button" className={`shelf-card${choosing ? " choosing" : ""}${chosen ? " chosen" : ""}`} onClick={onOpen}
+  return <button type="button" className={`shelf-row${choosing ? " choosing" : ""}${chosen ? " chosen" : ""}`} onClick={onOpen}
     {...(choosing ? { role: "checkbox", "aria-checked": chosen } : {})}>
-    <span className="shelf-card-thumb">
+    {choosing && <span className="shelf-row-check" aria-hidden="true">{chosen && <FiCheck />}</span>}
+    <span className="shelf-row-thumb">
       {doc.thumbnailUrl && !failed
         ? <>{!loaded && <ImageSpinner />}<img src={doc.thumbnailUrl} alt="" loading="lazy" decoding="async" draggable={false} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} /></>
         : <FiFileText aria-hidden="true" />}
-      {doc.kind === "paged" && <span className="shelf-card-badge">複数ページ</span>}
-      {choosing && <span className="shelf-card-check" aria-hidden="true">{chosen && <FiCheck />}</span>}
     </span>
-    <span className="shelf-card-body">
+    <span className="shelf-row-body">
       <strong>{documentTitle(doc)}</strong>
       {caption && <small>{caption}</small>}
-      <span className="shelf-card-meta">
-        <time dateTime={doc.confirmedAt}>{dayFormat.format(new Date(doc.confirmedAt))} 確定</time>
-        {doc.seriesVersion > 1 && <span className="shelf-version">版{doc.seriesVersion}</span>}
-      </span>
+    </span>
+    <span className="shelf-row-meta">
+      {doc.kind === "paged" && <span className="shelf-version">複数ページ</span>}
+      {doc.seriesVersion > 1 && <span className="shelf-version">版{doc.seriesVersion}</span>}
+      <time dateTime={doc.confirmedAt}>{dayFormat.format(new Date(doc.confirmedAt))} 確定</time>
     </span>
   </button>;
 }
@@ -315,16 +318,17 @@ function subLabel(label: string, group: string): string {
   return rest && !/^[（(]/.test(rest) ? rest : label;
 }
 
-function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry, onOpenReview }: {
+function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
   summary: DocumentSummary;
   folderName: string;
   detail: Detail;
-  backLabel: string;
-  onBack: () => void;
   onRetry: () => void;
   onOpenReview: (jobId: string, field: string | null) => void;
 }) {
   const [picked, setPicked] = useState<{ id: string; fromImage: boolean; heading?: boolean } | null>(null);
+  // A table row picked by its number: the whole row is outlined on the image and shown enlarged below it.
+  const [pickedRow, setPickedRow] = useState<{ tableId: string; rowId: string } | null>(null);
+  const pick = (next: { id: string; fromImage: boolean; heading?: boolean }) => { setPickedRow(null); setPicked(next); };
   const document = detail.document;
   const byId = useMemo(() => new Map(document?.fields.map((reading) => [reading.fieldId, reading]) ?? []), [document]);
   const tableTitles = useMemo(() => new Map(document?.tables.map((table) => [table.id, table.title]) ?? []), [document]);
@@ -389,7 +393,19 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
     for (const table of tables) if (!shown.has(table.id)) result.push({ key: `table:${table.id}`, table });
     return result;
   }, [document, joins, linesOf, sections]);
-  const current = picked && !picked.heading ? byId.get(picked.id) ?? null : null;
+  const current = picked && !picked.heading && !pickedRow ? byId.get(picked.id) ?? null : null;
+  const rowView = useMemo(() => {
+    if (!pickedRow || !document) return null;
+    const table = document.tables.find((item) => item.id === pickedRow.tableId);
+    const row = table?.rows.find((item) => item.id === pickedRow.rowId);
+    if (!table || !row) return null;
+    const cells = table.columns.flatMap((column) => {
+      const fieldId = row.cells.find((cell) => cell.columnId === column.id)?.fieldId;
+      const reading = fieldId ? byId.get(fieldId) : undefined;
+      return reading ? [{ label: column.label, reading }] : [];
+    });
+    return { table, rowNumber: row.rowNumber, cells, readings: cells.map((cell) => cell.reading).filter((reading) => reading.box) };
+  }, [pickedRow, document, byId]);
   // A heading or item name picked on the image highlights what it names on the right.
   const heading = picked?.heading ? document?.headings?.find((item) => item.cellId === picked.id) ?? null : null;
   const headingFields = new Set(heading?.kind === "item" ? heading.fieldIds : []);
@@ -405,7 +421,7 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
   }, [picked]);
   const value = (reading: StructuredReading) => <ReadingValue key={reading.fieldId} reading={reading} active={current?.fieldId === reading.fieldId}
     buttonRef={(element) => { if (element) valueRefs.current.set(reading.fieldId, element); else valueRefs.current.delete(reading.fieldId); }}
-    onPick={() => setPicked({ id: reading.fieldId, fromImage: false })} />;
+    onPick={() => pick({ id: reading.fieldId, fromImage: false })} />;
 
   // Items outside tables are a 2-column table (name, value) framed like the tables; no header row.
   const fieldsView = (lines: ShelfLine[], groups: readonly ItemGroup[] = []) => {
@@ -433,7 +449,7 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
             ? <tr key={`join:${line.join.name}`} className={`shelf-joined${line.readings.some((item) => headingFields.has(item.fieldId)) ? " heading-hit" : ""}`}>
               {nameCells(line, line.join.name)}
               <td><button type="button" className={`shelf-value${line.readings.some((item) => item.fieldId === current?.fieldId) ? " active" : ""}`}
-                title="原本の欄を表示" onClick={() => setPicked({ id: line.readings[0].fieldId, fromImage: false })}>
+                title="原本の欄を表示" onClick={() => pick({ id: line.readings[0].fieldId, fromImage: false })}>
                 {joinedText(line.join.members, (path) => line.readings.find((item) => item.targetPath === path)?.value, line.join.separator ?? "") || <em>空欄</em>}
                 {line.readings.some((item) => item.status === "uncertain") && <small className="shelf-uncertain">要確認</small>}
               </button></td>
@@ -446,13 +462,9 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
   };
   return <article className="shelf-document">
     <header className="shelf-document-head">
-      <button type="button" className="ghost compact shelf-back" onClick={onBack}><FiArrowLeft aria-hidden="true" />{backLabel}</button>
       <div className="shelf-document-title">
         <h2>{documentTitle(summary)}</h2>
-        <p>{folderName} ・ {timeFormat.format(new Date(summary.confirmedAt))} 確定{summary.seriesVersion > 1 ? ` ・ 版${summary.seriesVersion}` : ""}</p>
-        {identityValues(summary).length > 0 && <dl className="shelf-identity">
-          {identityValues(summary).map((item) => <div key={item.targetPath}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
-        </dl>}
+        <p>{folderName} ・ {timeFormat.format(new Date(summary.confirmedAt))}</p>
       </div>
       <div className="shelf-document-actions">
         <button type="button" className="secondary compact" onClick={() => onOpenReview(summary.jobId, null)}><FiEdit3 aria-hidden="true" />修正する</button>
@@ -467,13 +479,17 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
         <section className="shelf-viewer-pane" aria-label="原本">
           <PageViewer pages={document.pages ?? []} readings={document.fields} picked={current}
             headings={document.headings ?? []} pickedHeading={heading}
-            onPick={(reading) => setPicked({ id: reading.fieldId, fromImage: true })}
-            onPickHeading={(item) => setPicked({ id: item.cellId, fromImage: true, heading: true })} />
-          {current
-            ? <PickedField reading={current} place={readingPlace(current, current.tableId ? tableTitles.get(current.tableId) ?? null : null)}
-              onOpen={() => onOpenReview(summary.jobId, current.targetPath)} />
+            rowFieldIds={rowView?.readings.map((reading) => reading.fieldId) ?? null}
+            onPick={(reading) => pick({ id: reading.fieldId, fromImage: true })}
+            onPickHeading={(item) => pick({ id: item.cellId, fromImage: true, heading: true })} />
+          {rowView
+            ? <PickedRow key={`${rowView.table.id}:${rowView.rowNumber}`} title={rowView.table.title} rowNumber={rowView.rowNumber} cells={rowView.cells}
+              imageUrl={(document.pages ?? []).find((page) => page.pageId === (rowView.readings[0]?.pageId ?? null))?.imageUrl ?? null}
+              box={unionBox(rowView.readings)} />
+            : current
+            ? <PickedField reading={current} place={readingPlace(current, current.tableId ? tableTitles.get(current.tableId) ?? null : null)} />
             : heading ? <p className="shelf-picked-heading" aria-live="polite">{headingText(heading, document, byId)}</p>
-            : <p className="shelf-viewer-note">値か原本の枠（見出し・項目名も）を押すと、対応する場所を強調します。</p>}
+            : null}
         </section>
         <section ref={valuesPane} className="shelf-values" aria-label="読み取り値">
           {shownBlocks.map((block) => "table" in block
@@ -482,14 +498,20 @@ function DocumentView({ summary, folderName, detail, backLabel, onBack, onRetry,
             <div className="shelf-table-wrap">
               <table className="shelf-table">
                 <thead><tr><th scope="col" className="shelf-row-number">行</th>{block.table.columns.map((column) => <th key={column.id} scope="col" className={headsColumn(block.table.id, column.id) ? "heading-hit" : undefined}>{column.label}</th>)}</tr></thead>
-                <tbody>{block.table.rows.map((row) => <tr key={row.id}>
-                  <th scope="row" className="shelf-row-number">{row.rowNumber}</th>
+                <tbody>{block.table.rows.map((row) => {
+                  const rowPicked = pickedRow?.tableId === block.table.id && pickedRow.rowId === row.id;
+                  return <tr key={row.id} className={rowPicked ? "row-hit" : undefined}>
+                  <th scope="row" className="shelf-row-number">
+                    <button type="button" className="shelf-row-pick" aria-pressed={rowPicked} title="この行全体を原本で表示"
+                      onClick={() => { setPicked(null); setPickedRow(rowPicked ? null : { tableId: block.table.id, rowId: row.id }); }}>{row.rowNumber}</button>
+                  </th>
                   {block.table.columns.map((column) => {
                     const fieldId = row.cells.find((cell) => cell.columnId === column.id)?.fieldId;
                     const reading = fieldId ? byId.get(fieldId) : undefined;
                     return <td key={column.id} className={headsColumn(block.table.id, column.id) ? "column-hit" : undefined}>{reading ? value(reading) : null}</td>;
                   })}
-                </tr>)}</tbody>
+                </tr>;
+                })}</tbody>
               </table>
             </div>
             {block.lines && fieldsView(block.lines, block.groups)}
@@ -524,10 +546,12 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
 }
 
 /** The aligned page image with every read cell outlined; the picked cell is highlighted. */
-export function PageViewer({ pages, readings, picked, headings, pickedHeading, marked = false, onPick, onPickHeading, title, actions }: {
+export function PageViewer({ pages, readings, picked, headings, pickedHeading, marked = false, rowFieldIds = null, onPick, onPickHeading, title, actions }: {
   pages: DocumentPage[];
   readings: StructuredReading[];
   picked: StructuredReading | null;
+  /** The cells of a picked table row: outlined together. */
+  rowFieldIds?: string[] | null;
   headings: HeadingCell[];
   pickedHeading: HeadingCell | null;
   /** Every shown cell is highlighted (the chat's answer cells), the picked one most. */
@@ -545,12 +569,17 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
   const [failed, setFailed] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const page = pages[pageIndex] ?? null;
-  // A value picked on another page turns to that page.
+  const rowReadings = useMemo(() => {
+    const ids = new Set(rowFieldIds ?? []);
+    return readings.filter((reading) => ids.has(reading.fieldId) && reading.box);
+  }, [readings, rowFieldIds]);
+  // A value (or row) picked on another page turns to that page.
+  const target = picked ?? rowReadings[0] ?? null;
   useEffect(() => {
-    if (!picked) return;
-    const index = pages.findIndex((item) => item.pageId === (picked.pageId ?? null));
+    if (!target) return;
+    const index = pages.findIndex((item) => item.pageId === (target.pageId ?? null));
     if (index >= 0) setPageIndex(index);
-  }, [picked, pages]);
+  }, [target, pages]);
   const image = useRef<HTMLImageElement>(null);
   // A cached image may have loaded before this runs; then its size is taken from it rather than cleared.
   useEffect(() => {
@@ -561,19 +590,22 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
   // Bring the picked cell into the visible part of the image.
   useEffect(() => {
     const frame = scroller.current;
-    if (!frame || !picked || !size) return;
-    const target = frame.querySelector<HTMLElement>(`[data-field="${CSS.escape(picked.fieldId)}"]`);
-    if (!target) return;
-    const outer = frame.getBoundingClientRect(), inner = target.getBoundingClientRect();
+    if (!frame || !size) return;
+    const element = picked ? frame.querySelector<HTMLElement>(`[data-field="${CSS.escape(picked.fieldId)}"]`)
+      : rowReadings.length ? frame.querySelector<HTMLElement>(".shelf-row-outline") : null;
+    if (!element) return;
+    const outer = frame.getBoundingClientRect(), inner = element.getBoundingClientRect();
     if (inner.top >= outer.top && inner.bottom <= outer.bottom && inner.left >= outer.left && inner.right <= outer.right) return;
     frame.scrollTo({
       top: frame.scrollTop + inner.top - outer.top - (outer.height - inner.height) / 2,
       left: frame.scrollLeft + inner.left - outer.left - (outer.width - inner.width) / 2,
       behavior: "smooth",
     });
-  }, [picked, size, zoom, pageIndex]);
+  }, [picked, rowReadings, size, zoom, pageIndex]);
   if (!page) return <div className="shelf-viewer empty"><p>原本画像はありません。</p></div>;
   const shown = readings.filter((reading) => reading.box && (reading.pageId ?? null) === page.pageId);
+  const rowIds = new Set(rowReadings.map((reading) => reading.fieldId));
+  const rowBox = unionBox(rowReadings.filter((reading) => (reading.pageId ?? null) === page.pageId));
   const zoomIndex = ZOOMS.indexOf(zoom);
   return <div className="shelf-viewer">
     <div className="shelf-viewer-tools">
@@ -607,10 +639,12 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
             const box = reading.box!;
             const active = picked?.fieldId === reading.fieldId;
             return <button key={reading.fieldId} type="button" tabIndex={-1} data-field={reading.fieldId}
-              className={`shelf-box${marked ? " marked" : ""}${active ? " active" : ""}${reading.value === null ? " blank" : ""}`}
+              className={`shelf-box${marked ? " marked" : ""}${active ? " active" : ""}${rowIds.has(reading.fieldId) ? " in-row" : ""}${reading.value === null ? " blank" : ""}`}
               style={{ left: `${(box.x / size.width) * 100}%`, top: `${(box.y / size.height) * 100}%`, width: `${(box.width / size.width) * 100}%`, height: `${(box.height / size.height) * 100}%` }}
               title={`${reading.label}：${reading.value ?? "空欄"}`} aria-label={`${reading.label}を選ぶ`} onClick={() => onPick(reading)} />;
           })}
+          {size && rowBox && <div className="shelf-row-outline" aria-hidden="true"
+            style={{ left: `${(rowBox.x / size.width) * 100}%`, top: `${(rowBox.y / size.height) * 100}%`, width: `${(rowBox.width / size.width) * 100}%`, height: `${(rowBox.height / size.height) * 100}%` }} />}
         </div>}
     </div>
   </div>;
@@ -635,7 +669,36 @@ function headingText(heading: HeadingCell, document: StructuredDocument, byId: M
   }
 }
 
-function PickedField({ reading, place, onOpen }: { reading: StructuredReading; place: string; onOpen: () => void }) {
+type Box = NonNullable<StructuredReading["box"]>;
+/** The rectangle around every given cell, with a little margin. */
+function unionBox(readings: StructuredReading[]): Box | null {
+  const boxes = readings.flatMap((reading) => reading.box ? [reading.box] : []);
+  if (!boxes.length) return null;
+  const pad = 4;
+  const x = Math.max(Math.min(...boxes.map((box) => box.x)) - pad, 0);
+  const y = Math.max(Math.min(...boxes.map((box) => box.y)) - pad, 0);
+  return { x, y, width: Math.max(...boxes.map((box) => box.x + box.width)) + pad - x, height: Math.max(...boxes.map((box) => box.y + box.height)) + pad - y };
+}
+
+/** A picked table row: the row cut out of the page image, and its values. */
+function PickedRow({ title, rowNumber, cells, imageUrl, box }: {
+  title: string; rowNumber: number; cells: { label: string; reading: StructuredReading }[]; imageUrl: string | null; box: Box | null;
+}) {
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  return <div className="shelf-picked shelf-picked-row" aria-live="polite">
+    {imageUrl && box && <div className="shelf-row-crop" style={{ aspectRatio: `${box.width} / ${box.height}` }}>
+      <img src={imageUrl} alt={`${title} ${rowNumber}行目の原本`} draggable={false}
+        onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+        style={natural ? { width: `${(natural.width / box.width) * 100}%`, left: `${(-box.x / box.width) * 100}%`, top: `${(-box.y / box.height) * 100}%` } : { visibility: "hidden" }} />
+    </div>}
+    <div className="shelf-picked-text">
+      <span>{title} {rowNumber}行目</span>
+      <dl className="shelf-row-values">{cells.map((cell) => <div key={cell.reading.fieldId}><dt>{cell.label}</dt><dd>{cell.reading.value ?? "空欄"}</dd></div>)}</dl>
+    </div>
+  </div>;
+}
+
+function PickedField({ reading, place }: { reading: StructuredReading; place: string }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [reading.fieldId]);
   return <div className="shelf-picked" aria-live="polite">
@@ -644,7 +707,6 @@ function PickedField({ reading, place, onOpen }: { reading: StructuredReading; p
       <span>{place}</span>
       <strong>{reading.value ?? "空欄"}</strong>
     </div>
-    <button type="button" className="ghost compact" onClick={onOpen}><FiExternalLink aria-hidden="true" />確認画面で開く</button>
   </div>;
 }
 

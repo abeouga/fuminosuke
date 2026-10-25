@@ -5,6 +5,6 @@ if [ "${APP_ENV:-container}" != "cloud" ]; then
 else
   # Backend has no published port; only the private Compose proxy may reach it.
   exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log \
-    --proxy-headers --forwarded-allow-ips '*'
+    --proxy-headers --forwarded-allow-ips '*' --timeout-graceful-shutdown 10
 fi
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log

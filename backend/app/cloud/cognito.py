@@ -28,7 +28,35 @@ class Cognito:
                 "redirect_uri": self.config.callback, "code": code, "code_verifier": verifier,
             })
             response.raise_for_status()
-            token = response.json()["id_token"]
+            return await self._verify(response.json()["id_token"], nonce)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise AccessDenied from exc
+
+    async def password_identity(self, username: str, password: str) -> tuple[str, int]:
+        """The app's own login form: USER_PASSWORD_AUTH with the public client, server side.
+
+        Any challenge (new password, MFA) is refused; users are created with permanent passwords.
+        """
+        try:
+            response = await self.client.post(
+                f"https://cognito-idp.{self.config.cognito_region}.amazonaws.com/",
+                headers={
+                    "Content-Type": "application/x-amz-json-1.1",
+                    "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+                },
+                json={
+                    "AuthFlow": "USER_PASSWORD_AUTH", "ClientId": self.config.cognito_client_id,
+                    "AuthParameters": {"USERNAME": username, "PASSWORD": password},
+                },
+            )
+            if response.status_code != 200:
+                raise AccessDenied
+            return await self._verify(response.json()["AuthenticationResult"]["IdToken"], None)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise AccessDenied from exc
+
+    async def _verify(self, token: object, nonce: str | None) -> tuple[str, int]:
+        try:
             if not isinstance(token, str) or len(token) > 16_384:
                 raise AccessDenied
             header = jwt.get_unverified_header(token)
@@ -49,12 +77,15 @@ class Cognito:
                     self.refreshed = time.monotonic()
             if header["kid"] not in self.keys:
                 raise AccessDenied
+            required = ["exp", "iat", "iss", "aud", "sub", "token_use"]
             claims = jwt.decode(
                 token, self.keys[header["kid"]], algorithms=["RS256"],
                 audience=self.config.cognito_client_id, issuer=self.config.issuer,
-                options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce", "token_use"]},
+                options={"require": required + (["nonce"] if nonce is not None else [])},
             )
-            if claims["token_use"] != "id" or not secrets.compare_digest(claims["nonce"], nonce):
+            if claims["token_use"] != "id":
+                raise AccessDenied
+            if nonce is not None and not secrets.compare_digest(claims["nonce"], nonce):
                 raise AccessDenied
             lifetime = min(self.config.session_seconds, int(claims["exp"] - time.time()))
             if lifetime <= 0:

@@ -529,6 +529,7 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
 
 .ocr-mark-status-popover>div.ocr-mark-options{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
 .ocr-mark-status-popover>div.ocr-mark-options button{min-width:40px;padding:5px 9px;font:700 17px "Yu Gothic UI","Meiryo",sans-serif}
+.ocr-mark-status-popover>div.ocr-mark-options button.ocr-mark-extra{border-style:dashed}
 .ocr-mark-status-popover>div.ocr-mark-options span{font-size:11px;color:#9b2c2c}
 .ocr-key-value-table tr.ocr-write-in-row th.ocr-write-in-label{width:1%;white-space:nowrap;color:#5b6b75}
 
@@ -2249,7 +2250,29 @@ small{font-size:12px;line-height:1.5}
 @media (max-width: 64rem) { .ocr-image-surface { height: clamp(260px, 40svh, 340px); } }
 
 .auth-screen { max-width: 32rem; margin: 15vh auto; padding: 2rem; }
-.auth-account-bar { display: flex; align-items: center; justify-content: flex-end; gap: 1rem; padding: .5rem 1rem; border-bottom: 1px solid #dce2e8; font-size: .875rem; }
+.auth-screen.auth-checking { display: flex; align-items: center; justify-content: center; max-width: none; min-height: 100vh; margin: 0; padding: 0; color: #4b5b6b; }
+.auth-screen.auth-checking p { display: flex; align-items: center; margin: 0; font-size: 15px; }
+/* The app's own login page (cloud mode). */
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--ui-canvas, #e2e8ee); }
+.login-card { width: min(380px, 100%); display: grid; gap: 16px; padding: 36px 32px 32px; border: 1px solid var(--ui-border, #d3dbe2); border-radius: 16px; background: #fff; box-shadow: 0 18px 48px #1632471a; }
+.login-mark { width: 52px; height: 52px; margin: 0 auto; }
+.login-card h1 { margin: 0 0 4px; text-align: center; color: var(--ui-text, #1d2b38); font-size: 24px; font-weight: 800; letter-spacing: .04em; }
+.login-note { margin: 0; padding: 10px 12px; border-radius: 8px; background: #f1f5f8; color: #4b5b6b; font-size: 13px; line-height: 1.6; }
+.login-field { display: grid; gap: 6px; color: #4b5b6b; font-size: 13px; font-weight: 700; }
+.login-field input { height: 44px; padding: 0 12px; border: 1px solid #b7c5d2; border-radius: 8px; font-size: 16px; color: var(--ui-text, #1d2b38); background: #fff; }
+.login-field input:focus { outline: none; border-color: #2f6f9f; box-shadow: 0 0 0 3px #2f6f9f26; }
+.login-error { margin: 0; color: #a14d3d; font-size: 13px; }
+.login-submit { width: 100%; height: 46px; margin-top: 4px; font-size: 15px; gap: 6px; }
+.login-submit:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Logout: the left menu footer (PC) and the phone top bar. */
+.auth-logout-button { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #526173; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.auth-logout-button:hover:not(:disabled) { border-color: #cad4dc; background: #fff; color: #1d2b38; }
+.auth-logout-button svg { width: 15px; height: 15px; }
+.side-footer:has(.auth-logout-button) { display: flex; align-items: center; gap: 8px; }
+.auth-logout-button.icon-only { margin-left: 0; width: 38px; height: 38px; justify-content: center; padding: 0; }
+.auth-logout-button.icon-only span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.auth-logout-button.icon-only svg { width: 19px; height: 19px; }
 
 .beta-badge { align-self: center; white-space: nowrap; padding: 2px 7px; border: 1px solid #cad4dc; border-radius: 4px; color: #526173; background: #f7f9fa; font-size: 10px; letter-spacing: .04em; }
 .editing-help { color: #526173; font-size: .82rem; }
@@ -2810,3 +2833,8 @@ button.reading-float-open { cursor: pointer; }
   .ocr-step-progress li.is-sending>span,.reading-send-check{animation:none}
   .reading-send-text small{transition:none}
 }
+.series-picker-status{display:flex;align-items:center;gap:8px;margin:0;color:#71837e;font-size:12px}
+.series-picker-auto{margin:0;border-left:3px solid #2d746c;border-radius:6px;background:#eaf4f1;padding:8px 11px;color:#173a37;font-size:12px;line-height:1.6}
+.series-auto-notice{display:grid;gap:6px;border-left:3px solid #2d746c;border-radius:6px;background:#eaf4f1;padding:9px 12px;color:#173a37;font-size:12px}.series-auto-notice>span{display:flex;align-items:center;gap:8px;color:#71837e}.series-auto-notice strong{font-size:13px}.series-auto-notice ul{margin:0;padding-left:18px;display:grid;gap:2px;overflow-wrap:anywhere}
+.review-discard{gap:6px;color:#a14d3d}.review-discard:hover:not(:disabled){background:#fff2ef;color:#8d3b2c}
+.review-save-retry{gap:6px;border-color:#e3b9ae;color:#a14d3d}.review-save-retry:hover:not(:disabled){background:#fff2ef}

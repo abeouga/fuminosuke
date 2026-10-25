@@ -1391,57 +1391,7 @@
       "type": "object"
     },
     "LayoutMarkOption": {
-      "additionalProperties": false,
-      "properties": {
-        "height": {
-          "exclusiveMinimum": 0,
-          "title": "Height",
-          "type": "integer"
-        },
-        "id": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Id",
-          "type": "string"
-        },
-        "label": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Label",
-          "type": "string"
-        },
-        "value": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Value",
-          "type": "string"
-        },
-        "width": {
-          "exclusiveMinimum": 0,
-          "title": "Width",
-          "type": "integer"
-        },
-        "x": {
-          "minimum": 0,
-          "title": "X",
-          "type": "integer"
-        },
-        "y": {
-          "minimum": 0,
-          "title": "Y",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "label",
-        "value",
-        "x",
-        "y",
-        "width",
-        "height"
-      ],
-      "title": "LayoutMarkOption",
+      "additionalProperties": true,
       "type": "object"
     },
     "LayoutMarkSet": {
@@ -1826,57 +1776,7 @@
       "type": "object"
     },
     "MarkOptionConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "height": {
-          "exclusiveMinimum": 0,
-          "title": "Height",
-          "type": "integer"
-        },
-        "id": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Id",
-          "type": "string"
-        },
-        "label": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Label",
-          "type": "string"
-        },
-        "value": {
-          "maxLength": 100,
-          "minLength": 1,
-          "title": "Value",
-          "type": "string"
-        },
-        "width": {
-          "exclusiveMinimum": 0,
-          "title": "Width",
-          "type": "integer"
-        },
-        "x": {
-          "minimum": 0,
-          "title": "X",
-          "type": "integer"
-        },
-        "y": {
-          "minimum": 0,
-          "title": "Y",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "label",
-        "value",
-        "x",
-        "y",
-        "width",
-        "height"
-      ],
-      "title": "MarkOptionConfig",
+      "additionalProperties": true,
       "type": "object"
     },
     "NormalizedBox": {
@@ -2623,7 +2523,10 @@
       "type": "integer"
     },
     "documentType": {
-      "const": "generic-document",
+      "enum": [
+        "generic-document",
+        "spreadsheet"
+      ],
       "title": "Documenttype",
       "type": "string"
     },

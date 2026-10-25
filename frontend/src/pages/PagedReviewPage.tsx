@@ -38,6 +38,8 @@ import { showToast } from "../components/Toast";
 import type { FieldReading, OcrFieldPreview } from "../types";
 import { Spinner } from "../components/Spinner";
 import { restoreAfterLeaving } from "../reviewLeave";
+import { DiscardReading } from "../components/DiscardReading";
+import { ReviewPresenceDialog, useReviewPresence } from "../components/ReviewPresence";
 
 type Drafts = Record<string, Record<string, PageFieldEdit>>;
 
@@ -52,6 +54,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
   templateNames?: Record<string, string>;
 }) {
   const [result, setResult] = useState<PagedReviewResult | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [pageId, setPageId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
@@ -99,7 +102,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
       if (generation.current === current) setError(reason instanceof Error ? reason.message : "結果を取得できませんでした。");
     });
     return () => { generation.current += 1; };
-  }, [jobId]);
+  }, [jobId, loadAttempt]);
   useEffect(() => {
     onNavigationGuardChange?.(unsaved || inlineDirty || busy);
     const guard = (event: BeforeUnloadEvent) => {
@@ -111,7 +114,10 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
 
   // A re-edit left without confirming goes back to the last confirmation (see ReviewPage).
   const [leaveDialog, setLeaveDialog] = useState(false);
-  const reopenedUnchanged = Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
+  // Another screen with this reading open is told before anything changes (see ReviewPage).
+  const presence = useReviewPresence(jobId, Boolean(result && !result.confirmed), () => setLoadAttempt(value => value + 1));
+  const elsewhere = presence.state === "other" || presence.state === "lost";
+  const reopenedUnchanged = !elsewhere && Boolean(result?.reopened && !result.confirmed && !result.changedSinceConfirmed
     && !unsaved && !inlineDirty && !busy && !needsRefresh);
   const leaveState = useRef({ reopenedUnchanged, revision: result?.revision ?? 0 });
   leaveState.current = { reopenedUnchanged, revision: result?.revision ?? 0 };
@@ -398,6 +404,9 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
       <button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
       <div><h1>読み取り結果を確認</h1>
         <p>全ページの画像と読み取り結果を確認・修正してから確定します。確定後にXLSXを取得できます。</p></div>
+      {result && !result.confirmed && !result.reopened && <div className="page-actions">
+        <DiscardReading jobId={jobId} disabled={busy} onDiscarded={() => onClose(true)} />
+      </div>}
     </header>
     {error && <p className="error-box" role="alert">{error}</p>}
     {(needsRefresh || (!result && error)) && <button className="secondary" disabled={busy}
@@ -573,6 +582,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
         </>}
       </div>
     </>}
+    <ReviewPresenceDialog presence={presence} closeLabel={closeLabel} onClose={() => onClose(true)}/>
   </div></ReviewDraftBoundary>;
 }
 

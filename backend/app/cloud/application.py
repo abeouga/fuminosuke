@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
+import os
 import secrets
-from contextlib import asynccontextmanager
+import signal
+import time
+from contextlib import AsyncExitStack, asynccontextmanager
 from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlencode
@@ -16,6 +20,7 @@ from starlette.types import Message, Receive, Scope, Send
 
 from app.cloud.cognito import Cognito
 from app.cloud.config import CloudSettings
+from app.cloud.handoff import HandoffRelay, PreviousTask
 from app.cloud.journal import Journal, ReceiptStore, S3Receipts, s3_client
 from app.cloud.operations import Operations
 from app.cloud.registry import AccessDenied, Registry, request_credential
@@ -44,6 +49,25 @@ def problem(code: str, status: int) -> JSONResponse:
                         status_code=status, headers={"Cache-Control": "no-store"})
 
 
+# Rolling update: a new task waits for the previous one to release the single-runtime lease.
+# Requests that reach it meanwhile wait (no error) instead of failing; under CloudFront's 60 s.
+HANDOFF_REQUEST_WAIT = 50
+HANDOFF_LEASE_WAIT = 900
+
+
+async def runtime_ready(app: FastAPI) -> bool:
+    try:
+        await asyncio.wait_for(app.state.ready.wait(), HANDOFF_REQUEST_WAIT)
+        return True
+    except TimeoutError:
+        return False
+
+
+def lease_busy(error: Exception) -> bool:
+    """Only the "another runtime owns it" refusals are worth waiting for."""
+    return isinstance(error, OSError) or "owns this installation" in str(error)
+
+
 class TenantGateway:
     def __init__(self, app: FastAPI, config: CloudSettings) -> None:
         self.app, self.config = app, config
@@ -54,8 +78,12 @@ class TenantGateway:
         headers = dict(scope["headers"])
         if (headers.get(b"host", b"").decode("latin-1")
                 != self.config.public_origin.split("://", 1)[1]
-                or scope["scheme"] not in {"https", "wss"}):
+                or scope["scheme"] not in (
+                    {"http", "ws"} if self.config.loopback else {"https", "wss"})):
             await self.deny(scope, receive, send, 403, "ORIGIN_REJECTED")
+            return
+        if not await runtime_ready(self.app):
+            await self.deny(scope, receive, send, 503, "RUNTIME_STARTING")
             return
         origin = headers.get(b"origin", b"").decode("latin-1")
         token = cookie(scope, SESSION)
@@ -162,10 +190,20 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
     if paid and not config.ai_enabled:
         raise ValueError("Cloud paid AI requires explicit activation and the shared beta journal")
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
-        configure_logging(settings.logging, bounded=True)
-        with cloud_runtime(config, serving=True) as control:
+    async def own_runtime(stack: AsyncExitStack) -> Any:
+        # Wait until the previous task (rolling update) has stopped and released the lease.
+        deadline = time.monotonic() + HANDOFF_LEASE_WAIT
+        while True:
+            try:
+                return stack.enter_context(cloud_runtime(config, serving=True))
+            except (RuntimeError, OSError) as error:
+                if not lease_busy(error) or time.monotonic() > deadline:
+                    raise
+                await asyncio.sleep(1)
+
+    async def serve(stop: asyncio.Event) -> None:
+        async with AsyncExitStack() as stack:
+            control = await own_runtime(stack)
             registry = Registry(config.root, config.max_users, control=control)
             operations = None
             if config.journal_bucket:
@@ -177,17 +215,41 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
                 operations = Operations(settings, config, registry, journal)
                 await asyncio.to_thread(operations.replay_deletions)
             app.state.operations = operations
-            async with httpx.AsyncClient(
+            client = await stack.enter_async_context(httpx.AsyncClient(
                 timeout=10, follow_redirects=False, trust_env=False,
-            ) as client:
-                app.state.registry = registry
-                app.state.cognito = Cognito(config, client)
-                app.state.tenants = TenantApplications(settings, config, registry, operations)
-                try:
-                    await app.state.tenants.start()
-                    yield
-                finally:
-                    await app.state.tenants.close()
+            ))
+            app.state.registry = registry
+            app.state.cognito = Cognito(config, client)
+            app.state.tenants = TenantApplications(settings, config, registry, operations)
+            try:
+                await app.state.tenants.start()
+                app.state.ready.set()
+                await stop.wait()
+            finally:
+                await app.state.tenants.close()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+        configure_logging(settings.logging, bounded=True)
+        app.state.ready = asyncio.Event()
+        stop = asyncio.Event()
+        runtime = asyncio.create_task(serve(stop))
+
+        def failed(task: asyncio.Task[None]) -> None:
+            # Never keep answering health checks without a runtime: let ECS replace the task.
+            if not task.cancelled() and task.exception() is not None:
+                logging.getLogger(__name__).error("Cloud runtime failed", exc_info=task.exception())
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        runtime.add_done_callback(failed)
+        try:
+            yield
+        finally:
+            runtime.remove_done_callback(failed)
+            stop.set()
+            if not app.state.ready.is_set():
+                runtime.cancel()
+            await asyncio.gather(runtime, return_exceptions=True)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
@@ -196,6 +258,8 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
         # Never trust forwarded host headers to construct callback or tenant identity.
         if str(request.base_url).rstrip("/") != config.public_origin:
             return problem("ORIGIN_REJECTED", 403)
+        if request.url.path != "/api/health" and not await runtime_ready(app):
+            return problem("RUNTIME_STARTING", 503)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -250,6 +314,50 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
         )
         return response
 
+    # Failed password logins per client address and per user name, in the last 5 minutes.
+    failures: dict[str, list[float]] = {}
+
+    def throttled(*keys: str) -> bool:
+        now = time.monotonic()
+        for key in keys:
+            failures[key] = [t for t in failures.get(key, []) if now - t < 300]
+        return any(len(failures[key]) >= 5 for key in keys)
+
+    @app.post("/api/auth/password")
+    async def password_login(request: Request) -> JSONResponse:
+        """The app's own login page; no Cognito-hosted session is left behind on logout."""
+        if request.headers.get("origin") != config.public_origin:
+            return problem("CSRF_REJECTED", 403)
+        try:
+            body = await request.json()
+            username = str(body.get("username", "")).strip()
+            password = str(body.get("password", ""))
+        except (ValueError, AttributeError):
+            return problem("LOGIN_REJECTED", 400)
+        if not (0 < len(username) <= 128) or not (0 < len(password) <= 256):
+            return problem("LOGIN_REJECTED", 400)
+        keys = ("ip:" + (request.client.host if request.client else ""), "user:" + username.lower())
+        if throttled(*keys):
+            detail = "失敗が続いたため、5分ほど待ってからもう一度ログインしてください。"
+            return JSONResponse({"code": "LOGIN_THROTTLED", "detail": detail},
+                                status_code=429, headers={"Cache-Control": "no-store"})
+        try:
+            subject, lifetime = await app.state.cognito.password_identity(username, password)
+            token, identity = app.state.registry.issue(subject, lifetime)
+        except AccessDenied:
+            for key in keys:
+                failures[key].append(time.monotonic())
+            return JSONResponse({"code": "LOGIN_REJECTED",
+                                 "detail": "ユーザー名またはパスワードが違います。"},
+                                status_code=401, headers={"Cache-Control": "no-store"})
+        app.state.registry.revoke(request.cookies.get(SESSION, ""))
+        response = JSONResponse({"mode": "cognito", "authenticated": True,
+                                 "csrfToken": identity.csrf, "storageScope": identity.tenant_id})
+        response.set_cookie(
+            SESSION, token, max_age=lifetime, secure=True, httponly=True, samesite="lax",
+        )
+        return response
+
     @app.post("/api/auth/logout")
     async def logout(request: Request) -> JSONResponse:
         token = request.cookies.get(SESSION, "")
@@ -268,9 +376,20 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
+        # Healthy while waiting for the lease, so ECS can stop the previous task (rolling update).
+        if not app.state.ready.is_set():
+            return {"status": "starting"}
         with app.state.registry.connect() as db:
             db.execute("SELECT 1")
         return {"status": "ok"}
 
     app.mount("/", TenantGateway(app, config))
+
+    def ready() -> bool:
+        event = getattr(app.state, "ready", None)
+        return event is not None and event.is_set()
+
+    # Outermost: until this task owns the runtime, relay to the previous ECS task.
+    app.add_middleware(HandoffRelay, ready=ready,
+                       previous=PreviousTask(config.ecs_service, config.relay_port))
     return app

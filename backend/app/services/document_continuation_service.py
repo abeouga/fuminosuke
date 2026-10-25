@@ -5,8 +5,11 @@ the earlier reading used, and the handwriting of the earlier reading is compared
 same places on the new image: a later photo of the same sheet still carries every stroke
 of the earlier one (more may have been added), while another sheet filled on the same form
 has different writing there. The comparison is the correlation of the ink darkness (paper
-level removed, slightly blurred) over the earlier reading's handwriting, outside the
-printed form, so a darker or brighter photo of the same sheet still matches.
+level removed, slightly blurred) over the earlier reading's handwriting inside the form's
+reading regions, outside the printed form, so a darker or brighter photo of the same sheet
+still matches. Marks outside the regions (binder holes, the sheet's edge, shadows, the desk)
+are left out: they differ between photos of one sheet and look alike between photos taken
+the same way.
 """
 from __future__ import annotations
 
@@ -30,10 +33,11 @@ from app.image_processing.registration import TemplateAligner
 from app.repositories.job_repository import JobRepository
 from app.storage.local_storage import LocalStorageService
 
-MAX_JOBS = 8
-# Measured on the stored readings: the same sheet re-photographed (tilted, darker, uneven
-# light, with or without writing added since) 0.87-1.00; other sheets filled on the same
-# form -0.19-0.52.
+# Unconfirmed readings in the queue, or a template's latest confirmed documents.
+MAX_JOBS = 24
+# Measured on the stored readings (2026-10-25, within the reading regions): photos of one
+# sheet taken again with writing added since 0.95-0.97 (whole-sheet comparison: 0.46-0.57),
+# other sheets filled on the same form -0.26-0.41.
 CONTINUATION_SIMILARITY = 0.75
 # Fewer handwriting pixels than this in the earlier reading leave nothing to compare.
 MIN_COMPARED_PIXELS = 300
@@ -59,15 +63,26 @@ def _darkness(
     return np.asarray(cv2.GaussianBlur(darkness, (0, 0), 3), dtype=np.float32)
 
 
+def _in_regions(
+    shape: tuple[int, ...], regions: tuple[tuple[int, int, int, int], ...],
+) -> NDArray[np.bool_]:
+    inside = np.zeros(shape[:2], dtype=bool)
+    for x, y, width, height in regions:
+        inside[max(y, 0):max(y + height, 0), max(x, 0):max(x + width, 0)] = True
+    return inside
+
+
 def _similarity(
     earlier_rgb: NDArray[np.uint8],
     earlier_mask: NDArray[np.bool_],
     later_rgb: NDArray[np.uint8],
     template_rgb: NDArray[np.uint8],
+    regions: tuple[tuple[int, int, int, int], ...],
 ) -> float | None:
     template_gray = cv2.cvtColor(template_rgb, cv2.COLOR_RGB2GRAY)
     printed = cv2.dilate((template_gray < 205).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-    region = (cv2.dilate(earlier_mask.astype(np.uint8), np.ones((11, 11), np.uint8)) > 0) & ~printed
+    writing = earlier_mask & _in_regions(earlier_mask.shape, regions)
+    region = (cv2.dilate(writing.astype(np.uint8), np.ones((11, 11), np.uint8)) > 0) & ~printed
     if int(region.sum()) < MIN_COMPARED_PIXELS:
         return None
     gray = template_gray.astype(np.float32)
@@ -87,9 +102,16 @@ class DocumentContinuationService:
         self._loader = ImageLoader(settings.storage, settings.image_processing)
         self._aligner = TemplateAligner(settings.registration)
         self._isolator = HandwritingIsolator(threshold=settings.segmentation.threshold)
+        self._templates: dict[str, NDArray[np.uint8]] = {}
 
     def _image(self, path: str, media_type: str | None) -> NDArray[np.uint8]:
         return self._loader.load(self._storage.read_bytes(path), media_type).rgb
+
+    def _template(self, path: str, media_type: str | None) -> NDArray[np.uint8]:
+        # Documents of one template share the image; it is read once per comparison.
+        if path not in self._templates:
+            self._templates[path] = self._image(path, media_type)
+        return self._templates[path]
 
     def _earlier(self, job_id: str) -> _Earlier | None:
         with self._database.session() as session:
@@ -127,7 +149,7 @@ class DocumentContinuationService:
             mask = artifacts.get("handwritingMask")
             earlier = _Earlier(
                 job_id=job_id,
-                template_rgb=self._image(path, template.get("cleanTemplateMediaType")),
+                template_rgb=self._template(path, template.get("cleanTemplateMediaType")),
                 template_key=str(template.get("cleanTemplateSha256") or path),
                 regions=tuple(
                     (r.x, r.y, r.width, r.height) for r in config.mapped_ocr_regions()
@@ -183,6 +205,7 @@ class DocumentContinuationService:
                     if later is not None:
                         similarity = _similarity(
                             earlier.aligned_rgb, earlier.mask, later, earlier.template_rgb,
+                            earlier.regions,
                         )
             except (AppError, LookupError, OSError, ValueError):
                 similarity = None

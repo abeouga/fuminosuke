@@ -67,22 +67,42 @@
 .shelf-card-body strong{font-size:14px;line-height:1.4;overflow-wrap:anywhere}
 .shelf-card-body small{color:var(--ui-text-muted);font-size:12px;line-height:1.4;overflow-wrap:anywhere}
 .shelf-card-meta{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:3px;color:var(--ui-text-muted);font-size:12px}
+/* テンプレートの中の書類は横長の行（テンプレートのカードと見た目を分け、いまどこにいるか分かるように） */
+.shelf-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.shelf-list.is-rising>li{animation:shelf-card-rise .36s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--rise-index,0) * 30ms)}
+@media (prefers-reduced-motion:reduce){.shelf-list.is-rising>li{animation:none}}
+.shelf-row{display:flex;align-items:center;gap:14px;width:100%;min-height:0;padding:8px 16px 8px 8px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface);color:var(--ui-text);text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s,background .15s}
+.shelf-row:hover{border-color:var(--ui-primary);background:#f7fafc;box-shadow:0 4px 14px #1d354514}
+.shelf-row:focus-visible{outline:3px solid var(--ui-primary-soft);border-color:var(--ui-primary)}
+.shelf-row.chosen{border-color:var(--ui-primary);background:#eef5fb;box-shadow:0 0 0 1px var(--ui-primary)}
+.shelf-row-check{display:grid;place-items:center;flex:none;width:22px;height:22px;border:2px solid var(--ui-border-strong);border-radius:6px;background:#fff;color:#fff}
+.shelf-row.chosen .shelf-row-check{border-color:var(--ui-primary);background:var(--ui-primary)}
+.shelf-row-check svg{width:15px;height:15px}
+.shelf-row-thumb{position:relative;display:grid;place-items:center;flex:none;width:52px;height:64px;padding:4px 4px 0;border-radius:6px;background:#e7ecf0;overflow:hidden}
+.shelf-row-thumb img{width:100%;height:100%;object-fit:cover;object-position:top center;border-radius:2px 2px 0 0;background:#fff;box-shadow:0 1px 3px #1d354533;-webkit-user-drag:none;user-select:none}
+.shelf-row-thumb>svg{width:24px;height:24px;color:var(--ui-text-muted)}
+.shelf-row-thumb .image-spinner{width:18px;height:18px;border-width:2px}
+.shelf-row-body{display:grid;gap:2px;flex:1;min-width:0}
+.shelf-row-body strong{font-size:15px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shelf-row-body small{color:var(--ui-text-muted);font-size:12px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shelf-row-meta{display:flex;align-items:center;gap:8px;flex:none;color:var(--ui-text-muted);font-size:12px;white-space:nowrap}
+@media (max-width:640px){
+  .shelf-row{gap:10px;padding:6px 10px 6px 6px}
+  .shelf-row-thumb{width:40px;height:50px}
+  .shelf-row-meta{flex-direction:column;align-items:flex-end;gap:2px}
+}
 .shelf-version{padding:1px 7px;border-radius:999px;background:#e8eef3;color:var(--ui-text-secondary);font-size:11px}
 
 /* 書類を開いた画面 */
 .shelf-document{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
-.shelf-document-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:6px 14px;padding:14px 18px;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface)}
-.shelf-back{grid-column:1 / -1;justify-self:start;gap:6px;margin:-4px 0 0 -8px}
+.shelf-document-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 14px;padding:14px 18px;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface)}
+.shelf-back{justify-self:start;gap:6px;margin:-4px 0 0 -8px}
 .shelf-document-title{min-width:0}
 .shelf-document-title h2{margin:0;color:var(--ui-text);font-size:22px;font-weight:800;overflow-wrap:anywhere}
 .shelf-document-title p{margin:3px 0 0;color:var(--ui-text-secondary);font-size:13px}
-.shelf-document-actions{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.shelf-document-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .shelf-document-actions .compact{gap:6px}
-.shelf-document-actions .excel-export-actions{display:grid;gap:6px}
-.shelf-identity{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0}
-.shelf-identity div{padding:5px 10px;border:1px solid var(--ui-border);border-radius:9px;background:var(--ui-surface-muted)}
-.shelf-identity dt{color:var(--ui-text-muted);font-size:11px}
-.shelf-identity dd{margin:1px 0 0;color:var(--ui-text);font-size:14px;font-weight:700;overflow-wrap:anywhere;white-space:pre-line}
+.shelf-document-actions .excel-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .shelf-document .error-box{display:grid;gap:8px;justify-items:start}
 .shelf-document .error-box p{margin:0}
 .shelf-document-body{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:16px;align-items:start}
@@ -105,18 +125,29 @@
 .shelf-box:hover{border-color:var(--ui-primary);background:#23699e14}
 .shelf-box.marked{border:2px solid #d9480fcc;background:#ffb02e2e}
 .shelf-box.marked:hover{border-color:#d9480f;background:#ffb02e4d}
-.shelf-box.active{z-index:1;border:2px solid #d9480f;background:#ffb02e33;box-shadow:0 0 0 3px #fff9,0 0 0 6px #d9480f40}
+.shelf-box.active{z-index:1;border:2px solid var(--ui-primary);background:#23699e26;box-shadow:0 0 0 3px #fff9,0 0 0 6px #23699e40}
+.shelf-box.marked.active{border-color:#d9480f;background:#ffb02e33;box-shadow:0 0 0 3px #fff9,0 0 0 6px #d9480f40}
+.shelf-box.in-row{border-color:#23699e99;background:#23699e14}
+.shelf-row-outline{position:absolute;z-index:2;border:2px solid var(--ui-primary);border-radius:4px;box-shadow:0 0 0 3px #fff9,0 0 0 6px #23699e33;pointer-events:none}
 .shelf-heading-box{position:absolute;min-height:0;padding:0;border:1px dashed transparent;border-radius:2px;background:transparent;cursor:pointer}
 .shelf-heading-box:hover{border-color:#16805d;background:#16805d14}
 .shelf-heading-box.active{z-index:1;border:2px solid #16805d;background:#16805d22;box-shadow:0 0 0 3px #fff9,0 0 0 6px #16805d40}
 .shelf-picked-heading{margin:0;padding:10px 12px;border:1px solid #16805d80;border-radius:12px;background:#effaf5;color:#0f5c43;font-size:14px;font-weight:700;overflow-wrap:anywhere}
-.shelf-viewer-note{margin:0;padding:10px 12px;border:1px dashed var(--ui-border-strong);border-radius:12px;color:var(--ui-text-muted);font-size:13px}
-.shelf-picked{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 12px;padding:10px 12px;border:1px solid #d9480f80;border-radius:12px;background:#fff8f2}
-.shelf-picked img{grid-column:1 / -1;display:block;max-width:100%;max-height:110px;margin:0 auto;object-fit:contain;border:1px solid var(--ui-border);border-radius:6px;background:#fff}
+.shelf-picked{display:grid;gap:10px;padding:12px 14px;border:1px solid var(--ui-border);border-left:3px solid var(--ui-primary);border-radius:12px;background:var(--ui-surface);box-shadow:0 2px 8px #1c35450a}
+.shelf-picked>img{display:block;max-width:100%;max-height:110px;margin:0 auto;object-fit:contain;border:1px solid var(--ui-border);border-radius:6px;background:#fff}
 .shelf-picked-text{min-width:0}
 .shelf-picked-text span{display:block;color:var(--ui-text-secondary);font-size:12px}
 .shelf-picked-text strong{display:block;color:var(--ui-text);font-size:17px;overflow-wrap:anywhere}
-.shelf-picked .ghost{gap:6px;white-space:nowrap}
+.shelf-row-crop{position:relative;width:100%;overflow:hidden;border-radius:6px;background:#fff;box-shadow:0 0 0 1px var(--ui-border)}
+.shelf-row-crop img{position:absolute;max-width:none;user-select:none;-webkit-user-drag:none}
+.shelf-row-values{display:flex;flex-wrap:wrap;gap:6px 14px;margin:4px 0 0}
+.shelf-row-values div{display:flex;align-items:baseline;gap:5px}
+.shelf-row-values dt{color:var(--ui-text-muted);font-size:12px}
+.shelf-row-values dd{margin:0;color:var(--ui-text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.shelf-row-pick{min-width:26px;min-height:0;padding:1px 6px;border:1px solid transparent;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.shelf-row-pick:hover{border-color:var(--ui-primary);color:var(--ui-primary)}
+.shelf-table tr.row-hit .shelf-row-pick{border-color:var(--ui-primary);background:var(--ui-primary);color:#fff}
+.shelf-table tr.row-hit td{background:#f1f7fc}
 
 /* 読み取り値 */
 .shelf-values{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0;padding:16px 18px;border:1px solid var(--ui-border);border-radius:14px;background:var(--ui-surface)}
@@ -132,7 +163,7 @@
 .shelf-kv-table tbody tr.heading-hit>td{background:#effaf5}
 .shelf-value{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-self:start;max-width:100%;min-height:0;padding:2px 6px;margin:-2px -6px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ui-text);font-size:15px;font-weight:700;text-align:left;overflow-wrap:anywhere;white-space:pre-line;cursor:pointer;scroll-margin:80px}
 .shelf-value:hover{border-color:var(--ui-border-strong);background:#fff}
-.shelf-value.active{border-color:#d9480f;background:#fff1e6;color:#8a2f08}
+.shelf-value.active{border-color:var(--ui-primary);background:#eaf3fb;color:#174a73}
 .shelf-value.static{cursor:default}
 .shelf-value em{color:var(--ui-text-muted);font-style:normal;font-weight:400;font-size:13px;white-space:nowrap}
 .shelf-uncertain{padding:0 6px;border-radius:999px;background:#fff0d8;color:var(--ui-warning);font-size:11px;font-weight:700}
@@ -151,10 +182,9 @@
   .shelf-viewer-pane{top:0;z-index:3;gap:6px;padding:6px 0;background:var(--ui-surface)}
   .shelf-viewer-scroll{max-height:40dvh;min-height:180px}
   .shelf-picked{padding:6px 10px}
-  .shelf-picked img{display:none}
+  .shelf-picked>img{display:none}
   .shelf-picked-text strong{font-size:15px}
-  .shelf-viewer-note{padding:6px 10px;font-size:12px}
-  .shelf-value{scroll-margin-top:calc(40dvh + 150px)}
+    .shelf-value{scroll-margin-top:calc(40dvh + 150px)}
 }
 @media (max-width:640px){
   .shelf-header-actions,.shelf-search{width:100%}
@@ -163,7 +193,7 @@
   .shelf-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .shelf-card-thumb{padding:8px 8px 0}
   .shelf-card-body{padding:8px 10px 10px}
-  .shelf-document-head{grid-template-columns:minmax(0,1fr);padding:12px 14px}
+  .shelf-document-head{padding:12px 14px}
   .shelf-viewer-scroll{max-height:34dvh;min-height:150px;padding:6px}
   .shelf-viewer-tools{padding:5px 8px}
   .shelf-value{scroll-margin-top:calc(34dvh + 140px)}

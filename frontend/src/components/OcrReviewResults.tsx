@@ -6,6 +6,7 @@ import { displayName } from "../userMessages";
 import { ITEM_JOIN_EDITING_VISIBLE } from "./TemplateItemJoinEditor";
 import { AiDragTh, useAiDraggable } from "./ReviewAiDrag";
 import { joinedText, orderMark, sortBlocks, sortByOrder, type ItemJoin, type ItemJoinMember } from "../itemJoins";
+import { isPhoneDevice } from "../hooks/usePhoneDevice";
 
 /** `writeIn`: the 「その他（　）」 text a symbol/check box's item owns, shown on the same row. */
 export type ReadingEntry = { path: string; label: string; value: FieldReading; writeIn?: ReadingEntry;
@@ -642,18 +643,22 @@ export function MarkStatusPopover({
   const multiple = preview.markSelectionMode === "multiple";
   const current = entry.value.normalized ?? entry.value.raw ?? "";
   const blank = entry.value.status === "blank";
-  // Symbols shown as chosen are the ones a click adds to (an unsure reading starts from none).
-  const selected = entry.value.status === "readable"
-    ? current.split("・").map((value) => value.trim()).filter((value) => labels.includes(value)) : [];
-  const apply = (next: string[]) => {
-    const value = labels.filter((label) => next.includes(label)).join("・");
+  // What is already read stays chosen, even when the reading is unsure: a click adds to it or
+  // takes one away. Read text that matches no option is kept too (it can be taken away by hand).
+  const parts = blank ? [] : [...new Set(current.split("・").map((value) => value.trim()).filter(Boolean))];
+  const selected = parts.filter((value) => labels.includes(value));
+  const extras = parts.filter((value) => !labels.includes(value));
+  const apply = (next: string[], kept: string[]) => {
+    const value = [...labels.filter((label) => next.includes(label)), ...kept].join("・");
     onChange(value
       ? { raw: value, normalized: value, status: "readable", reviewReason: null }
       : { raw: null, normalized: null, status: "blank", reviewReason: null });
   };
-  const toggle = (label: string) => apply(multiple
-    ? (selected.includes(label) ? selected.filter((value) => value !== label) : [...selected, label])
-    : [label]);
+  // A box that takes one choice is replaced by the click; one that takes several keeps the rest.
+  const toggle = (label: string) => multiple
+    ? apply(selected.includes(label) ? selected.filter((value) => value !== label) : [...selected, label], extras)
+    : apply([label], []);
+  const dropExtra = (extra: string) => apply(selected, extras.filter((value) => value !== extra));
   return (
     <section className="ocr-cell-status-popover ocr-mark-status-popover" aria-label={`${entry.label}の判定`}>
       <div className="ocr-mark-options" role="group" aria-label={`${entry.label}の記号`}>
@@ -665,6 +670,11 @@ export function MarkStatusPopover({
           );
         })}
         {labels.length === 0 && <span>テンプレートに選択肢が設定されていません。</span>}
+        {extras.map((extra) => (
+          <button type="button" key={`extra:${extra}`} className="active ocr-mark-extra" aria-pressed="true"
+            title="選択肢にない読み取りです。押すと外します。" aria-label={`${extra}（選択肢にない読み取り）を外す`}
+            disabled={confirmed} onClick={() => dropExtra(extra)}>{extra}<span aria-hidden="true"> ×</span></button>
+        ))}
       </div>
       <div role="group" aria-label={`${entry.label}の判定`}>
         <button type="button" className={blank ? "active" : ""} aria-pressed={blank} disabled={confirmed || blank}
@@ -915,14 +925,17 @@ export function KeyValueReviewTable({
   const units = sortByOrder(collected, (unit) => "join" in unit ? unit.members[0].entry.path : unit.path, orders);
   // A box with its write-in (「その他 ○ ／ 記入 …」) or a joined item fills a row of its own.
   const ownRow = (unit: ReadingEntry | JoinedUnit) => "join" in unit || Boolean(unit.writeIn);
+  // A phone is too narrow for two items side by side: one item per row.
+  const phone = isPhoneDevice();
+  const perRow = phone ? 1 : 2;
   const rows = units.reduce<Array<Array<ReadingEntry | JoinedUnit>>>((result, unit) => {
     const last = result[result.length - 1];
-    if (ownRow(unit) || !last || last.length === 2 || ownRow(last[0])) result.push([unit]);
+    if (ownRow(unit) || !last || last.length === perRow || ownRow(last[0])) result.push([unit]);
     else last.push(unit);
     return result;
   }, []);
   const single = units.length === 1 && !ownRow(units[0]);
-  const wide = units.length > 1;
+  const wide = perRow === 2 && units.length > 1;
   const cell = (entry: ReadingEntry) => (
     <ReviewValueCell
       entry={entry}
@@ -975,6 +988,18 @@ export function KeyValueReviewTable({
               ];
             }
             const plain = row as ReadingEntry[];
+            // On a phone the write-in goes on the row below its box.
+            const writeIn = plain[0].writeIn;
+            if (phone && writeIn) return [
+              <tr key={index} className="ocr-write-in-row">
+                <AiDragTh scope="row" id={`item:${plain[0].path}`} data={{ kind: "item", path: plain[0].path }}><ReviewItemName entry={plain[0]} /></AiDragTh>
+                {cell(plain[0])}
+              </tr>,
+              <tr key={`${index}:write-in`} className="ocr-write-in-row">
+                <th scope="row" className="ocr-write-in-label" title={writeIn.label}>記入</th>
+                {cell(writeIn)}
+              </tr>,
+            ];
             return (
             <tr key={index} className={plain[0].writeIn ? "ocr-write-in-row" : undefined}>
               {plain[0].writeIn

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from app.api.dependencies import get_app_settings
+from app.core.config import local_host
 from app.core.errors import AppError, FieldError
 from app.editing.errors import problem, reject
 
@@ -69,7 +70,7 @@ def local_request(request: Request) -> None:
     if getattr(request.app.state, "cloud_authenticated", False):
         return  # The outer gateway has authenticated the cookie and checked CSRF/origin.
     settings = get_app_settings(request)
-    if request.url.hostname not in {"127.0.0.1", "localhost", "::1"} or (
+    if not local_host(request.url.hostname) or (
         (origin := request.headers.get("origin")) is not None
         and origin not in settings.app.frontend_origins
     ):

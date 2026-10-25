@@ -1,16 +1,22 @@
 import { useEffect, useState } from "react";
 import { FiSearch } from "react-icons/fi";
 import { ApiError, api, type SeriesCandidate } from "../api";
+import { Spinner } from "./Spinner";
 
 export type SeriesSelection = { jobId: string; label: string; seriesVersion: number };
 
 /**
- * Optional choice to read the upload as the next version of a confirmed document.
- * The user picks the document; nothing is matched automatically.
+ * Choice to read the upload as the next version of a confirmed document. The reading screen turns
+ * it on by itself (`automatic`) when the image matches a confirmed document; the user can change or
+ * turn it off, or pick a document by hand.
  */
-export function DocumentSeriesPicker({ templateVersionId, open, onOpenChange, value, onChange }: {
+export function DocumentSeriesPicker({ templateVersionId, open, automatic = false, checking = false, onOpenChange, value, onChange }: {
   templateVersionId: string;
   open: boolean;
+  /** The choice was filled in from the image comparison. */
+  automatic?: boolean;
+  /** The image is still being compared with the confirmed documents. */
+  checking?: boolean;
   onOpenChange: (open: boolean) => void;
   value: SeriesSelection | null;
   onChange: (value: SeriesSelection | null) => void;
@@ -39,6 +45,14 @@ export function DocumentSeriesPicker({ templateVersionId, open, onOpenChange, va
           if (!event.target.checked) onChange(null);
         }} /><i />
       </label>
+      {checking && !open && (
+        <p className="series-picker-status" role="status"><Spinner />確定済みの書類と照合しています…</p>
+      )}
+      {automatic && open && value && (
+        <p className="series-picker-auto" role="status">
+          この画像は確定済みの「{value.label}」と同じ書類のようです。その更新（次の版）として読み込みます。違う場合はオフにしてください。
+        </p>
+      )}
       {open && (
         <div className="series-picker-body">
           <label className="series-picker-search">

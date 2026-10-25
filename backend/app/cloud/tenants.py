@@ -102,6 +102,13 @@ class TenantApplications:
 
             app.add_exception_handler(AccessDenied, denied)
             await self.stack.enter_async_context(app.router.lifespan_context(app))
+            seed_dir = self.config.template_dir_for(self.registry.subject(tenant))
+            if seed_dir is not None:
+                from app.cloud.seed_templates import seed_templates
+
+                await asyncio.to_thread(
+                    seed_templates, seed_dir, app.state.database, app.state.storage,
+                )
             self.apps[tenant] = app
             return app
 

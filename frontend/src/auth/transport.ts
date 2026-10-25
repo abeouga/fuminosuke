@@ -25,6 +25,20 @@ export async function loadSession(): Promise<AuthSession> {
   current = next.authenticated ? next : { ...next, storageScope: current?.storageScope };
   return next;
 }
+/** The app's own login form (cloud mode): the server checks the password with Cognito. */
+export async function signIn(username: string, password: string): Promise<AuthSession> {
+  const response = await fetch("/api/auth/password", {
+    method: "POST", credentials: "include", cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(response.status === 401 ? "ユーザー名またはパスワードが違います。"
+      : body?.detail || "ログインできませんでした。時間をおいてもう一度お試しください。");
+  }
+  return loadSession();
+}
 export function csrfHeaders(): Record<string, string> {
   return current?.mode === "cognito" && current.csrfToken ? { "X-CSRF-Token": current.csrfToken } : {};
 }

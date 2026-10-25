@@ -1,8 +1,66 @@
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
-import { authenticatedFetch, endBrowserSession, loadSession } from "./transport";
+import { createContext, useContext, useEffect, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
+import { FiLogOut } from "react-icons/fi";
+import { authenticatedFetch, endBrowserSession, loadSession, signIn } from "./transport";
 import type { AuthSession } from "./transport";
 import { Spinner } from "../components/Spinner";
+
+type Account = { logout: () => void; loggingOut: boolean };
+const AccountContext = createContext<Account | null>(null);
+
+/** Logout for the signed-in Cognito user; renders nothing in the local (no login) mode. */
+export function LogoutButton({ className = "" }: { className?: string }) {
+  const account = useContext(AccountContext);
+  if (!account) return null;
+  return <button type="button" className={`auth-logout-button ${className}`} disabled={account.loggingOut}
+    onClick={account.logout} aria-label="ログアウト" title="ログアウト">
+    {account.loggingOut ? <Spinner /> : <FiLogOut aria-hidden="true" />}
+    <span>ログアウト</span>
+  </button>;
+}
+
+function LoginPage({ expired, notice, onSignedIn }: {
+  expired: boolean; notice: string; onSignedIn: (session: AuthSession) => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy || !username.trim() || !password) return;
+    setBusy(true); setError("");
+    try {
+      onSignedIn(await signIn(username.trim(), password));
+      setPassword("");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "ログインできませんでした。");
+    } finally { setBusy(false); }
+  }
+  return <main className="login-page">
+    <form className="login-card" onSubmit={event => void submit(event)} aria-labelledby="login-title">
+      <img className="login-mark" src="/favicon.svg" alt="" />
+      <h1 id="login-title">文之助</h1>
+      {(expired || notice) && <p className="login-note" role="status">
+        {expired ? "ログインの期限が切れました。もう一度ログインすると、この画面の続きから使えます。" : notice}
+      </p>}
+      <label className="login-field">
+        <span>ユーザー名</span>
+        <input autoComplete="username" autoCapitalize="none" spellCheck={false} value={username}
+          onChange={event => setUsername(event.target.value)} autoFocus disabled={busy} />
+      </label>
+      <label className="login-field">
+        <span>パスワード</span>
+        <input type="password" autoComplete="current-password" value={password}
+          onChange={event => setPassword(event.target.value)} disabled={busy} />
+      </label>
+      {error && <p className="login-error" role="alert">{error}</p>}
+      <button type="submit" className="primary login-submit" disabled={busy || !username.trim() || !password}>
+        {busy ? <><Spinner />ログイン中…</> : "ログイン"}
+      </button>
+    </form>
+  </main>;
+}
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -22,10 +80,15 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       setMessage(error instanceof Error ? error.message : "ログアウトできませんでした。");
     } finally { setLoggingOut(false); }
   }
+  function requestLogout() {
+    const event = new Event("fuminosuke-before-logout", { cancelable: true });
+    if (!window.dispatchEvent(event)) setConfirmLogout(true);
+    else void logout();
+  }
   useEffect(() => {
     let active = true;
     const refresh = () => { void loadSession().then(value => {
-      if (active) { setSession(value); setMessage(""); if (value.authenticated) setReady(true); }
+      if (active) { setSession(value); if (value.authenticated) { setReady(true); setMessage(""); } }
     }).catch(error => { if (active) setMessage(String(error.message)); }); };
     const expired = () => { setSession(previous => previous ? { ...previous, authenticated: false } : null); };
     refresh();
@@ -38,29 +101,18 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       window.removeEventListener("fuminosuke-auth-required", expired);
     };
   }, []);
-  return <>
-    {!session?.authenticated && <main className="auth-screen">
-    <h1>文之助 ベータ</h1>
-    <p>{message || (ready
-      ? "ログイン期限が切れました。未保存の入力はこのタブに保持しています。別タブで再ログインし、このタブに戻ってください。"
-      : session ? "招待されたアカウントでログインしてください。" : "ログイン状態を確認しています。")}</p>
-    {session?.mode === "cognito" && <a className="button" href="/api/auth/login"
-      target={ready ? "_blank" : undefined} rel="noopener">
-      {ready ? "別タブで再ログイン" : "ログイン"}
-    </a>}
+  const signedIn = session?.authenticated === true;
+  const account = signedIn && session.mode === "cognito" ? { logout: requestLogout, loggingOut } : null;
+  return <AccountContext.Provider value={account}>
+    {!session && !message && <main className="auth-screen auth-checking" aria-busy="true">
+      <p><Spinner />ログイン中</p>
     </main>}
-    {session?.authenticated && session.mode === "cognito" && <div className="auth-account-bar">
-      <span>文之助 ベータ</span>
-      <small>バックアップの復元対象は7日間です。削除の反映に時間がかかる場合があります。</small>
-      <button type="button" disabled={loggingOut} onClick={() => {
-        const event = new Event("fuminosuke-before-logout", { cancelable: true });
-        if (!window.dispatchEvent(event)) setConfirmLogout(true);
-        else void logout();
-      }}>{loggingOut ? <><Spinner />ログアウト中…</> : "ログアウト"}</button>
-      {message && <span role="alert">{message}</span>}
-    </div>}
-    {ready && <div hidden={!session?.authenticated}>{children}</div>}
-    {confirmLogout && session?.authenticated && <div className="navigation-confirm-backdrop">
+    {!session && message && <main className="auth-screen"><p role="alert">{message}</p></main>}
+    {session && !signedIn && session.mode === "cognito" && <LoginPage expired={ready} notice={message}
+      onSignedIn={value => { setSession(value); setReady(true); setMessage(""); }} />}
+    {/* Kept mounted while signed out after expiry, so unsaved input survives the re-login. */}
+    {ready && <div hidden={!signedIn}>{children}</div>}
+    {confirmLogout && signedIn && <div className="navigation-confirm-backdrop">
       <section className="navigation-confirm-dialog auth-logout-dialog" role="dialog" aria-modal="true" aria-labelledby="logout-title">
         <h2 id="logout-title">編集内容を確認してください</h2>
         <p>未保存の入力、または確認が必要な処理があります。ログアウトすると、このタブの編集画面を閉じます。</p>
@@ -71,5 +123,5 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
         </div>
       </section>
     </div>}
-  </>;
+  </AccountContext.Provider>;
 }

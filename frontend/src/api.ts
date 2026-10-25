@@ -393,6 +393,9 @@ export const api = {
     }),
     reopenResult: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),
     cancelReopen: (id: string, baseRevision: number) => request<OcrResult>(`/ocr-jobs/${id}/cancel-reopen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseRevision }) }),
+    claimReviewPresence: (id: string, viewerId: string, takeOver = false) => request<{ held: boolean; otherSince: string | null }>(`/ocr-jobs/${encodeURIComponent(id)}/review-presence`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ viewerId, takeOver }) }),
+    // keepalive lets the release reach the server while the tab is closing.
+    releaseReviewPresence: (id: string, viewerId: string) => request<void>(`/ocr-jobs/${encodeURIComponent(id)}/review-presence/release`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ viewerId }), keepalive: true }),
     retry: (id: string, revision: number | null | undefined) => request<Job>(`/jobs/${id}/retry${revision == null ? "" : `?expectedRevision=${revision}`}`, { method: "POST" }),
     cancel: (id: string) => request<Job>(`/jobs/${id}/cancel`, { method: "POST" }),
     /** Deletes a read document (a confirmed one only with `confirm`); its files go too. */

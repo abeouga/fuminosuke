@@ -45,6 +45,8 @@ LENIENT = 0.30
 MODEL_CALL_LIMIT = 4
 PENDING_SECONDS = 3600
 MAX_CHOICES = 20
+# A document the user has to pick: the newest few as cards; any other is found by writing its name.
+DOC_CHOICES = 5
 # A field the user has to pick: a few likely ones; the user can also just write its name.
 ASK_CHOICES = 6
 MAX_ROW_CHOICES = 30
@@ -554,10 +556,13 @@ class QuestionEngine:
             if not group:
                 resolved.notes = notes + resolved.notes
                 return self._result(resolved, calls, [], text, forced, scope)
-            loaded = [await self._load(s) for s in group]
-            if kind == "open" and len(loaded) > 1:
+            loaded = [await self._load(s) for s in group[:DOC_CHOICES]] if kind == "open" else [
+                await self._load(s) for s in group
+            ]
+            if kind == "open" and len(group) > 1:
                 kind_name = _md(group[0].get("templateName") or "（名称なし）")
-                message = f"「{kind_name}」の書類は{len(loaded)}件あります。どれを開きますか。"
+                message = f"「{kind_name}」の書類は{len(group)}件あります。どれを開きますか。"
+                message += self._more_documents(len(group))
                 return self._result(
                     Outcome(
                         "clarifying",
@@ -565,7 +570,7 @@ class QuestionEngine:
                         question={
                             "kind": "document",
                             "message": message,
-                            "choices": [self._document_choice(d) for d in loaded[:MAX_CHOICES]],
+                            "choices": [self._document_choice(d) for d in loaded[:DOC_CHOICES]],
                         },
                         notes=notes,
                     ),
@@ -1169,13 +1174,14 @@ class QuestionEngine:
             message = (
                 f"「{_md(held)}」が書かれている書類が{count}件あります。{pick}選んでください。"
             )
+        message += self._more_documents(len(documents))
         return Outcome(
             "clarifying",
             message,
             question={
                 "kind": "document",
                 "message": message,
-                "choices": [self._document_choice(d) for d in documents[:MAX_CHOICES]],
+                "choices": [self._document_choice(d) for d in documents[:DOC_CHOICES]],
             },
             unnamed=not matched and not followed and held is None,
         )
@@ -1247,6 +1253,13 @@ class QuestionEngine:
                 return f"「{name}」という名前の書類が{count}件あります。{pick}"
             return f"「{name}」に当てはまる書類が{count}件あります。{pick}"
         return f"質問に当てはまる書類が{count}件あります。{pick}"
+
+    @staticmethod
+    def _more_documents(count: int) -> str:
+        """Said when only the newest documents are offered as cards."""
+        if count <= DOC_CHOICES:
+            return ""
+        return f"新しい{DOC_CHOICES}件を出しています。ほかの書類は、名前を書いて送ってください。"
 
     @staticmethod
     def _document_choice(document: dict[str, Any]) -> dict[str, Any]:

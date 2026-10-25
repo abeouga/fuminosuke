@@ -1,0 +1,255 @@
+/*
+ * Phone screens (`.phone-shell`, set on a phone-sized touch device): a slim bar on top that
+ * also holds the page's own tools, the three destinations as tabs at the bottom, and every
+ * page in one column. Explanations that a PC shows beside the controls are left out here;
+ * the controls carry their own names. The page size for zoomed / large-text phones is set by
+ * phoneViewport.ts; the layout here only has to hold from 340 CSS pixels up.
+ */
+.phone-shell {
+  --phone-top: 50px;
+  --phone-tabs: calc(60px + env(safe-area-inset-bottom, 0px));
+  display: block;
+  min-height: 100dvh;
+}
+.phone-shell .side-nav { display: none; }
+
+/* ---------- Top bar: brand, the page's tools, the reading status ---------- */
+.phone-top {
+  position: sticky; top: 0; z-index: 80;
+  display: flex; align-items: center; gap: 4px;
+  height: var(--phone-top); padding: 0 6px 0 10px;
+  padding-top: env(safe-area-inset-top, 0px);
+  border-bottom: 1px solid #d4dde5; background: #ffffffeb;
+  backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3);
+}
+.phone-brand {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin-right: auto; padding: 0 4px 0 0;
+  border: 0; background: none; color: #1d2b36; cursor: pointer;
+}
+.phone-brand img { width: 28px; height: 28px; }
+.phone-brand strong { font-family: "Yuji Boku", serif; font-size: 21px; font-weight: 400; letter-spacing: .04em; }
+.phone-offline { padding: 3px 9px; border-radius: 999px; background: #fdecea; color: #9b2f27; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.phone-top-tools { display: flex; align-items: center; gap: 2px; }
+.phone-top-button {
+  display: grid; place-items: center; width: 42px; height: 42px; min-height: 0; padding: 0;
+  border: 0; border-radius: 50%; background: none; color: #34495e; cursor: pointer;
+}
+.phone-top-button svg { width: 22px; height: 22px; }
+.phone-top-button:active { background: #e6edf4; }
+.phone-top-button:disabled { opacity: .35; cursor: default; }
+/* The reading status is the ring alone; its count and spinner say what is going on. */
+.phone-top .reading-float { margin-left: 2px; z-index: 81; }
+.phone-top .reading-float-pill { min-height: 0; padding: 2px; gap: 0; border-radius: 50%; }
+.phone-top .reading-float-summary, .phone-top .reading-float-chevron { display: none; }
+.phone-top .reading-float-ring { width: 36px; height: 36px; }
+.phone-top .reading-float-panel {
+  position: fixed; top: calc(var(--phone-top) + 6px); left: 8px; right: 8px; width: auto;
+  max-height: calc(100dvh - var(--phone-top) - var(--phone-tabs) - 20px); background: #fff;
+}
+.phone-top .reading-float-text strong { font-size: 15px; }
+.phone-top .reading-float-text small { font-size: 13px; }
+.phone-top .reading-float-thumb { width: 46px; height: 46px; }
+.phone-top .reading-float-go, .phone-top .reading-float-primary, .phone-top .reading-float-link { min-height: 40px; font-size: 14px; }
+.phone-top .reading-float-remove { width: 40px; height: 40px; opacity: .8; }
+
+/* ---------- Bottom tabs ---------- */
+.phone-tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  height: var(--phone-tabs); padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid #d4dde5; background: #fffffff2;
+  backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow: 0 -6px 18px #10283d0d;
+}
+.phone-tabs button {
+  display: grid; justify-items: center; align-content: center; gap: 2px;
+  min-height: 0; padding: 4px 2px; border: 0; border-radius: 0; background: none;
+  color: #5b6b78; font-size: 12px; font-weight: 700; letter-spacing: .02em; cursor: pointer;
+}
+.phone-tabs button > span:first-child { display: grid; place-items: center; width: 52px; height: 30px; border-radius: 999px; transition: background .2s; }
+.phone-tabs button svg { width: 24px; height: 24px; stroke-width: 2; }
+.phone-tabs button .nav-ask-mark { width: 24px; height: 24px; font-size: 13px; }
+.phone-tabs button.active { color: #1f5f94; }
+.phone-tabs button.active > span:first-child { background: #dceaf7; }
+.phone-tabs button:active > span:first-child { background: #e6edf4; }
+.phone-shell.phone-typing .phone-tabs { display: none; }
+
+/* ---------- Page area ---------- */
+.phone-shell .main-content { max-width: none; margin: 0; padding: 10px 10px calc(var(--phone-tabs) + 14px); }
+.phone-shell.phone-typing .main-content { padding-bottom: 14px; }
+.phone-shell .page-stack { gap: 12px; }
+.phone-shell .primary, .phone-shell .secondary, .phone-shell .danger-button, .phone-shell a.button-link { min-height: 46px; font-size: 15px; }
+.phone-shell .toast-viewport { bottom: calc(var(--phone-tabs) + 10px); }
+
+/* Page headers: back and the actions on one row, the title under them, left-aligned. */
+.phone-shell .page-header.split.has-back { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-bottom: 8px; }
+.phone-shell .page-header.split.has-back > .page-back { order: 0; flex: none; margin-right: auto; min-height: 40px; padding: 0 8px 0 0; font-size: 14px; white-space: nowrap; }
+.phone-shell .page-header.split.has-back > div:not(.page-actions):not([class*="actions"]) { order: 2; flex: 1 1 100%; }
+.phone-shell .page-header.split.has-back > .page-actions,
+.phone-shell .page-header.split.has-back > [class*="actions"] { order: 1; flex: 0 1 auto; margin: 0; flex-wrap: nowrap; justify-content: flex-end; gap: 6px; }
+.phone-shell .page-header .page-title-end { text-align: left; }
+.phone-shell .page-header .eyebrow { display: none; }
+.phone-shell .page-header h1 { margin: 0; font-size: 19px; line-height: 1.4; }
+
+/* ---------- Chat ---------- */
+.phone-shell .ask-page { min-height: 0; gap: 8px; }
+.phone-shell .ask-layout,
+.phone-shell .ask-layout.with-history,
+.phone-shell .ask-layout.with-rail,
+.phone-shell .ask-layout.with-document { grid-template-columns: minmax(0, 1fr) !important; gap: 0; }
+.phone-shell .ask-side { position: absolute; width: 0; height: 0; overflow: visible; border: 0; }
+.phone-shell .ask-rail { display: none; }
+/* The history is a drawer over everything, opened from the clock in the top bar. */
+.phone-shell .ask-history,
+.phone-shell .ask-side.open .ask-history {
+  position: fixed; top: 0; bottom: 0; left: 0; z-index: 90; width: min(320px, 88vw);
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  border: 0; border-radius: 0 18px 18px 0; background: #f6f8fa; box-shadow: 0 18px 50px #172a3a40;
+  opacity: 1; transform: translateX(-110%); transition: transform .3s cubic-bezier(.2, .8, .2, 1);
+}
+.phone-shell .ask-side.open .ask-history { transform: none; }
+.phone-shell .ask-history-backdrop { display: block; position: fixed; inset: 0; z-index: 89; min-height: 0; border: 0; background: #0f1e2d59; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+.phone-shell .ask-history-backdrop.show { opacity: 1; pointer-events: auto; }
+.phone-shell .ask-history-close { width: 44px; height: 44px; }
+.phone-shell .ask-history-new { min-height: 48px; font-size: 16px; }
+.phone-shell .ask-history-item { min-height: 46px; font-size: 15px; }
+.phone-shell .ask-history-remove { width: 44px; height: 44px; opacity: .75; }
+.phone-shell .ask-history-group h2 { font-size: 13px; }
+
+.phone-shell .ask-chat { border-radius: 16px; }
+.phone-shell .ask-messages { padding: 14px 10px; gap: 14px; }
+.phone-shell .ask-welcome h2 { font-size: 26px; }
+.phone-shell .ask-msg.user { max-width: 90%; }
+.phone-shell .ask-msg.bot { grid-template-columns: minmax(0, 1fr); }
+.phone-shell .ask-avatar { display: none; }
+/* The textarea's default 20-column width would otherwise set the composer's narrowest size.
+   The text gets the whole first line; the buttons sit below it (attach left, voice and send right). */
+.phone-shell .ask-composer { grid-template-columns: minmax(0, 1fr); padding: 8px; }
+.phone-shell .ask-input-row { flex-wrap: wrap; gap: 2px 6px; padding: 6px 8px 8px 14px; border-radius: 22px; }
+.phone-shell .ask-input-row textarea { flex: 1 1 100%; padding: 4px 4px 2px 0; font-size: 17px; scrollbar-width: none; }
+.phone-shell .ask-input-row .ask-attach { margin-right: auto; margin-left: -6px; }
+.phone-shell .ask-round-button { width: 42px; height: 42px; min-width: 42px; }
+/* A document opens inside the chat card, between the conversation and the composer: the
+   conversation keeps the top, the page takes at most half, and nothing floats in between.
+   The chat section's box is dissolved so its parts and the panel share one column. */
+.phone-shell .ask-layout.with-document {
+  position: relative; display: flex; flex-direction: column;
+  overflow: hidden; border: 1px solid var(--ui-border); border-radius: 16px; background: var(--ui-surface);
+}
+.phone-shell .ask-layout.with-document .ask-chat { display: contents; }
+.phone-shell .ask-layout.with-document .ask-messages { order: 1; flex: 1 1 0; min-height: 96px; }
+.phone-shell .ask-layout.with-document .ask-document-panel {
+  order: 2; position: static; flex: 0 0 auto; height: min(46%, 380px); min-height: 0; max-height: none;
+  border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; box-shadow: none;
+  animation-name: ask-panel-up;
+}
+.phone-shell .ask-layout.with-document .ask-composer { order: 3; }
+/* Typing leaves little room: the page gives it back to the conversation and the keyboard. */
+.phone-shell.phone-typing .ask-layout.with-document .ask-document-panel { height: min(34%, 220px); }
+.phone-shell .ask-splitter { display: none; }
+
+/* ---------- Reading ---------- */
+.phone-shell .ocr-breadcrumb { display: none; }
+.phone-shell .ocr-page-header:not(:has(> :not(.ocr-breadcrumb))) { display: none; }
+/* The three steps in one slim row. */
+.phone-shell .ocr-step-progress { grid-template-columns: repeat(3, minmax(0, 1fr)); border-radius: 10px; overflow: hidden; }
+.phone-shell .ocr-step-progress li:nth-child(n) { border-bottom: 0; border-right: 1px solid #b8c0c7; }
+.phone-shell .ocr-step-progress li:last-child { border-right: 0; }
+.phone-shell .ux-shell .ocr-step-progress li, .phone-shell .ocr-step-progress li { flex-direction: row; justify-content: center; gap: 6px; padding: 7px 4px; }
+.phone-shell .ocr-step-progress li > span { flex: none; width: 22px; height: 22px; font-size: 12px; }
+.phone-shell .ocr-step-progress li strong { font-size: 12px; }
+.phone-shell .ocr-step-progress li small { display: none; }
+/* No clipping on the card: the start button below sticks to the window, not to the card. */
+.phone-shell .ocr-step-card { overflow: visible; }
+.phone-shell .ocr-step-card .ocr-step-panel { gap: 10px; padding: 10px; }
+/* The step itself says what to do; no heading on top of the list. */
+.phone-shell .ocr-template-select-card .ocr-step-heading { display: none; }
+.phone-shell .ocr-template-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.phone-shell .ocr-template-card:hover { transform: none; }
+.phone-shell .ocr-template-card-select { grid-template-rows: none; grid-template-columns: 96px minmax(0, 1fr); min-height: 72px; }
+.phone-shell .ocr-template-card-visual { aspect-ratio: auto; border-bottom: 0; border-right: 1px solid #cbd4da; }
+.phone-shell .ocr-template-card-copy { min-height: 72px; padding: 8px 12px; }
+.phone-shell .ocr-template-card-copy strong { font-size: 16px; }
+.phone-shell .ocr-template-editing-badge { top: 6px; left: 6px; font-size: 11px; }
+/* Earlier readings waiting below the templates: the summary alone, compact rows. */
+.phone-shell .home-history .section-lead { display: none; }
+.phone-shell .home-history summary { font-size: 14px; }
+.phone-shell .home-attention-list .job-row { min-height: 56px; }
+
+/* Image step: the camera first, then the saved photos; the start button stays in reach. */
+.phone-shell .ocr-reading-step-header { gap: 8px; }
+.phone-shell .ocr-reading-step-header h2, .phone-shell .ocr-template-name-editor-row strong { font-size: 17px; line-height: 1.4; }
+.phone-shell .ocr-template-name-edit { display: none; }
+.phone-shell .ocr-reading-back { width: 40px; min-height: 40px; }
+.phone-shell .ocr-reading-setup { display: flex; flex-direction: column; gap: 10px; }
+.phone-shell .ocr-reading-setup > .ocr-reading-input-panel { padding: 0; }
+/* The blank form was chosen on the previous step; it is not shown again here. */
+.phone-shell .ocr-reading-setup > .ocr-reading-reference { display: none; }
+.phone-shell .ocr-image-picker { display: flex; flex-direction: column; gap: 8px; }
+.phone-shell .ocr-image-picker > .ocr-camera-button { order: -1; margin-top: 0; }
+.phone-shell .ocr-camera-button { justify-content: center; align-items: center; gap: 10px; min-height: 58px; border-radius: 14px; font-size: 18px; }
+.phone-shell .ocr-camera-button svg { width: 24px; height: 24px; }
+.phone-shell .ocr-image-surface { height: auto; min-height: 0; padding: 0; border: 0; background: none; }
+.phone-shell .ocr-image-surface .ocr-image-target { position: static; display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 8px; min-height: 46px; padding: 8px 12px; border: 1px solid #b9c6d1; border-radius: 12px; background: #fff; }
+.phone-shell .ocr-image-surface .ocr-image-target small, .phone-shell .ocr-image-surface .drop-icon { display: none; }
+.phone-shell .ocr-image-target strong { font-size: 15px; }
+/* The camera button says enough; no tips paragraph on a phone. */
+.phone-shell .ocr-photo-tips:not([role="status"]) { display: none; }
+.phone-shell .series-picker .switch-row small { display: none; }
+.phone-shell .series-picker .switch-row strong { font-size: 14px; }
+.phone-shell .ocr-step-actions { position: sticky; bottom: calc(var(--phone-tabs) + 6px); z-index: 5; padding-top: 6px; background: linear-gradient(#fff0, #fff 40%); }
+.phone-shell.phone-typing .ocr-step-actions { bottom: 6px; }
+.phone-shell .ocr-step-actions .primary { width: 100%; min-height: 52px; font-size: 17px; }
+
+/* ---------- Review ---------- */
+/* Identity check: the field name is the question; the template was chosen already. */
+.phone-shell .identity-template-card { display: none; }
+.phone-shell .identity-confirm-card { padding: 12px; }
+.phone-shell .identity-confirm-card h2 { font-size: 17px; }
+.phone-shell .identity-confirm-preview { margin-top: 8px; }
+.phone-shell .identity-result-label, .phone-shell .identity-confirm-card .field-label > small { display: none; }
+.phone-shell .identity-next { gap: 8px; }
+.phone-shell .identity-next .primary { flex: 1 1 auto; }
+/* Results: 再編集 / .xlsx (or 廃棄) beside the back button; the name and 「内容を確定する」 in a bar above the tabs. */
+.phone-shell .review-header-actions { flex: 0 1 auto; margin-left: 0; }
+.phone-shell .review-header-actions .excel-export-actions { flex: none; }
+.phone-shell .review-header-actions .secondary, .phone-shell .review-header-actions .primary { flex: none; min-height: 40px; padding: 0 12px; font-size: 14px; white-space: nowrap; }
+.phone-shell .review-page { padding-bottom: 72px; }
+.review-phone-bar {
+  position: fixed; left: 0; right: 0; bottom: var(--phone-tabs); z-index: 70;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px calc(8px + 0px);
+  border-top: 1px solid #d4dde5; background: #ffffffee; backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3);
+}
+.phone-shell.phone-typing .review-phone-bar { bottom: 0; }
+.review-phone-bar .document-name-field { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.review-phone-bar .document-name-field > span { flex: none; font-size: 13px; }
+.review-phone-bar .document-name-field input { flex: 1 1 auto; min-width: 0; min-height: 44px; font-size: 16px; }
+.review-phone-bar .primary { flex: none; min-height: 44px; padding: 0 14px; font-size: 15px; white-space: nowrap; }
+.review-phone-bar .review-save-retry { flex: none; }
+.phone-shell .ocr-join-configure, .phone-shell .review-column-navigation { display: none; }
+.phone-shell .ocr-edit-section > header h3 { font-size: 16px; }
+.phone-shell .field-toolbar { padding: 8px 10px; }
+.phone-shell .field-toolbar-actions { justify-content: flex-start; }
+.phone-shell .field-toolbar-actions > span:last-child:not(.review-edit-label) { display: none; }
+
+/* ---------- Library ---------- */
+.phone-shell .shelf-page { padding: 0; }
+.phone-shell .shelf-main { padding: 10px; }
+.phone-shell .shelf-pick-head { display: none; }
+.phone-shell .shelf-main > .shelf-header-actions { padding-bottom: 10px; }
+.phone-shell .shelf-card-body strong { font-size: 15px; }
+/* Deleting documents in bulk stays on the PC. */
+.phone-shell .shelf-choose { display: none; }
+.phone-shell .shelf-header-actions .shelf-search { flex: 1 1 0; min-width: 0; }
+.phone-shell .shelf-document-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.phone-shell .shelf-document-title { min-width: 0; }
+.phone-shell .shelf-document-title h2 { font-size: 19px; }
+.phone-shell .shelf-document-title p { font-size: 13px; }
+.phone-shell .shelf-document-actions { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 8px; }
+.phone-shell .shelf-document-actions > * { flex: 1 1 0; min-width: 0; }
+.phone-shell .shelf-document-actions .excel-export-actions .primary { width: 100%; }
+.phone-shell .shelf-viewer-pane { position: static; }
+.phone-shell .shelf-viewer-scroll { max-height: 52dvh; }
+/* With a document open, the search belongs to the list behind it. */
+.phone-shell .shelf-main:has(.shelf-document) .shelf-search,
+.phone-shell .shelf-main:has(.shelf-document) .shelf-refresh { display: none; }

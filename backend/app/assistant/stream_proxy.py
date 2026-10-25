@@ -27,7 +27,7 @@ from app.ai.realtime_transcription import (
 )
 from app.assistant.stream_contracts import AudioBegin, AudioControl
 from app.assistant.stream_service import StreamService
-from app.core.config import Settings
+from app.core.config import Settings, local_host
 from app.core.errors import AppError
 from app.editing.errors import reject
 
@@ -82,7 +82,7 @@ async def run_proxy(
     try:
         if (
             (not getattr(socket.app.state, "cloud_authenticated", False)
-             and socket.url.hostname not in {"127.0.0.1", "localhost", "::1"})
+             and not local_host(socket.url.hostname))
             or socket.headers.get("origin") not in settings.app.frontend_origins
         ):
             await socket.close(code=1008)

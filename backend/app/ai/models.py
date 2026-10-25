@@ -15,6 +15,7 @@ class ApiCallLedger(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     ordinal: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
-    purpose: Mapped[str] = mapped_column(String(20), nullable=False)
+    # e.g. "editing.v2.voice.connect"; SQLite never enforced the old 20.
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(20), default="RESERVED", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

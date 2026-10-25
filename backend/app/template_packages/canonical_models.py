@@ -190,7 +190,7 @@ class CanonicalAssetReferences(CanonicalModel):
 class CanonicalTemplate(CanonicalModel):
     schema_version: Literal[2] = 2
     name: str = Field(min_length=1, max_length=300)
-    document_type: Literal["generic-document"]
+    document_type: Literal["generic-document", "spreadsheet"]
     mode: TemplateMode
     canonical_width: int = Field(gt=0)
     canonical_height: int = Field(gt=0)

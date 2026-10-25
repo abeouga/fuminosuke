@@ -55,7 +55,8 @@ export function flyIntoConversation(sources: Map<string, Source>) {
   sources.forEach((source, id) => {
     const target = document.querySelector<HTMLElement>(`[data-reading-image="${CSS.escape(id)}"]`);
     if (!target) return;
-    const bubble = target.closest<HTMLElement>(".ask-msg") ?? target;
+    // An image sent with text hides only itself; the text bubble beside it stays.
+    const bubble = target.closest<HTMLElement>(".ask-turn-image") ?? target.closest<HTMLElement>(".ask-msg") ?? target;
     bubble.classList.add("is-flying-in");
     const flyer = paper(source.src, source.rect);
     const delay = index++ * 70;

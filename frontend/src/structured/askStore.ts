@@ -30,6 +30,8 @@ export type Turn = {
   pending: boolean;
   /** Choice value picked from this turn's question, to mark it as chosen. */
   picked: string | null;
+  /** An answer made here without asking the server (「読み取って」 sent with images). */
+  local?: string;
 };
 export type Conversation = { id: string; title: string; updatedAt: number; turns: Turn[] };
 export type AskState = {
@@ -57,6 +59,8 @@ export type AskViewer = {
   evidence: Evidence[];
   /** The cell picked last; it is scrolled into view and shown below the page. */
   focus: string | null;
+  /** Only the sheet's picture (a reading not confirmed yet, which has no document to show). */
+  image?: boolean;
 };
 
 const STORAGE_KEY = "fuminosuke-ask-v1";
@@ -297,13 +301,14 @@ function conversationContext(): QuestionContext | undefined {
   };
 }
 
-function push(text: string, base: Turn["request"], scope: ScopeItem[]) {
+function push(text: string, base: Turn["request"], scope: ScopeItem[]): number {
   const context = conversationContext();
   const request = context ? { ...base, context } : base;
   const id = nextId++;
   const turn: Turn = { id, text, request, scope, result: null, error: null, errorCode: null, pending: true, picked: null };
   set((current) => ({ turns: [...current.turns, turn].slice(-MAX_TURNS), replyMode: true }));
   void run(id);
+  return id;
 }
 
 export const askStore = {
@@ -316,11 +321,21 @@ export const askStore = {
   busy: () => state.turns.some((turn) => turn.pending),
 
   /** A new question over the given documents (none: every confirmed document). */
-  ask(text: string, scope: ScopeItem[]) {
+  ask(text: string, scope: ScopeItem[]): number | null {
     const question = text.trim();
-    if (!question || askStore.busy()) return;
+    if (!question || askStore.busy()) return null;
     const documentIds = scope.length > 0 ? scope.map((item) => item.jobId) : undefined;
-    push(question, { text: question, ...(documentIds ? { documentIds } : {}) }, scope);
+    return push(question, { text: question, ...(documentIds ? { documentIds } : {}) }, scope);
+  },
+
+  /** A message answered here, without the server (the images sent with it are what it asks for). */
+  note(text: string, answer: string): number | null {
+    const words = text.trim();
+    if (!words || askStore.busy()) return null;
+    const id = nextId++;
+    const turn: Turn = { id, text: words, request: { text: words }, scope: [], result: null, error: null, errorCode: null, pending: false, picked: null, local: answer };
+    set((current) => ({ turns: [...current.turns, turn].slice(-MAX_TURNS), replyMode: true }));
+    return id;
   },
 
   /** Answer a turn's question with one of its choices. */
@@ -333,11 +348,11 @@ export const askStore = {
   },
 
   /** Answer the open question in the user's own words. */
-  replyText(text: string) {
+  replyText(text: string): number | null {
     const open = openQuestion(state);
     const words = text.trim();
-    if (!open || !words || askStore.busy()) return;
-    push(words, { text: "", replyTo: { questionId: open.question.questionId, text: words } }, open.turn.scope);
+    if (!open || !words || askStore.busy()) return null;
+    return push(words, { text: "", replyTo: { questionId: open.question.questionId, text: words } }, open.turn.scope);
   },
 
   /** Stop the question being answered: its request is dropped and the server cancels the work. */

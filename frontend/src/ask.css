@@ -200,7 +200,6 @@
 .ask-chat{position:relative}
 .ask-chat.dropping .ask-messages{outline:2px dashed var(--ui-primary);outline-offset:-10px}
 .ask-drop-hint{position:absolute;top:45%;left:0;right:0;z-index:2;display:flex;justify-content:center;align-items:center;gap:8px;color:var(--ui-primary-dark);font-size:16px;font-weight:700;pointer-events:none}
-.ask-welcome-hint{margin:0;color:var(--ui-text-muted);font-size:15px}
 .ask-msg.user.image{max-width:min(60%,280px)}
 .ask-image{display:block;max-width:100%;max-height:220px;border:1px solid var(--ui-border);border-radius:12px 12px 4px 12px;background:#fff;object-fit:contain;box-shadow:0 4px 12px #1d354514}
 .ask-reading-status{display:flex;align-items:center;gap:8px;margin:0;color:var(--ui-text-secondary);font-size:16px}
@@ -230,7 +229,12 @@
 .ask-icon-button{font-size:18px}
 .ask-icon-button[aria-pressed="true"]{border-color:var(--ui-primary);background:var(--ui-primary-soft);color:var(--ui-primary)}
 .ask-icon-button:disabled{opacity:.45;cursor:default}
-.ask-history{display:flex;flex-direction:column;gap:12px;min-height:0;padding:12px 10px;border:1px solid var(--ui-border);border-radius:18px;background:#f4f7fa;animation:ask-history-in .32s cubic-bezier(.2,.8,.2,1)}
+.ask-layout{transition:grid-template-columns .32s cubic-bezier(.2,.8,.2,1)}
+body.ask-resizing .ask-layout{transition:none}
+/* One panel: its width slides between the rail (56px) and the history (268px); the contents cross-fade. */
+.ask-side{position:relative;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--ui-border);border-radius:18px;background:#f4f7fa}
+.ask-history{position:absolute;top:0;bottom:0;left:0;width:266px;display:flex;flex-direction:column;gap:12px;min-height:0;padding:12px 10px;box-sizing:border-box;opacity:0;transform:translateX(-12px);pointer-events:none;transition:opacity .16s ease,transform .32s cubic-bezier(.2,.8,.2,1)}
+.ask-side.open .ask-history{opacity:1;transform:none;pointer-events:auto;transition:opacity .22s ease .08s,transform .32s cubic-bezier(.2,.8,.2,1)}
 .ask-history-close{align-self:flex-start;margin-left:4px;border-color:transparent;background:transparent}
 .ask-history-close:hover{background:#e6edf4}
 .ask-history-new{display:flex;align-items:center;gap:10px;min-height:46px;padding:0 16px;border:0;border-radius:999px;background:#fff;color:var(--ui-text);font-size:15px;font-weight:700;box-shadow:0 2px 8px #1d35450f;cursor:pointer;transition:box-shadow .2s,transform .2s}
@@ -255,16 +259,23 @@
 .ask-history-backdrop{display:none}
 .ask-layout.with-rail{grid-template-columns:56px minmax(0,1fr)}
 .ask-layout.with-rail.with-document{grid-template-columns:56px minmax(0,1fr) minmax(0,1fr)}
-.ask-rail{display:flex;flex-direction:column;align-items:center;gap:8px;min-height:0;padding:12px 0;border:1px solid var(--ui-border);border-radius:18px;background:#f4f7fa;animation:ask-fade .25s ease}
+.ask-rail{position:absolute;top:0;bottom:0;left:0;width:54px;display:flex;flex-direction:column;align-items:center;gap:8px;min-height:0;padding:12px 0;box-sizing:border-box;transition:opacity .2s ease .1s}
+.ask-side.open .ask-rail{opacity:0;pointer-events:none;transition:opacity .12s ease}
 .ask-rail .ask-icon-button{width:40px;height:40px;border-color:transparent;border-radius:12px;background:transparent}
 .ask-rail .ask-icon-button:hover:not(:disabled){background:#e6edf4;color:var(--ui-primary)}
 .ask-rail .ask-rail-new:not(:disabled){background:#fff;color:var(--ui-text);box-shadow:0 2px 8px #1d35450f}
-@keyframes ask-history-in{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
 @media (max-width:900px){
-  .ask-layout.with-history,.ask-layout.with-history.with-document,.ask-layout.with-rail.with-document{grid-template-columns:minmax(0,1fr)}
-  .ask-layout.with-rail.with-document .ask-rail{display:none}
-  .ask-history{position:fixed;top:0;bottom:0;left:0;z-index:46;width:min(300px,86vw);border-radius:0 18px 18px 0;box-shadow:0 18px 50px #172a3a40}
-  .ask-history-backdrop{display:block;position:fixed;inset:0;z-index:44;min-height:0;border:0;background:#0f1e2d59;animation:ask-fade .25s ease}
+  /* Narrow: the rail keeps its column and the history slides in over the page as a drawer. */
+  .ask-layout.with-history{grid-template-columns:56px minmax(0,1fr)}
+  .ask-layout.with-history.with-document,.ask-layout.with-rail.with-document{grid-template-columns:minmax(0,1fr)}
+  .ask-side{overflow:visible}
+  .ask-layout.with-document .ask-side{position:absolute;width:0;height:0;border:0}
+  .ask-layout.with-document .ask-rail{display:none}
+  .ask-side.open .ask-rail{opacity:1}
+  .ask-history,.ask-side.open .ask-history{position:fixed;z-index:46;width:min(300px,86vw);border:1px solid #c2cdd7;border-radius:0 18px 18px 0;background:#f6f8fa;box-shadow:0 18px 50px #172a3a40;opacity:1;transform:translateX(-110%);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+  .ask-side.open .ask-history{transform:none}
+  .ask-history-backdrop{display:block;position:fixed;inset:0;z-index:44;min-height:0;border:0;background:#0f1e2d59;opacity:0;pointer-events:none;transition:opacity .25s ease}
+  .ask-history-backdrop.show{opacity:1;pointer-events:auto}
   .ask-history-remove{opacity:1}
 }
 
@@ -272,9 +283,8 @@
 .ask-messages{gap:20px}
 .ask-welcome{gap:16px}
 .ask-welcome-hello,.ask-welcome-ask{display:block;opacity:0;animation:ask-rise .7s cubic-bezier(.2,.8,.2,1) forwards}
-.ask-welcome-hello{background:linear-gradient(90deg,#4f8df7,#9b72f2 45%,#e8758f 70%,#4f8df7);background-size:240% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:ask-rise .7s cubic-bezier(.2,.8,.2,1) forwards,ask-flow 6s linear infinite}
+.ask-welcome-hello{background:linear-gradient(90deg,#4f8df7,#9b72f2 45%,#e8758f 70%,#4f8df7);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:ask-rise .7s cubic-bezier(.2,.8,.2,1) forwards,ask-flow 6s linear infinite}
 .ask-welcome-ask{color:#a5b2be;animation-delay:.18s}
-.ask-welcome-hint{opacity:0;animation:ask-rise .7s .36s cubic-bezier(.2,.8,.2,1) forwards}
 
 .ask-msg.user{animation:ask-user-in .38s cubic-bezier(.2,.8,.2,1)}
 .ask-msg.bot{animation:ask-rise .45s cubic-bezier(.2,.8,.2,1)}
@@ -299,7 +309,7 @@
 .ask-thinking i:nth-child(2){width:86%;animation-delay:.12s}
 .ask-thinking i:nth-child(3){width:58%;animation-delay:.24s}
 
-.ask-input-row:focus-within::before{content:"";position:absolute;inset:-4px;z-index:-1;border-radius:32px;background:linear-gradient(90deg,#4f8df7,#9b72f2,#e8758f,#4f8df7);background-size:300% 100%;animation:ask-flow 4s linear infinite}
+.ask-input-row:focus-within::before{content:"";position:absolute;inset:-4px;z-index:-1;border-radius:32px;background:linear-gradient(90deg,#4f8df7,#9b72f2,#e8758f,#4f8df7);background-size:200% 100%;animation:ask-flow 4s linear infinite}
 .ask-input-row:focus-within::after{content:"";position:absolute;inset:-1px;z-index:-1;border-radius:29px;background:#fff}
 .ask-composer{position:relative;z-index:0}
 .ask-send:not(:disabled){background:linear-gradient(135deg,#4f8df7,#7b6ff0);transition:transform .2s,box-shadow .2s}
@@ -317,12 +327,13 @@
 .deploy-shell .side-nav nav button.nav-ask.active::after{content:"";position:absolute;inset:2px;z-index:-1;border-radius:6px;background:#eef3fe}
 @keyframes ask-nav-flow{from{transform:translate3d(0,0,0)}to{transform:translate3d(-50%,0,0)}}
 @media (prefers-reduced-motion:reduce){.deploy-shell .side-nav nav button.nav-ask.active::before{animation:none}}
-@keyframes ask-flow{from{background-position:0% 50%}to{background-position:240% 50%}}
+@keyframes ask-flow{from{background-position:0% 50%}to{background-position:200% 50%}}
 @keyframes ask-shimmer{from{background-position:100% 0}to{background-position:-200% 0}}
 @keyframes ask-spin{to{transform:rotate(360deg)}}
 @keyframes ask-fade{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){
-  .ask-history,.ask-history-backdrop,.ask-msg.user,.ask-msg.bot,.ask-msg.bot .ask-bubble>*,.ask-welcome-hello,.ask-welcome-ask,.ask-welcome-hint{animation:none;opacity:1}
+  .ask-layout,.ask-side .ask-history,.ask-side .ask-rail,.ask-history-backdrop{transition:none !important}
+  .ask-msg.user,.ask-msg.bot,.ask-msg.bot .ask-bubble>*,.ask-welcome-hello,.ask-welcome-ask{animation:none;opacity:1}
   .ask-avatar.thinking::before,.ask-avatar.thinking b,.ask-input-row:focus-within::before{animation:none}
   .ask-thinking i{animation-duration:3s}
 }
@@ -381,7 +392,7 @@
 
 /* 書類の欄はチャットと一続きの枠：間は1本の線で、つまんで幅を変える */
 .ask-layout.with-document{column-gap:0}
-.ask-layout.with-document .ask-history,.ask-layout.with-document .ask-rail{margin-right:16px}
+.ask-layout.with-document .ask-side{margin-right:16px}
 .ask-layout.with-document .ask-chat{border-right:0;border-radius:14px 0 0 14px}
 .ask-layout.with-document .ask-document-panel{position:relative;border-radius:0 14px 14px 0;box-shadow:0 6px 18px #1d354508}
 .ask-splitter{position:absolute;top:0;bottom:0;left:-1px;z-index:5;width:11px;cursor:col-resize;touch-action:none}
@@ -440,7 +451,7 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 .ask-messages{background:#eef2f6}
 .ask-msg.bot .ask-bubble{border-color:#d2dbe3;box-shadow:0 1px 2px #1d354512,0 4px 14px #1d35450f}
 .ask-composer{border-top-color:#d2dbe3}
-.ask-history,.ask-rail{border-color:#c2cdd7;background:#f6f8fa}
+.ask-side{border-color:#c2cdd7;background:#f6f8fa}
 .ask-document-panel{border-color:#c2cdd7}
 
 /* Images attached to the message box: read only when the message is sent. */
@@ -472,4 +483,22 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 .chat-flight-layer{position:fixed;inset:0;z-index:1200;pointer-events:none}
 .chat-flight-paper{position:fixed;overflow:hidden;border:1px solid #d3dbe2;border-radius:12px;background:#fff;box-shadow:0 10px 26px #10283d2e,0 2px 6px #10283d1a;will-change:transform,opacity,left,top}
 .chat-flight-paper img{width:100%;height:100%;object-fit:cover;user-select:none;-webkit-user-drag:none}
-.ask-msg.is-flying-in{visibility:hidden}
+.ask-msg.is-flying-in,.ask-turn-image.is-flying-in{visibility:hidden}
+/* Images sent together with text: in the same message, and their readings under the same answer. */
+.ask-turn-images{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:min(100%,420px);margin-bottom:6px}
+.ask-turn-image{flex:0 1 auto;max-width:200px}
+.ask-turn-images .ask-image{max-height:160px}
+.ask-turn-readings{display:grid;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--ui-border)}
+.ask-turn-readings:first-child{margin-top:0;padding-top:0;border-top:0}
+.ask-turn-reading{display:grid;gap:10px}
+/* The continuation question: short option cards (their explanation behind the i), the earlier sheet opens on the right. */
+.ask-continuation-option{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 10px 11px 14px}
+.ask-option-info{margin-top:0}
+.ask-option-info .ask-info-button{width:24px;height:24px;font-size:15px}
+.ask-continuation-option:hover .ask-option-info .ask-info-button{color:var(--ui-primary)}
+.ask-option-info .ask-info-pop{font-size:13px;font-weight:400}
+.ask-msg.bot:has(.ask-option-info:hover){position:relative;z-index:5}
+button.ask-continuation-earlier{width:100%;min-height:0;font:inherit;color:var(--ui-text);text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+button.ask-continuation-earlier:hover{border-color:var(--ui-primary);box-shadow:0 6px 16px #23699e1f}
+button.ask-continuation-earlier.is-showing{border-color:var(--ui-primary);background:#f2f8fc}
+.ask-continuation-cancel{display:flex;justify-content:flex-end}

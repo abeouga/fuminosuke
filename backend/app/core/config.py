@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 import shutil
 from dataclasses import dataclass
@@ -11,6 +12,17 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def local_host(hostname: str | None) -> bool:
+    """Loopback, or a private IPv4 address so phones on the same network can open the frontend."""
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        address = ipaddress.ip_address(hostname or "")
+    except ValueError:
+        return False
+    return address.version == 4 and address.is_private and not address.is_unspecified
 
 
 class AppSettings(BaseModel):
@@ -46,16 +58,16 @@ class AppSettings(BaseModel):
                 raise ValueError("Wildcard CORS origins are forbidden")
             parsed = urlparse(origin)
             if info.data.get("environment") == "cloud":
-                if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                # http only for the local trial against the real Cognito pool (loopback origin).
+                local_trial = (parsed.scheme == "http"
+                               and parsed.hostname in {"localhost", "127.0.0.1"})
+                if ((parsed.scheme != "https" and not local_trial) or not parsed.hostname
+                        or parsed.username
                         or parsed.password or parsed.path or parsed.query or parsed.fragment):
                     raise ValueError("Cloud frontend origins must be exact HTTPS origins")
                 continue
-            if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
-                "localhost",
-                "127.0.0.1",
-                "::1",
-            }:
-                raise ValueError("Only loopback frontend origins are allowed")
+            if parsed.scheme not in {"http", "https"} or not local_host(parsed.hostname):
+                raise ValueError("Only loopback or private-network frontend origins are allowed")
         return origins
 
 
@@ -66,7 +78,8 @@ class StorageSettings(BaseModel):
 
 class DatabaseSettings(BaseModel):
     url: str = Field(repr=False)
-    schema_name: str | None = Field(default=None, pattern=r"^tenant_[0-9a-f]{32}$")
+    # PostgreSQL only: the schema every connection uses (cloud: tenant_<id>, local: DATABASE_SCHEMA).
+    schema_name: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
 
 class JobSettings(BaseModel):
@@ -188,6 +201,7 @@ class RawSettings(BaseSettings):
     )
     data_dir: Path = Field(default=Path("./data"), validation_alias="DATA_DIR")
     database_url: str = Field(default="sqlite:///./data/app.db", validation_alias="DATABASE_URL")
+    database_schema: str = Field(default="app", validation_alias="DATABASE_SCHEMA")
     log_file: Path = Field(default=Path("./data/logs/app.log"), validation_alias="LOG_FILE")
     max_upload_bytes: int = Field(default=20_971_520, validation_alias="MAX_UPLOAD_BYTES")
     max_image_pixels: int = Field(default=30_000_000, validation_alias="MAX_IMAGE_PIXELS")
@@ -342,7 +356,12 @@ class Settings:
                 data_dir=data_dir,
                 max_upload_bytes=raw.max_upload_bytes,
             ),
-            database=DatabaseSettings(url=database_url),
+            database=DatabaseSettings(
+                url=database_url,
+                schema_name=(
+                    raw.database_schema if database_url.startswith(POSTGRES_PREFIX) else None
+                ),
+            ),
             jobs=JobSettings(
                 max_concurrency=raw.job_max_concurrency,
                 thread_workers=raw.job_thread_workers,
@@ -417,14 +436,19 @@ def _require_descendant(path: Path, root: Path, label: str) -> None:
         raise ValueError(f"{label} must be inside DATA_DIR") from exc
 
 
+POSTGRES_PREFIX = "postgresql+psycopg://"
+
+
 def _normalize_database_url(url: str, data_dir: Path) -> str:
+    if url.startswith(POSTGRES_PREFIX):
+        return url
     memory_urls = {"sqlite:///:memory:", "sqlite+pysqlite:///:memory:"}
     if url in memory_urls:
         return "sqlite+pysqlite:///:memory:"
     prefixes = ("sqlite:///", "sqlite+pysqlite:///")
     prefix = next((candidate for candidate in prefixes if url.startswith(candidate)), None)
     if prefix is None:
-        raise ValueError("Only SQLite DATABASE_URL values are supported")
+        raise ValueError("DATABASE_URL must be SQLite or postgresql+psycopg://")
     path_text = url[len(prefix) :]
     database_path = Path(path_text).expanduser().resolve()
     _require_descendant(database_path, data_dir, "DATABASE_URL")
