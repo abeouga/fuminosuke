@@ -133,6 +133,7 @@ class TemplateFieldMemoryService:
                         "exampleAfter": row.example_after,
                         "hitCount": row.hit_count,
                         "updatedAt": row.updated_at.isoformat(),
+                        "targetPatterns": list(row.target_patterns_json),
                         "boxes": [
                             box
                             for target in row.target_patterns_json

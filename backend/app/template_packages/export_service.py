@@ -148,6 +148,11 @@ class TemplateExportService:
                     if "optional/spreadsheet-source.xlsx" in collected.payloads
                     else None
                 ),
+                printable_pdf=(
+                    "optional/printable.pdf"
+                    if "optional/printable.pdf" in collected.payloads
+                    else None
+                ),
             )
             canonical, quality = self._mapper.map_template(
                 session,

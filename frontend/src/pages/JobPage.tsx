@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { InfoTip } from "../components/InfoTip";
 import { ApiError, api } from "../api";
 import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
@@ -69,11 +70,10 @@ export function JobPage({
   return (
     <div className="page-stack narrow">
       <header className="page-header split has-back">
-        <button className="ghost page-back" type="button" onClick={onClose}>← 読み取りへ</button>
+        <button className="ghost page-back" type="button" onClick={onClose}>← 戻る</button>
         <div>
           <span className="eyebrow">PROCESS RECOVERY</span>
-          <h1>処理状況を確認</h1>
-          <p>保存された処理状況を確認し、再試行または新しい登録など必要な対応を選べます。</p>
+          <h1>処理状況を確認<InfoTip text="やり直すか、新しく読み取るか選べます。" /></h1>
         </div>
       </header>
 
@@ -136,7 +136,7 @@ export function JobPage({
                 処理を中止
               </button>
             )}
-            <button className="secondary" type="button" onClick={onClose}>読み取りへ戻る</button>
+            <button className="secondary" type="button" onClick={onClose}>戻る</button>
           </div>
         </section>
       )}

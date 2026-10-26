@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { InfoTip } from "../components/InfoTip";
 import type { CSSProperties } from "react";
 import { FiArrowLeft, FiArrowRight, FiCheck, FiDownload, FiEdit3, FiRefreshCw, FiSave } from "react-icons/fi";
 import { api } from "../api";
@@ -9,6 +10,8 @@ import {
   ReviewPenSurface,
   useReviewPaint,
   ReviewChecklists,
+  ReviewChoiceLabels,
+  choiceLabelsByPath,
   ReviewJoins,
   ReviewRenaming,
   checklistOptionsByPath,
@@ -43,7 +46,7 @@ import { ReviewPresenceDialog, useReviewPresence } from "../components/ReviewPre
 
 type Drafts = Record<string, Record<string, PageFieldEdit>>;
 
-export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, templateNames = {}, closeLabel = "ホームへ" }: {
+export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, templateNames = {}, closeLabel = "戻る" }: {
   jobId: string;
   /** `discarded`: the unsaved input was thrown away on purpose, so leaving does not ask again. */
   onClose: (discarded?: boolean) => void;
@@ -402,8 +405,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
     {leaveDialog && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="paged-leave-title"><h2 id="paged-leave-title">確定しないで戻りますか？</h2><p>再編集で変えた内容は、まだ確定されていません。確定済みの内容に戻すと、ライブラリには前の内容のまま残ります。再編集中のままにすると、確定するまでライブラリに表示されません。</p><div className="page-actions"><button className="secondary" disabled={busy} onClick={() => setLeaveDialog(false)}>編集を続ける</button><button className="secondary" disabled={busy} onClick={() => { setLeaveDialog(false); onClose(); }}>再編集中のまま戻る</button><button className="primary" disabled={busy || needsRefresh} onClick={() => void restoreConfirmed()}>{busy ? <Spinner /> : null}確定済みの内容に戻す</button></div></section></div>}
     <header className="page-header split has-back">
       <button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft aria-hidden="true" />{closeLabel}</button>
-      <div><h1>読み取り結果を確認</h1>
-        <p>全ページの画像と読み取り結果を確認・修正してから確定します。確定後にXLSXを取得できます。</p></div>
+      <div><h1>読み取り結果を確認<InfoTip text="全ページ見て直してから確定します。" /></h1></div>
       {result && !result.confirmed && !result.reopened && <div className="page-actions">
         <DiscardReading jobId={jobId} disabled={busy} onDiscarded={() => onClose(true)} />
       </div>}
@@ -472,7 +474,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
             penActive={pen && !result.confirmed}
             onPenChange={changePen}
           />
-          <ReviewChecklists.Provider value={checklistOptionsByPath(pagePreviews)}><ReviewRenaming.Provider value={interactionMode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={(path) => { const entry = pageEntries.find((item) => item.path === path); if (entry) selectEntry(entry); }} onExit={() => changePen(false)}><div className="ocr-edit-tables paged-review-results">
+          <ReviewChecklists.Provider value={checklistOptionsByPath(pagePreviews)}><ReviewChoiceLabels.Provider value={choiceLabelsByPath(pagePreviews)}><ReviewRenaming.Provider value={interactionMode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}><ReviewPenSurface active={pen && !result.confirmed} painted={painted} onPaint={paint} onHover={(path) => { const entry = pageEntries.find((item) => item.path === path); if (entry) selectEntry(entry); }} onExit={() => changePen(false)}><div className="ocr-edit-tables paged-review-results">
             {displayBlocks.map((block) => block.kind === "record" ? (
               <GenericRecordReviewTable
                 key={block.key}
@@ -522,7 +524,7 @@ export function PagedReviewPage({ jobId, onClose, onConfirmed, onNavigationGuard
                 />
               </ReviewTableSection>
             ))}
-          </div></ReviewPenSurface></ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider>
+          </div></ReviewPenSurface></ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChoiceLabels.Provider></ReviewChecklists.Provider>
           {!result.confirmed && !pen && interactionMode === "edit" && selected && selectedEntry && selected.markRecognitionMode !== "checklist" && (() => {
             const markPreview = selected.mappingType === "mark"
               ? pagePreviews.find(preview => preview.mappingId === selected.mappingId) : undefined;

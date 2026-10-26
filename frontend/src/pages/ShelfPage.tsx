@@ -16,6 +16,7 @@ import {
   type StructuredTable,
 } from "../structured/client";
 import { ImageSpinner, Spinner } from "../components/Spinner";
+import { choiceText } from "../components/OcrReviewResults";
 import { leftReviewsSettled } from "../reviewLeave";
 
 /** What the shelf shows; kept by the app so a review opened from here can come back to it. */
@@ -533,6 +534,11 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
   </article>;
 }
 
+/** A repeated choice stored numbered (黒2) is shown by its printed name (黒). */
+function shownValue(reading: StructuredReading): string | null {
+  return reading.value === null ? null : choiceText(reading.value, reading.choiceLabels ?? undefined);
+}
+
 function ReadingValue({ reading, active, buttonRef, onPick }: {
   reading: StructuredReading;
   active: boolean;
@@ -540,7 +546,7 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
   onPick: () => void;
 }) {
   return <button ref={buttonRef} type="button" className={`shelf-value${active ? " active" : ""}`} aria-pressed={active} title="原本のこの欄を表示" onClick={onPick}>
-    {reading.value ?? <em>空欄</em>}
+    {shownValue(reading) ?? <em>空欄</em>}
     {reading.status === "uncertain" && <small className="shelf-uncertain">要確認</small>}
   </button>;
 }
@@ -693,7 +699,7 @@ function PickedRow({ title, rowNumber, cells, imageUrl, box }: {
     </div>}
     <div className="shelf-picked-text">
       <span>{title} {rowNumber}行目</span>
-      <dl className="shelf-row-values">{cells.map((cell) => <div key={cell.reading.fieldId}><dt>{cell.label}</dt><dd>{cell.reading.value ?? "空欄"}</dd></div>)}</dl>
+      <dl className="shelf-row-values">{cells.map((cell) => <div key={cell.reading.fieldId}><dt>{cell.label}</dt><dd>{shownValue(cell.reading) ?? "空欄"}</dd></div>)}</dl>
     </div>
   </div>;
 }
@@ -705,7 +711,7 @@ function PickedField({ reading, place }: { reading: StructuredReading; place: st
     {reading.cropUrl && !failed && <img src={reading.cropUrl} alt={`${place}の原本`} draggable={false} onError={() => setFailed(true)} />}
     <div className="shelf-picked-text">
       <span>{place}</span>
-      <strong>{reading.value ?? "空欄"}</strong>
+      <strong>{shownValue(reading) ?? "空欄"}</strong>
     </div>
   </div>;
 }

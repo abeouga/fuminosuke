@@ -181,7 +181,7 @@ export function TemplateTrashPanel({ onClose, onRestored }: {
   return <div className="trash-panel">
     <div className="trash-panel-head">
       <h3><FiTrash2 aria-hidden="true" />ごみ箱</h3>
-      <button type="button" className="ghost compact" onClick={onClose}><FiX aria-hidden="true" />一覧に戻る</button>
+      <button type="button" className="ghost compact" onClick={onClose}><FiX aria-hidden="true" />戻る</button>
     </div>
     {error && <p className="trash-error" role="alert">{error}</p>}
     {!items && !error && <p className="trash-note"><Spinner />読み込んでいます…</p>}

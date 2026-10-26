@@ -24,7 +24,7 @@ import { privateLocalStorage } from "../auth/transport";
 import { PageViewer } from "./ShelfPage";
 import { chatReadings, useChatAttachments, useChatReadings, type ChatReading } from "../structured/chatReadings";
 import { showToast } from "../components/Toast";
-import { useReadingQueue } from "../readingQueue";
+import { useReadingState } from "../readingQueue";
 import { Spinner } from "../components/Spinner";
 import { Markdown } from "../components/Markdown";
 import { captureAttachments, flyIntoConversation, flyToReadingQueue } from "../components/chatFlights";
@@ -319,7 +319,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             <FiClock aria-hidden="true" />
           </button>
           <button type="button" className="phone-top-button" aria-label="新しい会話" title="新しい会話"
-            disabled={busy || (turns.length === 0 && readings.length === 0)} onClick={startNew}>
+            disabled={busy} onClick={startNew}>
             <FiPlus aria-hidden="true" />
           </button>
         </>,
@@ -334,7 +334,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             <button type="button" className="ask-icon-button" aria-label="履歴を開く" title="履歴を開く" onClick={() => setSidebar(true)}>
               <FiSidebar aria-hidden="true" />
             </button>
-            <button type="button" className="ask-icon-button ask-rail-new" disabled={busy || (turns.length === 0 && readings.length === 0)}
+            <button type="button" className="ask-icon-button ask-rail-new" disabled={busy}
               aria-label="新しい会話" title="新しい会話" onClick={startNew}>
               <FiPlus aria-hidden="true" />
             </button>
@@ -811,8 +811,7 @@ function ReadingView({ reading, onOpenReview, replaced }: {
   /** A later image replaced this reading: its job was deleted. */
   replaced: boolean;
 }) {
-  const queue = useReadingQueue();
-  const queued = reading.jobId ? queue.find((item) => item.jobId === reading.jobId) ?? null : null;
+  const queued = useReadingState(reading.state === "queued" ? reading.jobId : null);
   const failed = reading.state === "failed" || (queued !== null && ["FAILED", "INTERRUPTED"].includes(queued.status));
   return (
     <>
@@ -847,8 +846,7 @@ function ReadingBody({ reading, onOpenReview, replaced }: {
   onOpenReview: (jobId: string) => void;
   replaced: boolean;
 }) {
-  const queue = useReadingQueue();
-  const queued = reading.jobId ? queue.find((item) => item.jobId === reading.jobId) ?? null : null;
+  const queued = useReadingState(reading.state === "queued" ? reading.jobId : null);
   const hasFile = chatReadings.hasFile(reading.id);
   return (
         <>

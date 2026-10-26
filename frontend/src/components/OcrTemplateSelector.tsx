@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
+  FiCpu,
   FiEdit2,
+  FiFileText,
+  FiInfo,
+  FiLayers,
+  FiLayout,
   FiPlus,
   FiTrash2,
 } from "react-icons/fi";
+import type { IconType } from "react-icons";
 import type { Template } from "../types";
 import { templatePreviewKey, type useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import { TemplatePrintFiles } from "./TemplatePrintFiles";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "./TemplateItemJoinEditor";
 import { openDocumentNameEditor } from "./TemplateDocumentNameEditor";
-import { openTemplateMemory } from "./TemplateMemoryDialog";
 import { ImageSpinner, Spinner } from "./Spinner";
 
 export type ReadingTemplateCard = {
@@ -92,12 +97,12 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                           </span>
                         </button>
                         {/* Printing the blank form is a PC task; a phone only reads. */}
-                        {!phoneDevice && version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE" && (
+                        {!phoneDevice && version.status === "ACTIVE" && version.mode === "SPREADSHEET_TEMPLATE"
+                          && (version.quality.printLayout != null || blankSource(version.quality) !== null) && (
                           <div className="ocr-template-print-files">
                             <TemplatePrintFiles key={version.id} versionId={version.id} disabled={deleting}
-                              sourceImport={version.quality.printLayout == null && version.quality.sourceType === "xlsx"}
-                              disabledReason={version.quality.printLayout != null || version.quality.sourceType === "xlsx"
-                                ? undefined : "印刷用ファイルを取得できるXLSX原本がありません。"} />
+                              sourceImport={version.quality.printLayout == null && blankSource(version.quality) !== null}
+                              pdf={blankSource(version.quality) !== "package" || Boolean(version.quality.spreadsheetPrintablePdfPath)} />
                           </div>
                         )}
                         {!phoneDevice && <span className="ocr-template-card-actions">
@@ -108,7 +113,6 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
                             onFields={() => openTemplateWorkspace("manage", version.id, "fields")}
                             onJoins={() => openItemJoinEditor(template.id, version.id)}
                             onDocumentName={() => openDocumentNameEditor(template.id, template.name)}
-                            onMemory={() => openTemplateMemory(template.id, template.name, version)}
                           />
                           <button
                             type="button"
@@ -141,14 +145,13 @@ export function OcrTemplateSelector({ templateCards, previewFor, previewImageSta
 }
 
 /** 「編集」: what to edit — the form's structure, the reading settings, or how items are shown. */
-function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins, onDocumentName, onMemory }: {
+function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoins, onDocumentName }: {
   templateName: string;
   disabled: boolean;
   onStructure: () => void;
   onFields: () => void;
   onJoins: () => void;
   onDocumentName: () => void;
-  onMemory: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -181,29 +184,43 @@ function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoin
         編集
       </button>
       {open && (
-        <div className="template-edit-menu-list" role="menu">
-          <button type="button" role="menuitem" onClick={choose(onStructure)}>
-            <strong>構造を編集する</strong>
-            <small>欄・表・項目名など、テンプレートの形を直します。</small>
-          </button>
-          <button type="button" role="menuitem" onClick={choose(onFields)}>
-            <strong>項目の読み取り設定</strong>
-            <small>欄ごとに候補語を付けます。</small>
-          </button>
-          <button type="button" role="menuitem" onClick={choose(onMemory)}>
-            <strong>メモリ</strong>
-            <small>確定した書類から覚えた書き方のルールと、その欄を見ます。</small>
-          </button>
-          <button type="button" role="menuitem" onClick={choose(onDocumentName)}>
-            <strong>ファイル名の付け方</strong>
-            <small>書類名に入れる欄と、前後に付ける文字を変えます。</small>
-          </button>
-          {ITEM_JOIN_EDITING_VISIBLE && <button type="button" role="menuitem" onClick={choose(onJoins)}>
-            <strong>項目のまとめ方・順番</strong>
-            <small>住所や日付など、ばらばらの欄を1つの値として表示します。</small>
-          </button>}
+        <div className="template-edit-menu-list reading-edit-menu-list" role="menu" aria-label={`${templateName}の編集`}>
+          <MenuItem icon={FiLayout} title="テンプレートを編集する" note="欄や表の形を直します。" onClick={choose(onStructure)} />
+          <MenuItem icon={FiCpu} title="メモリ" note="よく出る言葉と、覚えた書き方です。" onClick={choose(onFields)} />
+          {DOCUMENT_NAME_EDITING_VISIBLE && <MenuItem icon={FiFileText} title="ファイル名の付け方" note="書類名に入れる欄と、前後に付ける文字を変えます。" onClick={choose(onDocumentName)} />}
+          {ITEM_JOIN_EDITING_VISIBLE && <MenuItem icon={FiLayers} title="表示する順番を変える"
+            note="結果に出す順番を変えます。" onClick={choose(onJoins)} />}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * 「ファイル名の付け方」 is not offered (2026-10-26, unlikely to be used). Its dialog and the saved
+ * settings still work; set this to true to show the entry again.
+ */
+const DOCUMENT_NAME_EDITING_VISIBLE = false;
+
+/** The name only; what it does is in the 「i」, shown on hover. */
+function MenuItem({ icon: Icon, title, note, onClick }: { icon: IconType; title: string; note: string; onClick: () => void }) {
+  return (
+    <button type="button" role="menuitem" aria-label={`${title}（${note}）`} onClick={onClick}>
+      <span className="menu-item-icon" aria-hidden="true"><Icon focusable="false" /></span>
+      <strong className="menu-item-title">{title}</strong>
+      <span className="menu-item-info" data-tip={note} aria-hidden="true"><FiInfo focusable="false" /></span>
+    </button>
+  );
+}
+
+/**
+ * Where the blank workbook of a template without saved print pages comes from: the XLSX it was made
+ * from, or the workbook carried in the template package it was imported from (with its PDF only when
+ * the package carried one).
+ */
+function blankSource(quality: Record<string, unknown>): "xlsx" | "package" | null {
+  if (quality.sourceType === "xlsx") return "xlsx";
+  if (typeof quality.sourceType === "string" && quality.sourceType.startsWith("template-package")
+    && typeof quality.spreadsheetSourcePath === "string" && quality.spreadsheetSourcePath) return "package";
+  return null;
 }

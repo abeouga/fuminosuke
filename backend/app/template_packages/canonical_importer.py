@@ -146,6 +146,7 @@ class CanonicalTemplateImporter:
                 "spreadsheet_source.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
+            "optional/printable.pdf": ("printablePdf", "printable.pdf", "application/pdf"),
         }
         for package_path, (artifact_name, file_name, media_type) in asset_contract.items():
             content = package.payloads.get(package_path)
@@ -294,6 +295,7 @@ class CanonicalTemplateImporter:
                     "sourceFileName": canonical.spreadsheet.file_name,
                     "sourceSheetName": canonical.spreadsheet.sheet_name,
                     "spreadsheetSourcePath": artifact_paths.get("optional/spreadsheet-source.xlsx"),
+                    "spreadsheetPrintablePdfPath": artifact_paths.get("optional/printable.pdf"),
                     "layoutVerificationDetector": "xlsx-structure",
                 }
             )

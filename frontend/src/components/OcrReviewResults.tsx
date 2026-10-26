@@ -29,6 +29,26 @@ export function checklistOptionsByPath(previews: readonly OcrFieldPreview[]): Ma
     .map((preview) => [preview.targetPath, (preview.markOptions ?? []).map((option) => option.label)]));
 }
 
+/** Choice fields (path → their choice names), so a numbered repeat is shown by its plain name. */
+export const ReviewChoiceLabels = createContext<ReadonlyMap<string, readonly string[]>>(new Map());
+export function choiceLabelsByPath(previews: readonly OcrFieldPreview[]): Map<string, string[]> {
+  return new Map(previews
+    .filter((preview) => preview.markOptions?.length)
+    .map((preview) => [preview.targetPath, (preview.markOptions ?? []).map((option) => option.label)]));
+}
+
+/**
+ * A repeated choice name is stored with a number (黒・白・黒2) only to keep the names apart;
+ * people see the printed name (黒). The stored value is unchanged.
+ */
+export function choiceName(label: string, labels: readonly string[] | undefined): string {
+  const match = labels && /^(.*\D)(\d+)$/.exec(label);
+  return match && labels.includes(label) && labels.includes(match[1]) ? match[1] : label;
+}
+export function choiceText(text: string, labels: readonly string[] | undefined): string {
+  return labels ? text.split("・").map((part) => choiceName(part.trim(), labels)).join("・") : text;
+}
+
 /** Checked items of a checklist reading (an undecided one counts what was read). */
 function checkedItems(value: FieldReading): Set<string> {
   const text = value.status === "blank" ? "" : (value.normalized ?? value.raw ?? "");
@@ -53,14 +73,14 @@ export function ChecklistBoxes({ labels, entry, confirmed, onEdit }: {
   return <span className="ocr-checkbox-list">{labels.map((label) => {
     const on = checked.has(label);
     // A lone box (its only item is "チェック済み") is just the box.
-    const name = labels.length === 1 ? entry.label : label;
+    const name = labels.length === 1 ? entry.label : choiceName(label, labels);
     return (
       <button type="button" key={label} className={`ocr-checkbox-toggle${on ? " checked" : ""}`}
         role="checkbox" aria-checked={on} aria-label={name}
         title={confirmed ? undefined : on ? "クリックでチェックを外す" : "クリックでチェックを付ける"}
         onClick={() => toggle(label)}>
         <span className="ocr-checkbox-value" aria-hidden="true">{on ? "☑" : "☐"}</span>
-        {labels.length > 1 && label}
+        {labels.length > 1 && name}
       </button>
     );
   })}</span>;
@@ -666,7 +686,7 @@ export function MarkStatusPopover({
           const active = selected.includes(label);
           return (
             <button type="button" key={label} className={active ? "active" : ""} aria-pressed={active}
-              disabled={confirmed} onClick={() => toggle(label)}>{label}</button>
+              disabled={confirmed} onClick={() => toggle(label)}>{choiceName(label, labels)}</button>
           );
         })}
         {labels.length === 0 && <span>テンプレートに選択肢が設定されていません。</span>}
@@ -1132,6 +1152,8 @@ export function ReviewValueCell({
   const marks = useContext(ReviewSeriesMarks);
   const added = marks?.added.has(entry.path) ?? false, carried = marks?.carried.has(entry.path) ?? false;
   const checklistLabels = useContext(ReviewChecklists).get(entry.path);
+  const choiceLabels = useContext(ReviewChoiceLabels).get(entry.path);
+  const shown = value && choiceText(value, choiceLabels);
   const painted = useContext(ReviewPaint).has(entry.path);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(value ?? "");
@@ -1183,7 +1205,7 @@ export function ReviewValueCell({
           type="button"
           ref={dragRef}
           {...dragListeners}
-          aria-label={`${entry.label}：${value || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}。${confirmed ? "画像を確認" : "選択して確認・編集"}`}
+          aria-label={`${entry.label}：${shown || (entry.value.status === "blank" ? (choice ? "未選択" : "空欄") : "未入力")}。${confirmed ? "画像を確認" : "選択して確認・編集"}`}
           title={confirmed || choice ? undefined : drag.active ? "ダブルクリックで直接編集・AIのツールバーへドラッグで指示に引用" : "ダブルクリックで直接編集"}
           onClick={() => onSelect(entry)}
           onDoubleClick={(event) => {
@@ -1196,7 +1218,7 @@ export function ReviewValueCell({
           }}
         >
           {/* An unmarked symbol box reads 「-」 (screen readers still hear 「未選択」); a blank write-in stays 「空欄」. */}
-          <span>{value || (entry.value.status === "blank" ? (choice ? "-" : "空欄") : "未入力")}</span>
+          <span>{shown || (entry.value.status === "blank" ? (choice ? "-" : "空欄") : "未入力")}</span>
           <small>{warning ? "要確認" : hasChoices ? "候補あり" : added ? "追加" : carried ? "前の版" : "OK"}</small>
         </button>
       )}

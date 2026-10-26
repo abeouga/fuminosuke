@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { InfoTip } from "./InfoTip";
 import { ApiError, api } from "../api";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -97,7 +98,7 @@ export function TemplateItemJoinEditor({
       setSaved(signature(next));
       setSelected(next.find((draft) => draft.kind !== "sections")?.key ?? null);
     })().catch((error) => {
-      if (!cancelled) setFeedback({ kind: "error", text: errorText(error, "項目のまとめ方を読み込めませんでした。") });
+      if (!cancelled) setFeedback({ kind: "error", text: errorText(error, "表示する順番を読み込めませんでした。") });
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -256,17 +257,18 @@ export function TemplateItemJoinEditor({
   const blockOrderPanel = blocks.length >= 2 && (
     <section className="item-join-headings item-join-blocks" aria-label={BLOCK_ORDER_NAME}>
       <div className="candidate-panel-heading compact">
-        <div><h2>{BLOCK_ORDER_NAME}</h2></div>
+        <div><h2>{BLOCK_ORDER_NAME}<InfoTip text={blockDraft ? "表と見出しの並び順です。" : "表と見出しの並び順です。今は帳票の上から順です。"} /></h2></div>
         {blockDraft && <button type="button" className="ghost compact" onClick={() => reorderBlocks(blocks.map((block) => block.key))}>帳票の順に戻す</button>}
       </div>
-      <p className="item-join-note">表・見出しを、確認画面・ライブラリ・一覧のXLSXに出す順に並べます。{blockDraft ? "" : "今は帳票の上から順（同じ高さは左から）です。"}</p>
       <SortableList items={blocksInOrder.map((block) => block.key)} label={blockTitle} onReorder={reorderBlocks} />
     </section>
   );
+  /** False when the person keeps the editor open (saving, or unsaved changes they keep). */
   const close = () => {
-    if (saving) return;
-    if (dirty && !window.confirm("保存していない変更があります。破棄して閉じますか？")) return;
+    if (saving) return false;
+    if (dirty && !window.confirm("保存していない変更があります。破棄して閉じますか？")) return false;
     onClose();
+    return true;
   };
   const save = async () => {
     const incomplete = drafts.find((draft) => draft.members.length < 2);
@@ -286,7 +288,7 @@ export function TemplateItemJoinEditor({
       setPicking(false);
       onSaved?.(result.items);
       if (focus) {
-        showToast({ tone: "success", quiet: true, title: "まとめ方・順番を保存しました" });
+        showToast({ tone: "success", quiet: true, title: "表示する順番を保存しました" });
         onClose();
         return;
       }
@@ -464,14 +466,12 @@ export function TemplateItemJoinEditor({
 
   const body = (
     <div className={`page-stack candidate-settings-page item-join-page${overlay ? " overlay" : ""}`}>
-      <header className={`page-header split${overlay ? "" : " has-back"}`}>
-        {!overlay && <button type="button" className="ghost page-back" disabled={saving} onClick={close}>← テンプレート一覧へ</button>}
+      <header className="page-header split has-back title-end">
+        <button type="button" className="ghost page-back" disabled={saving} onClick={close}>← 戻る</button>
         <div>
           <span className="eyebrow">{templateName}</span>
-          <h1>項目のまとめ方・順番</h1>
-          <p>表・見出しを出す順番と、見出しの中の欄の並び順やまとめ方を変えられます。読み取りと修正は欄ごとのままです。</p>
+          <h1>表示する順番を変える<InfoTip align="end" text="結果に出す順番を変えます。" /></h1>
         </div>
-        {overlay && <button type="button" className="ghost" disabled={saving} onClick={close}>閉じる</button>}
       </header>
 
       {feedback && <div className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</div>}
@@ -540,15 +540,44 @@ export function TemplateItemJoinEditor({
 
       {!loading && mappings.length > 0 && (
         <div className="decision-bar sticky candidate-save-bar">
-          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>確認画面・ライブラリ・一覧のXLSX・質問に使います。読み取り済みの書類にも反映されます。</p></div>
+          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}<InfoTip side="above" text="読み取り済みの書類にも反映します。" /></strong></div>
           <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
         </div>
       )}
     </div>
   );
   return overlay
-    ? <div className="item-join-overlay" role="dialog" aria-modal="true" aria-label="項目のまとめ方・順番">{body}</div>
+    ? <BelowAppBar onLeave={close}>{body}</BelowAppBar>
     : body;
+}
+
+/**
+ * The full-screen editor starts under the app's top bar, so the bar stays in sight. The bar
+ * scrolls with the page, so the page goes back to its top first.
+ */
+function BelowAppBar({ children, onLeave }: { children: ReactNode; onLeave: () => boolean }) {
+  const [top, setTop] = useState(0);
+  const leave = useRef(onLeave);
+  leave.current = onLeave;
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+    const bar = document.querySelector<HTMLElement>(".side-nav, .phone-top");
+    setTop(Math.max(0, bar?.getBoundingClientRect().bottom ?? 0));
+  }, []);
+  // A button in the top bar (チャット・ライブラリ…) leaves the editor first: it closes, or the
+  // click is held back when the person keeps unsaved changes.
+  useEffect(() => {
+    const click = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target?.closest(".side-nav button, .side-nav a, .phone-top button, .phone-top a")) return;
+      if (leave.current()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("click", click, true);
+    return () => document.removeEventListener("click", click, true);
+  }, []);
+  return <div className="item-join-overlay" role="dialog" aria-modal="true" aria-label="表示する順番を変える" style={{ top }}>{children}</div>;
 }
 
 type JoinFocus = { paths: string[]; anchor: HTMLElement | null };

@@ -46,7 +46,7 @@ describe("authenticated workspace", () => {
       fireEvent.click(await screen.findByRole("button", { name: "ログアウト" }));
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       expect(mocks.fetch).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "編集画面に戻る" }));
+      fireEvent.click(screen.getByRole("button", { name: "戻る" }));
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(screen.getByLabelText("draft")).toHaveValue("unsaved");
       fireEvent.click(screen.getByRole("button", { name: "ログアウト" }));

@@ -9,7 +9,6 @@ const ShelfPage = lazy(() => import("./pages/ShelfPage").then(module => ({ defau
 import type { ShelfSelection } from "./pages/ShelfPage";
 import { ItemJoinEditorHost } from "./components/TemplateItemJoinEditor";
 import { DocumentNameEditorHost } from "./components/TemplateDocumentNameEditor";
-import { TemplateMemoryHost } from "./components/TemplateMemoryDialog";
 import type { TemplateWorkspaceRequest } from "./pages/OcrPage";
 import type { Health, Job, Template } from "./types";
 import { ImageSpinner, Spinner } from "./components/Spinner";
@@ -18,13 +17,14 @@ import { readingQueue, useReadingQueuePolling, type QueuedReading } from "./read
 import { usePhoneDevice } from "./hooks/usePhoneDevice";
 import { usePhoneTyping } from "./phone/usePhoneTyping";
 import { LogoutButton } from "./auth/AuthBoundary";
+import { PageErrorBoundary } from "./components/PageErrorBoundary";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 
 type Page = "ocr" | "review" | "job" | "ask" | "shelf";
 type ReviewReturn = "ocr" | "ask" | "shelf";
-const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "読み取りへ戻る", ask: "チャットへ戻る", shelf: "ライブラリへ戻る" };
+const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "戻る", ask: "戻る", shelf: "戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
 type PendingNavigation = { page: Page; guard: NavigationGuard; resetOcrWorkspace?: boolean; action?: () => void };
 const RECENT_KEY = "document-ocr-recent-jobs";
@@ -345,6 +345,7 @@ export default function App() {
       </aside>
       )}
       <main className="main-content">
+        <PageErrorBoundary resetKey={`${page}:${reviewJobId ?? ""}`}>
         <Suspense fallback={<div className="page-spinner" aria-busy="true"><ImageSpinner label="画面を読み込んでいます" /></div>}>
         {templateLoadFailed && (
           <aside className="notice danger persistent-system-notice" role="alert">
@@ -393,6 +394,7 @@ export default function App() {
           onStartNewReading={() => navigateTo("ocr")}
         />}
         </Suspense>
+        </PageErrorBoundary>
       </main>
       {phone && (
         <nav className="phone-tabs" aria-label="メインメニュー">
@@ -404,7 +406,6 @@ export default function App() {
       <ToastViewport />
       <ItemJoinEditorHost />
       <DocumentNameEditorHost />
-      <TemplateMemoryHost />
       {pendingNavigation && (
         <NavigationConfirmDialog
           guard={pendingNavigation.guard}

@@ -158,6 +158,18 @@
           "default": null,
           "title": "Preview"
         },
+        "printablePdf": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Printablepdf"
+        },
         "spreadsheetSource": {
           "anyOf": [
             {

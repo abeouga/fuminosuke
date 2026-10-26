@@ -242,6 +242,14 @@ class TemplateRepository:
             raise self._not_found()
         if version.status != TemplateVersionStatus.DRAFT.value:
             raise self._invalid_state("編集中のテンプレートだけを破棄できます。")
+        # Discarding is 「変更を取り消す」: it drops the edits to a template in use, never the
+        # template itself. A template that was never put to use has nothing to go back to.
+        template = self.get_template(version.template_id)
+        active = template.active_version_id if template else None
+        if not active or active == version.id:
+            raise self._invalid_state(
+                "まだ作成していないテンプレートは、変更を取り消せません。不要ならテンプレートを削除してください。"
+            )
         version.status = TemplateVersionStatus.REJECTED.value
         version.rejected_at = datetime.now(UTC)
         source_job = self._session.get(ProcessingJob, version.source_job_id)

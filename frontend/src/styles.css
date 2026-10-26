@@ -2353,7 +2353,7 @@ small{font-size:12px;line-height:1.5}
 .ocr-join-order{display:inline-grid;place-items:center;min-width:17px;margin-right:5px;color:#2468a2;font-weight:800}
 .ocr-edit-section>header .ocr-join-configure{margin-left:10px;padding:3px 9px;font-size:10px}
 
-.item-join-overlay{position:fixed;inset:0;z-index:60;overflow:auto;padding:18px;background:#f1f4ef}
+.item-join-overlay{position:fixed;inset:0;z-index:60;overflow:auto;padding:18px;background:var(--ui-canvas,#e2e8ee)}
 .item-join-page.overlay{max-width:1400px;margin:0 auto}
 .item-join-picking .candidate-preview-stage{cursor:crosshair}
 .item-join-pick-hint{margin:0;padding:9px 12px;border-bottom:1px solid #e3c57d;background:#fff6dc;color:#6b4a07;font-size:12px;font-weight:700}
@@ -2558,23 +2558,6 @@ small{font-size:12px;line-height:1.5}
 .document-name-close{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:#4a5d6b;cursor:pointer}
 .document-name-close:hover{background:#eef2f5}
 .document-name-subtitle,.document-name-heading{margin:0;color:#4a5d6b;font-size:13px}
-/* メモリ（確定時に覚えた書き方のルール） */
-.template-memory-dialog{display:grid;gap:12px;width:min(960px,100%);max-height:min(88vh,860px);overflow:hidden}
-.template-memory-dialog header{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.template-memory-dialog header h2{margin:0}
-.template-memory-empty{margin:8px 0;color:#4a5d6b}
-.template-memory-body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(260px,1fr);gap:16px;min-height:0;overflow:hidden}
-.template-memory-preview{position:relative;align-self:start;max-height:70vh;max-width:100%;border:1px solid #dbe3ea;border-radius:8px;overflow:hidden;background:#fff}
-.template-memory-preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}
-.template-memory-box{position:absolute;border:2px solid #cf761d;background:#f5a64733;border-radius:2px;pointer-events:none}
-.template-memory-list{display:grid;align-content:start;gap:14px;overflow:auto;max-height:70vh;padding-right:4px}
-.template-memory-list h3{margin:0 0 6px;font-size:14px;color:#24323d}
-.template-memory-rule{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid #dbe3ea;border-radius:8px;background:#fff;cursor:pointer;margin-bottom:6px}
-.template-memory-rule:hover{border-color:#9fb4c4}
-.template-memory-rule.active{border-color:#cf761d;background:#fff8ef}
-.template-memory-rule strong{display:block;font-size:14px;font-weight:600;color:#1f2b35}
-.template-memory-rule small{display:block;margin-top:4px;color:#5d6f7c;font-size:12px}
-@media (max-width:760px){.template-memory-body{grid-template-columns:1fr;overflow:auto}.template-memory-list{max-height:none}}
 .document-name-heading{font-weight:700;color:#263c4a}
 .document-name-dialog .document-name-field-options{max-height:220px;overflow:auto}
 .document-name-dialog .document-name-field-options label{border-radius:8px;cursor:pointer}
@@ -2600,6 +2583,7 @@ svg:has(+ .busy-spinner){display:none}
 .identity-result-label{display:inline-flex;align-items:center;gap:6px}
 .identity-result-label svg{width:14px;height:14px;color:#2468a2}
 .page-actions.identity-next{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.identity-next .identity-discard{margin-right:auto}
 /* 「確認しました」 looks like the buttons beside it (same height, corners and type). */
 .identity-agree{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:40px;padding:9px 14px;border:1px solid #b9c7d1;border-radius:8px;background:#fff;color:#334b5c;font-size:14px;font-weight:800;line-height:1;cursor:pointer;user-select:none;transition:background .15s,border-color .15s}
 .identity-agree:hover{border-color:#245b84;background:#f4f8fb}
@@ -2838,3 +2822,78 @@ button.reading-float-open { cursor: pointer; }
 .series-auto-notice{display:grid;gap:6px;border-left:3px solid #2d746c;border-radius:6px;background:#eaf4f1;padding:9px 12px;color:#173a37;font-size:12px}.series-auto-notice>span{display:flex;align-items:center;gap:8px;color:#71837e}.series-auto-notice strong{font-size:13px}.series-auto-notice ul{margin:0;padding-left:18px;display:grid;gap:2px;overflow-wrap:anywhere}
 .review-discard{gap:6px;color:#a14d3d}.review-discard:hover:not(:disabled){background:#fff2ef;color:#8d3b2c}
 .review-save-retry{gap:6px;border-color:#e3b9ae;color:#a14d3d}.review-save-retry:hover:not(:disabled){background:#fff2ef}
+
+/* A page that could not load (e.g. replaced by a newer release while the tab stayed open). */
+.page-load-failed {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 12vh auto 0;
+  max-width: 420px;
+  padding: 24px;
+  border: 1px solid var(--ui-border, #d5dde5);
+  border-radius: 12px;
+  background: #fff;
+  text-align: center;
+}
+.page-load-failed span { color: #5b6b7a; font-size: 14px; }
+
+/* 読み取り画面の「編集」メニュー: ボタンの上に開く */
+.reading-edit-menu .template-edit-menu-list.reading-edit-menu-list{top:auto;bottom:calc(100% + 8px);left:0;right:auto;width:max(100%,320px);gap:2px;padding:6px;border:1px solid #dbe4ea;border-radius:14px;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);box-shadow:0 18px 40px -12px #0f2a3a40,0 4px 12px -4px #0f2a3a1f;transform-origin:bottom left;animation:reading-menu-up .16s cubic-bezier(.2,.8,.2,1)}
+@keyframes reading-menu-up{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.reading-edit-menu .reading-edit-menu-list{animation:none}}
+.ocr-template-card-actions .reading-edit-menu .reading-edit-menu-list button{display:flex;align-items:center;gap:12px;width:100%;height:auto;min-height:0;padding:10px 10px;border:0;border-radius:10px;background:transparent;box-shadow:none;text-align:left;white-space:normal;color:#14313f;transition:background .12s}
+.ocr-template-card-actions .reading-edit-menu .reading-edit-menu-list button:hover,.ocr-template-card-actions .reading-edit-menu .reading-edit-menu-list button:focus-visible{background:#f0f5f9;outline:none}
+.reading-edit-menu-list .menu-item-icon{flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:#e8f1f7;color:#24618a;font-size:16px;transition:background .12s,color .12s}
+.reading-edit-menu-list button:hover .menu-item-icon,.reading-edit-menu-list button:focus-visible .menu-item-icon{background:#24618a;color:#fff}
+.reading-edit-menu-list .menu-item-title{flex:1;min-width:0;font-size:13.5px;font-weight:650}
+.reading-edit-menu-list .menu-item-info{position:relative;flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;color:#9aabb6;font-size:15px;transition:color .12s,background .12s}
+.reading-edit-menu-list .menu-item-info:hover{color:#24618a;background:#e1edf5}
+.reading-edit-menu-list .menu-item-info::after{content:attr(data-tip);position:absolute;z-index:2;right:-6px;bottom:calc(100% + 8px);width:max-content;max-width:240px;padding:8px 10px;border-radius:8px;background:#1d2f3a;color:#fff;font-size:12px;font-weight:400;line-height:1.5;white-space:normal;box-shadow:0 8px 20px -6px #0f2a3a59;opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
+.reading-edit-menu-list .menu-item-info:hover::after{opacity:1;visibility:visible;transform:none}
+
+/* メモリ: 選んだ欄の候補語の下の、覚えた書き方 */
+.field-memory-rules{display:grid;gap:8px;margin-top:6px;padding-top:14px;border-top:1px solid #e1e8ed}
+.field-memory-rules h3{margin:0;font-size:13px;color:#14313f}
+.field-memory-empty{margin:0;font-size:12px;color:#6b7f8c}
+.field-memory-rules ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.field-memory-rules li{display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid #e1e8ed;border-radius:10px;background:#f7fafc}
+.field-memory-rules li>div{flex:1;min-width:0;display:grid;gap:2px}
+.field-memory-rules li strong{font-size:13px;font-weight:600}
+.field-memory-rules li small{font-size:11.5px;color:#6b7f8c}
+
+/* メモリ: 設定済みの欄の一覧 */
+.candidate-control-panel>section.memory-set-list{gap:10px;padding:14px 12px 12px;border-radius:14px;border-color:#dbe4ea;box-shadow:0 6px 20px -12px #0f2a3a33}
+.memory-set-head{display:flex;align-items:center;gap:8px;padding:0 4px}
+.memory-set-head h2{margin:0;font-size:14px;font-weight:700;color:#14313f}
+.memory-set-count{display:grid;place-items:center;min-width:22px;height:20px;padding:0 7px;border-radius:999px;background:#e8f1f7;color:#24618a;font-size:11.5px;font-weight:700}
+.memory-set-list ul{list-style:none;margin:0;padding:0;display:grid;gap:4px;max-height:320px;overflow:auto}
+.memory-set-item{display:flex;align-items:center;gap:10px;width:100%;padding:10px 10px 10px 12px;border:1px solid transparent;border-radius:10px;background:transparent;color:#14313f;text-align:left;cursor:pointer;transition:background .12s,border-color .12s}
+.memory-set-item:hover{background:#f3f7fa}
+.memory-set-item:focus-visible{outline:2px solid #24618a;outline-offset:1px}
+.memory-set-item.active{background:#fff6ec;border-color:#f1c99b;box-shadow:inset 3px 0 0 #cf761d}
+.memory-set-name{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px}
+.memory-set-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
+.memory-set-name small{flex:none;font-size:11px;color:#7d909c}
+.memory-set-tags{flex:none;display:flex;gap:4px}
+.memory-tag{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.memory-tag svg{font-size:12px}
+.memory-tag.is-keywords{background:#e6f4ee;color:#1d6b52}
+.memory-tag.is-keywords.is-off{background:#eef1f3;color:#7d909c}
+.memory-tag.is-rules{background:#efeafb;color:#5b3fa8}
+.memory-set-arrow{flex:none;color:#b4c2cb;font-size:15px;transition:transform .12s,color .12s}
+.memory-set-item:hover .memory-set-arrow,.memory-set-item.active .memory-set-arrow{color:#6b7f8c;transform:translateX(2px)}
+.candidate-settings-page .candidate-control-panel>section.field-setting-card{border-radius:14px;border-color:#dbe4ea;box-shadow:0 6px 20px -12px #0f2a3a33}
+
+/* 戻るは左、画面の名前は右（メモリ・表示する順番を変える） */
+.page-header.split.has-back.title-end>div:not(.page-actions):not([class*="actions"]){text-align:right}
+.page-header.split.has-back.title-end>div p{margin-left:auto}
+
+/* 見出しの横の「i」: 説明は合わせたとき・フォーカスしたときだけ */
+.info-tip{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px;font-size:14px;font-weight:400;line-height:1;letter-spacing:0;text-align:left}
+.info-tip-button{display:grid;place-items:center;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:#9aabb6;font-size:15px;cursor:help;box-shadow:none;transition:color .12s,background .12s}
+.info-tip-button:hover,.info-tip-button:focus-visible{color:#24618a;background:#e1edf5;outline:none}
+.info-tip-bubble{position:absolute;z-index:80;left:-6px;top:calc(100% + 8px);width:max-content;max-width:min(340px,80vw);padding:9px 12px;border-radius:9px;background:#1d2f3a;color:#fff;font-size:12.5px;font-weight:400;line-height:1.6;white-space:normal;box-shadow:0 10px 24px -8px #0f2a3a66;opacity:0;visibility:hidden;transform:translateY(-3px);transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
+.info-tip.is-end .info-tip-bubble{left:auto;right:-6px}
+.info-tip.is-above .info-tip-bubble{top:auto;bottom:calc(100% + 8px);transform:translateY(3px)}
+.info-tip:hover .info-tip-bubble,.info-tip:focus-within .info-tip-bubble{opacity:1;visibility:visible;transform:none}

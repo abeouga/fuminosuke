@@ -9,7 +9,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { FiArrowRight, FiFileText, FiList } from "react-icons/fi";
 import { privateLocalStorage } from "../auth/transport";
-import { InlineEditActivity, ReviewChecklists, ReviewPaint, ReviewSeriesMarks, readingChoices, reviewEntryContext, type ReadingEntry, type ReviewDisplayModel } from "./OcrReviewResults";
+import { InlineEditActivity, ReviewChecklists, ReviewChoiceLabels, choiceName, choiceText,ReviewPaint, ReviewSeriesMarks, readingChoices, reviewEntryContext, type ReadingEntry, type ReviewDisplayModel } from "./OcrReviewResults";
 import { useAiDraggable } from "./ReviewAiDrag";
 
 export type ReviewView = "list" | "form";
@@ -109,6 +109,7 @@ export function ReviewFormView({ src, entries, display, selectedPath, warningPat
     box = cell.getBoundingClientRect();
     if (box.top < 0 || box.bottom > window.innerHeight) cell.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
   }, [selectedPath, size]);
+  const choiceLabels = useContext(ReviewChoiceLabels);
   const placed = entries.filter(entry => entry.value.boundingBox), loose = entries.filter(entry => !entry.value.boundingBox);
   return <div className={`review-form-view${leaving ? " is-leaving" : ""}${revealed ? " is-revealed" : ""}`}
     onPointerDown={event => { if (event.button === 2) { rightHeld.current = true; onReveal(true); } }}
@@ -125,7 +126,7 @@ export function ReviewFormView({ src, entries, display, selectedPath, warningPat
     {loose.length > 0 && <div className="review-form-loose"><span>帳票上の位置がない欄</span>{loose.map(entry => {
       const value = entry.value.normalized ?? entry.value.raw;
       return <button type="button" key={entry.path} data-review-path={entry.path} className={`${warningPaths.has(entry.path) ? "ocr-cell-warning" : "ocr-cell-ok"}${entry.path === selectedPath ? " ocr-cell-selected" : ""}`} onClick={() => onSelect(entry)}>
-        <small>{reviewEntryContext(display, entry)}</small><span>{value || "空欄"}</span></button>;
+        <small>{reviewEntryContext(display, entry)}</small><span>{(value && choiceText(value, choiceLabels.get(entry.path))) || "空欄"}</span></button>;
     })}</div>}
   </div>;
 }
@@ -137,6 +138,7 @@ function FormCell({ entry, page, selected, warning, choice, confirmed, editable,
   const box = entry.value.boundingBox!;
   const value = entry.value.normalized ?? entry.value.raw;
   const checklistLabels = useContext(ReviewChecklists).get(entry.path);
+  const choiceLabels = useContext(ReviewChoiceLabels).get(entry.path);
   const painted = useContext(ReviewPaint).has(entry.path);
   const marks = useContext(ReviewSeriesMarks);
   const added = marks?.added.has(entry.path) ?? false, carried = marks?.carried.has(entry.path) ?? false;
@@ -150,7 +152,7 @@ function FormCell({ entry, page, selected, warning, choice, confirmed, editable,
   }, [entry.path, editing, editValue, value, reportInlineEdit]);
   useEffect(() => { if (!editing) setEditValue(value ?? ""); }, [editing, value]);
   const commit = () => { if (!editing || !editable) return; setEditing(false); onEdit(entry, editValue); };
-  const text = value || (entry.value.status === "blank" && choice ? "-" : "");
+  const text = (value && choiceText(value, choiceLabels)) || (entry.value.status === "blank" && choice ? "-" : "");
   // The print is sized from the box height, and shrinks so the whole value fits its width
   // (a full-width character counts as 1em, ASCII as 0.6em). While typing, the text being typed
   // decides it, so the value is edited in place exactly as it will be shown.
@@ -222,5 +224,5 @@ function FormChecklist({ labels, entry, context, editable, onEdit }: {
   };
   return labels.length === 1
     ? box(labels[0], context)
-    : <span className="review-form-checks">{labels.map(label => box(label, `${context} ${label}`, <span>{label}</span>))}</span>;
+    : <span className="review-form-checks">{labels.map(label => box(label, `${context} ${choiceName(label, labels)}`, <span>{choiceName(label, labels)}</span>))}</span>;
 }

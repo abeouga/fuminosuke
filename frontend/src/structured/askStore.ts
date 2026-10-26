@@ -1,4 +1,4 @@
-import { privateLocalStorage } from "../auth/transport";
+import { privateLocalStorage, storageScope } from "../auth/transport";
 import { EditingError } from "../editing/client";
 import { structuredClient, type Evidence, type QuestionContext, type QuestionResult } from "./client";
 
@@ -118,8 +118,24 @@ function initial(): AskState {
   }
 }
 
+// The history is kept per signed-in user in the cloud, and this module loads before the session is
+// known: read it again once the user's storage is known, or the first save would write an empty list
+// over the user's history.
+let loadedScope = storageScope();
 let state: AskState = initial();
 let nextId = [...state.turns, ...state.history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1;
+
+function current(): AskState {
+  const scope = storageScope();
+  if (scope !== loadedScope) {
+    loadedScope = scope;
+    const history = loadHistory();
+    state = { ...state, history };
+    state = { ...state, history: withCurrent(state) };
+    nextId = Math.max(nextId, [...state.turns, ...history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1);
+  }
+  return state;
+}
 const listeners = new Set<() => void>();
 
 function titleOf(turns: Turn[]): string {
@@ -158,6 +174,7 @@ function save() {
 }
 
 function set(patch: Partial<AskState> | ((current: AskState) => Partial<AskState>)) {
+  current();
   const next = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
   // Remember the shown conversation's document panel, so switching back reopens it.
   const viewers = { ...next.viewers };
@@ -316,7 +333,7 @@ export const askStore = {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   },
-  getSnapshot: () => state,
+  getSnapshot: current,
   set,
   busy: () => state.turns.some((turn) => turn.pending),
 

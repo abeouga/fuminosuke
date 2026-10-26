@@ -179,6 +179,19 @@ class TemplateAssetCollector:
                 content=sanitized.content,
                 sanitized=True,
             )
+            printable = by_name.get("printablePdf")
+            if printable is not None:
+                self._add_payload(
+                    payloads,
+                    inspections,
+                    path="optional/printable.pdf",
+                    role="printable-pdf",
+                    media_type="application/pdf",
+                    content=self._verified_artifact_bytes(
+                        printable, expected_media_type="application/pdf"
+                    ),
+                    sanitized=False,
+                )
         elif by_name.get("sourceWorkbook") is not None:
             raise TemplatePackageExportError(
                 "SPREADSHEET_SOURCE_MODE_MISMATCH",

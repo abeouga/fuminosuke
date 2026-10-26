@@ -118,7 +118,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
         <p>未保存の入力、または確認が必要な処理があります。ログアウトすると、このタブの編集画面を閉じます。</p>
         {message && <p role="alert">{message}</p>}
         <div className="navigation-confirm-actions">
-          <button className="secondary" disabled={loggingOut} onClick={() => setConfirmLogout(false)} autoFocus>編集画面に戻る</button>
+          <button className="secondary" disabled={loggingOut} onClick={() => setConfirmLogout(false)} autoFocus>戻る</button>
           <button className="secondary" disabled={loggingOut} onClick={() => void logout()}>ログアウトする</button>
         </div>
       </section>

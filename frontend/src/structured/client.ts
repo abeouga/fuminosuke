@@ -22,6 +22,7 @@ export type StructuredReading = {
   cropUrl?: string | null;
   /** A selection box (選択欄); older servers leave it out. */
   choice?: boolean;
+  choiceLabels?: string[] | null;
   /** The cell's rectangle on its page image (aligned-image pixels). */
   box?: Box | null;
 };

@@ -786,6 +786,7 @@ class TemplateMemoryItem(ApiModel):
     example_after: str | None
     hit_count: int
     updated_at: str
+    target_patterns: list[str] = Field(default_factory=list)
     boxes: list[TemplateMemoryBox]
 
 

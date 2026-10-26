@@ -1,11 +1,12 @@
 import { userText } from "../userMessages";
+import { InfoTip } from "../components/InfoTip";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { v2client as editingClient, EditingError } from "../editing/v2client";
 import { templateEditingStore, type LoadedManualView } from "../editing/workbenchStore";
 import { reconcileOwnSave } from "../editing/reconcile";
 import { TemplateAnalysisStore } from "../editing/templateAnalysisStore";
 import { TemplateAnalysisStatus } from "../editing/TemplateAnalysisStatus";
-import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiChevronDown, FiCopy, FiFileText, FiImage, FiGrid, FiPrinter, FiTrash2, FiX } from "react-icons/fi";
+import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiCheck, FiChevronDown, FiCopy, FiFileText, FiImage, FiGrid, FiPrinter, FiRotateCcw, FiTrash2, FiX } from "react-icons/fi";
 import { ApiError, api, createIdempotencyKey } from "../api";
 import { AssistantPanel } from "../assistant/AssistantPanel";
 import { EditingControls } from "../editing/EditingControls";
@@ -55,10 +56,10 @@ const LAYOUT_WIZARD_STEPS: Array<{
   shortTitle: string;
   description: string;
 }> = [
-  { id: "classify", shortTitle: "欄の種類", title: "検出された枠の種類を確認する", description: "書類から検出された枠を、項目名、見出し、記入欄、読み取らない欄に分けます。記入欄では文字・番号・記号・印刷された選択肢の読み取り方法を指定できます。" },
-  { id: "meaning", shortTitle: "読み取る内容", title: "各欄で読み取る内容を決める", description: "記入欄と保存する情報を対応づけます。項目名のない記入欄には、保存する情報を直接指定できます。" },
-  { id: "records", shortTitle: "繰り返し部分", title: "繰り返し部分をまとめる", description: "明細表など、同じ構造を繰り返す欄をひとまとまりとして設定します。" },
-  { id: "identity", shortTitle: "確認する欄", title: "読み取り後に確認する欄を決める", description: "氏名や番号など、読み取り後に「この書類で合っているか」を確かめる欄を決めます。" },
+  { id: "classify", shortTitle: "欄の種類", title: "検出された枠の種類を確認する", description: "枠ごとに種類を選びます。" },
+  { id: "meaning", shortTitle: "読み取る内容", title: "各欄で読み取る内容を決める", description: "記入欄に何を書くか決めます。" },
+  { id: "records", shortTitle: "繰り返し部分", title: "繰り返し部分をまとめる", description: "表のくり返し部分をまとめます。" },
+  { id: "identity", shortTitle: "確認する欄", title: "読み取り後に確認する欄を決める", description: "書類が合っているか見る欄を選びます。" },
 ];
 
 type TemplateWorkspace = "create" | "manage";
@@ -280,7 +281,7 @@ export function TemplatePage({
     return <TemplateReviewGate
       version={review.version}
       jobId={review.jobId}
-      closeLabel={review.returnToReading ? "← 読み取りへ戻る" : undefined}
+      closeLabel={review.returnToReading ? "← 戻る" : undefined}
       onNavigationGuardChange={onNavigationGuardChange}
       onClose={() => {
         const returnToReading = review.returnToReading;
@@ -331,7 +332,7 @@ export function TemplatePage({
     return <TemplateFieldSettingsEditor
       template={candidateEditor.template}
       version={candidateEditor.version}
-      closeLabel={candidateEditor.returnToReading ? "← 読み取りへ戻る" : undefined}
+      closeLabel={candidateEditor.returnToReading ? "← 戻る" : undefined}
       onNavigationGuardChange={onNavigationGuardChange}
       onClose={() => {
         if (candidateEditor.returnToReading && onClose) { onClose(); return; }
@@ -373,8 +374,8 @@ export function TemplatePage({
   return (
     <div className="page-stack narrow template-setup-workspace">
       <header className={`page-header split${onClose ? " has-back" : ""}`}>
-        {onClose && <button type="button" className="ghost page-back" onClick={closeWorkspace}><FiArrowLeft aria-hidden="true" />読み取りへ戻る</button>}
-        <div><h1>テンプレート作成・編集</h1><p>新しい帳票のテンプレートを作成するか、既存のテンプレートを編集します。</p></div>
+        {onClose && <button type="button" className="ghost page-back" onClick={closeWorkspace}><FiArrowLeft aria-hidden="true" />戻る</button>}
+        <div><h1>テンプレート作成・編集<InfoTip text="新しく作るか、今あるものを直します。" /></h1></div>
       </header>
       {message && <div className="error-box action-message" role="alert"><span>{message}</span>{job?.status === "REVIEW_REQUIRED" && <button type="button" className="secondary compact" disabled={openingReview} onClick={() => void openPreparedTemplate(job)}>{openingReview ? <><Spinner />再取得中…</> : "確認画面を再取得"}</button>}</div>}
       <div
@@ -732,7 +733,7 @@ function TemplateReview({
   onClose,
   onReprocess,
   onApproved,
-  closeLabel = "← 一覧へ戻る",
+  closeLabel = "← 戻る",
   onNavigationGuardChange,
 }: {
   version: TemplateVersion;
@@ -1152,12 +1153,12 @@ function TemplateReview({
     setDecisionBusy(null);
   };
   const rejectVersion = async () => {
-    if (!window.confirm("この下書きを却下しますか？却下後は確認を再開できません。") || !beginDecision("reject")) return;
+    if (!window.confirm("このテンプレートで行った変更を取り消しますか？使用中のテンプレートはそのまま残ります。") || !beginDecision("reject")) return;
     try {
       await api.reject(version.id, revisionRef.current);
       onClose();
     } catch (error) {
-      setFeedback({ kind: "error", text: errorMessage(error, "テンプレートを却下できませんでした。") });
+      setFeedback({ kind: "error", text: errorMessage(error, "変更を取り消せませんでした。") });
     } finally {
       endDecision();
     }
@@ -1405,8 +1406,7 @@ function TemplateReview({
         <section className="form-card mapping-section">
           <div className="section-title">
             <div>
-              <h2 ref={mappingSectionHeadingRef} tabIndex={-1}>{activeLayoutStep.title}</h2>
-              <p>{activeLayoutStep.description}</p>
+              <h2 ref={mappingSectionHeadingRef} tabIndex={-1}>{activeLayoutStep.title}<InfoTip text={activeLayoutStep.description} /></h2>
             </div>
           </div>
           <nav className="layout-wizard-steps" aria-label="テンプレート設定の工程">
@@ -1643,8 +1643,9 @@ function TemplateReview({
           {editorDirty || maskDirty || identityDirty || documentNameDirty
             ? <span>未保存の変更があります。保存してから次へ進んでください。</span>
             : isRevision && <span>反映すると、次の読み取りからこの設定を使います。</span>}</div>
-        <button className="danger-button" disabled={operationBusy} onClick={() => void rejectVersion()}>
-          <FiX aria-hidden="true" />{decisionBusy === "reject" ? <><Spinner />却下中…</> : "却下"}</button>
+        {/* Only the edits to a template in use can be taken back; a new template is deleted from the list instead. */}
+        {isRevision && <button className="secondary" disabled={operationBusy} onClick={() => void rejectVersion()}>
+          <FiRotateCcw aria-hidden="true" />{decisionBusy === "reject" ? <><Spinner />取り消し中…</> : "変更を取り消す"}</button>}
         {!version.quality.forkParentVersionId && maskRequiresReprocess && <button className="secondary"
           disabled={operationBusy || printSaved || printDirty || maskDirty || !meaningSaved}
           onClick={() => void reprocessVersion()}>{decisionBusy === "reprocess" ? <><Spinner />再生成中…</> : "選別マスクから再生成"}</button>}
@@ -1701,8 +1702,8 @@ function TemplateEditMenu({ label, primary, disabled, structureLabel, structureA
             <small>欄・表・項目名など、テンプレートの形を直します。</small>
           </button>
           <button type="button" role="menuitem" onClick={() => { setOpen(false); onFields(); }}>
-            <strong>項目の読み取り設定</strong>
-            <small>欄ごとに候補語や読み方の指示を付けます。</small>
+            <strong>メモリ</strong>
+            <small>欄ごとの候補語と、確定した書類から覚えた書き方のルールです。</small>
           </button>
           {onCopy && <button type="button" role="menuitem" onClick={() => { setOpen(false); onCopy(); }}>
             <strong>複製する</strong>

@@ -11,7 +11,7 @@ import { useInteractionContext } from "../assistant/useInteractionContext";
 import type { AssistantSnapshot } from "../assistant/contracts";
 import { PagedReviewPage } from "./PagedReviewPage";
 import { ExcelExportActions } from "../components/ExcelExportActions";
-import { AnchoredReviewPopover, ReviewPaint, ReviewPenSurface, RegionPreviewFlyIn, useReviewPaint, ReviewChecklists, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, reviewDisplayBlocks, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, sectionItemPaths, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
+import { AnchoredReviewPopover, ReviewPaint, ReviewPenSurface, RegionPreviewFlyIn, useReviewPaint, ReviewChecklists, ReviewChoiceLabels, choiceLabelsByPath, ReviewJoins, ReviewRenaming, checklistOptionsByPath, ReviewSeriesMarks, buildReviewDisplayModel, reviewDisplayBlocks, CellStatusPopover, MarkStatusPopover, markPopoverIsWide, reviewEntryLabel, GenericRecordReviewTable, IndependentReviewGroups, KeyValueReviewTable, ReviewResultsToolbar, ReviewDraftBoundary, ReviewTableSection, VoiceTableTarget, reviewEntryContext, sectionItemPaths, type ReadingEntry, type ReviewDisplayRecordSection, type ReviewInteractionMode } from "../components/OcrReviewResults";
 import type { Artifact, DocumentIdentity, FieldReading, OcrDocument, OcrResult } from "../types";
 import { displayName } from "../userMessages";
 import { displayOrders, joinByPath, type ItemJoin } from "../itemJoins";
@@ -24,7 +24,7 @@ import { ReviewPresenceDialog, useReviewPresence } from "../components/ReviewPre
 import { ReviewAiDragProvider, type AiAttachment, type AiDragData } from "../components/ReviewAiDrag";
 import { ReviewFormActions, ReviewFormReveal, ReviewFormView, ReviewViewSwitch, readStoredReviewView, reducedMotion, storeReviewView, type ReviewView } from "../components/ReviewFormView";
 export { buildReviewDisplayModel, positionReviewPopover } from "../components/OcrReviewResults";
-export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, closeLabel = "ホームへ", }: {
+export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChange, requireIdentityConfirmation = false, initialSelectedPath = null, autoReopenConfirmed = false, templateNames = {}, closeLabel = "戻る", }: {
     jobId: string;
     /** `discarded`: the unsaved input was thrown away on purpose, so leaving does not ask again. */
     onClose: (discarded?: boolean) => void;
@@ -466,8 +466,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
             <button className="ghost" onClick={() => onClose()}><FiArrowLeft />{closeLabel}</button></section>;
     if (!identityChecked && !result.confirmed)
         return <div className="page-stack identity-confirm-page">
-    <header className="page-header split has-back"><button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">{isUpdate ? "書類の更新" : "書類の確認"}</span><h1>この読み取りはあっていますか？</h1></div>
-      {canDiscard && <div className="page-actions"><DiscardReading jobId={jobId} disabled={busy || saving} onDiscarded={() => onClose(true)}/></div>}</header>
+    <header className="page-header split has-back"><button className="ghost page-back" disabled={busy} onClick={leave}><FiArrowLeft />{closeLabel}</button><div className="page-title-end"><span className="eyebrow">{isUpdate ? "書類の更新" : "書類の確認"}</span><h1>この読み取りはあっていますか？</h1></div></header>
     <aside className="identity-template-card">
       <span className="identity-template-thumb">{fullImage ? <img src={fullImage.replace(/(\/artifacts\/[^/?]+)/, "$1/thumbnail")} alt="" decoding="async" onError={event => { event.currentTarget.hidden = true; }}/> : null}<FiFileText aria-hidden="true"/></span>
       <span className="identity-template-text"><small>使用テンプレート</small><strong>{templateNames[result.result.templateId] ?? "読み取り時のテンプレート"}</strong></span>
@@ -513,6 +512,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     </aside>}
     {error && <p className="error-box" role="alert">{error}</p>}
     <div className="page-actions identity-next">
+      {canDiscard && <span className="identity-discard"><DiscardReading jobId={jobId} disabled={busy || saving} onDiscarded={() => onClose(true)}/></span>}
       <label className="identity-agree"><input type="checkbox" checked={identityAgreed} onChange={event => setIdentityAgreed(event.target.checked)}/><FiCheck aria-hidden="true"/>確認しました</label>
       <button className="primary" disabled={!identityAgreed || busy || saving || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}>次へ<FiArrowRight /></button>
     </div>
@@ -566,7 +566,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
       <span className="series-identity-actions"><button className="secondary compact" disabled={busy} onClick={() => setAcceptMismatch(true)}>この書類の更新として続ける</button></span>
     </aside>}
     <ReviewAiDragProvider enabled={aiDragEnabled} describe={describeDrag} onDrop={attachment => setAiAttach(current => ({ key: (current?.key ?? 0) + 1, attachment }))}>
-    <div className="review-assistant-workspace"><VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}>
+    <div className="review-assistant-workspace"><VoiceTableTarget.Provider value={voiceTableTarget}><ReviewSeriesMarks.Provider value={seriesMarks}><ReviewChecklists.Provider value={checklistOptionsByPath(previews)}><ReviewChoiceLabels.Provider value={choiceLabelsByPath(previews)}><ReviewRenaming.Provider value={mode === "rename" ? renameItem : null}><ReviewJoins.Provider value={joinContext}><ReviewPaint.Provider value={result.confirmed ? new Set<string>() : painted}>
     <div className={`generic-review-workspace${stage === "to-form" || stage === "form" ? " is-form" : ""}${stage === "to-form" || stage === "to-list" ? " is-switching" : ""}`}><section className="generic-review-source">
       {/* 一覧 | 帳票 and, in 帳票 mode, 「写真を見る」 on the left; the check pen and 「次の要確認」 on the right. */}
       {(formAllowed || formStage) && <div className="review-source-head">
@@ -599,7 +599,7 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
         {selectedPreview?.mappingType === "mark"
           ? <MarkStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} preview={selectedPreview} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>
           : <CellStatusPopover entry={{ ...selectedEntry, label: reviewEntryLabel(display, selectedEntry) }} confirmed={locked} onChange={patch => update(selectedEntry.path, patch)}/>}</AnchoredReviewPopover>}
-    </ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>
+    </ReviewPaint.Provider></ReviewJoins.Provider></ReviewRenaming.Provider></ReviewChoiceLabels.Provider></ReviewChecklists.Provider></ReviewSeriesMarks.Provider></VoiceTableTarget.Provider>
     {editingEnabled && <ReviewAiFocus rootRef={reviewRoot} focus={editingStatus.focus} context={editingStatus.context} viewRevision={result.revision} />}
     {/* Voice input and undo float over the form image like on the template screen; results speak in its bubble. */}
     {editingEnabled ? <EditingControls store={editingStore} pageScope={{ mode: "all", pageId: null }} tableSelector={false}

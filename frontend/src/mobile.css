@@ -62,8 +62,6 @@ input, select, textarea { max-width: 100%; }
 .review-mode-switch button.active:hover:not(:disabled) { background: #2468a2; color: #fff; }
 
 /* Phone reading: a camera button next to the image picker. */
-.ocr-camera-button { position: relative; display: flex; width: 100%; margin-top: 10px; cursor: pointer; }
-.ocr-camera-button input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
 .ocr-photo-tips { margin: 8px 0 0; font-size: 13px; line-height: 1.6; color: #4d6070; }
 .ocr-progress-stage .ocr-progress-actions.ocr-retake-guide { display: grid; justify-items: start; gap: 8px; text-align: left; }
 .ocr-retake-guide p, .ocr-retake-guide ul { margin: 0; }

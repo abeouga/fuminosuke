@@ -45,6 +45,8 @@ class StructuredReading(Contract):
     box: Box | None = None
     # A selection box (選択欄): its printed choices are not repeated in the shown name.
     choice: bool = False
+    # Its choice names; a repeated one is stored numbered (黒2) and shown plain (黒).
+    choice_labels: list[str] | None = None
 
 
 class ExtraReading(Contract):

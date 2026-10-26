@@ -25,7 +25,8 @@
             "preview",
             "handwriting-candidates",
             "output-layout",
-            "spreadsheet-source"
+            "spreadsheet-source",
+            "printable-pdf"
           ],
           "title": "Role",
           "type": "string"

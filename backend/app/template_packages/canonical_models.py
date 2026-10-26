@@ -165,6 +165,8 @@ class CanonicalAssetReferences(CanonicalModel):
     handwriting_candidates: str | None = None
     output_layout: str | None = None
     spreadsheet_source: str | None = None
+    # The blank form as printed from the source workbook (optional, spreadsheet templates only).
+    printable_pdf: str | None = None
 
     @model_validator(mode="after")
     def validate_asset_paths(self) -> Self:
@@ -176,6 +178,7 @@ class CanonicalAssetReferences(CanonicalModel):
             "handwriting_candidates": "optional/handwriting-candidates.json",
             "output_layout": "optional/output-layout.json",
             "spreadsheet_source": "optional/spreadsheet-source.xlsx",
+            "printable_pdf": "optional/printable.pdf",
         }
         for field_name, required_path in expected.items():
             value = getattr(self, field_name)
@@ -281,7 +284,11 @@ class CanonicalTemplate(CanonicalModel):
                 raise ValueError("Spreadsheet templates require a sanitized source workbook")
             if self.spreadsheet is None:
                 raise ValueError("Spreadsheet templates require portable source workbook metadata")
-        elif self.assets.spreadsheet_source is not None or self.spreadsheet is not None:
+        elif (
+            self.assets.spreadsheet_source is not None
+            or self.assets.printable_pdf is not None
+            or self.spreadsheet is not None
+        ):
             raise ValueError("Only spreadsheet templates can include source workbook data")
         return self
 

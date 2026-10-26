@@ -33,6 +33,7 @@ PackageFileRole = Literal[
     "handwriting-candidates",
     "output-layout",
     "spreadsheet-source",
+    "printable-pdf",
 ]
 
 _ROLE_PATHS: dict[str, str] = {
@@ -45,6 +46,7 @@ _ROLE_PATHS: dict[str, str] = {
     "handwriting-candidates": "optional/handwriting-candidates.json",
     "output-layout": "optional/output-layout.json",
     "spreadsheet-source": "optional/spreadsheet-source.xlsx",
+    "printable-pdf": "optional/printable.pdf",
 }
 _ROLE_MEDIA_TYPES: dict[str, str] = {
     "template": "application/json",
@@ -56,6 +58,7 @@ _ROLE_MEDIA_TYPES: dict[str, str] = {
     "handwriting-candidates": "application/json",
     "output-layout": "application/json",
     "spreadsheet-source": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    "printable-pdf": "application/pdf",
 }
 
 

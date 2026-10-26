@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api, ApiError } from "./api";
-import { privateLocalStorage } from "./auth/transport";
+import { privateLocalStorage, storageScope } from "./auth/transport";
 import { showToast } from "./components/Toast";
 
 // The readings started from the reading page, kept outside the page so they keep running and stay
@@ -30,8 +30,20 @@ const RUNNING = new Set(["CREATED", "QUEUED", "PROCESSING"]);
 const UNCONFIRMED = new Set([...RUNNING, "REVIEW_REQUIRED"]);
 const POLL_MS = 2500;
 
+// Read again whenever the signed-in user's storage changes: this module loads before the session is
+// known, and in the cloud the list is kept per user (reading it then would show another, stale list).
+let loadedScope = storageScope();
 let items: QueuedReading[] = read();
 const listeners = new Set<() => void>();
+
+function current(): QueuedReading[] {
+  const scope = storageScope();
+  if (scope !== loadedScope) {
+    loadedScope = scope;
+    items = read();
+  }
+  return items;
+}
 
 function read(): QueuedReading[] {
   try {
@@ -44,6 +56,7 @@ function read(): QueuedReading[] {
 }
 
 function update(next: QueuedReading[]) {
+  loadedScope = storageScope();
   items = next;
   try {
     privateLocalStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -58,31 +71,31 @@ export const readingQueue = {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   },
-  snapshot: () => items,
+  snapshot: current,
   add(jobId: string, fileName: string, templateName: string, origin: QueuedReadingOrigin = {}) {
-    update([...items.filter((item) => item.jobId !== jobId), {
+    update([...current().filter((item) => item.jobId !== jobId), {
       jobId, fileName, templateName, status: "QUEUED", progressPercent: 0, errorMessage: null, addedAt: Date.now(),
       ...origin,
     }]);
   },
   remove(jobId: string) {
-    update(items.filter((item) => item.jobId !== jobId));
+    update(current().filter((item) => item.jobId !== jobId));
   },
   /** Drops the finished ones (confirmed, cancelled) the user no longer needs to see. */
   clearDone() {
-    update(items.filter((item) => !["CONFIRMED", "CANCELLED"].includes(item.status)));
+    update(current().filter((item) => !["CONFIRMED", "CANCELLED"].includes(item.status)));
   },
   setStatus(jobId: string, status: string) {
-    update(items.map((item) => item.jobId === jobId ? { ...item, status } : item));
+    update(current().map((item) => item.jobId === jobId ? { ...item, status } : item));
   },
   /** The next document waiting for review, in the order it was sent (not `exceptJobId`). */
   nextReview(exceptJobId?: string) {
-    return items.find((item) => item.status === "REVIEW_REQUIRED" && item.jobId !== exceptJobId) ?? null;
+    return current().find((item) => item.status === "REVIEW_REQUIRED" && item.jobId !== exceptJobId) ?? null;
   },
-  running: () => items.filter((item) => RUNNING.has(item.status)),
+  running: () => current().filter((item) => RUNNING.has(item.status)),
   /** The sent readings of this template that are not confirmed yet (newest first). */
   unconfirmed(templateId: string, templateName: string) {
-    return items
+    return current()
       .filter((item) => UNCONFIRMED.has(item.status)
         && (item.templateId ? item.templateId === templateId : item.templateName === templateName))
       .sort((a, b) => b.addedAt - a.addedAt);
@@ -96,7 +109,7 @@ export function useReadingQueue() {
 /** Reads the current state of the given readings from the server and announces finished ones. */
 let syncing = false;
 
-export async function syncReadingQueue(ids = items.map((item) => item.jobId)) {
+export async function syncReadingQueue(ids = current().map((item) => item.jobId)) {
   // One sync at a time: a slow reply must not land after a newer one.
   if (ids.length === 0 || syncing) return;
   syncing = true;
@@ -112,7 +125,7 @@ export async function syncReadingQueue(ids = items.map((item) => item.jobId)) {
     syncing = false;
   }
   let changed = gone.size > 0;
-  const next = items.filter((item) => !gone.has(item.jobId)).map((item) => {
+  const next = current().filter((item) => !gone.has(item.jobId)).map((item) => {
     const job = jobs.find((candidate) => candidate?.id === item.jobId);
     if (!job) return item;
     const errorMessage = job.error?.message ?? null;
@@ -140,4 +153,52 @@ export function useReadingQueuePolling() {
     const timer = window.setInterval(poll, POLL_MS);
     return () => window.clearInterval(timer);
   }, [running]);
+}
+
+export type ReadingState = Pick<QueuedReading, "status" | "progressPercent" | "errorMessage">;
+
+// The state of readings no longer in the list (removed with ×, sent from another browser or listed in a
+// list this browser forgot): read from the server, so a chat message never waits on a list entry.
+const outside = new Map<string, ReadingState>();
+const outsideListeners = new Set<() => void>();
+const fetching = new Set<string>();
+const FINAL = new Set(["CONFIRMED", "FAILED", "CANCELLED", "INTERRUPTED"]);
+
+async function fetchOutside(jobId: string) {
+  if (fetching.has(jobId)) return;
+  fetching.add(jobId);
+  try {
+    const job = await api.job(jobId);
+    outside.set(jobId, { status: job.status, progressPercent: job.progressPercent, errorMessage: job.error?.message ?? null });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.code === "JOB_NOT_FOUND")) return;
+    outside.set(jobId, { status: "CANCELLED", progressPercent: 0, errorMessage: "この読み取りは削除されています。" });
+  } finally {
+    fetching.delete(jobId);
+  }
+  outsideListeners.forEach((listener) => listener());
+}
+
+/** The state of one sent reading: from the list while it is listed, otherwise from the server. */
+export function useReadingState(jobId: string | null): ReadingState | null {
+  const queue = useReadingQueue();
+  const listed = jobId ? queue.find((item) => item.jobId === jobId) ?? null : null;
+  const fetched = useSyncExternalStore(
+    (listener) => { outsideListeners.add(listener); return () => { outsideListeners.delete(listener); }; },
+    () => (jobId ? outside.get(jobId) ?? null : null),
+  );
+  const ask = Boolean(jobId) && !listed;
+  const running = !fetched || RUNNING.has(fetched.status);
+  const final = fetched !== null && FINAL.has(fetched.status);
+  useEffect(() => {
+    // Read again whenever the message is shown (a review may have been confirmed meanwhile), and keep
+    // polling while it is still being read.
+    if (!ask || !jobId || final) return;
+    const poll = () => { if (!document.hidden) void fetchOutside(jobId); };
+    poll();
+    if (!running) return;
+    const timer = window.setInterval(poll, POLL_MS * 2);
+    return () => window.clearInterval(timer);
+  }, [ask, jobId, running, final]);
+  return listed ?? fetched;
 }

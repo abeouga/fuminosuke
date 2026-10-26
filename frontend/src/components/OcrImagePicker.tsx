@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { FiCamera } from "react-icons/fi";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { FiCamera, FiImage } from "react-icons/fi";
 import { usePhoneDevice } from "../hooks/usePhoneDevice";
 import { prepareUploadImage } from "./phonePhoto";
 import { Spinner } from "./Spinner";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,image/tiff";
 const LABEL = "帳票画像を選択またはドロップ";
+/** Any image: Android's Chrome then opens its photo picker (it has no camera; the sheet offers that). */
+const PHOTO_ACCEPT = "image/*";
 /** One batch at most; the server's job queue holds 100. */
 export const MAX_BATCH_FILES = 30;
 
@@ -20,11 +22,11 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
   multiple?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
   const phoneDevice = usePhoneDevice();
   const [preparing, setPreparing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [sheet, setSheet] = useState(false);
   const previews = useObjectUrls(files);
   const single = files.length === 1 ? files[0] : null;
   const accepted = (next: File) => (allowXlsx && /\.xlsx$/i.test(next.name))
@@ -67,6 +69,18 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
         event.target.value = "";
       }} />
   );
+  /**
+   * On a computer the box is the file input itself. On a phone it opens a small sheet: the camera,
+   * or the phone's own photo picker (no single system screen offers both on Android).
+   */
+  const target = (children: ReactNode, label: string) => phoneDevice
+    ? <button type="button" className="ocr-image-target" aria-label={label} aria-haspopup="dialog" onClick={() => setSheet(true)}>{children}</button>
+    : <label className="ocr-image-target">{input}{children}</label>;
+  const chosen = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSheet(false);
+    select(Array.from(event.target.files ?? []));
+    event.target.value = "";
+  };
   return (
     <div className="ocr-image-picker">
       <div className={`ocr-image-surface${files.length > 0 ? " has-file" : ""}${files.length > 1 ? " has-files" : ""}${dragging ? " dragging" : ""}`}
@@ -93,25 +107,23 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
             ))}
             {files.length < MAX_BATCH_FILES && (
               <li className="ocr-image-grid-add">
-                <label className="ocr-image-target">
-                  {input}
+                {target(<>
                   <span className="drop-icon" aria-hidden="true">＋</span>
                   <strong>追加</strong>
-                </label>
+                </>, "帳票画像を追加")}
               </li>
             )}
           </ul>
         ) : (
-          <label className="ocr-image-target">
-            {input}
+          target(<>
             {single ? (/\.xlsx$/i.test(single.name)
               ? <><strong>記入済みExcel</strong><small>登録したテンプレートと同じセル配置のファイルを読み取ります。</small></>
               : previews.get(single) && <img src={previews.get(single)} alt="選択した帳票画像" />) : <>
               <span className="drop-icon" aria-hidden="true">＋</span>
-              <strong>{phoneDevice ? "保存した写真から選ぶ" : allowXlsx ? "帳票画像または記入済みExcelを選択" : LABEL}</strong>
-              <small>PNG / JPEG / WebP / TIFF{allowXlsx ? " / XLSX" : ""}・最大20 MB{multiple ? `・まとめて${MAX_BATCH_FILES}件まで` : ""}</small>
+              <strong>{phoneDevice ? "タップして撮影または写真を選ぶ" : allowXlsx ? "帳票画像または記入済みExcelを選択" : LABEL}</strong>
+              {!phoneDevice && <small>PNG / JPEG / WebP / TIFF{allowXlsx ? " / XLSX" : ""}・最大20 MB{multiple ? `・まとめて${MAX_BATCH_FILES}件まで` : ""}</small>}
             </>}
-          </label>
+          </>, files.length === 0 ? "撮影または写真を選ぶ" : "帳票画像を置き換える")
         )}
         {single && <button type="button" className="ocr-image-remove" aria-label="画像の選択を取り消す"
           onClick={() => {
@@ -119,20 +131,39 @@ export function OcrImagePicker({ files, onChange, allowXlsx = false, multiple = 
             if (inputRef.current) { inputRef.current.value = ""; inputRef.current.focus(); }
           }}><span aria-hidden="true">×</span></button>}
       </div>
-      {/* On a phone the camera is the main way in (shown first); the picker above chooses saved photos. */}
-      {phoneDevice && <label className="primary ocr-camera-button">
-        <input ref={cameraRef} type="file" accept={ACCEPT} capture="environment" aria-label="カメラで撮影"
-          onChange={(event) => {
-            select(Array.from(event.target.files ?? []));
-            event.target.value = "";
-          }} />
-        <FiCamera aria-hidden="true" />{multiple && files.length > 0 ? "続けて撮影" : "カメラで撮影"}
-      </label>}
-      {phoneDevice && <p className="ocr-photo-tips">真上から、書類全体が入るように撮影してください。</p>}
+      {phoneDevice && sheet && <PhotoSourceSheet multiple={multiple} onChosen={chosen} onClose={() => setSheet(false)} />}
       {preparing && <p className="ocr-photo-tips" role="status"><Spinner />画像を準備しています…</p>}
       {single && <small className="ocr-image-name" title={single.name}>{single.name}</small>}
       {files.length > 1 && <small className="ocr-image-name">{files.length}件の書類を選択中（1枚が1件の書類として読み取られます）</small>}
       {error && <p className="file-picker-error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+/** 「カメラで撮影」 or 「写真を選ぶ」, rising from the bottom of the phone screen. */
+function PhotoSourceSheet({ multiple, onChosen, onClose }: {
+  multiple: boolean;
+  onChosen: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [onClose]);
+  return (
+    <div className="photo-source-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="photo-source-sheet" role="dialog" aria-modal="true" aria-label="画像の選び方">
+        <label className="photo-source-option">
+          <input type="file" accept={ACCEPT} capture="environment" onChange={onChosen} />
+          <FiCamera aria-hidden="true" />カメラで撮影
+        </label>
+        <label className="photo-source-option">
+          <input type="file" accept={PHOTO_ACCEPT} multiple={multiple} onChange={onChosen} />
+          <FiImage aria-hidden="true" />写真を選ぶ
+        </label>
+        <button type="button" className="photo-source-cancel" onClick={onClose}>やめる</button>
+      </section>
     </div>
   );
 }

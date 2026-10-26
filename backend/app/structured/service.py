@@ -67,6 +67,14 @@ def page_image_url(job_id: str, page_id: str | None) -> str:
     return f"/api/v1/jobs/{quote(job_id, safe='')}/artifacts/{quote(name, safe='')}"
 
 
+def _choice_labels(mapping: dict) -> list[str] | None:
+    options = mapping.get("markOptions") if mapping.get("mappingType") == "mark" else None
+    labels = [
+        o["label"] for o in options or [] if isinstance(o, dict) and isinstance(o.get("label"), str)
+    ]
+    return labels or None
+
+
 def _box(reading: object, mapping: dict[str, Any]) -> dict[str, float] | None:
     """The reading's own box when stored, else the mapped cell (as the review screen shows it)."""
     source = reading.get("boundingBox") if isinstance(reading, dict) else None
@@ -294,6 +302,7 @@ class StructuredDocumentService:
                 document["fields"].get(reading["key"]), mappings.get(reading["fieldId"], {})
             )
             reading["choice"] = mappings.get(reading["fieldId"], {}).get("mappingType") == "mark"
+            reading["choiceLabels"] = _choice_labels(mappings.get(reading["fieldId"], {}))
         body["blocks"] = structure.get("blocks") if isinstance(structure, dict) else None
         image = page_image_url(job.id, None)
         version = (
@@ -381,6 +390,7 @@ class StructuredDocumentService:
             reading["choice"] = (
                 mapping_by_id.get(reading["fieldId"], {}).get("mappingType") == "mark"
             )
+            reading["choiceLabels"] = _choice_labels(mapping_by_id.get(reading["fieldId"], {}))
         body["blocks"] = structure.get("blocks") if isinstance(structure, dict) else None
         page_list = [
             {

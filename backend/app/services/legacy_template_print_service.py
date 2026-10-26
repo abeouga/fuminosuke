@@ -36,14 +36,20 @@ class LegacyTemplatePrintService:
                 raise print_error("テンプレートがありません。", "TEMPLATE_NOT_FOUND", 404)
             owner = session.get(Template, version.template_id)
             quality = version.quality_json
+            # A template imported from a package keeps the package's (sanitized) workbook, and the
+            # printed blank form when the package carried one.
+            imported = (
+                quality.get("sourceType") in {"template-package", "template-package-drive"}
+                and bool(quality.get("spreadsheetSourcePath"))
+            )
             if (
                 version.mode != TemplateMode.SPREADSHEET_TEMPLATE.value
                 or version.status != TemplateVersionStatus.ACTIVE.value
                 or owner is None
                 or owner.active_version_id != version.id
-                or quality.get("sourceType") != "xlsx"
+                or not (quality.get("sourceType") == "xlsx" or imported)
                 or quality.get("printLayout") is not None
-                or quality.get("spreadsheetPrintablePageCount") != 1
+                or (not imported and quality.get("spreadsheetPrintablePageCount") != 1)
                 or not version.source_job_id
             ):
                 raise print_error(
@@ -65,6 +71,11 @@ class LegacyTemplatePrintService:
             )
             if format_name == "xlsx":
                 return source
+            if imported and not quality.get("spreadsheetPrintablePdfPath"):
+                raise print_error(
+                    "取り込んだテンプレートには印刷用PDFがありません。印刷用XLSXを使ってください。",
+                    "PRINT_FILE_SOURCE_MISSING", 409,
+                )
             return self._verified_content(
                 session, version.source_job_id, clean.attempt_number,
                 "printablePdf", quality.get("spreadsheetPrintablePdfPath"),

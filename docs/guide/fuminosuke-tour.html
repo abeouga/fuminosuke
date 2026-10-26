@@ -1,0 +1,574 @@
+<title>文之助のつかいかた</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Yomogi&display=swap">
+<style>
+/* layout: 見出し → 左に動くスマホ、右に章の一覧。字幕はスマホの下に大きく */
+:root{
+  --bg:#f3f6f5; --surface:#ffffff; --ink:#15242a; --muted:#5b6b70; --line:#d9e2e0;
+  --accent:#23699e; --accent-soft:#e3eef7; --warm:#e0703c; --warm-soft:#fbe9df;
+  --ok:#1f9d63; --ok-soft:#dcf2e6; --warn:#e3a417; --warn-soft:#fdf2d0;
+  --font-display:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",sans-serif;
+  --font-body:"Noto Sans JP","Hiragino Sans","Yu Gothic",sans-serif;
+  --font-hand:"Yomogi","Klee One",cursive;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1719; --surface:#182326; --ink:#e7eeee; --muted:#9aaaad; --line:#2a3a3d;
+  --accent:#6fb0e2; --accent-soft:#1d3444; --warm:#f08a58; --warm-soft:#3a2418; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1719; --surface:#182326; --ink:#e7eeee; --muted:#9aaaad; --line:#2a3a3d;
+  --accent:#6fb0e2; --accent-soft:#1d3444; --warm:#f08a58; --warm-soft:#3a2418; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.7}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px 32px;margin-bottom:24px}
+.eyebrow{font-family:var(--font-display);font-weight:700;letter-spacing:.12em;color:var(--accent);font-size:14px}
+h1{font-family:var(--font-display);font-weight:900;font-size:clamp(30px,5vw,48px);line-height:1.2;margin:4px 0 6px;text-wrap:balance}
+.lead{margin:0;color:var(--muted);font-size:17px;max-width:36em}
+.note{font-size:13px;color:var(--muted)}
+.player{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start}
+@media (max-width:880px){.player{grid-template-columns:1fr}}
+.stagecol{min-width:0;display:grid;gap:16px}
+.stage{position:relative;background:linear-gradient(160deg,var(--accent-soft),var(--warm-soft));border-radius:28px;padding:28px 16px;display:grid;place-items:center;overflow:hidden}
+.phone-fit{width:380px;max-width:100%;}
+.phone-scale{transform-origin:top left;width:380px;height:780px}
+.caption{min-height:92px;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px 20px;display:flex;gap:14px;align-items:center}
+.caption .num{flex:none;width:44px;height:44px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-family:var(--font-display);font-weight:900;font-size:18px}
+.caption p{margin:0;font-size:clamp(18px,2.4vw,22px);font-weight:700;line-height:1.55;text-wrap:pretty}
+.caption p.swap{animation:capin .45s ease}
+@keyframes capin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{font:inherit;font-weight:700;font-size:16px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:10px 18px;min-height:46px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn:focus-visible,.chap:focus-visible{outline:3px solid var(--warm);outline-offset:2px}
+.btn[aria-pressed="true"]{background:var(--warm-soft);border-color:var(--warm);color:var(--ink)}
+.bar{flex:1 1 160px;height:8px;border-radius:99px;background:var(--line);overflow:hidden;min-width:120px}
+.bar i{display:block;height:100%;width:0;background:var(--warm);transition:width .4s ease}
+aside.chapters{display:grid;gap:10px}
+aside h2{font-family:var(--font-display);font-size:18px;margin:0 0 2px}
+#chaps{display:grid;gap:10px}
+.chap{all:unset;box-sizing:border-box;width:100%;cursor:pointer;display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;transition:border-color .2s,background .2s}
+.chap .n{width:40px;height:40px;border-radius:12px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-family:var(--font-display);font-weight:900}
+.chap b{display:block;font-size:17px;line-height:1.4}
+.chap small{display:block;color:var(--muted);font-size:13.5px;line-height:1.5}
+.chap .t{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.chap.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.chap.on .n{background:var(--accent);color:#fff}
+.chap.done .n{background:var(--ok-soft);color:var(--ok)}
+footer.n2{margin-top:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+footer.n2 div{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+footer.n2 b{font-family:var(--font-display);font-size:17px;display:block;margin-bottom:4px}
+footer.n2 p{margin:0;color:var(--muted);font-size:14.5px}
+
+/* ===== スマホの中（アプリの画面は常に明るい見た目） ===== */
+.phone{width:380px;height:780px;border-radius:52px;background:#0d1417;padding:12px;box-shadow:0 30px 60px #0e2a3a40,inset 0 0 0 2px #2a3337}
+.scr{position:relative;width:100%;height:100%;border-radius:42px;overflow:hidden;background:#eef2f5;color:#16242b;font-family:var(--font-body);font-size:14px;line-height:1.55;display:flex;flex-direction:column}
+.is-paused .scr *, .is-paused .scr{animation-play-state:paused!important}
+.notch{position:absolute;top:10px;left:50%;transform:translateX(-50%);width:110px;height:30px;border-radius:20px;background:#0d1417;z-index:30}
+.sbar{height:44px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 28px 4px;font-size:12px;font-weight:700}
+.apptop{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:#fff;border-bottom:1px solid #dfe6ea}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-weight:900;font-size:18px;color:#16242b}
+.logo i{width:28px;height:28px;border-radius:8px;background:#23699e;color:#fff;font-style:normal;display:grid;place-items:center;font-family:serif;font-size:16px}
+.ring{position:relative;width:40px;height:40px;border-radius:50%;border:1px solid #dfe6ea;background:#f7fafb;display:grid;place-items:center}
+.ring svg{position:absolute;inset:3px}
+.ring .ck{width:18px;height:18px;border-radius:50%;background:#22c55e;color:#fff;display:none;place-items:center;font-size:11px;font-weight:900}
+.ring.done .ck{display:grid;animation:pop .4s ease}
+.ring .badge{position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;border-radius:9px;background:#e0703c;color:#fff;font-size:11px;font-weight:700;display:none;place-items:center;padding:0 5px}
+.ring.done .badge{display:grid}
+.ring.spin svg{animation:rot 1.1s linear infinite}
+.ring.bump{animation:bump .6s ease}
+@keyframes rot{to{transform:rotate(360deg)}}
+@keyframes pop{from{transform:scale(.3)}to{transform:scale(1)}}
+@keyframes bump{30%{transform:scale(1.18)}}
+.content{position:relative;flex:1;overflow:hidden;padding:14px}
+.tabs{height:66px;flex:none;display:grid;grid-template-columns:repeat(3,1fr);background:#fff;border-top:1px solid #dfe6ea;padding-bottom:10px}
+.tab{display:grid;place-items:center;align-content:center;gap:2px;font-size:11.5px;font-weight:700;color:#7a8a90}
+.tab span{font-size:18px;line-height:1}
+.tab.on{color:#23699e}
+.card{background:#fff;border:1px solid #dfe6ea;border-radius:14px}
+.h{font-family:var(--font-display);font-weight:700;font-size:16px;margin:0 0 10px}
+.tpl{display:flex;align-items:center;gap:12px;padding:10px;margin-bottom:10px;transition:border-color .2s,box-shadow .2s}
+.tpl .th{width:56px;height:44px;border-radius:6px;background:repeating-linear-gradient(#fff 0 7px,#cfd8dd 7px 8px);border:1px solid #cfd8dd}
+.tpl b{display:block;font-size:14.5px}.tpl small{color:#71838a;font-size:12px}
+.tpl.sel{border-color:#23699e;box-shadow:0 0 0 2px #cfe2f1}
+.bigbtn{display:flex;align-items:center;justify-content:center;gap:8px;height:54px;border-radius:14px;background:#23699e;color:#fff;font-weight:700;font-size:15.5px}
+.ghostbtn{display:flex;align-items:center;justify-content:center;height:46px;border-radius:12px;border:1px solid #c8d4da;background:#fff;font-weight:700;color:#23699e;font-size:14px}
+.stack{display:grid;gap:10px}
+.dock{position:absolute;left:14px;right:14px;bottom:14px}
+.pressed{transform:scale(.96);transition:transform .12s}
+.fade-in{animation:fin .4s ease both}
+@keyframes fin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* 台帳の紙 */
+.paper{background:#fffdf8;border-radius:4px;box-shadow:0 6px 18px #0003;padding:10px 12px;font-size:10px;color:#3c4a50;position:relative}
+.paper .ttl{font-weight:700;text-align:center;font-size:11px;margin-bottom:6px;letter-spacing:.2em}
+.paper table{width:100%;border-collapse:collapse}
+.paper td{border:1px solid #9aa6ab;height:18px;padding:0 4px;font-size:9px}
+.paper .hw{font-family:var(--font-hand);color:#1d3d8f;font-size:12px}
+.viewfinder{position:absolute;inset:0;background:#1b2427;z-index:5;display:grid;grid-template-rows:1fr auto;animation:fin .3s ease}
+.vf-area{position:relative;display:grid;place-items:center;padding:30px 26px}
+.vf-area .paper{transform:rotate(-2.5deg) skewX(-1deg);width:100%}
+.corner{position:absolute;width:26px;height:26px;border:3px solid #fff}
+.corner.a{top:18px;left:16px;border-right:0;border-bottom:0}.corner.b{top:18px;right:16px;border-left:0;border-bottom:0}
+.corner.c{bottom:18px;left:16px;border-right:0;border-top:0}.corner.d{bottom:18px;right:16px;border-left:0;border-top:0}
+.vf-bar{height:110px;display:grid;place-items:center}
+.shutter{width:66px;height:66px;border-radius:50%;border:4px solid #fff;background:#fff3;display:grid;place-items:center}
+.shutter i{width:50px;height:50px;border-radius:50%;background:#fff}
+.flash{position:absolute;inset:0;background:#fff;z-index:20;animation:flash .5s ease forwards;pointer-events:none}
+@keyframes flash{from{opacity:1}to{opacity:0}}
+.shot{display:flex;gap:10px;align-items:center;padding:10px}
+.shot .mini{width:64px;height:84px;flex:none;overflow:hidden;border-radius:6px;background:#2a3438;display:grid;place-items:center}
+.shot .mini .paper{transform:scale(.24);transform-origin:center;width:260px;flex:none}
+.flyer{position:absolute;z-index:40;width:64px;height:84px;border-radius:6px;background:#fffdf8;box-shadow:0 8px 20px #0004;transition:transform .9s cubic-bezier(.5,-0.3,.4,1),opacity .9s;background-image:repeating-linear-gradient(#fffdf8 0 9px,#cfd8dd 9px 10px)}
+.menu{position:absolute;top:60px;right:10px;left:56px;z-index:25;padding:10px;box-shadow:0 14px 30px #10283d30;animation:fin .25s ease}
+.qrow{display:flex;align-items:center;gap:10px}
+.qrow .mini2{width:40px;height:50px;border-radius:5px;background:repeating-linear-gradient(#fffdf8 0 6px,#cfd8dd 6px 7px);border:1px solid #cfd8dd}
+.qrow b{display:block;font-size:13.5px}.qrow small{font-size:12px;color:#1f9d63;font-weight:700}
+.pill{margin-left:auto;background:#23699e;color:#fff;border-radius:99px;padding:6px 12px;font-size:12.5px;font-weight:700}
+.idcard{padding:16px}
+.idcard .q{font-family:var(--font-display);font-weight:700;font-size:18px;line-height:1.4;margin-bottom:12px}
+.idrow{display:flex;align-items:center;justify-content:space-between;background:#f3f7f9;border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.idrow small{color:#71838a}.idrow b{font-size:18px}
+.chk{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 14px;border:1px solid #c8d4da;border-radius:10px;font-weight:700;background:#fff}
+.chk i{width:20px;height:20px;border-radius:5px;border:2px solid #9aa8ae;display:grid;place-items:center;font-style:normal;color:#fff;font-size:12px}
+.chk.on{border-color:#23699e;background:#e3eef7}.chk.on i{background:#23699e;border-color:#23699e}
+.rowbtns{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+.next{height:44px;padding:0 20px;border-radius:10px;background:#c9d4da;color:#fff;font-weight:700;display:grid;place-items:center}
+.next.ok{background:#23699e}
+.res{overflow:hidden}
+.res .sec{padding:8px 12px;background:#f3f7f9;font-weight:700;font-size:12.5px;color:#4a5c63;border-bottom:1px solid #dfe6ea}
+.kv{display:grid;grid-template-columns:96px 1fr;border-bottom:1px solid #e6ecef}
+.kv>span{padding:10px 12px;font-size:13px;color:#4a5c63;background:#fafcfd;border-right:1px solid #e6ecef}
+.kv>b{padding:8px 12px;font-size:16px;display:flex;align-items:center;justify-content:space-between;gap:8px;transition:background .4s}
+.kv>b.okc{background:#dff0e6}.kv>b.wc{background:#fdf2d0}
+.kv>b em{font-style:normal;font-size:11px;background:#e3a417;color:#fff;border-radius:99px;padding:1px 8px}
+.kv>b.flashc{animation:fl 1s ease}
+@keyframes fl{0%{background:#bfe9cf}100%{background:#dff0e6}}
+.kv>b input{font:inherit;font-weight:700;width:100%;border:2px solid #23699e;border-radius:6px;padding:2px 6px;background:#fff;color:#16242b}
+.crop{position:absolute;left:14px;right:14px;top:20px;z-index:12;padding:10px;box-shadow:0 16px 34px #10283d38;transform-origin:70% 80%;animation:zoomin .35s cubic-bezier(.2,.8,.3,1)}
+@keyframes zoomin{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:none}}
+.crop .img{height:110px;border-radius:8px;background:#fffdf8;border:1px solid #cfd8dd;display:grid;place-items:center;position:relative;background-image:linear-gradient(90deg,transparent 49.6%,#9aa6ab 49.6% 50.4%,transparent 50.4%)}
+.crop .img span{font-family:var(--font-hand);font-size:56px;color:#1d3d8f;transform:rotate(-3deg)}
+.crop small{display:block;margin-top:6px;color:#71838a;font-size:12px}
+.toast{position:absolute;left:50%;top:64px;transform:translateX(-50%);z-index:35;background:#16242b;color:#fff;border-radius:99px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;animation:toast 2.2s ease forwards}
+@keyframes toast{0%{opacity:0;transform:translate(-50%,-8px)}12%,80%{opacity:1;transform:translate(-50%,0)}100%{opacity:0}}
+.mic{position:absolute;right:16px;bottom:96px;z-index:15;width:58px;height:58px;border-radius:50%;background:#16242b;color:#fff;display:grid;place-items:center;font-size:22px;box-shadow:0 10px 24px #0004}
+.mic.listen{background:#e0703c}
+.mic.listen::before,.mic.listen::after{content:"";position:absolute;inset:0;border-radius:50%;border:2px solid #e0703c;animation:wave 1.4s ease-out infinite}
+.mic.listen::after{animation-delay:.7s}
+@keyframes wave{to{transform:scale(1.9);opacity:0}}
+.bubble{position:absolute;right:16px;bottom:166px;left:40px;z-index:15;background:#fff;border-radius:16px 16px 4px 16px;padding:12px 14px;box-shadow:0 10px 26px #10283d2e;font-weight:700;font-size:14.5px;animation:fin .3s ease}
+.bubble.ai{background:#16242b;color:#fff}
+.dots i{display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;margin:0 2px;animation:dot 1s infinite}
+.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+@keyframes dot{40%{transform:translateY(-5px);opacity:.5}}
+.namebar{position:absolute;left:0;right:0;bottom:0;z-index:10;background:#fff;border-top:1px solid #dfe6ea;padding:10px 14px 12px;display:grid;gap:8px}
+.field{height:44px;border:1px solid #c8d4da;border-radius:10px;display:flex;align-items:center;padding:0 12px;font-weight:700;font-size:15px;color:#9aa8ae}
+.field.filled{color:#16242b}
+.dialog{position:absolute;inset:0;z-index:30;background:#10232e80;display:grid;place-items:center;padding:20px;animation:fin .2s ease}
+.dialog .card{padding:18px}
+.dialog h4{margin:0 0 6px;font-family:var(--font-display);font-size:17px}
+.dialog p{margin:0 0 14px;font-size:13.5px;color:#4a5c63}
+.shelf{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.shelf .card{padding:8px}
+.shelf .th2{height:84px;border-radius:8px;background:repeating-linear-gradient(#fffdf8 0 8px,#cfd8dd 8px 9px);border:1px solid #dfe6ea;margin-bottom:6px}
+.shelf b{font-size:13px;display:block}.shelf small{font-size:11.5px;color:#71838a}
+.greet{text-align:center;margin-top:120px}
+.greet h3{margin:0;font-family:var(--font-display);font-weight:900;font-size:28px;background:linear-gradient(90deg,#23699e,#e0703c);-webkit-background-clip:text;background-clip:text;color:transparent}
+.greet p{margin:4px 0 0;color:#71838a;font-size:15px}
+.chatin{position:absolute;left:14px;right:14px;bottom:12px;z-index:8;background:#fff;border:2px solid #b7c5d2;border-radius:24px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:8px;min-height:54px}
+.chatin .tx{flex:1;font-size:14.5px;color:#9aa8ae}
+.chatin .tx.filled{color:#16242b}
+.chatin .ic{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:#4a5c63;font-size:17px}
+.chatin .send{background:#23699e;color:#fff}
+.att{position:absolute;left:24px;bottom:72px;z-index:8;width:56px;height:70px;border-radius:8px;background:repeating-linear-gradient(#fffdf8 0 7px,#cfd8dd 7px 8px);border:2px solid #fff;box-shadow:0 4px 12px #0003;animation:fin .3s ease}
+.msgs{display:grid;gap:12px;align-content:start}
+.me{justify-self:end;max-width:80%;background:#23699e;color:#fff;border-radius:16px 16px 4px 16px;padding:9px 13px;font-weight:500;animation:fin .3s ease}
+.ai{display:flex;gap:8px;align-items:flex-start;animation:fin .35s ease}
+.ai .av{flex:none;width:30px;height:30px;border-radius:9px;background:#23699e;color:#fff;display:grid;place-items:center;font-family:serif;font-weight:700}
+.ai .av.think{animation:breathe 1s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.45;transform:scale(.92)}}
+.ai .body{background:#fff;border:1px solid #dfe6ea;border-radius:4px 16px 16px 16px;padding:10px 12px;font-size:14px;flex:1;min-width:0}
+.ai mark{background:linear-gradient(transparent 55%,#ffe08a 55%);color:inherit;font-weight:700}
+.ai .lk{color:#23699e;text-decoration:underline;text-decoration-thickness:1px;font-weight:700}
+.mtab{width:100%;border-collapse:collapse;margin-top:8px;font-size:12.5px}
+.mtab th,.mtab td{border-bottom:1px solid #e6ecef;padding:4px 4px;text-align:left}
+.mtab td.r,.mtab th.r{text-align:right;font-variant-numeric:tabular-nums}
+.sheet{position:absolute;left:0;right:0;bottom:0;height:62%;z-index:20;background:#fff;border-radius:22px 22px 0 0;box-shadow:0 -12px 30px #10283d30;padding:14px;animation:up .4s cubic-bezier(.2,.8,.3,1)}
+@keyframes up{from{transform:translateY(100%)}to{transform:none}}
+.sheet .grab{width:44px;height:5px;border-radius:3px;background:#cfd8dd;margin:0 auto 10px}
+.sheet .paper{font-size:9px}
+.sheet td.hl{outline:2px solid #e0703c;background:#fbe9df}
+.status{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#4a5c63}
+.progress{height:6px;border-radius:3px;background:#e6ecef;overflow:hidden;margin-top:6px}
+.progress i{display:block;height:100%;width:0;background:#23699e;transition:width 2.4s ease}
+.okline{color:#1f9d63}
+
+.finger{position:absolute;z-index:50;left:0;top:0;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:#e0703c55;border:2px solid #fff;box-shadow:0 2px 10px #0004;transition:transform .6s cubic-bezier(.4,0,.2,1),opacity .3s;pointer-events:none;opacity:0}
+.finger.show{opacity:1}
+.finger.tap::after{content:"";position:absolute;inset:-2px;border-radius:50%;border:3px solid #e0703c;animation:ripple .5s ease-out}
+@keyframes ripple{from{transform:scale(.6);opacity:1}to{transform:scale(2.2);opacity:0}}
+.endcard{position:absolute;inset:0;z-index:60;background:#16242bf0;color:#fff;display:grid;place-items:center;text-align:center;padding:30px;animation:fin .4s ease}
+.endcard h3{font-family:var(--font-display);font-weight:900;font-size:26px;margin:0 0 8px}
+.endcard p{margin:0;color:#c9d6db}
+@media (prefers-reduced-motion: reduce){.finger{transition:none}.scr *{animation-duration:.01ms!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">文之助 · つかいかた</div>
+      <h1>紙の台帳を、撮って、確かめて、話しかけて調べる。</h1>
+      <p class="lead">スマホで台帳を撮るだけで、中身がデータになります。わからないことは、ふだんの言葉で聞くだけ。6つの場面を順番にお見せします。</p>
+    </div>
+    <p class="note">画面は説明のために作った見本です。<br>書類の名前や数字も見本です。</p>
+  </header>
+
+  <section class="player" aria-label="使いかたの動画">
+    <div class="stagecol">
+      <div class="stage" id="stage">
+        <div class="phone-fit" id="fit">
+          <div class="phone-scale" id="scale">
+            <div class="phone">
+              <div class="scr" id="scr" aria-hidden="true">
+                <div class="notch"></div>
+                <div class="sbar"><span>9:41</span><span>●●● 5G</span></div>
+                <div class="apptop">
+                  <div class="logo"><i>文</i>文之助</div>
+                  <div class="ring" id="ring">
+                    <svg viewBox="0 0 34 34"><circle cx="17" cy="17" r="14" fill="none" stroke="#dfe6ea" stroke-width="3"/><circle id="arc" cx="17" cy="17" r="14" fill="none" stroke="#23699e" stroke-width="3" stroke-linecap="round" stroke-dasharray="88" stroke-dashoffset="88"/></svg>
+                    <span class="ck">✓</span><span class="badge">1</span>
+                  </div>
+                </div>
+                <div class="content" id="content"></div>
+                <nav class="tabs">
+                  <div class="tab" data-tab="chat"><span>💬</span>チャット</div>
+                  <div class="tab" data-tab="read"><span>📷</span>読み取り</div>
+                  <div class="tab" data-tab="lib"><span>📚</span>ライブラリ</div>
+                </nav>
+                <div class="finger" id="finger"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption" aria-live="polite"><span class="num" id="capnum">1</span><p id="cap">再生ボタンを押すと始まります。</p></div>
+      <div class="controls">
+        <button class="btn primary" id="play" type="button">▶ 再生</button>
+        <button class="btn" id="prev" type="button" aria-label="前の場面">◀ 前へ</button>
+        <button class="btn" id="next" type="button" aria-label="次の場面">次へ ▶</button>
+        <button class="btn" id="slow" type="button" aria-pressed="false">ゆっくり</button>
+        <div class="bar" aria-hidden="true"><i id="prog"></i></div>
+      </div>
+    </div>
+
+    <aside class="chapters" aria-label="場面の一覧">
+      <h2>6つの場面</h2>
+      <div id="chaps"></div>
+    </aside>
+  </section>
+
+  <footer class="n2">
+    <div><b>撮るのは、ふだんのスマホで</b><p>紙全体が写れば大丈夫。少し曲がっていても、傾いていても読み取ります。</p></div>
+    <div><b>直すのも、聞くのも、ことばで</b><p>欄を押して書き換えるか、マイクで「価格を55万に直して」と言うだけです。</p></div>
+    <div><b>確定した書類は、ずっと残る</b><p>ライブラリでいつでも見返せて、Excelのファイルとしても受け取れます。</p></div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const scr = $('#scr'), content = $('#content'), finger = $('#finger'), ring = $('#ring'), arc = $('#arc');
+  const capEl = $('#cap'), capNum = $('#capnum'), prog = $('#prog'), stage = $('#stage');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- スマホの拡大縮小 ---------- */
+  const fit = $('#fit'), scaleBox = $('#scale');
+  let scale = 1;
+  function resize() {
+    const w = stage.clientWidth - 32;
+    if (w <= 0) return;
+    scale = Math.max(0.5, Math.min(1, w / 380, (innerHeight * 0.8) / 780));
+    scaleBox.style.transform = `scale(${scale})`;
+    fit.style.height = (780 * scale) + 'px';
+    fit.style.width = (380 * scale) + 'px';
+  }
+  addEventListener('resize', resize); addEventListener('load', resize); resize();
+  new ResizeObserver(resize).observe(stage);
+
+  /* ---------- 一時停止できる時計 ---------- */
+  let playing = false, speed = 1, token = 0, waiters = [], last = performance.now();
+  function tick(now) {
+    const dt = now - last; last = now;
+    if (playing) {
+      for (const w of waiters.slice()) {
+        w.left -= dt * speed;
+        if (w.left <= 0) { waiters.splice(waiters.indexOf(w), 1); w.res(); }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  const STOP = Symbol('stop');
+  function wait(ms) {
+    const my = token;
+    return new Promise((res, rej) => {
+      waiters.push({ left: reduce ? Math.min(ms, 900) : ms, res: () => (my === token ? res() : rej(STOP)) });
+    });
+  }
+  function cancelAll() { token++; const ws = waiters; waiters = []; ws.forEach(w => w.res()); }
+
+  /* ---------- 指の動きと文字入力 ---------- */
+  function pos(el) {
+    const a = scr.getBoundingClientRect(), b = el.getBoundingClientRect();
+    return [(b.left - a.left + b.width / 2) / scale, (b.top - a.top + b.height / 2) / scale];
+  }
+  async function move(sel) {
+    const el = typeof sel === 'string' ? $(sel, scr) : sel;
+    const [x, y] = pos(el);
+    finger.classList.add('show');
+    finger.style.transform = `translate(${x}px,${y}px)`;
+    await wait(700);
+    return el;
+  }
+  async function tap(sel) {
+    const el = await move(sel);
+    finger.classList.remove('tap'); void finger.offsetWidth; finger.classList.add('tap');
+    el.classList.add('pressed'); await wait(220); el.classList.remove('pressed');
+    await wait(180);
+    return el;
+  }
+  async function type(el, text, ms = 85) {
+    el.classList.add('filled'); el.textContent = '';
+    for (const ch of text) { el.textContent += ch; await wait(ms); }
+  }
+  const hideFinger = () => finger.classList.remove('show');
+  function setTab(t) { scr.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.tab === t)); }
+  function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; scr.appendChild(d); setTimeout(() => d.remove(), 2400); }
+  function ringState(s) {
+    ring.classList.remove('spin', 'done'); arc.style.transition = 'none'; arc.style.strokeDashoffset = 88;
+    if (s === 'spin') { ring.classList.add('spin'); requestAnimationFrame(() => { arc.style.transition = 'stroke-dashoffset 3s ease'; arc.style.strokeDashoffset = 22; }); }
+    if (s === 'done') { arc.style.strokeDashoffset = 0; ring.classList.add('done'); }
+  }
+
+  /* ---------- 画面の部品 ---------- */
+  const PAPER = (hand = true, extra = false) => `
+    <div class="paper"><div class="ttl">繁 殖 台 帳</div>
+      <table>
+        <tr><td style="width:28%">名号</td><td class="hw">${hand ? 'こよみ' : ''}</td><td style="width:22%">毛色</td><td class="hw">${hand ? '黒' : ''}</td></tr>
+        <tr><td>生年月日</td><td class="hw" colspan="3">${hand ? 'R2. 4. 12' : ''}</td></tr>
+        <tr><td>産次</td><td>体重</td><td colspan="2">価格</td></tr>
+        <tr><td class="hw">1</td><td class="hw">330</td><td class="hw" colspan="2">540,000</td></tr>
+        <tr><td class="hw">2</td><td class="hw">312</td><td class="hw" colspan="2">770,000</td></tr>
+        <tr><td class="hw">${extra ? '3' : ''}</td><td class="hw">${extra ? '305' : ''}</td><td class="hw" colspan="2">${extra ? '762,300' : ''}</td></tr>
+      </table></div>`;
+
+  const RESULTS = (weight = '33', price = '540,000', wOk = false) => `
+    <div class="card res fade-in">
+      <div class="sec">基本の情報</div>
+      <div class="kv"><span>名号</span><b class="okc">こよみ</b></div>
+      <div class="kv"><span>生年月日</span><b class="okc">令和2年4月12日</b></div>
+      <div class="kv"><span>毛色</span><b class="okc">黒</b></div>
+      <div class="sec">売却子牛（1頭目）</div>
+      <div class="kv"><span>体重</span><b id="wcell" class="${wOk ? 'okc' : 'wc'}">${weight}${wOk ? '' : '<em>要確認</em>'}</b></div>
+      <div class="kv"><span>価格</span><b id="pcell" class="okc">${price}</b></div>
+    </div>`;
+
+  /* ---------- 6つの場面 ---------- */
+  const CH = [
+    { title: '紙を撮って送る', sub: '書類の種類を選んで、カメラで撮るだけ', caps: 6, async run() {
+      setTab('chat'); ringState();
+      content.innerHTML = `<div class="greet"><h3>こんにちは</h3><p>何を調べますか？</p></div>`;
+      await cap('下の「読み取り」を押します。'); await tap('[data-tab=read]'); setTab('read');
+      content.innerHTML = `<div class="fade-in"><p class="h">どの書類を読み取りますか？</p>
+        <div class="card tpl" id="t1"><div class="th"></div><div><b>繁殖台帳</b><small>1枚・牛ごとの記録</small></div></div>
+        <div class="card tpl"><div class="th"></div><div><b>給水の申込書</b><small>1枚</small></div></div>
+        <div class="card tpl"><div class="th"></div><div><b>農薬の記録簿</b><small>1枚</small></div></div></div>`;
+      await wait(500);
+      await cap('読み取る書類の種類を選びます。'); await tap('#t1'); $('#t1').classList.add('sel'); await wait(500);
+      content.innerHTML = `<div class="fade-in stack"><p class="h">繁殖台帳を撮影します</p>
+        <div class="bigbtn" id="cam">📷 カメラで撮影</div><div class="ghostbtn">保存した写真から選ぶ</div></div>`;
+      await cap('「カメラで撮影」を押して、紙全体をおさめます。'); await tap('#cam');
+      const vf = document.createElement('div'); vf.className = 'viewfinder';
+      vf.innerHTML = `<div class="vf-area">${PAPER()}<span class="corner a"></span><span class="corner b"></span><span class="corner c"></span><span class="corner d"></span></div><div class="vf-bar"><div class="shutter" id="shut"><i></i></div></div>`;
+      content.appendChild(vf); await wait(1300);
+      await cap('パシャッ。少しくらい紙が曲がっていても大丈夫です。'); await tap('#shut');
+      const fl = document.createElement('div'); fl.className = 'flash'; scr.appendChild(fl); setTimeout(() => fl.remove(), 600);
+      await wait(300);
+      content.innerHTML = `<div class="fade-in stack"><p class="h">繁殖台帳を撮影します</p>
+        <div class="card shot"><div class="mini" id="mini">${PAPER()}</div><div><b>写真 1枚</b><br><small style="color:#71838a">続けて撮ることもできます</small></div></div>
+        <div class="ghostbtn">📷 もう1枚撮る</div></div><div class="dock"><div class="bigbtn" id="go">読み取りを開始</div></div>`;
+      await wait(900);
+      await cap('「読み取りを開始」を押したら、あとは待つだけ。'); await tap('#go'); hideFinger();
+      const m = $('#mini'), a = scr.getBoundingClientRect(), b = m.getBoundingClientRect(), r = ring.getBoundingClientRect();
+      const f = document.createElement('div'); f.className = 'flyer';
+      f.style.left = (b.left - a.left) / scale + 'px'; f.style.top = (b.top - a.top) / scale + 'px'; scr.appendChild(f);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        f.style.transform = `translate(${(r.left - b.left) / scale - 12}px,${(r.top - b.top) / scale - 20}px) scale(.2)`; f.style.opacity = '.2';
+      }));
+      await wait(950); f.remove(); ring.classList.add('bump'); setTimeout(() => ring.classList.remove('bump'), 700);
+      ringState('spin');
+      content.innerHTML = `<div class="fade-in stack"><p class="h">繁殖台帳を撮影します</p><div class="bigbtn" id="cam">📷 カメラで撮影</div><div class="ghostbtn">保存した写真から選ぶ</div></div>`;
+      await cap('読み取りは裏で進みます。その間に次の紙も送れます。'); await wait(3200); ringState('done'); await wait(1600);
+    }},
+    { title: '結果を確かめる', sub: '色で、見てほしい欄がひと目でわかる', caps: 5, async run() {
+      setTab('read'); ringState('done');
+      content.innerHTML = `<div class="stack"><p class="h">繁殖台帳を撮影します</p><div class="bigbtn">📷 カメラで撮影</div><div class="ghostbtn">保存した写真から選ぶ</div></div>`;
+      await cap('読み取りが終わると、右上の丸にチェックが付きます。'); await tap('#ring');
+      const mn = document.createElement('div'); mn.className = 'card menu';
+      mn.innerHTML = `<div class="qrow"><div class="mini2"></div><div><b>繁殖台帳</b><small>✓ 確認待ち</small></div><span class="pill" id="open">確認する</span></div>`;
+      scr.appendChild(mn); await wait(700);
+      await cap('「確認する」を押して開きます。'); await tap('#open'); mn.remove();
+      content.innerHTML = `<div class="card idcard fade-in"><div class="q">この読み取りは<br>あっていますか？</div>
+        <div class="idrow"><small>名号</small><b>こよみ</b></div><div class="idrow"><small>生年月日</small><b>令和2年4月12日</b></div>
+        <div class="rowbtns"><span class="chk" id="agree"><i>✓</i>確認しました</span><span class="next" id="nx">次へ</span></div></div>`;
+      await wait(500);
+      await cap('どの書類かを確かめます。合っていれば「確認しました」→「次へ」。');
+      await tap('#agree'); $('#agree').classList.add('on'); $('#nx').classList.add('ok'); await wait(300); await tap('#nx');
+      content.innerHTML = RESULTS();
+      await cap('緑は読めた欄。黄色は、念のため見てほしい欄です。'); await move('#wcell'); await wait(1600);
+      await cap('欄を押すと、紙のその部分が大きく出ます。'); await tap('#wcell');
+      const cp = document.createElement('div'); cp.className = 'card crop';
+      cp.innerHTML = `<div class="img"><span>330</span></div><small>紙では「330」。最後の0がかすれていたようです。</small>`;
+      content.appendChild(cp); hideFinger(); await wait(3600);
+    }},
+    { title: 'まちがいを直す', sub: '書き換えるか、声で頼むか', caps: 4, async run() {
+      setTab('read'); ringState();
+      content.innerHTML = RESULTS();
+      const mic = document.createElement('div'); mic.className = 'mic'; mic.id = 'mic'; mic.textContent = '🎤'; content.appendChild(mic);
+      await cap('書き換えたい欄を押して、正しい値を入れます。'); await tap('#wcell');
+      const w = $('#wcell'); w.innerHTML = '<input id="win" value="">'; const inp = $('#win');
+      for (const c of '330') { inp.value += c; await wait(220); }
+      await wait(400); hideFinger();
+      w.className = 'okc flashc'; w.textContent = '330';
+      await cap('直した内容は自動で保存されます。'); toast('保存しました'); await wait(2400);
+      await cap('マイクを押せば、声でも頼めます。'); await tap('#mic'); mic.classList.add('listen'); hideFinger();
+      const bb = document.createElement('div'); bb.className = 'bubble'; bb.innerHTML = '<span id="said"></span>'; content.appendChild(bb);
+      await wait(400);
+      await cap('「価格を55万に直して」。言ったとおりに直ります。');
+      const said = $('#said'); for (const c of '「価格を55万に直して」') { said.textContent += c; await wait(110); }
+      await wait(500); mic.classList.remove('listen');
+      bb.classList.add('ai'); bb.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>'; await wait(1300);
+      const p = $('#pcell'); p.textContent = '550,000'; p.className = 'okc flashc';
+      bb.innerHTML = '「価格」を 550,000 にしました。'; await wait(3200);
+    }},
+    { title: '確定して残す', sub: '名前を付けて、ライブラリへ', caps: 3, async run() {
+      setTab('read'); ringState();
+      content.innerHTML = RESULTS('330', '550,000', true);
+      const nb = document.createElement('div'); nb.className = 'namebar';
+      nb.innerHTML = `<div class="field" id="nm">書類名</div><div class="bigbtn" id="cf">内容を確定する</div>`;
+      content.appendChild(nb); await wait(400);
+      await cap('最後に書類名を入れて「内容を確定する」。'); await tap('#nm'); await type($('#nm'), 'こよみ', 160); await wait(300);
+      await tap('#cf');
+      const dg = document.createElement('div'); dg.className = 'dialog';
+      dg.innerHTML = `<div class="card"><h4>結果を確定しますか？</h4><p>確定することで、この内容が質問に使えます。</p><div class="bigbtn" id="yes">確定する</div></div>`;
+      content.appendChild(dg); await wait(700); await tap('#yes'); hideFinger();
+      setTab('chat'); content.innerHTML = `<div class="greet fade-in"><h3>こんにちは</h3><p>何を調べますか？</p></div>`;
+      await cap('確定すると、チャットで質問できるようになります。'); toast('「こよみ」を確定しました'); await wait(2600);
+      await cap('確定した書類は「ライブラリ」にいつでも残っています。'); await tap('[data-tab=lib]'); setTab('lib');
+      content.innerHTML = `<div class="fade-in"><p class="h">繁殖台帳</p><div class="shelf">
+        <div class="card"><div class="th2"></div><b>こよみ</b><small>今日 確定</small></div>
+        <div class="card"><div class="th2"></div><b>はじめ</b><small>10月22日</small></div>
+        <div class="card"><div class="th2"></div><b>ほまれ</b><small>10月18日</small></div>
+        <div class="card"><div class="th2"></div><b>そら</b><small>10月12日</small></div></div></div>`;
+      hideFinger(); await wait(3200);
+    }},
+    { title: '話しかけて調べる', sub: 'ふだんの言葉で、台帳に質問', caps: 3, async run() {
+      setTab('chat'); ringState();
+      content.innerHTML = `<div class="greet" id="gr"><h3>こんにちは</h3><p>何を調べますか？</p></div>
+        <div class="chatin"><span class="ic">🖼</span><span class="tx" id="q">質問を入力</span><span class="ic send" id="snd">↑</span></div>`;
+      await wait(400);
+      await cap('知りたいことを、ふだんの言葉で書きます。'); await tap('#q'); await type($('#q'), 'こよみの子牛の価格の合計は？', 110);
+      await tap('#snd'); hideFinger();
+      $('#gr').remove(); $('#q').textContent = '質問を入力'; $('#q').classList.remove('filled');
+      const ms = document.createElement('div'); ms.className = 'msgs'; content.prepend(ms);
+      ms.innerHTML = `<div class="me">こよみの子牛の価格の合計は？</div><div class="ai"><div class="av think">文</div></div>`;
+      await cap('台帳の中身から、数字を拾って計算します。'); await wait(1600);
+      ms.lastElementChild.outerHTML = `<div class="ai"><div class="av">文</div><div class="body"><span class="lk" id="lk">こよみ</span>の売却子牛の価格を合計すると、<mark>2,082,300円</mark>になります（3頭分）。
+        <table class="mtab"><tr><th>産次</th><th class="r">体重</th><th class="r">価格</th></tr><tr><td>1</td><td class="r">330</td><td class="r">550,000</td></tr><tr><td>2</td><td class="r">312</td><td class="r">770,000</td></tr><tr><td>3</td><td class="r">305</td><td class="r">762,300</td></tr></table></div></div>`;
+      await wait(2600);
+      await cap('答えのもとになった紙も、その場で開けます。'); await tap('#lk');
+      const sh = document.createElement('div'); sh.className = 'sheet';
+      sh.innerHTML = `<div class="grab"></div>${PAPER(true, true)}`; content.appendChild(sh);
+      sh.querySelectorAll('tr').forEach((tr, i) => { if (i >= 3) { const c = tr.cells[tr.cells.length - 1]; c.classList.add('hl'); } });
+      hideFinger(); await wait(3600);
+    }},
+    { title: '書き足した紙を送る', sub: '続きだと自動で気づいて、足すだけ', caps: 3, async run() {
+      setTab('chat'); ringState();
+      content.innerHTML = `<div class="msgs" id="ms"></div><div class="chatin"><span class="ic" id="img">🖼</span><span class="tx" id="q">質問を入力</span><span class="ic send" id="snd">↑</span></div>`;
+      await wait(400);
+      await cap('書き足した紙は、チャットに写真を置いて送るだけ。'); await tap('#img');
+      const at = document.createElement('div'); at.className = 'att'; content.appendChild(at); await wait(600);
+      await tap('#snd'); at.remove(); hideFinger();
+      const ms = $('#ms');
+      ms.innerHTML = `<div class="me" style="padding:6px"><div style="width:70px;height:88px;border-radius:8px;background:repeating-linear-gradient(#fffdf8 0 7px,#cfd8dd 7px 8px)"></div></div>
+        <div class="ai"><div class="av think">文</div><div class="body"><div class="status" id="st">前に読み取った書類と照らし合わせています…</div></div></div>`;
+      await cap('前の書類の続きだと、自動で見つけます。'); await wait(2200);
+      ms.querySelector('.av').classList.remove('think');
+      $('#st').outerHTML = `<div><div class="status">「こよみ」の続きとして読み取ります。</div><div class="progress"><i id="pg"></i></div></div>`;
+      requestAnimationFrame(() => { $('#pg').style.width = '100%'; }); ringState('spin');
+      await cap('書き足したところだけを読み取って、前の内容に足します。'); await wait(2800);
+      ringState('done');
+      ms.lastElementChild.querySelector('.body').innerHTML = `<div class="status okline">✓ 読み取りました（3頭目を追加）</div><div class="rowbtns"><span class="pill">確認する</span></div>`;
+      await wait(3000);
+    }},
+  ];
+
+  /* ---------- 再生の進行 ---------- */
+  let ci = 0, capIdx = 0, chapterDone = new Set();
+  const chapsEl = $('#chaps');
+  CH.forEach((c, i) => {
+    const b = document.createElement('button'); b.className = 'chap'; b.type = 'button';
+    b.innerHTML = `<span class="n">${i + 1}</span><span><b>${c.title}</b><small>${c.sub}</small></span><span class="t"></span>`;
+    b.addEventListener('click', () => { start(i); setPlaying(true); });
+    chapsEl.appendChild(b);
+  });
+  async function cap(t) {
+    capIdx++; capEl.classList.remove('swap'); void capEl.offsetWidth; capEl.classList.add('swap'); capEl.textContent = t;
+    prog.style.width = Math.min(100, (capIdx / CH[ci].caps) * 100) + '%';
+    await wait(450);
+  }
+  function mark() {
+    [...chapsEl.children].forEach((b, i) => { b.classList.toggle('on', i === ci); b.classList.toggle('done', chapterDone.has(i) && i !== ci); b.setAttribute('aria-current', i === ci ? 'step' : 'false'); });
+    capNum.textContent = ci + 1;
+  }
+  function clean() { scr.querySelectorAll('.menu,.toast,.flash,.flyer,.endcard').forEach(e => e.remove()); hideFinger(); }
+  async function start(i) {
+    cancelAll(); clean(); ci = i; capIdx = 0; prog.style.width = '0%'; mark();
+    const my = token;
+    try {
+      await CH[i].run();
+      if (my !== token) return;
+      chapterDone.add(i);
+      if (i < CH.length - 1) start(i + 1);
+      else {
+        const e = document.createElement('div'); e.className = 'endcard';
+        e.innerHTML = `<div><h3>これでひと通りです</h3><p>撮る・確かめる・聞く。<br>あとは毎日の台帳で試してみてください。</p></div>`;
+        scr.appendChild(e); capEl.textContent = 'おしまい。もう一度見るときは、右の一覧から場面を選んでください。'; setPlaying(false); mark();
+      }
+    } catch (err) { if (err !== STOP) console.error(err); }
+  }
+  const playBtn = $('#play');
+  let started = false;
+  function setPlaying(p) {
+    playing = p; stage.classList.toggle('is-paused', !p);
+    playBtn.textContent = p ? '❚❚ 一時停止' : '▶ 再生';
+  }
+  playBtn.addEventListener('click', () => {
+    if (!started) { started = true; start(0); setPlaying(true); return; }
+    if (!playing && scr.querySelector('.endcard')) { chapterDone.clear(); start(0); setPlaying(true); return; }
+    setPlaying(!playing);
+  });
+  $('#prev').addEventListener('click', () => { started = true; start(Math.max(0, ci - 1)); setPlaying(true); });
+  $('#next').addEventListener('click', () => { started = true; start(Math.min(CH.length - 1, ci + 1)); setPlaying(true); });
+  $('#slow').addEventListener('click', e => { const on = e.currentTarget.getAttribute('aria-pressed') !== 'true'; e.currentTarget.setAttribute('aria-pressed', on); speed = on ? 0.65 : 1; });
+
+  /* 最初の静止画：場面1の入口を見せておく */
+  setTab('chat'); mark();
+  content.innerHTML = `<div class="greet"><h3>こんにちは</h3><p>何を調べますか？</p></div>`;
+  stage.classList.add('is-paused');
+  const h = location.hash.replace('#', ''); const hi = ['shoot', 'check', 'fix', 'confirm', 'ask', 'update'].indexOf(h);
+  if (hi >= 0) { started = true; start(hi); setPlaying(false); }
+})();
+</script>

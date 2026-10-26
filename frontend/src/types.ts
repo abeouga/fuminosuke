@@ -158,6 +158,8 @@ export type TemplateMemory = {
     exampleAfter: string | null;
     hitCount: number;
     updatedAt: string;
+    /** The cells it applies to (repeated rows as 「[]」), as in the reading settings. */
+    targetPatterns: string[];
     boxes: Array<{ x: number; y: number; width: number; height: number }>;
   }>;
 };

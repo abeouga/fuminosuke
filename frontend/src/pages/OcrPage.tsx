@@ -39,7 +39,7 @@ export type TemplateWorkspaceRequest = {
   id: number;
   workspace: TemplateWorkspace;
   editVersionId?: string;
-  /** "fields": open 「項目の読み取り設定」 of `editVersionId` instead of its structure. */
+  /** "fields": open 「メモリ」 of `editVersionId` instead of its structure. */
   editTarget?: "structure" | "fields";
 };
 
@@ -392,7 +392,7 @@ export function OcrPage({
         <section className="form-card phone-template-notice" role="status">
           <h1>テンプレートの作成・編集はパソコンで行ってください</h1>
           <p>スマートフォンでは、作成済みのテンプレートを使った読み取り・確認・修正・確定・Excel取得・チャットができます。</p>
-          <button type="button" className="primary" onClick={() => setTemplateWorkspace(null)}>読み取りに戻る</button>
+          <button type="button" className="primary" onClick={() => setTemplateWorkspace(null)}>戻る</button>
         </section>
       </div>
     );

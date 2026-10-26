@@ -533,3 +533,7 @@ td.ocr-cell-painted.ocr-cell-warning { box-shadow: inset 4px 0 0 #e0b52c; }
 @media (prefers-reduced-motion: reduce) {
   .generic-review-workspace, .generic-review-workspace > .generic-review-results, .review-form-cells, .review-form-cell, .review-form-cell > *, .review-form-cell > button > span, .review-form-flag { transition: none; }
 }
+
+/* テンプレート設定の画面名（テンプレート設定・読み取る欄を設定）は右端へ。操作はその左 */
+.template-authoring-workspace .page-header.split.has-back.authoring-header>.authoring-title{order:3;flex:none;margin-left:12px}
+.template-authoring-workspace .page-header.split.has-back.authoring-header>.authoring-header-actions{order:2;margin-left:auto}

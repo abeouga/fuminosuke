@@ -33,6 +33,7 @@ _PATH_ROLE_MEDIA: dict[str, tuple[str, str]] = {
         "spreadsheet-source",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ),
+    "optional/printable.pdf": ("printable-pdf", "application/pdf"),
 }
 _FORBIDDEN_KEYS = {
     "apikey",

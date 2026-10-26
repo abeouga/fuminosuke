@@ -55,6 +55,10 @@ export async function authenticatedFetch(input: RequestInfo | URL, init?: Reques
   }
   return response;
 }
+/** Which user's storage the private stores read now (changes once the session is known). */
+export function storageScope(): string {
+  return current?.mode === "cognito" ? current.storageScope ?? "signed-out" : "";
+}
 function scoped(kind: "localStorage" | "sessionStorage"): Pick<Storage, "getItem" | "setItem" | "removeItem"> {
   const key = (value: string) => current?.mode === "cognito"
     ? `fuminosuke:${current.storageScope ?? "signed-out"}:${value}` : value;

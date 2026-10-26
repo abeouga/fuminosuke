@@ -163,6 +163,11 @@ class TemplatePackageReader:
                             raise self._error(
                                 "PACKAGE_XLSX_INVALID", "XLSX signatureが不正です。"
                             )
+                    elif item.role == "printable-pdf":
+                        if not payload.startswith(b"%PDF-"):
+                            raise self._error(
+                                "PACKAGE_PDF_INVALID", "印刷用PDFの形式が不正です。"
+                            )
                     else:
                         raise self._error(
                             "PACKAGE_MEDIA_TYPE_UNSUPPORTED",
@@ -405,6 +410,8 @@ class TemplatePackageReader:
             return self._limits.max_image_bytes
         if item.role == "spreadsheet-source":
             return self._limits.max_xlsx_bytes
+        if item.role == "printable-pdf":
+            return self._limits.max_pdf_bytes
         raise self._error(
             "PACKAGE_MEDIA_TYPE_UNSUPPORTED", f"未対応のmedia typeです: {item.media_type}"
         )

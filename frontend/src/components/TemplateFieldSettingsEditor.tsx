@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { InfoTip } from "./InfoTip";
+import { FiChevronRight, FiCpu, FiList, FiTrash2 } from "react-icons/fi";
 import { ApiError, api } from "../api";
-import type { Artifact, FieldMapping, LayoutDefinition, Template, TemplateFieldSetting, TemplateVersion } from "../types";
+import type { Artifact, FieldMapping, LayoutDefinition, Template, TemplateFieldSetting, TemplateMemory, TemplateVersion } from "../types";
 import { Spinner } from "./Spinner";
 
 type FieldDraft = {
@@ -14,13 +16,18 @@ type FieldItem = { key: string; label: string; patterns: string[]; mappings: Fie
 
 const EMPTY_DRAFT: FieldDraft = { keywordsText: "", keywordsEnabled: true, keywordsForced: false };
 
-/** Per-item reading settings: keywords, saved to the template (the instruction is the memory). */
+type MemoryRule = TemplateMemory["items"][number];
+
+/**
+ * 「メモリ」: per-item keywords set by hand, and below them the writing rules learned from
+ * corrections made before confirming (those can be deleted, not written here).
+ */
 export function TemplateFieldSettingsEditor({
   template,
   version,
   onClose,
   onNavigationGuardChange,
-  closeLabel = "← テンプレート一覧へ",
+  closeLabel = "← 戻る",
 }: {
   closeLabel?: string;
   template: Template;
@@ -34,6 +41,8 @@ export function TemplateFieldSettingsEditor({
   const [layout, setLayout] = useState<LayoutDefinition | null>(null);
   const [canonicalSize, setCanonicalSize] = useState({ width: version.canonicalWidth, height: version.canonicalHeight });
   const [drafts, setDrafts] = useState<Record<string, FieldDraft>>({});
+  const [rules, setRules] = useState<MemoryRule[]>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [savedSignature, setSavedSignature] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,7 +67,8 @@ export function TemplateFieldSettingsEditor({
       api.artifacts(version.sourceJobId),
       api.authoring(version.id),
       api.templateFieldSettings(template.id, version.id),
-    ]).then(([artifactResponse, authoring, settings]) => {
+      api.templateMemory(template.id, version.id),
+    ]).then(([artifactResponse, authoring, settings, memory]) => {
       if (cancelled) return;
       if (authoring.revision !== settings.resourceRevision) throw new Error("読み込み中に変更されました。もう一度読み込んでください。");
       const textMappings = authoring.mapping.mappings.filter((mapping) => mapping.enabled && mapping.mappingType === "text");
@@ -66,6 +76,7 @@ export function TemplateFieldSettingsEditor({
       setArtifacts(artifactResponse.items);
       setMappings(textMappings);
       setLayout(authoring.layout);
+      setRules(memory.items);
       setCanonicalSize({ width: authoring.mapping.canonicalWidth, height: authoring.mapping.canonicalHeight });
       const next = draftsFromSettings(settings.items, groupItems(textMappings, authoring.layout).keyByPattern);
       setDrafts(next);
@@ -73,7 +84,7 @@ export function TemplateFieldSettingsEditor({
     }).catch((error) => {
       if (cancelled) return;
       setLoadFailed(true);
-      setFeedback({ kind: "error", text: errorText(error, "項目の読み取り設定を読み込めませんでした。") });
+      setFeedback({ kind: "error", text: errorText(error, "メモリを読み込めませんでした。") });
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -91,7 +102,29 @@ export function TemplateFieldSettingsEditor({
     const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact.url]));
     return byName.get("cleanPreview") ?? byName.get("cleanTemplate") ?? byName.get("normalized") ?? byName.get("alignedSource.1") ?? "";
   }, [artifacts]);
-  const configured = [...items.values()].filter((item) => hasContent(drafts[item.key]));
+  // Each learned rule belongs to the item whose cells it covers.
+  const rulesByKey = useMemo(() => {
+    const byKey = new Map<string, MemoryRule[]>();
+    for (const rule of rules) {
+      const key = rule.targetPatterns.map((pattern) => keyByPattern.get(pattern)).find(Boolean);
+      if (key) byKey.set(key, [...(byKey.get(key) ?? []), rule]);
+    }
+    return byKey;
+  }, [rules, keyByPattern]);
+  const configured = [...items.values()].filter((item) => hasContent(drafts[item.key]) || rulesByKey.has(item.key));
+  const currentRules = (selected && rulesByKey.get(selected)) || [];
+  const removeRule = async (id: string) => {
+    setDeleting(id);
+    setFeedback(null);
+    try {
+      await api.deleteTemplateMemory(template.id, id);
+      setRules((all) => all.filter((rule) => rule.id !== id));
+    } catch (error) {
+      setFeedback({ kind: "error", text: errorText(error, "削除できませんでした。") });
+    } finally {
+      setDeleting(null);
+    }
+  };
   const current = selected ? items.get(selected) ?? null : null;
   const draft = (selected && drafts[selected]) || EMPTY_DRAFT;
   const keywordCount = lines(draft.keywordsText).length;
@@ -145,13 +178,12 @@ export function TemplateFieldSettingsEditor({
 
   return (
     <div className="page-stack candidate-settings-page">
-      <header className="page-header split">
+      <header className="page-header split has-back title-end">
+        <button type="button" className="ghost page-back" disabled={saving} onClick={close}>{closeLabel}</button>
         <div>
           <span className="eyebrow">{template.name}</span>
-          <h1>項目の読み取り設定</h1>
-          <p>欄を選んで、出てくる語（候補語）を付けます。</p>
+          <h1>メモリ<InfoTip align="end" text="欄を押して、よく出る言葉を登録します。覚えた書き方もここに出ます。" /></h1>
         </div>
-        <button type="button" className="ghost" disabled={saving} onClick={close}>{closeLabel}</button>
       </header>
 
       {feedback && <div className={feedback.kind === "error" ? "error-box" : "success-box"} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.text}</div>}
@@ -168,7 +200,7 @@ export function TemplateFieldSettingsEditor({
                     <button
                       type="button"
                       key={mapping.mappingId}
-                      className={`candidate-mapping-rectangle ${hasContent(drafts[key]) ? "bound" : ""} ${key === selected ? "active" : ""}`}
+                      className={`candidate-mapping-rectangle ${hasContent(drafts[key]) || rulesByKey.has(key) ? "bound" : ""} ${key === selected ? "active" : ""}`}
                       style={{
                         left: `${mapping.x / canonicalSize.width * 100}%`,
                         top: `${mapping.y / canonicalSize.height * 100}%`,
@@ -212,7 +244,24 @@ export function TemplateFieldSettingsEditor({
                       : "オフのときは参考だけ。候補と同じ語なら表記をそろえ、ほかは読み取ったまま残します。"}</small></span>
                   </label>
                 </div>}
-                {hasContent(draft) && <button type="button" className="ghost compact field-setting-clear" onClick={() => update({ ...EMPTY_DRAFT })}>この欄の設定を消す</button>}
+                {hasContent(draft) && <button type="button" className="ghost compact field-setting-clear" onClick={() => update({ ...EMPTY_DRAFT })}>候補語を消す</button>}
+                <div className="field-memory-rules">
+                  <h3>覚えた書き方</h3>
+                  {currentRules.length === 0
+                    ? <p className="field-memory-empty">まだありません。確定した書類で直した書き方を、ここで覚えます。</p>
+                    : <ul>{currentRules.map((rule) => (
+                        <li key={rule.id}>
+                          <div>
+                            <strong>{rule.rule}</strong>
+                            {rule.exampleBefore && rule.exampleAfter && <small>例：{rule.exampleBefore} → {rule.exampleAfter}</small>}
+                          </div>
+                          <button type="button" className="ghost compact" aria-label={`「${rule.rule}」を削除`} title="削除"
+                            disabled={deleting !== null} onClick={() => void removeRule(rule.id)}>
+                            {deleting === rule.id ? <Spinner /> : <FiTrash2 aria-hidden="true" />}
+                          </button>
+                        </li>
+                      ))}</ul>}
+                </div>
               </section>
             ) : (
               <section className="candidate-edit-card">
@@ -220,23 +269,39 @@ export function TemplateFieldSettingsEditor({
               </section>
             )}
             {configured.length > 0 && (
-              <section className="candidate-set-list" aria-label="設定済みの欄">
-                <div className="candidate-panel-heading compact"><div><h2>設定済み</h2></div><strong>{configured.length}件</strong></div>
-                {configured.map((item) => {
-                  const value = drafts[item.key];
-                  const count = lines(value.keywordsText).length;
-                  return (
-                    <button
-                      type="button"
-                      key={item.key}
-                      className={item.key === selected ? "candidate-set-card active" : "candidate-set-card"}
-                      onClick={() => select(item.key)}
-                    >
-                      <strong>{item.label}</strong>
-                      <span>{`候補語${count}語${value.keywordsEnabled ? value.keywordsForced ? "・寄せる" : "" : "・使わない"}`}</span>
-                    </button>
-                  );
-                })}
+              <section className="memory-set-list" aria-label="設定済みの欄">
+                <header className="memory-set-head">
+                  <h2>設定済み</h2>
+                  <span className="memory-set-count">{configured.length}</span>
+                </header>
+                <ul>
+                  {configured.map((item) => {
+                    const value = drafts[item.key];
+                    const count = value ? lines(value.keywordsText).length : 0;
+                    const learned = rulesByKey.get(item.key)?.length ?? 0;
+                    const active = item.key === selected;
+                    return (
+                      <li key={item.key}>
+                        <button type="button" className={`memory-set-item${active ? " active" : ""}`} aria-pressed={active} onClick={() => select(item.key)}>
+                          <span className="memory-set-name">
+                            <strong>{item.label}</strong>
+                            {item.mappings.length > 1 && <small>表の列</small>}
+                          </span>
+                          <span className="memory-set-tags">
+                            {count > 0 && <span className={`memory-tag is-keywords${value.keywordsEnabled ? "" : " is-off"}`}
+                              title={value.keywordsEnabled ? value.keywordsForced ? "候補語に寄せる" : "候補語を参考にする" : "候補語を使わない"}>
+                              <FiList aria-hidden="true" />{count}語{value.keywordsEnabled ? value.keywordsForced ? "・寄せる" : "" : "・オフ"}
+                            </span>}
+                            {learned > 0 && <span className="memory-tag is-rules" title="覚えた書き方">
+                              <FiCpu aria-hidden="true" />{learned}件
+                            </span>}
+                          </span>
+                          <FiChevronRight className="memory-set-arrow" aria-hidden="true" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               </section>
             )}
           </aside>
@@ -245,7 +310,7 @@ export function TemplateFieldSettingsEditor({
 
       {!loading && !loadFailed && (
         <div className="decision-bar sticky candidate-save-bar">
-          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}</strong><p>次に読み取る書類から使います。読み取り済みの書類は変わりません。</p></div>
+          <div><strong>{dirty ? "保存していない変更があります" : "保存済みです"}<InfoTip side="above" text="次の読み取りから使います。" /></strong></div>
           <button type="button" className="primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? <><Spinner />保存中…</> : "保存"}</button>
         </div>
       )}
