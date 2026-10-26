@@ -25,6 +25,12 @@ export type QueuedReading = {
 export type QueuedReadingOrigin = { templateId?: string; predecessorJobId?: string };
 
 const STORAGE_KEY = "fuminosuke.readingQueue";
+/**
+ * Listed at once when 「読み取りを開始」 is pressed while the image is still being compared with the
+ * confirmed documents; replaced by the real reading when the server accepts it. Its id is local.
+ */
+export const SENDING = "SENDING";
+const PENDING_PREFIX = "pending:";
 const RUNNING = new Set(["CREATED", "QUEUED", "PROCESSING"]);
 // Sent but not confirmed yet: a later photo of the same sheet may continue or replace it.
 const UNCONFIRMED = new Set([...RUNNING, "REVIEW_REQUIRED"]);
@@ -48,8 +54,10 @@ function current(): QueuedReading[] {
 function read(): QueuedReading[] {
   try {
     const stored: unknown = JSON.parse(privateLocalStorage.getItem(STORAGE_KEY) ?? "[]");
+    // A reading still being sent when the page was left can no longer be sent: it is dropped.
     return Array.isArray(stored) ? stored.filter((item): item is QueuedReading =>
-      typeof item === "object" && item !== null && typeof (item as QueuedReading).jobId === "string") : [];
+      typeof item === "object" && item !== null && typeof (item as QueuedReading).jobId === "string"
+      && (item as QueuedReading).status !== SENDING) : [];
   } catch {
     return [];
   }
@@ -77,6 +85,20 @@ export const readingQueue = {
       jobId, fileName, templateName, status: "QUEUED", progressPercent: 0, errorMessage: null, addedAt: Date.now(),
       ...origin,
     }]);
+  },
+  /** Lists a reading that is still being sent; returns its local id for `sent` or `remove`. */
+  sending(fileName: string, templateName: string, origin: QueuedReadingOrigin = {}) {
+    const id = `${PENDING_PREFIX}${crypto.randomUUID()}`;
+    update([...current(), {
+      jobId: id, fileName, templateName, status: SENDING, progressPercent: 0, errorMessage: null, addedAt: Date.now(),
+      ...origin,
+    }]);
+    return id;
+  },
+  /** The server accepted the reading listed as `localId`: it takes the real job's place in the list. */
+  sent(localId: string, jobId: string, origin: QueuedReadingOrigin = {}) {
+    update(current().map((item) => item.jobId === localId
+      ? { ...item, ...origin, jobId, status: "QUEUED" } : item));
   },
   remove(jobId: string) {
     update(current().filter((item) => item.jobId !== jobId));
@@ -110,6 +132,7 @@ export function useReadingQueue() {
 let syncing = false;
 
 export async function syncReadingQueue(ids = current().map((item) => item.jobId)) {
+  ids = ids.filter((id) => !id.startsWith(PENDING_PREFIX));
   // One sync at a time: a slow reply must not land after a newer one.
   if (ids.length === 0 || syncing) return;
   syncing = true;

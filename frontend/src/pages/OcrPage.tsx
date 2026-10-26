@@ -126,6 +126,8 @@ export function OcrPage({
   const [autoFor, setAutoFor] = useState<File | null>(null);
   const declinedRef = useRef(new Set<File>());
   const matchGenerationRef = useRef(0);
+  // The comparison running for each image, so 「読み取りを開始」 can wait for it after the page is left.
+  const matchLookupsRef = useRef(new Map<File, Promise<ConfirmedMatch | null>>());
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Images just handed to the reading queue: step 3 plays the send animation, then returns to step 2.
@@ -157,6 +159,7 @@ export function OcrPage({
     setPredecessor(null);
     setAutoFor(null);
     matchGenerationRef.current += 1;
+    matchLookupsRef.current = new Map();
     setMatches(new Map());
   }, [versionId]);
   useEffect(() => {
@@ -166,11 +169,11 @@ export function OcrPage({
     if (pending.length === 0) return;
     setMatches((current) => new Map([...current, ...pending.map((item) => [item, "checking"] as const)]));
     for (const item of pending) {
-      void findConfirmedMatch(item, versionId)
-        .catch(() => null)
-        .then((found) => {
-          if (generation === matchGenerationRef.current) setMatches((current) => new Map(current).set(item, found));
-        });
+      const lookup = findConfirmedMatch(item, versionId).catch(() => null);
+      matchLookupsRef.current.set(item, lookup);
+      void lookup.then((found) => {
+        if (generation === matchGenerationRef.current) setMatches((current) => new Map(current).set(item, found));
+      });
     }
   }, [files, matches, versionId]);
   useEffect(() => {
@@ -318,65 +321,79 @@ export function OcrPage({
     jobId, activeVersion?.quality.printLayout != null, openReview,
   );
   const currentStep = jobId || sent ? 3 : step;
-  const startReading = async () => {
-    if (files.length === 0 || creatingRef.current || jobId || sent || checking) return;
+  /**
+   * Sends the chosen images. They are listed in 「読み取り状況」 at once (as 送信中) and the page is
+   * ready for the next form: an image still being compared with the confirmed documents is sent
+   * when that ends (as the update of the one it matched), even after the user has left this page.
+   */
+  const startReading = () => {
+    if (files.length === 0 || creatingRef.current || jobId || sent || !versionId) return;
     creatingRef.current = true;
+    const chosen = files;
     const generation = submissionGenerationRef.current;
+    const target = versionId;
+    const ocr = ocrEnabledForSubmission;
     const templateName = activeSelection?.template.name ?? "テンプレート";
+    const templateId = activeSelection?.template.id;
     const keys = fileKeysRef.current;
-    setBusy(true);
-    let accepted = 0;
-    let remaining = files;
-    const acceptedFiles: File[] = [];
-    try {
-      for (const item of files) {
-        const predecessorJobId = files.length === 1
-          ? (seriesOpen ? predecessor?.jobId : undefined)
-          : batchPredecessors.get(item)?.jobId;
+    // Already decided: the update chosen for a single image (by hand or from its match), or declined.
+    const chosenUpdate = chosen.length === 1 && seriesOpen ? predecessor?.jobId : undefined;
+    const declined = new Set(chosen.filter((item) => declinedRef.current.has(item)));
+    const lookups = new Map(chosen.map((item) => {
+      const known = matches.get(item);
+      return [item, known !== undefined && known !== "checking"
+        ? Promise.resolve(known)
+        : matchLookupsRef.current.get(item) ?? Promise.resolve(null)] as const;
+    }));
+    const listed = chosen.map((item) => readingQueue.sending(item.name, templateName, { templateId }));
+    setFiles([]);
+    setSeriesOpen(false);
+    setPredecessor(null);
+    setAutoFor(null);
+    setSent({
+      id: Date.now(),
+      count: chosen.length,
+      images: chosen.slice(0, 3).map((item) => (/\.xlsx$/i.test(item.name) ? null : URL.createObjectURL(item))),
+    });
+    creatingRef.current = false;
+    void (async () => {
+      const updates = new Map<File, string | undefined>();
+      if (chosen.length === 1) {
+        const only = chosen[0];
+        updates.set(only, chosenUpdate ?? (seriesOpen || declined.has(only) ? undefined : (await lookups.get(only))?.jobId));
+      } else {
+        // Each image updates the document it matched; a document takes the first image only.
+        const found = await Promise.all(chosen.map((item) => declined.has(item) ? null : lookups.get(item)));
+        const used = new Set<string>();
+        chosen.forEach((item, index) => {
+          const match = found[index];
+          if (match && !used.has(match.jobId)) { used.add(match.jobId); updates.set(item, match.jobId); }
+        });
+      }
+      for (const [index, item] of chosen.entries()) {
+        const predecessorJobId = updates.get(item);
         let key = keys.get(item);
         if (!key) { key = createIdempotencyKey("ocr"); keys.set(item, key); }
-        const created = await api.createOcr(
-          versionId,
-          item,
-          ocrEnabledForSubmission,
-          key,
-          predecessorJobId,
-        );
-        rememberJob(created.jobId);
-        readingQueue.add(created.jobId, item.name, templateName, {
-          templateId: activeSelection?.template.id,
-          predecessorJobId,
-        });
-        keys.delete(item);
-        accepted += 1;
-        acceptedFiles.push(item);
-        remaining = remaining.filter((kept) => kept !== item);
-        if (generation === submissionGenerationRef.current) setFiles(remaining);
-      }
-    } catch (error) {
-      if (generation !== submissionGenerationRef.current) return;
-      showToast({
-        tone: "error",
-        title: accepted > 0 ? `${accepted}件を受け付けましたが、残り${remaining.length}件を送れませんでした` : "読み取りを開始できませんでした",
-        message: error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。",
-      });
-    } finally {
-      if (generation === submissionGenerationRef.current) {
-        creatingRef.current = false;
-        setBusy(false);
-        if (accepted > 0) {
-          setSeriesOpen(false);
-          setPredecessor(null);
-          setAutoFor(null);
-          setSent({
-            id: Date.now(),
-            count: accepted,
-            images: acceptedFiles.slice(0, 3).map((item) => (
-              /\.xlsx$/i.test(item.name) ? null : URL.createObjectURL(item))),
+        try {
+          const created = await api.createOcr(target, item, ocr, key, predecessorJobId);
+          rememberJob(created.jobId);
+          readingQueue.sent(listed[index], created.jobId, { templateId, predecessorJobId });
+          keys.delete(item);
+        } catch (error) {
+          const left = chosen.slice(index);
+          listed.slice(index).forEach((id) => readingQueue.remove(id));
+          // Still on this page: the images not sent come back to be sent again.
+          const here = generation === submissionGenerationRef.current;
+          if (here) setFiles((current) => [...left, ...current.filter((kept) => !left.includes(kept))]);
+          showToast({
+            tone: "error",
+            title: index > 0 ? `${index}件を受け付けましたが、残り${left.length}件を送れませんでした` : "読み取りを開始できませんでした",
+            message: `${error instanceof ApiError ? error.message : "バックエンドとの接続を確認してください。"}${here ? "" : "画像を選び直してください。"}`,
           });
+          return;
         }
       }
-    }
+    })();
   };
   const startNewReading = () => {
     idempotencyKeyRef.current = null;
@@ -570,9 +587,9 @@ export function OcrPage({
                 </div>
                 <div className="ocr-step-actions ocr-step-actions-single">
                   <button type="button" className="primary"
-                    disabled={files.length === 0 || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor) || checking}
-                    onClick={() => void startReading()}>
-                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : checking ? <><Spinner />確定済みの書類と照合中…</> : `${ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}${files.length > 1 ? `（${files.length}件）` : ""}`}</button>
+                    disabled={files.length === 0 || !versionId || busy || Boolean(jobId) || mappingPreview === null || !mappedReadingReady || Boolean(mappingError) || (seriesOpen && !predecessor)}
+                    onClick={startReading}>
+                    <FiPlay aria-hidden="true" />{busy ? <><Spinner />送信中…</> : `${ocrEnabledForSubmission ? "読み取りを開始" : "画像処理を開始"}${files.length > 1 ? `（${files.length}件）` : ""}`}</button>
                 </div>
               </section>
             )}

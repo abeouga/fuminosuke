@@ -3,6 +3,7 @@ import { FiAlertCircle, FiCheck, FiChevronDown, FiFileText, FiX } from "react-ic
 import { readingQueue, syncReadingQueue, useReadingQueue, type QueuedReading } from "../readingQueue";
 
 const STATUS_LABELS: Record<string, string> = {
+  SENDING: "送信中",
   CREATED: "受付中",
   QUEUED: "順番待ち",
   PROCESSING: "読み取り中",
@@ -12,7 +13,7 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELLED: "中止",
   INTERRUPTED: "中断",
 };
-const RUNNING = new Set(["CREATED", "QUEUED", "PROCESSING"]);
+const RUNNING = new Set(["SENDING", "CREATED", "QUEUED", "PROCESSING"]);
 const PROBLEM = new Set(["FAILED", "INTERRUPTED"]);
 
 /**
