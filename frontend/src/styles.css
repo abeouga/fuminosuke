@@ -1636,7 +1636,9 @@ small{font-size:12px;line-height:1.5}
 
 /* Temporary top notifications and shared development diagnostics. */
 .toast-viewport{position:fixed;z-index:1200;top:18px;left:50%;display:grid;width:min(620px,calc(100vw - 28px));gap:9px;transform:translateX(-50%);pointer-events:none}
-.persistent-system-notice{justify-content:space-between;margin-bottom:18px}.persistent-system-notice>div{display:grid;gap:3px}.persistent-system-notice button{flex:0 0 auto}
+.persistent-system-notice{justify-content:space-between;margin-bottom:18px}
+.newer-release-notice{justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.newer-release-notice button{flex:0 0 auto}
+.persistent-system-notice>div{display:grid;gap:3px}.persistent-system-notice button{flex:0 0 auto}
 .toast-card{--toast-color:#2468a2;display:grid;grid-template-columns:5px minmax(0,1fr) auto auto;align-items:center;gap:13px;min-height:62px;overflow:hidden;border:1px solid #b8c5cf;border-radius:10px;background:#fff;padding:0 11px 0 0;color:var(--ui-text);box-shadow:0 10px 28px #17344a24;pointer-events:auto;animation:toast-enter .22s ease-out}
 .toast-card.success{--toast-color:#16805d}.toast-card.warning{--toast-color:#b36b00}.toast-card.error{--toast-color:#b53a32}
 .toast-mark{align-self:stretch;background:var(--toast-color)}

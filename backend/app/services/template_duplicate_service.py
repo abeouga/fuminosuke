@@ -358,7 +358,8 @@ class TemplateDuplicateService(TemplateVersionService):
                 clone_id = str(uuid4())
                 content, verified_sha = self._artifact_bytes(artifact, owner_job=source_job)
                 target_path, copied_sha = self._write_verified(
-                    f"jobs/{job_id}/1/{clone_id}{Path(artifact.relative_path).suffix}",
+                    # artifacts/ is kept in S3 by cloud storage; other folders are task-local.
+                    f"artifacts/{job_id}/attempts/1/{clone_id}{Path(artifact.relative_path).suffix}",
                     content, created_paths,
                 )
                 if verified_sha != copied_sha:

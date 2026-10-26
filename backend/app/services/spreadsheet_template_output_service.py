@@ -28,6 +28,8 @@ from app.storage.local_storage import LocalStorageService
 _SOURCE_CELL_ID = re.compile(r"^xlsx_([A-Z]{1,3}[1-9]\d*)(?:$|_)")
 _CELL_COORDINATE = re.compile(r"^([A-Z]{1,3})([1-9]\d*)$")
 _MISSING = object()
+_BOXES = "□☐"
+_CHECKED = "☑"
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +261,7 @@ class SpreadsheetTemplateOutputService:
             )
 
         merge_plans = self._merge_plans(snapshot, worksheet)
-        self._apply_merges(worksheet, merge_plans)
+        merged_texts = self._apply_merges(worksheet, merge_plans)
 
         written_cells = 0
         for raw_mapping in mappings:
@@ -272,6 +274,15 @@ class SpreadsheetTemplateOutputService:
             for coordinate, destination_value in destinations:
                 anchor = self._merged_anchor(worksheet, coordinate)
                 cell = worksheet[anchor]
+                segments = merged_texts.get(anchor)
+                if segments is not None:
+                    destination_value = self._merged_value(
+                        raw_mapping, value, segments, destination_value
+                    )
+                else:
+                    checked = self._checked_text(raw_mapping, value, cell.value)
+                    if checked is not None:
+                        destination_value = checked
                 cell.value = destination_value
                 if isinstance(destination_value, str):
                     # OCR text must remain text even when it begins with "=".
@@ -338,6 +349,71 @@ class SpreadsheetTemplateOutputService:
         if composite_values:
             return "".join(composite_values)
         return value
+
+    @classmethod
+    def _merged_value(
+        cls,
+        mapping: dict[str, Any],
+        value: object,
+        segments: list[tuple[str, str]],
+        plain: str | int | float | bool | None,
+    ) -> str | int | float | bool | None:
+        """The value of a merged cell keeps the printed text of the cells merged into it.
+
+        The read value takes the place of the first input cell; the other cells keep their text
+        (a house number between its printed brackets, "☑" before "その他").
+        """
+        if not any(text for kind, text in segments if kind != "input"):
+            checked = cls._checked_text(mapping, value, next(
+                (text for kind, text in segments if kind == "input"), None,
+            ))
+            return checked if checked is not None else plain
+        written: list[str] = []
+        placed = False
+        for kind, text in segments:
+            if kind == "input" and not placed:
+                checked = cls._checked_text(mapping, value, text)
+                written.append(checked if checked is not None else str(value))
+                placed = True
+            else:
+                written.append(text)
+        if not placed:
+            written.insert(0, str(value))
+        return "".join(written)
+
+    @staticmethod
+    def _checked_text(mapping: dict[str, Any], value: object, original: object) -> str | None:
+        """A checked checklist is written as ☑ on the printed box, not as the option's name.
+
+        A cell that is only a box (or empty) becomes ☑. In a cell that lists the options after
+        boxes ("□ 本人確認書類 □ 申請書"), the box before each checked option becomes ☑.
+        Anything else keeps the option names (None).
+        """
+        options = mapping.get("markOptions")
+        if (
+            mapping.get("markRecognitionMode") != "checklist"
+            or not isinstance(options, list)
+            or not isinstance(value, str)
+        ):
+            return None
+        labels = [item.get("label") for item in options if isinstance(item, dict)]
+        labels = [label for label in labels if isinstance(label, str) and label]
+        chosen = [label for label in labels if label in value.split("・")]
+        if not chosen:
+            return None
+        text = original if isinstance(original, str) else ""
+        if not text.strip() or text.strip() in _BOXES:
+            return _CHECKED if len(labels) == 1 else None
+        written = text
+        for label in chosen:
+            at = written.find(label)
+            box = at - 1
+            while box >= 0 and written[box].isspace():
+                box -= 1
+            if at < 0 or box < 0 or written[box] not in _BOXES:
+                return None
+            written = written[:box] + _CHECKED + written[box + 1:]
+        return written
 
     @staticmethod
     def _value_at_path(document: dict[str, Any], path: str) -> object:
@@ -594,7 +670,15 @@ class SpreadsheetTemplateOutputService:
         return ranges if has_merged_source else {}
 
     @classmethod
-    def _apply_merges(cls, worksheet: Worksheet, plans: list[_MergePlan]) -> None:
+    def _apply_merges(
+        cls, worksheet: Worksheet, plans: list[_MergePlan]
+    ) -> dict[str, list[tuple[str, str]]]:
+        """Merges the cells and returns, per merged anchor, the text of each merged part in order.
+
+        Excel keeps only the top-left value of a merge, so the printed text of the other cells
+        (such as "その他") is joined into the anchor instead of being dropped.
+        """
+        texts: dict[str, list[tuple[str, str]]] = {}
         for plan in plans:
             exact_match = False
             replace_ranges: list[str] = []
@@ -614,6 +698,17 @@ class SpreadsheetTemplateOutputService:
             if exact_match:
                 continue
             cls._ensure_merge_contents_safe(worksheet, plan)
+            segments: list[tuple[str, str]] = []
+            seen: list[dict[str, Any]] = []
+            for coordinate, part in plan.parts_by_coordinate.items():
+                if any(part is item for item in seen):
+                    continue
+                seen.append(part)
+                original = worksheet[coordinate].value
+                segments.append((
+                    "input" if part.get("partType") == "input" else "text",
+                    "" if original is None else str(original),
+                ))
             perimeter: dict[str, dict[str, Any]] = {}
             if replace_ranges:
                 left, top, right, bottom = cls._range_bounds(plan.excel_range)
@@ -641,6 +736,12 @@ class SpreadsheetTemplateOutputService:
                 for side, value in edges.items():
                     setattr(border, side, value)
                 worksheet[coordinate].border = border
+            texts[plan.anchor_cell] = segments
+            joined = "".join(text for _, text in segments)
+            if joined and joined != segments[0][1]:
+                worksheet[plan.anchor_cell].value = joined
+                worksheet[plan.anchor_cell].data_type = "s"
+        return texts
 
     @staticmethod
     def _range_bounds(excel_range: str) -> tuple[int, int, int, int]:

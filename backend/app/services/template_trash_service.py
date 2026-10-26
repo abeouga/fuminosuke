@@ -225,6 +225,7 @@ class TemplateTrashService:
             ))) | {v.source_job_id for v in versions if v.source_job_id}
             template.active_version_id = None
             session.flush()
+            _delete_authoring_records(session, version_ids)
             for version in versions:
                 session.delete(version)
             session.flush()
@@ -246,6 +247,35 @@ class TemplateTrashService:
         )]:
             if self._storage.exists(relative_path):
                 self._storage.delete_tree(relative_path)
+
+
+def _delete_authoring_records(session: Session, version_ids: list[str]) -> None:
+    """The template-authoring records point at the versions without ON DELETE CASCADE.
+
+    PostgreSQL refuses to delete a version they still point at (SQLite does not check), so a
+    template that was ever edited could not be emptied from the trash in the cloud.
+    """
+    if not version_ids:
+        return
+    from sqlalchemy import delete, inspect
+
+    from app.template_analysis.models import (
+        AnalysisEvent,
+        AnalysisMerge,
+        AnalysisPage,
+        AnalysisRun,
+        AuthoringFacet,
+    )
+
+    tables = inspect(session.connection())
+    if tables.has_table(AuthoringFacet.__tablename__):
+        session.execute(delete(AuthoringFacet).where(AuthoringFacet.version_id.in_(version_ids)))
+    if tables.has_table(AnalysisRun.__tablename__):
+        runs = select(AnalysisRun.id).where(AnalysisRun.resource_id.in_(version_ids))
+        for child in (AnalysisEvent, AnalysisMerge, AnalysisPage):
+            session.execute(delete(child).where(child.run_id.in_(runs)))
+        session.execute(delete(AnalysisRun).where(AnalysisRun.resource_id.in_(version_ids)))
+    session.flush()
 
 
 def _utc(value: datetime | None) -> datetime | None:

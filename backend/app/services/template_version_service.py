@@ -509,7 +509,11 @@ class TemplateVersionService:
             for artifact in artifacts:
                 clone_id = str(uuid4())
                 content, source_sha = self._artifact_bytes(artifact, owner_job=source_job)
-                target = f"jobs/{job_id}/1/{clone_id}{Path(artifact.relative_path).suffix}"
+                # Under artifacts/: cloud storage keeps only these business folders in S3, so a copy
+                # under any other folder lived on the task's disk and was gone after a restart.
+                target = (
+                    f"artifacts/{job_id}/attempts/1/{clone_id}{Path(artifact.relative_path).suffix}"
+                )
                 target, destination_sha = self._write_verified(
                     target, content, created_paths
                 )

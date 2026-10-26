@@ -18,6 +18,7 @@ import { usePhoneDevice } from "./hooks/usePhoneDevice";
 import { usePhoneTyping } from "./phone/usePhoneTyping";
 import { LogoutButton } from "./auth/AuthBoundary";
 import { PageErrorBoundary } from "./components/PageErrorBoundary";
+import { newerReleaseDeployed, useNewerRelease } from "./appVersion";
 
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
@@ -244,6 +245,9 @@ export default function App() {
       return false;
     }
     applyNavigation(nextPage);
+    // Nothing unsaved is left behind here, so a newer release takes over by loading the page anew
+    // (the address already names the page being opened).
+    if (newerReleaseDeployed()) window.location.reload();
     return true;
   };
   const openReadingRoot = () => {
@@ -293,6 +297,7 @@ export default function App() {
     void refreshJobs();
   }, [refreshJobs, retryTemplates]);
   const backendHealthy = health !== null;
+  const newerRelease = useNewerRelease();
   const phone = usePhoneDevice();
   const typing = usePhoneTyping(phone);
   const chatActive = page === "ask" || (page === "review" && reviewReturn === "ask");
@@ -347,6 +352,12 @@ export default function App() {
       <main className="main-content">
         <PageErrorBoundary resetKey={`${page}:${reviewJobId ?? ""}`}>
         <Suspense fallback={<div className="page-spinner" aria-busy="true"><ImageSpinner label="画面を読み込んでいます" /></div>}>
+        {newerRelease && (
+          <aside className="notice newer-release-notice" role="status">
+            <span>新しい版の画面があります。画面を移ると切り替わります。</span>
+            <button type="button" className="secondary compact" onClick={() => window.location.reload()}>今すぐ再読み込み</button>
+          </aside>
+        )}
         {templateLoadFailed && (
           <aside className="notice danger persistent-system-notice" role="alert">
             <div>
