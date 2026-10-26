@@ -19,6 +19,7 @@ import { ImageSpinner, Spinner } from "../components/Spinner";
 import { ImageLightbox, type LightboxImage } from "../components/ImageLightbox";
 import { choiceText } from "../components/OcrReviewResults";
 import { leftReviewsSettled } from "../reviewLeave";
+import { usePhoneDevice } from "../hooks/usePhoneDevice";
 
 /** What the shelf shows; kept by the app so a review opened from here can come back to it. */
 export type ShelfSelection = { templateId: string | null; jobId: string | null; query: string };
@@ -327,6 +328,7 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
   onRetry: () => void;
   onOpenReview: (jobId: string, field: string | null) => void;
 }) {
+  const phone = usePhoneDevice();
   const [expanded, setExpanded] = useState<LightboxImage | null>(null);
   const [picked, setPicked] = useState<{ id: string; fromImage: boolean; heading?: boolean } | null>(null);
   // A table row picked by its number: the whole row is outlined on the image and shown enlarged below it.
@@ -454,7 +456,6 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
               <td><button type="button" className={`shelf-value${line.readings.some((item) => item.fieldId === current?.fieldId) ? " active" : ""}`}
                 title="原本の欄を表示" onClick={() => pick({ id: line.readings[0].fieldId, fromImage: false })}>
                 {joinedText(line.join.members, (path) => line.readings.find((item) => item.targetPath === path)?.value, line.join.separator ?? "") || <em>空欄</em>}
-                {line.readings.some((item) => item.status === "uncertain") && <small className="shelf-uncertain">要確認</small>}
               </button></td>
             </tr>
             : <tr key={line.fieldId} className={headingFields.has(line.fieldId) ? "heading-hit" : undefined}>{nameCells(line, readingLabel(line))}<td>{value(line)}</td></tr>)}
@@ -467,14 +468,15 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
     <header className="shelf-document-head">
       <div className="shelf-document-title">
         <h2>{documentTitle(summary)}</h2>
-        <p>{folderName} ・ {timeFormat.format(new Date(summary.confirmedAt))}</p>
+        <p>{phone ? timeFormat.format(new Date(summary.confirmedAt)) : `${folderName} ・ ${timeFormat.format(new Date(summary.confirmedAt))}`}</p>
       </div>
-      <div className="shelf-document-actions">
+      {/* スマホのライブラリは見るだけ。修正とXLSXはPCで行う。 */}
+      {!phone && <div className="shelf-document-actions">
         <button type="button" className="secondary compact" onClick={() => onOpenReview(summary.jobId, null)}><FiEdit3 aria-hidden="true" />修正する</button>
         {summary.kind === "paged"
           ? <PagedXlsxButton jobId={summary.jobId} revision={summary.confirmedRevision} documentName={summary.documentName} />
           : <ExcelExportActions compact jobId={summary.jobId} documentName={summary.documentName} />}
-      </div>
+      </div>}
     </header>
     {detail.error ? <div className="error-box" role="alert"><p>{detail.error}</p><button type="button" className="secondary compact" onClick={onRetry}>もう一度取得</button></div>
       : !document ? <p className="shelf-empty" role="status">内容を読み込んでいます。</p>
@@ -485,7 +487,7 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
             rowFieldIds={rowView?.readings.map((reading) => reading.fieldId) ?? null}
             onPick={(reading) => pick({ id: reading.fieldId, fromImage: true })}
             onPickHeading={(item) => pick({ id: item.cellId, fromImage: true, heading: true })}
-            onExpand={setExpanded} />
+            onExpand={setExpanded} expandAnywhere={phone} />
           {expanded && <ImageLightbox image={expanded} onClose={() => setExpanded(null)} />}
           {rowView
             ? <PickedRow key={`${rowView.table.id}:${rowView.rowNumber}`} title={rowView.table.title} rowNumber={rowView.rowNumber} cells={rowView.cells}
@@ -551,7 +553,6 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
 }) {
   return <button ref={buttonRef} type="button" className={`shelf-value${active ? " active" : ""}`} aria-pressed={active} title="原本のこの欄を表示" onClick={onPick}>
     {shownValue(reading) ?? <em>空欄</em>}
-    {reading.status === "uncertain" && <small className="shelf-uncertain">要確認</small>}
   </button>;
 }
 

@@ -398,8 +398,8 @@ export default function App() {
       </main>
       {phone && (
         <nav className="phone-tabs" aria-label="メインメニュー">
-          <NavButton active={chatActive} icon="ask" label="チャット" onClick={() => navigateTo("ask")} />
           <NavButton active={readingActive} icon="ocr" label="読み取り" onClick={openReadingRoot} />
+          <NavButton active={chatActive} icon="ask" label="チャット" onClick={() => navigateTo("ask")} />
           <NavButton active={shelfActive} icon="shelf" label="ライブラリ" onClick={() => navigateTo("shelf")} />
         </nav>
       )}

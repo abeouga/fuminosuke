@@ -144,7 +144,7 @@
 .shelf-row-values div{display:flex;align-items:baseline;gap:5px}
 .shelf-row-values dt{color:var(--ui-text-muted);font-size:12px}
 .shelf-row-values dd{margin:0;color:var(--ui-text);font-size:14px;font-weight:700;overflow-wrap:anywhere}
-.shelf-row-pick{min-width:26px;min-height:0;padding:1px 6px;border:1px solid transparent;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.shelf-row-pick{min-width:26px;min-height:0;padding:1px 6px;text-align:left;border:1px solid transparent;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 .shelf-row-pick:hover{border-color:var(--ui-primary);color:var(--ui-primary)}
 .shelf-table tr.row-hit .shelf-row-pick{border-color:var(--ui-primary);background:var(--ui-primary);color:#fff}
 .shelf-table tr.row-hit td{background:#f1f7fc}
@@ -156,7 +156,7 @@
 .shelf-table th.heading-hit{background:#e3f5ec;color:#0f5c43;box-shadow:inset 0 -2px 0 #16805d;scroll-margin:80px}
 .shelf-table td.column-hit{background:#f3fbf7}
 .shelf-table-wrap+.shelf-fields{margin-top:8px}
-.shelf-kv-table tbody th{width:32%;min-width:110px;padding:6px 9px;border-bottom:1px solid #e3e9ee;background:var(--ui-surface-muted);color:var(--ui-text-secondary);font-weight:600;white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+.shelf-kv-table tbody th{width:32%;min-width:110px;padding:6px 9px;border-bottom:1px solid #e3e9ee;background:var(--ui-surface-muted);color:var(--ui-text-secondary);font-weight:600;white-space:normal;overflow-wrap:anywhere;text-align:left;vertical-align:middle}
 .shelf-kv-table tbody th.shelf-item-group{width:16%;min-width:72px;border-right:1px solid #e3e9ee;color:var(--ui-text);font-weight:700}
 .shelf-kv-table tbody th.shelf-item-sub{width:22%;font-weight:500}
 .shelf-kv-table tbody tr.heading-hit>th{background:#e3f5ec;color:#0f5c43;box-shadow:inset 3px 0 0 #16805d;scroll-margin:80px}
@@ -166,15 +166,14 @@
 .shelf-value.active{border-color:var(--ui-primary);background:#eaf3fb;color:#174a73}
 .shelf-value.static{cursor:default}
 .shelf-value em{color:var(--ui-text-muted);font-style:normal;font-weight:400;font-size:13px;white-space:nowrap}
-.shelf-uncertain{padding:0 6px;border-radius:999px;background:#fff0d8;color:var(--ui-warning);font-size:11px;font-weight:700}
 .shelf-table-wrap{overflow-x:auto;border:1px solid var(--ui-border);border-radius:10px}
 .shelf-table{width:100%;border-collapse:collapse;font-size:13px}
-.shelf-table th{padding:7px 9px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface-muted);color:var(--ui-text-secondary);font-weight:700;text-align:left;white-space:nowrap}
-.shelf-table td{min-width:64px;padding:5px 9px;border-bottom:1px solid #e3e9ee;vertical-align:top}
+.shelf-table th{padding:7px 9px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface-muted);color:var(--ui-text-secondary);font-weight:700;text-align:left;vertical-align:middle;white-space:nowrap}
+.shelf-table td{min-width:64px;padding:5px 9px;border-bottom:1px solid #e3e9ee;text-align:left;vertical-align:middle}
 .shelf-table tbody tr:last-child td,.shelf-table tbody tr:last-child th{border-bottom:0}
 .shelf-table .shelf-value{font-size:13px;overflow-wrap:normal}
-.shelf-table th.shelf-row-number{width:1%;color:var(--ui-text-muted);text-align:right}
-.shelf-table tbody th.shelf-row-number{padding-top:8px;background:transparent;font-weight:400;vertical-align:top;border-bottom:1px solid #e3e9ee}
+.shelf-table th.shelf-row-number{width:1%;color:var(--ui-text-muted);text-align:left}
+.shelf-table tbody th.shelf-row-number{background:transparent;font-weight:400;vertical-align:middle;border-bottom:1px solid #e3e9ee}
 
 /* 縦に並ぶ幅では、原本を上に固定して値の一覧だけをスクロールさせる。 */
 @media (max-width:1180px){

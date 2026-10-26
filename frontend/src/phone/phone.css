@@ -239,11 +239,19 @@
 .phone-shell .shelf-document-title { min-width: 0; }
 .phone-shell .shelf-document-title h2 { font-size: 19px; }
 .phone-shell .shelf-document-title p { font-size: 13px; }
-.phone-shell .shelf-document-actions { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 8px; }
-.phone-shell .shelf-document-actions > * { flex: 1 1 0; min-width: 0; }
-.phone-shell .shelf-document-actions .excel-export-actions .primary { width: 100%; }
 .phone-shell .shelf-viewer-pane { position: static; }
 .phone-shell .shelf-viewer-scroll { max-height: 52dvh; }
+/* ライブラリの原本は欄を押せない。どこを押しても全画面で開く（ShelfPage の expandAnywhere）。 */
+.phone-shell .shelf-viewer-pane .shelf-box, .phone-shell .shelf-viewer-pane .shelf-heading-box { pointer-events: none; }
+/* ライブラリの値は折り返さない（長い値は表ごと横にスクロール）。書かれた改行だけは残す。
+   折り返してよいのは「項目｜値」の表の項目名だけ。表（売却子牛一覧など）は見出しも折り返さない。 */
+.phone-shell .shelf-table .shelf-value { white-space: pre; overflow-wrap: normal; flex-wrap: nowrap; max-width: none; }
+.phone-shell .shelf-table td { white-space: nowrap; }
+.phone-shell .shelf-table:not(.shelf-kv-table) th { white-space: nowrap; }
+.phone-shell .shelf-kv-table { width: auto; min-width: 100%; }
+.phone-shell .shelf-kv-table tbody th { width: 7.5em; min-width: 7.5em; max-width: 7.5em; }
+.phone-shell .shelf-kv-table tbody th.shelf-item-group { width: 4.5em; min-width: 4.5em; max-width: 4.5em; }
+.phone-shell .shelf-kv-table tbody th.shelf-item-sub { width: 6em; min-width: 6em; max-width: 6em; }
 /* With a document open, the search belongs to the list behind it. */
 .phone-shell .shelf-main:has(.shelf-document) .shelf-search,
 .phone-shell .shelf-main:has(.shelf-document) .shelf-refresh { display: none; }
@@ -284,6 +292,10 @@
 }
 @keyframes image-lightbox-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .image-lightbox { animation: none; } }
+
+/* スマホでは下へ引っぱって再読み込み（プルリフレッシュ）をさせない。入力・確認中の画面が読み直されないように。
+   Android の Chrome と iOS 16 以降の Safari で効く。再読み込みはブラウザーのメニューから行える。 */
+html.is-phone, html.is-phone body { overscroll-behavior-y: none; }
 
 /* チャットの間はページ自体をスクロールさせない（スワイプで入力欄が動かない）。
    キーボードに隠れないよう、高さは AskPage が見えている範囲から計算する。 */
