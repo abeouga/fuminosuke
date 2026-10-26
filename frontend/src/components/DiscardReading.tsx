@@ -45,9 +45,9 @@ export function DiscardReading({ jobId, disabled = false, onDiscarded }: {
       </button>
       {asking && (
         <div className="modal-backdrop">
-          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="discard-title">
+          <section className="modal-card discard-dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title">
+            <span className="discard-dialog-icon" aria-hidden="true"><FiTrash2 /></span>
             <h2 id="discard-title">この読み取りを廃棄しますか？</h2>
-            <p>読み取り結果と画像を削除します。直した内容も消え、元に戻せません。</p>
             {error && <p className="error-box" role="alert">{error}</p>}
             <div className="page-actions">
               <button type="button" className="secondary" disabled={busy} onClick={() => setAsking(false)}>確認を続ける</button>

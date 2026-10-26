@@ -84,6 +84,16 @@ class TemplateAligner:
             source_rgb, template_rgb, validation_regions, legacy_diagnostics,
         )
 
+    def align_global(
+        self, source_rgb: NDArray[np.uint8], template_rgb: NDArray[np.uint8],
+    ) -> RegistrationResult:
+        """The whole-page alignment alone, without the per-field acceptance of `align`.
+
+        Only for comparing photos (「確定済みの書類と照合」), where a bent page that is a field off
+        on one side still tells whether two photos show one sheet. Never for reading.
+        """
+        return self._align_legacy(source_rgb, template_rgb)
+
     def _recover_mutual(
         self,
         source_rgb: NDArray[np.uint8],

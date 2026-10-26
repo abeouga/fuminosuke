@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { logDetail, userText } from "../userMessages";
 import type { Job } from "../types";
 
@@ -21,7 +21,7 @@ const STATUS_LABELS: Record<string, string> = {
   COMPLETED: "完了", FAILED: "失敗", INTERRUPTED: "中断", CANCELLED: "中止", CANCELLING: "中止中",
 };
 
-export function JobProgress({ job, connectionLost }: { job: Job | null; connectionLost: boolean }) {
+export function JobProgress({ job, connectionLost, actions }: { job: Job | null; connectionLost: boolean; actions?: ReactNode }) {
   const failure = job?.error ? JSON.stringify(job.error) : null;
   useEffect(() => {
     // The code and stack trace are for diagnosis in the browser console, not for the screen.
@@ -45,6 +45,7 @@ export function JobProgress({ job, connectionLost }: { job: Job | null; connecti
         <p className="inline-warning">バックエンドの再起動で中断されました。再試行できます。</p>
       )}
       {job.error && <p className="error-box">{userText(job.error.message, "処理エラー")}</p>}
+      {actions && <div className="progress-actions">{actions}</div>}
     </section>
   );
 }

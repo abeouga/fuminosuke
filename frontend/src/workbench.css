@@ -82,10 +82,11 @@
 }
 .deploy-shell .side-nav {
   position: static; display: flex; flex-direction: row; align-items: center; gap: 24px;
-  height: 64px; padding: 0 24px; border: 0; border-bottom: 1px solid var(--ui-border);
-  background: white; box-shadow: none;
+  height: 64px; padding: 0 24px; border: 0; border-bottom: 1px solid #d9dce2;
+  background: #fbfaf6; box-shadow: none;
 }
-.deploy-shell .brand { min-height: 0; width: auto; flex: 0 0 auto; margin-right: 0; padding: 0; border: 0; }
+.deploy-shell .brand { min-height: 0; width: auto; flex: 0 0 auto; margin-right: 0; padding: 0; border: 0; background: transparent; }
+.deploy-shell .brand:hover { background: transparent; }
 /* The old side menu hid the name below 980px; the header bar keeps it. */
 .deploy-shell .brand div { display: block; }
 .deploy-shell .brand > span, .deploy-shell .brand img { width: 32px; height: 32px; flex-basis: 32px; }

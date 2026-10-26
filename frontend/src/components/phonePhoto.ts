@@ -11,6 +11,37 @@ const TARGET_EDGE = 4800;
  * photo over the size / pixel / edge limit (e.g. 48-200 MP camera modes), is re-encoded
  * as JPEG with the camera orientation applied, scaled to fit.
  */
+/**
+ * A smaller copy of a photo for the comparison with the confirmed documents (「確定済みの書類と照合」):
+ * it only tells whether two photos show the same sheet, and the server shrinks it to the same size,
+ * so sending the full photo only costs upload time. The reading itself always sends the original.
+ */
+export async function shrinkForMatching(file: File, edge: number): Promise<File> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    return file;
+  }
+  try {
+    const { width, height } = bitmap;
+    if (Math.max(width, height) <= edge) return file;
+    const scale = edge / Math.max(width, height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg", lastModified: file.lastModified });
+  } finally {
+    bitmap.close();
+  }
+}
+
 export async function prepareUploadImage(file: File): Promise<File> {
   const type = file.type.toLowerCase();
   const convertible = type === "image/webp" || /\.webp$/i.test(file.name);

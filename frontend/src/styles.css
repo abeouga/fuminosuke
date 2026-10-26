@@ -2821,6 +2821,13 @@ button.reading-float-open { cursor: pointer; }
 .series-picker-auto{margin:0;border-left:3px solid #2d746c;border-radius:6px;background:#eaf4f1;padding:8px 11px;color:#173a37;font-size:12px;line-height:1.6}
 .series-auto-notice{display:grid;gap:6px;border-left:3px solid #2d746c;border-radius:6px;background:#eaf4f1;padding:9px 12px;color:#173a37;font-size:12px}.series-auto-notice>span{display:flex;align-items:center;gap:8px;color:#71837e}.series-auto-notice strong{font-size:13px}.series-auto-notice ul{margin:0;padding-left:18px;display:grid;gap:2px;overflow-wrap:anywhere}
 .review-discard{gap:6px;color:#a14d3d}.review-discard:hover:not(:disabled){background:#fff2ef;color:#8d3b2c}
+.progress-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px;margin-top:16px}
+.modal-card.discard-dialog{width:min(360px,100%);padding:26px 22px 20px;text-align:center}
+.discard-dialog-icon{display:grid;place-items:center;width:46px;height:46px;margin:0 auto 14px;border-radius:50%;background:#fff2ef;color:#b4473a;font-size:21px}
+.modal-card.discard-dialog h2{margin:0 0 20px;font-size:17px;line-height:1.5}
+.modal-card.discard-dialog .error-box{margin:0 0 14px;text-align:left}
+.modal-card.discard-dialog .page-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;justify-content:stretch}
+.modal-card.discard-dialog .page-actions button{justify-content:center;width:100%;min-height:40px}
 .review-save-retry{gap:6px;border-color:#e3b9ae;color:#a14d3d}.review-save-retry:hover:not(:disabled){background:#fff2ef}
 
 /* A page that could not load (e.g. replaced by a newer release while the tab stayed open). */

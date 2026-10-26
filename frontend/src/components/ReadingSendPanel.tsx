@@ -42,8 +42,10 @@ export function ReadingSendPanel({ sent, onDone }: { sent: SentReading; onDone: 
     let cancelled = false;
     const timers: number[] = [];
     const animations: Animation[] = [];
+    let finished = false;
     const finish = () => {
-      if (cancelled) return;
+      if (cancelled || finished) return;
+      finished = true;
       setArrived(true);
       timers.push(window.setTimeout(() => { if (!cancelled) done.current(); }, 1100));
     };
@@ -72,6 +74,9 @@ export function ReadingSendPanel({ sent, onDone }: { sent: SentReading; onDone: 
         animations.push(animation);
       });
       const last = animations[animations.length - 1];
+      // A tab the browser does not paint (in the background) may never end the flight: the page
+      // must still come back for the next form.
+      timers.push(window.setTimeout(finish, 1200 + papers.length * 90 + 600));
       if (!last) finish();
       else last.finished.then(() => {
         if (cancelled) return;

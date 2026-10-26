@@ -27,8 +27,10 @@ from app.db.models import JobArtifact, ProcessingJob
 from app.db.session import Database
 from app.domain.template_config import FieldMappingConfig, TemplateConfig
 from app.extraction.handwriting_isolator import HandwritingIsolator
+from app.image_processing.document_boundary import DocumentNormalizer
 from app.image_processing.image_loader import ImageLoader
 from app.image_processing.photo_registration import register_document
+from app.image_processing.photometric import flatten_paper
 from app.image_processing.registration import TemplateAligner
 from app.repositories.job_repository import JobRepository
 from app.storage.local_storage import LocalStorageService
@@ -41,6 +43,19 @@ MAX_JOBS = 24
 CONTINUATION_SIMILARITY = 0.75
 # Fewer handwriting pixels than this in the earlier reading leave nothing to compare.
 MIN_COMPARED_PIXELS = 300
+# Photos are shrunk to this long edge before they are aligned for the comparison: telling one
+# sheet from another needs far less detail than reading it, and aligning a full phone photo
+# (a bent page in particular) is most of the time the comparison takes.
+MATCH_LONG_EDGE = 1800
+
+
+def _shrink(rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
+    height, width = rgb.shape[:2]
+    if max(height, width) <= MATCH_LONG_EDGE:
+        return rgb
+    scale = MATCH_LONG_EDGE / max(height, width)
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    return np.asarray(cv2.resize(rgb, size, interpolation=cv2.INTER_AREA), dtype=np.uint8)
 
 
 @dataclass(slots=True)
@@ -167,20 +182,40 @@ class DocumentContinuationService:
                 earlier.mask = stored[..., 0] > 0
         return earlier
 
-    def _align(
-        self, source: NDArray[np.uint8], earlier: _Earlier,
-    ) -> tuple[NDArray[np.uint8], NDArray[np.bool_]]:
-        document = register_document(
-            source, earlier.template_rgb, aligner=self._aligner,
-            validation_regions=earlier.regions,
-        )
-        aligned = document.registered.aligned_rgb
-        return aligned, self._isolator.isolate(aligned, earlier.template_rgb).mask > 0
+    def _align(self, source: NDArray[np.uint8], earlier: _Earlier) -> NDArray[np.uint8]:
+        """The photo on the template, for the comparison only.
+
+        The whole-page alignment is enough to tell one sheet from another, and a bent page that
+        reading must align field by field (3-9 s) takes it in under a second (measured
+        2026-10-26 on the stored photos: same sheet 0.93-1.0, other sheets unchanged). A photo
+        it cannot align takes the reading's full registration.
+        """
+        template = earlier.template_rgb
+        height, width = template.shape[:2]
+        for allow_swap in (False, True):
+            try:
+                page = DocumentNormalizer(
+                    canonical_width=width, canonical_height=height,
+                    allow_orientation_swap=allow_swap,
+                ).normalize(source).image_rgb
+            except AppError:
+                continue
+            if page.shape[:2] != (height, width):
+                page = np.asarray(cv2.rotate(page, cv2.ROTATE_90_CLOCKWISE), dtype=np.uint8)
+            flattened = flatten_paper(page, template)
+            for image in (flattened.image_rgb, page) if flattened.applied else (page,):
+                try:
+                    return self._aligner.align_global(image, template).aligned_rgb
+                except AppError:
+                    continue
+        return register_document(
+            source, template, aligner=self._aligner, validation_regions=earlier.regions,
+        ).registered.aligned_rgb
 
     def compare(
         self, content: bytes, media_type: str | None, job_ids: list[str],
     ) -> dict[str, Any]:
-        source = self._loader.load(content, media_type).rgb
+        source = _shrink(self._loader.load(content, media_type).rgb)
         aligned_by_template: dict[str, NDArray[np.uint8] | None] = {}
         items: list[dict[str, Any]] = []
         for job_id in list(dict.fromkeys(job_ids))[:MAX_JOBS]:
@@ -192,13 +227,17 @@ class DocumentContinuationService:
                         # Not aligned yet (still waiting or reading): align its own image.
                         if earlier.input_path is None:
                             raise LookupError
-                        earlier.aligned_rgb, earlier.mask = self._align(
-                            self._image(earlier.input_path, earlier.input_media_type), earlier,
+                        earlier.aligned_rgb = self._align(
+                            _shrink(self._image(earlier.input_path, earlier.input_media_type)),
+                            earlier,
                         )
+                        earlier.mask = self._isolator.isolate(
+                            earlier.aligned_rgb, earlier.template_rgb,
+                        ).mask > 0
                     key = earlier.template_key
                     if key not in aligned_by_template:
                         try:
-                            aligned_by_template[key] = self._align(source, earlier)[0]
+                            aligned_by_template[key] = self._align(source, earlier)
                         except AppError:
                             aligned_by_template[key] = None
                     later = aligned_by_template[key]

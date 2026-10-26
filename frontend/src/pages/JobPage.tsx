@@ -5,6 +5,7 @@ import { JobProgress } from "../components/JobProgress";
 import { useJobPoller } from "../hooks/useJobPoller";
 import type { Job } from "../types";
 import { Spinner } from "../components/Spinner";
+import { DiscardReading } from "../components/DiscardReading";
 
 const RETRYABLE = new Set(["FAILED", "INTERRUPTED"]);
 const CANCELLABLE = new Set(["QUEUED", "PROCESSING"]);
@@ -69,15 +70,59 @@ export function JobPage({
 
   return (
     <div className="page-stack narrow">
-      <header className="page-header split has-back">
+      <header className="page-header split has-back title-end">
         <button className="ghost page-back" type="button" onClick={onClose}>← 戻る</button>
         <div>
           <span className="eyebrow">PROCESS RECOVERY</span>
-          <h1>処理状況を確認<InfoTip text="やり直すか、新しく読み取るか選べます。" /></h1>
+          <h1>処理状況を確認<InfoTip align="end" text="やり直すか、新しく読み取るか選べます。" /></h1>
         </div>
       </header>
 
-      <JobProgress job={job} connectionLost={connectionLost} />
+      <JobProgress job={job} connectionLost={connectionLost} actions={job && (
+        <>
+        {RETRYABLE.has(job.status) && job.jobType === "EXTRACT_DOCUMENT" && (
+          <DiscardReading jobId={job.id} disabled={busy} onDiscarded={onClose} />
+        )}
+        {requiresNewRegistration && (
+          <button
+            className="primary"
+            type="button"
+            onClick={job.jobType === "PREPARE_TEMPLATE"
+              ? () => onOpenTemplates("create")
+              : onStartNewReading}
+          >
+            {job.jobType === "PREPARE_TEMPLATE"
+              ? "新しいテンプレートを登録"
+              : "新しい読み取りを開始"}
+          </button>
+        )}
+        {job.status === "REVIEW_REQUIRED" && job.jobType === "EXTRACT_DOCUMENT" && (
+          <button className="primary" type="button" onClick={() => onOpenReview(job.id)}>
+            読み取り結果を確認
+          </button>
+        )}
+        {job.status === "CONFIRMED" && job.jobType === "EXTRACT_DOCUMENT" && (
+          <button className="primary" type="button" onClick={() => onOpenReview(job.id)}>
+            確定済み結果を表示
+          </button>
+        )}
+        {job.status === "REVIEW_REQUIRED" && job.jobType === "PREPARE_TEMPLATE" && (
+          <button className="primary" type="button" onClick={() => onOpenTemplates("manage")}>
+            テンプレートを確認
+          </button>
+        )}
+        {RETRYABLE.has(job.status) && !requiresNewRegistration && (
+          <button className="primary" type="button" disabled={busy} onClick={() => void retry()}>
+            {busy ? <><Spinner />再開中…</> : "処理を再試行"}
+          </button>
+        )}
+        {CANCELLABLE.has(job.status) && (
+          <button className="danger-button" type="button" disabled={busy} onClick={() => void cancel()}>
+            処理を中止
+          </button>
+        )}
+        </>
+      )} />
 
       {!job && !connectionLost && (
         <div className="empty-state large">処理状況を読み込んでいます…</div>
@@ -90,106 +135,8 @@ export function JobPage({
       )}
       {message && <p className={job?.status === "FAILED" ? "error-box" : "success-box"}>{message}</p>}
 
-      {job && (
-        <section className="form-card job-recovery-actions">
-          <div>
-            <span className="eyebrow">NEXT ACTION</span>
-            <h2>{nextActionTitle(job)}</h2>
-            <p>{nextActionDescription(job)}</p>
           </div>
-          <div className="job-action-buttons">
-            {requiresNewRegistration && (
-              <button
-                className="primary"
-                type="button"
-                onClick={job.jobType === "PREPARE_TEMPLATE"
-                  ? () => onOpenTemplates("create")
-                  : onStartNewReading}
-              >
-                {job.jobType === "PREPARE_TEMPLATE"
-                  ? "新しいテンプレートを登録"
-                  : "新しい読み取りを開始"}
-              </button>
-            )}
-            {job.status === "REVIEW_REQUIRED" && job.jobType === "EXTRACT_DOCUMENT" && (
-              <button className="primary" type="button" onClick={() => onOpenReview(job.id)}>
-                読み取り結果を確認
-              </button>
-            )}
-            {job.status === "CONFIRMED" && job.jobType === "EXTRACT_DOCUMENT" && (
-              <button className="primary" type="button" onClick={() => onOpenReview(job.id)}>
-                確定済み結果を表示
-              </button>
-            )}
-            {job.status === "REVIEW_REQUIRED" && job.jobType === "PREPARE_TEMPLATE" && (
-              <button className="primary" type="button" onClick={() => onOpenTemplates("manage")}>
-                テンプレートを確認
-              </button>
-            )}
-            {RETRYABLE.has(job.status) && !requiresNewRegistration && (
-              <button className="primary" type="button" disabled={busy} onClick={() => void retry()}>
-                {busy ? <><Spinner />再開中…</> : "処理を再試行"}
-              </button>
-            )}
-            {CANCELLABLE.has(job.status) && (
-              <button className="danger-button" type="button" disabled={busy} onClick={() => void cancel()}>
-                処理を中止
-              </button>
-            )}
-            <button className="secondary" type="button" onClick={onClose}>戻る</button>
-          </div>
-        </section>
-      )}
-    </div>
   );
-}
-
-function nextActionTitle(job: Job) {
-  if (hasIncompleteJobInputs(job)) return "元画像の保存が完了していません";
-  if (hasInvalidTemplateSnapshot(job)) return "受付時のテンプレートを確認できません";
-  if (hasUnusableCallBudget(job)) return "この受付のOCR呼び出し予算は再利用できません";
-  if (job.status === "REVIEW_REQUIRED") {
-    return job.jobType === "EXTRACT_DOCUMENT"
-      ? "読み取り結果を確認できます"
-      : "テンプレートの確認へ進めます";
-  }
-  if (job.status === "CONFIRMED") return "この結果は確定保存済みです";
-  if (job.status === "FAILED") return "処理に失敗しました";
-  if (job.status === "INTERRUPTED") return "再起動により処理が中断されました";
-  if (job.status === "CANCELLED") return "処理は中止されています";
-  return "処理が完了するまでお待ちください";
-}
-
-function nextActionDescription(job: Job) {
-  if (hasIncompleteJobInputs(job)) {
-    return job.jobType === "PREPARE_TEMPLATE"
-      ? "受付中に停止したため、この処理には再試行に必要な元画像がありません。画像を選び直して、新しいテンプレートとして登録してください。"
-      : "受付中に停止したため、この処理には再試行に必要な元画像がありません。画像を選び直して、新しい読み取りを開始してください。";
-  }
-  if (hasInvalidTemplateSnapshot(job)) {
-    return "受付時に固定したテンプレート画像または設定を確認できないため、安全に再試行できません。画像を選び直して、新しい読み取りを開始してください。";
-  }
-  if (hasUnusableCallBudget(job)) {
-    return "受付済みジョブの予算と実行設定は変更できません。現在の設定で画像を選び直し、新しい読み取りを開始してください。";
-  }
-  if (RETRYABLE.has(job.status)) return "元画像と設定は保存されています。同じ内容で安全に再試行できます。";
-  if (job.status === "CANCELLED") return "新しく読み取りを開始する場合は、左側の「読み取り」を選んでください。";
-  if (job.status === "REVIEW_REQUIRED") return "内容を目視確認してから確定保存してください。";
-  return "画面を移動しても処理はバックエンドで継続します。";
-}
-
-function hasIncompleteJobInputs(job: Job) {
-  return job.status === "FAILED" && job.error?.code === "INCOMPLETE_JOB_INPUTS";
-}
-
-function hasInvalidTemplateSnapshot(job: Job) {
-  return job.status === "FAILED" && job.error?.code === "OCR_TEMPLATE_SNAPSHOT_INVALID";
-}
-
-function hasUnusableCallBudget(job: Job) {
-  return job.status === "FAILED" && NEW_READING_REQUIRED_ERRORS.has(job.error?.code ?? "")
-    && !hasIncompleteJobInputs(job)
-    && !hasInvalidTemplateSnapshot(job);
 }
 
 function cannotRetrySafely(job: Job) {

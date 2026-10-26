@@ -1,8 +1,11 @@
 import { logDetail, userText } from "./userMessages";
 import { authenticatedFetch, csrfHeaders } from "./auth/transport";
+import { shrinkForMatching } from "./components/phonePhoto";
 import type { TemplateAuthoringUpdate, TemplateAuthoringView } from "./assistant/generatedAuthoring";
 import type { Artifact, ExcelTable, FieldMappingsResponse, Health, Job, LayoutDefinition, OcrDocument, OcrResult, Problem, Template, TemplateDefinition, TemplateDefinitionRevision, TemplateDeleteImpact, TemplateDeleteResult, TemplateFieldSetting, TemplateFieldSettings, TemplateMemory, TemplatePackageActivation, TemplatePackageOperation, TemplateTrashItem } from "./types";
 import type { ItemJoin, ItemJoinSettings } from "./itemJoins";
+/** Long edge of the photo sent for 「確定済みの書類と照合」 (the server's MATCH_LONG_EDGE). */
+const MATCH_LONG_EDGE = 1800;
 const API = "/api/v1";
 import type { PrintPlan, PrintRequest, PrintState } from "./printLayout";
 import type { PageFieldEdit, PagedReviewResult } from "./pagedReview";
@@ -267,9 +270,10 @@ export const api = {
         return request<TemplateClassification>("/template-classifications", { method: "POST", body });
     },
     /** Whether the image is a later photo of the given readings' sheets (nothing is stored). */
-    compareContinuations: (file: File, jobIds: string[]) => {
+    compareContinuations: async (file: File, jobIds: string[]) => {
         const body = new FormData();
-        body.set("file", file);
+        // The server shrinks the photo for this comparison anyway: a smaller copy uploads faster.
+        body.set("file", await shrinkForMatching(file, MATCH_LONG_EDGE));
         body.set("jobIds", jobIds.join(","));
         return request<{
             items: { jobId: string; similarity: number | null; continuation: boolean }[];
