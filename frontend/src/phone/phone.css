@@ -124,8 +124,8 @@
 .phone-shell .ask-avatar { display: none; }
 /* The textarea's default 20-column width would otherwise set the composer's narrowest size.
    The text gets the whole first line; the buttons sit below it (attach left, voice and send right). */
-.phone-shell .ask-composer { grid-template-columns: minmax(0, 1fr); padding: 8px; }
-.phone-shell .ask-input-row { flex-wrap: wrap; gap: 2px 6px; padding: 6px 8px 8px 14px; border-radius: 22px; }
+.phone-shell .ask-composer { --ask-row-radius: 22px; --ask-composer-pad: 8px; grid-template-columns: minmax(0, 1fr); padding: 8px; }
+.phone-shell .ask-input-row { flex-wrap: wrap; gap: 2px 6px; padding: 6px 8px 8px 14px; }
 .phone-shell .ask-input-row textarea { flex: 1 1 100%; padding: 4px 4px 2px 0; font-size: 17px; scrollbar-width: none; }
 .phone-shell .ask-input-row .ask-attach { margin-right: auto; margin-left: -6px; }
 .phone-shell .ask-round-button { width: 42px; height: 42px; min-width: 42px; }
@@ -139,13 +139,13 @@
 .phone-shell .ask-layout.with-document .ask-chat { display: contents; }
 .phone-shell .ask-layout.with-document .ask-messages { order: 1; flex: 1 1 0; min-height: 96px; }
 .phone-shell .ask-layout.with-document .ask-document-panel {
-  order: 2; position: static; flex: 0 0 auto; height: min(46%, 380px); min-height: 0; max-height: none;
+  order: 2; position: static; flex: 0 0 auto; min-height: 0; max-height: none;
   border: 0; border-top: 1px solid var(--ui-border); border-radius: 0; box-shadow: none;
   animation-name: ask-panel-up;
 }
-.phone-shell .ask-layout.with-document .ask-composer { order: 3; }
-/* Typing leaves little room: the page gives it back to the conversation and the keyboard. */
-.phone-shell.phone-typing .ask-layout.with-document .ask-document-panel { height: min(34%, 220px); }
+/* 書類を開いている間は、書類欄が入力欄の上に重なる（入力欄は閉じると戻る。入力中の文・添付は残る）。 */
+.phone-shell .ask-layout.with-document .ask-composer { display: none; }
+.phone-shell .ask-layout.with-document .ask-document-panel { height: min(54%, 460px); }
 .phone-shell .ask-splitter { display: none; }
 
 /* ---------- Reading ---------- */
@@ -260,3 +260,55 @@
 @keyframes photo-source-rise { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes photo-source-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .photo-source-backdrop, .photo-source-sheet { animation: none; } }
+
+/* チャットの画像を押すと全画面に（上部バー・下のタブの上に重ねる）。× か背景で閉じる。 */
+.phone-shell .ask-image.expandable, .shelf-page-stage.expandable { cursor: zoom-in; }
+.shelf-page-stage.expandable .shelf-box, .shelf-page-stage.expandable .shelf-heading-box { cursor: pointer; }
+.shelf-viewer-tools.expandable { cursor: zoom-in; }
+.shelf-viewer-tools.expandable button { cursor: pointer; }
+.image-lightbox {
+  position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
+  padding: calc(env(safe-area-inset-top) + 56px) 10px calc(env(safe-area-inset-bottom) + 20px);
+  background: #0b151dee; animation: image-lightbox-in .18s ease-out; overscroll-behavior: contain;
+}
+.image-lightbox-stage { position: relative; max-width: 100%; max-height: 100%; line-height: 0; }
+.image-lightbox-stage img {
+  display: block; max-width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 76px);
+  object-fit: contain; background: #fff; border-radius: 4px; box-shadow: 0 12px 40px #0008;
+}
+.image-lightbox-box { position: absolute; border: 2px solid #d9480fcc; background: #ffb02e2e; border-radius: 2px; pointer-events: none; }
+.image-lightbox-box.active { border-color: #d9480f; box-shadow: 0 0 0 3px #fff9; }
+.image-lightbox-close {
+  position: fixed; top: calc(env(safe-area-inset-top) + 10px); right: 10px; display: grid; place-items: center;
+  width: 42px; height: 42px; padding: 0; border: 0; border-radius: 50%; background: #fffffff0; color: #263744; font-size: 22px; cursor: pointer;
+}
+@keyframes image-lightbox-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .image-lightbox { animation: none; } }
+
+/* チャットの間はページ自体をスクロールさせない（スワイプで入力欄が動かない）。
+   キーボードに隠れないよう、高さは AskPage が見えている範囲から計算する。 */
+html.phone-chat-pinned { height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* iOS は overflow:hidden でもページ全体をバウンドさせるため、body ごと画面に固定する。 */
+html.phone-chat-pinned body { position: fixed; inset: 0; overflow: hidden; overscroll-behavior: none; }
+html.phone-chat-pinned .phone-shell { min-height: 0; }
+html.phone-chat-pinned .phone-shell .main-content { padding-bottom: 0; }
+html.phone-chat-pinned .phone-shell .ask-page { margin-bottom: 0 !important; }
+html.phone-chat-pinned .phone-shell .ask-composer, html.phone-chat-pinned .phone-shell .ask-messages { overscroll-behavior: contain; }
+
+/* 回答は横いっぱいに。ごみ箱は回答の右下へ（横に列を取らない）。 */
+.phone-shell .ask-msg.bot .ask-remove-turn { grid-column: 1; justify-self: end; margin-top: -2px; opacity: .7; }
+.phone-shell .ask-msg.bot .ask-bubble { padding: 12px 13px; gap: 10px; }
+/* 会話の文字はスマホでは小さめに。出典の表（ask-table）は今の大きさのまま。 */
+.phone-shell .ask-answer { font-size: 15px; line-height: 1.7; }
+.phone-shell .ask-msg.user .ask-bubble { padding: 9px 14px; font-size: 15px; line-height: 1.6; }
+.phone-shell .ask-notes { font-size: 13px; }
+.phone-shell .ask-choices button { min-height: 38px; padding: 6px 13px; font-size: 14px; }
+.phone-shell .ask-choices-hint { font-size: 13px; }
+.phone-shell .ask-reading-status { font-size: 14px; }
+.phone-shell .ask-doc-choice-text strong { font-size: 15px; }
+.phone-shell .ask-table { font-size: 15px; }
+
+/* キーボードを閉じて下のタブが戻るとき、ぱっと出さずに下から滑り込ませる。 */
+.phone-shell:not(.phone-typing) .phone-tabs { animation: phone-tabs-in .3s cubic-bezier(.2,.8,.2,1); }
+@keyframes phone-tabs-in { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .phone-shell:not(.phone-typing) .phone-tabs { animation: none; } }

@@ -101,7 +101,7 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
       {(bubble || live || thinking || props.extra) && !dragging && <div
         className={`voice-bubble is-${live || thinking ? "info" : bubble?.tone ?? "info"}`} role="status" aria-live="polite">
         {live ? <p className="voice-bubble-caption">{props.caption}</p>
-          : thinking ? <p className="voice-thinking">指示を処理しています<span className="voice-dots"><i /><i /><i /></span></p>
+          : thinking ? <p className="voice-thinking" aria-label="指示を処理しています"><span className="voice-dots"><i /><i /><i /></span></p>
             : bubble ? <p>{bubble.text}</p> : null}
         {props.extra}
         {bubble && !live && !thinking && <button type="button" className="voice-bubble-close" aria-label="閉じる" onClick={() => setDismissed(bubble.key)}><FiX /></button>}
@@ -116,7 +116,9 @@ export function VoiceOverlay(props: VoiceOverlayProps) {
       <div className="voice-pill">
         <button type="button" className="voice-grip" aria-label="音声入力の位置を移動（ドラッグ又は矢印キー）" title="ドラッグで四隅へ移動"
           {...grip}><FiMove /></button>
-        {props.listening || props.starting
+        {props.starting && !props.listening
+          ? <button type="button" className="voice-mic is-starting is-busy" aria-label="マイクを準備中（押すと中止）" title="マイクを準備中（押すと中止）" onClick={props.onStop}><FiMic /></button>
+          : props.listening
           ? <button type="button" className={`voice-mic is-on${busy ? " is-busy" : ""}${props.speaking ? " is-speaking" : ""}`} aria-label="音声入力を停止" title="音声入力を停止" onClick={props.onStop}><FiSquare /></button>
           : <button type="button" className={`voice-mic${thinking ? " is-busy" : ""}`} aria-label="音声入力" title={props.canStart ? "音声入力" : props.startHint} disabled={!props.canStart} onClick={props.onStart}><FiMic /></button>}
         {props.listening && <VoiceMeter read={props.meter} active speaking={props.speaking} />}

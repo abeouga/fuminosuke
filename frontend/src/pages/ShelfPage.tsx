@@ -16,6 +16,7 @@ import {
   type StructuredTable,
 } from "../structured/client";
 import { ImageSpinner, Spinner } from "../components/Spinner";
+import { ImageLightbox, type LightboxImage } from "../components/ImageLightbox";
 import { choiceText } from "../components/OcrReviewResults";
 import { leftReviewsSettled } from "../reviewLeave";
 
@@ -326,6 +327,7 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
   onRetry: () => void;
   onOpenReview: (jobId: string, field: string | null) => void;
 }) {
+  const [expanded, setExpanded] = useState<LightboxImage | null>(null);
   const [picked, setPicked] = useState<{ id: string; fromImage: boolean; heading?: boolean } | null>(null);
   // A table row picked by its number: the whole row is outlined on the image and shown enlarged below it.
   const [pickedRow, setPickedRow] = useState<{ tableId: string; rowId: string } | null>(null);
@@ -482,7 +484,9 @@ function DocumentView({ summary, folderName, detail, onRetry, onOpenReview }: {
             headings={document.headings ?? []} pickedHeading={heading}
             rowFieldIds={rowView?.readings.map((reading) => reading.fieldId) ?? null}
             onPick={(reading) => pick({ id: reading.fieldId, fromImage: true })}
-            onPickHeading={(item) => pick({ id: item.cellId, fromImage: true, heading: true })} />
+            onPickHeading={(item) => pick({ id: item.cellId, fromImage: true, heading: true })}
+            onExpand={setExpanded} />
+          {expanded && <ImageLightbox image={expanded} onClose={() => setExpanded(null)} />}
           {rowView
             ? <PickedRow key={`${rowView.table.id}:${rowView.rowNumber}`} title={rowView.table.title} rowNumber={rowView.rowNumber} cells={rowView.cells}
               imageUrl={(document.pages ?? []).find((page) => page.pageId === (rowView.readings[0]?.pageId ?? null))?.imageUrl ?? null}
@@ -552,7 +556,7 @@ function ReadingValue({ reading, active, buttonRef, onPick }: {
 }
 
 /** The aligned page image with every read cell outlined; the picked cell is highlighted. */
-export function PageViewer({ pages, readings, picked, headings, pickedHeading, marked = false, rowFieldIds = null, onPick, onPickHeading, title, actions }: {
+export function PageViewer({ pages, readings, picked, headings, pickedHeading, marked = false, rowFieldIds = null, onPick, onPickHeading, title, actions, onExpand, expandAnywhere = false }: {
   pages: DocumentPage[];
   readings: StructuredReading[];
   picked: StructuredReading | null;
@@ -568,6 +572,10 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
   title?: ReactNode;
   /** Shown after the zoom buttons (the chat's close button). */
   actions?: ReactNode;
+  /** Given, a tap on the image outside the cells opens it over the whole screen. */
+  onExpand?: (image: LightboxImage) => void;
+  /** Every tap opens it, the cells too (the chat on a phone, where a cell is too small to aim at). */
+  expandAnywhere?: boolean;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -613,8 +621,21 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
   const rowIds = new Set(rowReadings.map((reading) => reading.fieldId));
   const rowBox = unionBox(rowReadings.filter((reading) => (reading.pageId ?? null) === page.pageId));
   const zoomIndex = ZOOMS.indexOf(zoom);
+  const expandView = (natural: { width: number; height: number }): LightboxImage => ({
+    src: page.imageUrl, alt: `${page.pageNumber}ページ目の原本`,
+    boxes: shown.filter((reading) => marked || picked?.fieldId === reading.fieldId).map((reading) => ({
+      key: reading.fieldId, active: picked?.fieldId === reading.fieldId,
+      left: (reading.box!.x / natural.width) * 100, top: (reading.box!.y / natural.height) * 100,
+      width: (reading.box!.width / natural.width) * 100, height: (reading.box!.height / natural.height) * 100,
+    })),
+  });
   return <div className="shelf-viewer">
-    <div className="shelf-viewer-tools">
+    {/* The bar's empty space (and the name in it) opens the page over the whole screen too; its buttons keep their own jobs. */}
+    <div className={`shelf-viewer-tools${onExpand ? " expandable" : ""}`}
+      onClick={onExpand && size ? (event) => {
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        onExpand(expandView(size));
+      } : undefined}>
       {title !== undefined && <div className="shelf-viewer-title">{title}</div>}
       {pages.length > 1 && <div className="shelf-pages" role="group" aria-label="ページ">
         {pages.map((item, index) => <button key={item.pageId ?? index} type="button" className={index === pageIndex ? "active" : ""} aria-pressed={index === pageIndex}
@@ -630,7 +651,12 @@ export function PageViewer({ pages, readings, picked, headings, pickedHeading, m
     <div ref={scroller} className="shelf-viewer-scroll">
       {!failed && !size && <ImageSpinner label="原本画像を読み込んでいます" />}
       {failed ? <p className="shelf-viewer-missing">原本画像を表示できません。</p>
-        : <div className="shelf-page-stage" style={{ width: `${zoom * 100}%` }}>
+        : <div className={`shelf-page-stage${onExpand ? " expandable" : ""}`} style={{ width: `${zoom * 100}%` }}
+          onClickCapture={onExpand && size && expandAnywhere ? (event) => { event.stopPropagation(); onExpand(expandView(size)); } : undefined}
+          onClick={onExpand && size && !expandAnywhere ? (event) => {
+            if ((event.target as HTMLElement).closest("button")) return;
+            onExpand(expandView(size));
+          } : undefined}>
           <img ref={image} src={page.imageUrl} alt={`${page.pageNumber}ページ目の原本`} draggable={false}
             onLoad={(event) => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
             onError={() => setFailed(true)} />

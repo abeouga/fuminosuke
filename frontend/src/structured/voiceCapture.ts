@@ -2,13 +2,14 @@ import type { MicVAD } from "@ricky0123/vad-web";
 import { acquireMicrophone, Pcm24k } from "../assistant/audioStream";
 import { LevelMeter } from "../components/VoiceMeter";
 
-export type VoiceState = { mode: "stopped" | "starting" | "listening"; message: string; caption: string };
+/** `message` is only ever a problem to tell (mic refused, connection lost); progress is shown by the button and the meter. */
+export type VoiceState = { mode: "stopped" | "starting" | "listening"; message: string; caption: string; speaking: boolean };
 type Utterance = { id: string; frames: ArrayBuffer[]; ready: boolean; samples: number; segmentSamples: number; segment: string | null; manifest: string[]; pcm: Pcm24k; sealed: boolean };
 const SILENCE_MS = 1200;
 
 /** PCM acquisition for questions. Completed transcripts are handed to the caller as text. */
 export class QuestionVoiceCapture {
-  private state: VoiceState = { mode: "stopped", message: "", caption: "" };
+  private state: VoiceState = { mode: "stopped", message: "", caption: "", speaking: false };
   private listeners = new Set<() => void>();
   readonly meter = new LevelMeter();
   private epoch = 0;
@@ -38,7 +39,7 @@ export class QuestionVoiceCapture {
   }
   async start() {
     await this.stop(); const epoch = this.epoch;
-    this.set({ mode: "starting", message: "音声接続を準備しています。", caption: "" });
+    this.set({ mode: "starting", message: "", caption: "" });
     try {
       const mic = await acquireMicrophone(() => epoch === this.epoch);
       if (epoch !== this.epoch) { mic.getTracks().forEach(t => t.stop()); return; }
@@ -58,7 +59,11 @@ export class QuestionVoiceCapture {
       if (epoch !== this.epoch) { await vad.destroy(); return; }
       this.vad = vad; await this.connect(epoch);
       if (epoch !== this.epoch) return;
-      this.set({ mode: "listening", message: "質問を話してください。" }); await vad.start();
+      // "Listening" only once the microphone really takes sound, so the button never says
+      // "speak now" while it is still getting ready.
+      await vad.start();
+      if (epoch !== this.epoch) return;
+      this.set({ mode: "listening", message: "" });
     } catch (error) { if (epoch === this.epoch) this.fail(error); }
   }
   private async connect(epoch: number) {
@@ -92,7 +97,7 @@ export class QuestionVoiceCapture {
     } else if (event.type === "transcript.completed") {
       this.active = null;
       const text = (event.text ?? "").trim();
-      this.set({ caption: "", message: text ? "聞き取った文を入力欄に入れました。確認してEnterで送信してください。" : "聞き取れる言葉がありませんでした。" });
+      this.set({ caption: "", message: "" });
       if (text) this.onTranscript(text);
       this.flushed?.();
       if (this.waitingSpeech) {
@@ -138,7 +143,7 @@ export class QuestionVoiceCapture {
       return;
     }
     const item: Utterance = { id: crypto.randomUUID(), frames: [], ready: false, samples: 0, segmentSamples: 0, segment: null, manifest: [], pcm: new Pcm24k(), sealed: false };
-    this.active = item; this.set({ caption: "", message: "聞き取り中…" });
+    this.active = item; this.set({ caption: "", message: "", speaking: true });
     for (const frame of this.ring.splice(0)) this.frame(frame);
     this.send({ type: "utterance.begin", utteranceId: item.id });
   }
@@ -146,7 +151,7 @@ export class QuestionVoiceCapture {
     this.speaking = false; this.stoppedAt = performance.now();
     if (!this.active || this.active.sealed) return;
     try { if (this.active.ready) this.commitSegment(this.active); this.send({ type: "speech.stopped" }); } catch (error) { this.fail(error); return; }
-    this.set({ message: "音声を整理中…" }); this.scheduleBoundary();
+    this.set({ speaking: false }); this.scheduleBoundary();
   }
   private scheduleBoundary() {
     if (this.state.mode !== "listening" || this.speaking || !this.active || this.active.sealed) return;
@@ -169,14 +174,11 @@ export class QuestionVoiceCapture {
       this.mic?.getTracks().forEach(t => t.stop());
       try { if (!item.sealed) { this.speaking = false; this.seal(); } } catch { /* closing anyway */ }
       if (this.active?.sealed) {
-        this.set({ message: "聞き取った文を受け取っています…" });
         await new Promise<void>(resolve => { this.flushed = resolve; setTimeout(resolve, 8000); });
       }
     }
     this.flushed = null;
-    const message = this.state.message;
     await this.stop();
-    if (message.startsWith("聞き取")) this.set({ message });
   }
   async stop() {
     this.epoch++; if (this.timer) clearTimeout(this.timer); this.timer = null; this.waitingSpeech = false;
@@ -184,6 +186,6 @@ export class QuestionVoiceCapture {
     const socket = this.socket; this.socket = null;
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "capture.stop" })); socket?.close();
     const vad = this.vad; this.vad = null; this.active = null; this.ring = []; this.speaking = false;
-    this.set({ mode: "stopped", message: "", caption: "" }); await vad?.destroy();
+    this.set({ mode: "stopped", message: "", caption: "", speaking: false }); await vad?.destroy();
   }
 }

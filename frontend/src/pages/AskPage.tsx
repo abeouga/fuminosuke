@@ -39,7 +39,11 @@ import {
 import { QuestionVoiceCapture } from "../structured/voiceCapture";
 import { VoiceMeter } from "../components/VoiceMeter";
 import { isPhoneDevice } from "../hooks/usePhoneDevice";
+import { ImageLightbox, type LightboxImage } from "../components/ImageLightbox";
 import { visibleHeight } from "../phone/phoneKeyboard";
+
+/** Less than this between the window and what is seen of it is the browser's bars, not a keyboard. */
+const KEYBOARD_GAP = 80;
 
 // Last known status, so coming back to the page shows it at once (refreshed on mount).
 let cachedStatus: StructuredStatus | null = null;
@@ -233,6 +237,73 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   useLayoutEffect(() => {
     const page = pageRef.current;
     if (!page) return;
+    // On a phone the chat is pinned to the visible part of the screen: swiping it never moves the
+    // field (iOS would otherwise scroll the page itself), and the keyboard never covers the field
+    // (iOS only shrinks and pans the visual viewport; the page follows that).
+    if (phone) {
+      const root = document.documentElement;
+      root.classList.add("phone-chat-pinned");
+      const pin = () => {
+        // iOS scrolls the page up when the keyboard opens, and the pinned chat moves with it; since the
+        // chat itself shrinks to end above the keyboard, that scroll would lift it twice (off the top).
+        // It is undone at once. Android never scrolls this page, so there this does nothing.
+        if (window.scrollY !== 0 || document.documentElement.scrollTop !== 0 || document.body.scrollTop !== 0) {
+          window.scrollTo(0, 0);
+          document.documentElement.scrollTop = 0;
+          document.body.scrollTop = 0;
+        }
+        const viewport = window.visualViewport;
+        // Where the chat starts in the (fixed, unscrolled) page: layout coordinates, the same frame
+        // as the visual viewport's offset, whatever the browser does with getBoundingClientRect.
+        let top = 0;
+        for (let node: HTMLElement | null = page; node; node = node.offsetParent as HTMLElement | null) top += node.offsetTop;
+        const tabs = document.querySelector<HTMLElement>(".phone-tabs");
+        const shown = tabs && getComputedStyle(tabs).display !== "none";
+        // The chat ends right on the tabs (no gap), or, while they are hidden for typing, at the
+        // window's bottom. The tabs sit at the bottom of the window; their slide-in is not counted.
+        let bottom = shown ? window.innerHeight - tabs.offsetHeight : window.innerHeight;
+        // iOS does not shrink the window for the keyboard, only what is seen of it (and may pan it
+        // up): the chat then ends where the keyboard begins. Android shrinks the window itself, so
+        // there the two are the same and nothing changes. A pinch zoom (a narrower view) is left out.
+        if (viewport && Math.abs(viewport.width - window.innerWidth) <= 1) {
+          const seen = viewport.offsetTop + viewport.height;
+          if (window.innerHeight - seen > KEYBOARD_GAP) bottom = Math.min(bottom, seen);
+        }
+        const height = Math.max(bottom - top - 6, 0);
+        // Growing back (the keyboard going away) glides instead of jumping with each resize step;
+        // shrinking (the keyboard coming up) is immediate, so the field is never under the keyboard.
+        const previous = parseFloat(page.style.getPropertyValue("--ask-height"));
+        // An event that changes nothing leaves a glide under way alone.
+        if (Number.isFinite(previous) && Math.abs(height - previous) <= 1) return;
+        const grow = Number.isFinite(previous) && height > previous && !reduceMotion.matches;
+        page.style.transition = grow ? "height .3s cubic-bezier(.2,.8,.2,1)" : "none";
+        page.style.setProperty("--ask-height", `${height}px`);
+      };
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      pin();
+      window.addEventListener("resize", pin);
+      window.addEventListener("scroll", pin);
+      window.addEventListener("phone-keyboard", pin);
+      // iOS scrolls to the field a moment after it gets the focus.
+      const focused = () => { pin(); window.setTimeout(pin, 60); window.setTimeout(pin, 320); };
+      window.addEventListener("focusin", focused);
+      window.visualViewport?.addEventListener("resize", pin);
+      window.visualViewport?.addEventListener("scroll", pin);
+      const shell = page.closest(".app-shell");
+      const watch = shell ? new MutationObserver(pin) : null;
+      if (shell) watch?.observe(shell, { attributes: true, attributeFilter: ["class"] });
+      return () => {
+        root.classList.remove("phone-chat-pinned");
+        page.style.transition = "";
+        window.removeEventListener("resize", pin);
+        window.removeEventListener("scroll", pin);
+        window.removeEventListener("phone-keyboard", pin);
+        window.removeEventListener("focusin", focused);
+        window.visualViewport?.removeEventListener("resize", pin);
+        window.visualViewport?.removeEventListener("scroll", pin);
+        watch?.disconnect();
+      };
+    }
     const fit = () => {
       const gap = 16;
       const top = page.getBoundingClientRect().top + window.scrollY;
@@ -257,7 +328,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       window.visualViewport?.removeEventListener("resize", fit);
       watch?.disconnect();
     };
-  }, []);
+  }, [phone]);
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input) return;
@@ -270,6 +341,10 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const qaConnected = enabled && status.qaConnected;
   const voiceConnected = enabled && status.voiceConnected;
   const listening = voiceState.mode !== "stopped";
+  const micStarting = voiceState.mode === "starting";
+  // The voice problem the user closed; a new one (or the same one after a new try) shows again.
+  const [voiceError, setVoiceError] = useState("");
+  useEffect(() => { if (voiceState.mode !== "stopped") setVoiceError(""); }, [voiceState.mode]);
   const latestId = last?.id ?? null;
   const placeholder = !enabled ? "チャットは利用できません"
     : answering ? "選択肢にない場合は、ここに書いて送ってください"
@@ -372,7 +447,14 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
           }}
         >
           {dragging && <div className="ask-drop-hint" aria-hidden="true"><FiImage />画像を置くと添付します</div>}
-          <div className="ask-messages" ref={listRef} role="log" aria-live="polite">
+          {/* On a phone the open document covers the composer; a tap on the conversation above it closes it
+              (links, buttons and table rows keep their own jobs). */}
+          <div className="ask-messages" ref={listRef} role="log" aria-live="polite"
+            onClick={phone && viewer ? (event) => {
+              if ((event.target as HTMLElement).closest("button, a, input, textarea, tr.has-source, .md-link, [role=button]")) return;
+              if (window.getSelection()?.toString()) return;
+              askStore.set({ viewer: null });
+            } : undefined}>
             {turns.length === 0 && readings.length === 0
               ? (
                 <div className="ask-welcome">
@@ -414,6 +496,13 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
               </ul>
             )}
             <div className="ask-input-row">
+              {/* A voice problem (mic refused, connection lost) speaks from the mic button. */}
+              {voiceState.message && !voiceState.caption && voiceError !== voiceState.message && (
+                <div className="ask-voice-bubble" role="alert">
+                  <p>{voiceState.message}</p>
+                  <button type="button" aria-label="閉じる" onClick={() => setVoiceError(voiceState.message)}><FiX aria-hidden="true" /></button>
+                </div>
+              )}
               <label className="sr-only" htmlFor="ask-input">質問</label>
               <textarea
                 id="ask-input"
@@ -449,17 +538,17 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
               >
                 <FiImage aria-hidden="true" />
               </button>
-              {voiceConnected && <VoiceMeter read={voice.meter.read} active={voiceState.mode === "listening"} speaking={voiceState.message === "聞き取り中…"} />}
+              {voiceConnected && <VoiceMeter read={voice.meter.read} active={voiceState.mode === "listening"} speaking={voiceState.speaking} />}
               {voiceConnected && (
                 <button
                   type="button"
-                  className={listening ? "ask-round-button ask-mic listening" : "ask-round-button ask-mic"}
+                  className={micStarting ? "ask-round-button ask-mic starting" : listening ? "ask-round-button ask-mic listening" : "ask-round-button ask-mic"}
                   aria-pressed={listening}
-                  aria-label={listening ? "音声入力を止める" : "音声で質問"}
-                  title={listening ? "音声入力を止める" : "音声で質問"}
+                  aria-label={micStarting ? "マイクを準備中（押すと中止）" : listening ? "音声入力を止める" : "音声で質問"}
+                  title={micStarting ? "マイクを準備中（押すと中止）" : listening ? "音声入力を止める" : "音声で質問"}
                   onClick={() => { if (listening) void voice.finish(); else void voice.start(); }}
                 >
-                  {listening ? <FiMicOff aria-hidden="true" /> : <FiMic aria-hidden="true" />}
+                  {listening && !micStarting ? <FiMicOff aria-hidden="true" /> : <FiMic aria-hidden="true" />}
                 </button>
               )}
               {busy ? (
@@ -474,9 +563,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                 </button>
               )}
             </div>
-            {(voiceState.caption || voiceState.message) && (
+            {voiceState.caption && (
               <p className="ask-composer-foot" role="status" aria-live="polite">
-                {voiceState.caption ? <span className="ask-caption">{voiceState.caption}</span> : <span>{voiceState.message}</span>}
+                <span className="ask-caption">{voiceState.caption}</span>
               </p>
             )}
           </form>
@@ -491,6 +580,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             onFocus={(focus) => askStore.set((current) => ({ viewer: current.viewer && { ...current.viewer, focus } }))}
             onClose={() => askStore.set({ viewer: null })}
             onResize={setSplit}
+            phone={phone}
           />
         )}
       </div>
@@ -737,7 +827,7 @@ function AnswerTableView({ table, sources, viewer, onHover, onOpen }: {
 const documentCache = new Map<string, StructuredDocument>();
 
 /** The source document in the right half of the page, the answer's cells highlighted on it. */
-function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }: {
+function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize, phone }: {
   /** How the panel appears: slid in when opened, risen like the messages after a conversation switch. */
   entrance: "open" | "switch";
   viewer: AskViewer;
@@ -747,7 +837,10 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
   onClose: () => void;
   /** The chat's share of the chat + document width, while the divider is dragged. */
   onResize: (ratio: number) => void;
+  /** On a phone a tap on the image opens it over the whole screen. */
+  phone: boolean;
 }) {
+  const [expanded, setExpanded] = useState<LightboxImage | null>(null);
   const [loaded, setDocument] = useState<StructuredDocument | null>(documentCache.get(viewer.jobId) ?? null);
   // Never the previous document for the moment after a switch: the new one's preview starts fresh.
   const fetched = loaded?.jobId === viewer.jobId ? loaded : documentCache.get(viewer.jobId) ?? null;
@@ -771,10 +864,10 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
     return () => { stopped = true; };
   }, [viewer.image, viewer.jobId]);
   useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !expanded) onClose(); };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, [expanded, onClose]);
   const readings = useMemo(() => {
     const ids = new Set(viewer.evidence.map((item) => item.fieldId));
     if (hovered) ids.add(hovered);
@@ -792,7 +885,7 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
         // Keyed by document, so switching to another one replays the preview's fade (only the preview, not the panel).
         ? <PageViewer key={viewer.jobId} pages={document.pages ?? []} readings={readings} picked={picked} headings={[]} pickedHeading={null} marked
           onPick={(reading) => onFocus(reading.fieldId)} onPickHeading={() => undefined}
-          title={title} actions={close} />
+          title={title} actions={close} onExpand={setExpanded} expandAnywhere={phone} />
         : (
           <>
             <div className="ask-panel-head">{title}{close}</div>
@@ -800,6 +893,7 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize }
               : <p className="ask-panel-lead"><Spinner />書類を読み込んでいます…</p>}
           </>
         )}
+      {expanded && <ImageLightbox image={expanded} onClose={() => setExpanded(null)} />}
     </aside>
   );
 }
@@ -829,6 +923,8 @@ function ReadingImage({ reading, replaced }: { reading: ChatReading; replaced: b
   const preview = chatReadings.preview(reading.id);
   const imageRef = useRef<HTMLImageElement>(null);
   const shownState = useRef(reading.state);
+  const [phone] = useState(isPhoneDevice);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     if (shownState.current !== "queued" && reading.state === "queued" && !replaced && imageRef.current) {
       flyToReadingQueue(imageRef.current);
@@ -836,7 +932,11 @@ function ReadingImage({ reading, replaced }: { reading: ChatReading; replaced: b
     shownState.current = reading.state;
   }, [reading.state, replaced]);
   return preview
-    ? <img ref={imageRef} className="ask-image" src={preview} alt={reading.fileName} draggable={false} data-reading-image={reading.id} />
+    ? <>
+      <img ref={imageRef} className={`ask-image${phone ? " expandable" : ""}`} src={preview} alt={reading.fileName} draggable={false} data-reading-image={reading.id}
+        onClick={phone ? () => setExpanded(true) : undefined} />
+      {expanded && <ImageLightbox image={{ src: preview, alt: reading.fileName }} onClose={() => setExpanded(false)} />}
+    </>
     : <div className="ask-bubble"><FiImage aria-hidden="true" /> {reading.fileName}</div>;
 }
 

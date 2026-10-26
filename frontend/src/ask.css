@@ -137,7 +137,7 @@
 .ask-scope-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:3px 4px 3px 10px;border-radius:999px;background:#e7f1f8;color:#123f61;font-size:12px;font-weight:700}
 .ask-scope-chip button{display:grid;place-items:center;width:20px;height:20px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:#4f6577;cursor:pointer}
 .ask-scope-chip button:hover{background:#cfe2f0}
-.ask-input-row{position:relative;display:flex;align-items:flex-end;gap:8px;padding:8px 8px 8px 20px;border:2px solid #b7c5d2;border-radius:28px;background:#fff;transition:border-color .2s,box-shadow .3s}
+.ask-input-row{position:relative;display:flex;align-items:flex-end;gap:8px;padding:8px 8px 8px 20px;border:2px solid #b7c5d2;border-radius:var(--ask-row-radius,28px);background:#fff;transition:border-color .2s,box-shadow .3s}
 .ask-input-row:focus-within{border-color:transparent;box-shadow:0 8px 28px #4f8df724}
 .ask-input-row textarea{flex:1;min-width:0;max-height:168px;padding:7px 0;border:0;outline:none;resize:none;background:transparent;color:var(--ui-text);font:inherit;font-size:17px;line-height:1.6}
 .ask-input-row textarea:focus-visible{outline:none}
@@ -150,6 +150,11 @@
 .ask-mic{background:#eef3f7;color:var(--ui-text-secondary)}
 .ask-mic:hover{background:#e1eaf1}
 .ask-mic.listening{background:#fdecea;color:#a23b2e;animation:ask-pulse 1.4s infinite}
+/* マイクの準備中：まだ話せない。灰色で回る輪だけ（赤い脈打ちは聞き取れるようになってから） */
+.ask-mic.starting{position:relative;background:#e4e9ee;color:#8a9aa8}
+.ask-mic.starting::before{content:"";position:absolute;inset:-3px;border-radius:50%;border:3px solid transparent;border-top-color:var(--ui-primary);border-right-color:var(--ui-primary);animation:ask-mic-spin .9s linear infinite}
+@keyframes ask-mic-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ask-mic.starting::before{animation-duration:2.4s}}
 @keyframes ask-pulse{0%{box-shadow:0 0 0 0 #d04a3a55}70%{box-shadow:0 0 0 9px #d04a3a00}100%{box-shadow:0 0 0 0 #d04a3a00}}
 .ask-composer-foot{min-height:1.4em;margin:0 4px;color:var(--ui-text-muted);font-size:14px}
 .ask-caption{color:var(--ui-text);font-weight:700}
@@ -309,8 +314,8 @@ body.ask-resizing .ask-layout{transition:none}
 .ask-thinking i:nth-child(2){width:86%;animation-delay:.12s}
 .ask-thinking i:nth-child(3){width:58%;animation-delay:.24s}
 
-.ask-input-row:focus-within::before{content:"";position:absolute;inset:-4px;z-index:-1;border-radius:32px;background:linear-gradient(90deg,#4f8df7,#9b72f2,#e8758f,#4f8df7);background-size:200% 100%;animation:ask-flow 4s linear infinite}
-.ask-input-row:focus-within::after{content:"";position:absolute;inset:-1px;z-index:-1;border-radius:29px;background:#fff}
+.ask-input-row:focus-within::before{content:"";position:absolute;inset:-4px;z-index:-1;border-radius:calc(var(--ask-row-radius,28px) + 4px);background:linear-gradient(90deg,#4f8df7,#9b72f2,#e8758f,#4f8df7);background-size:200% 100%;animation:ask-flow 4s linear infinite}
+.ask-input-row:focus-within::after{content:"";position:absolute;inset:-1px;z-index:-1;border-radius:calc(var(--ask-row-radius,28px) + 1px);background:#fff}
 .ask-composer{position:relative;z-index:0}
 .ask-send:not(:disabled){background:linear-gradient(135deg,#4f8df7,#7b6ff0);transition:transform .2s,box-shadow .2s}
 .ask-send:hover:not(:disabled){background:linear-gradient(135deg,#3f7de6,#6b5fe0);transform:scale(1.06);box-shadow:0 6px 16px #4f8df755}
@@ -502,3 +507,14 @@ button.ask-continuation-earlier{width:100%;min-height:0;font:inherit;color:var(-
 button.ask-continuation-earlier:hover{border-color:var(--ui-primary);box-shadow:0 6px 16px #23699e1f}
 button.ask-continuation-earlier.is-showing{border-color:var(--ui-primary);background:#f2f8fc}
 .ask-continuation-cancel{display:flex;justify-content:flex-end}
+/* 音声のエラーはマイクのボタンから出る吹き出しで知らせる */
+.ask-voice-bubble{position:absolute;right:42px;bottom:calc(100% + 12px);z-index:6;display:flex;align-items:flex-start;gap:6px;width:max-content;max-width:min(340px,calc(100% - 50px));padding:10px 8px 10px 13px;border:1px solid #f1a7a0;border-radius:12px;background:#fff5f4;color:#8f1c13;font-size:13px;line-height:1.5;box-shadow:0 6px 20px #0f172a26;animation:ask-voice-bubble-in .16s ease-out}
+.ask-voice-bubble p{margin:0;overflow-wrap:anywhere}
+.ask-voice-bubble::after{content:"";position:absolute;right:22px;bottom:-6px;width:10px;height:10px;background:inherit;border:inherit;border-width:0 1px 1px 0;transform:rotate(45deg)}
+.ask-voice-bubble button{flex:none;display:grid;place-items:center;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:999px;background:transparent;color:#8f1c13;cursor:pointer}
+.ask-voice-bubble button:hover{background:#8f1c1314}
+@keyframes ask-voice-bubble-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.ask-voice-bubble{animation:none}}
+/* 会話と入力欄の境の線は、両端を入力欄の角と同じ丸さで下へ曲げる（白い面の上の角を丸め、外側は会話の背景色） */
+.ask-composer{--ask-composer-pad:12px;border-top:0;background:#eef2f6}
+.ask-composer::before{content:"";position:absolute;inset:0;z-index:-1;border-top:1px solid #d2dbe3;border-radius:calc(var(--ask-row-radius,28px) + var(--ask-composer-pad)) calc(var(--ask-row-radius,28px) + var(--ask-composer-pad)) 0 0;background:#fff}

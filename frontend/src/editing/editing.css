@@ -63,6 +63,8 @@
 .voice-pill .voice-mic:disabled { background: #cbd5e1; color: #fff; }
 .voice-pill .voice-mic.is-on { background: #b42318; }
 .voice-pill .voice-mic.is-on:hover { background: #8f1c13; }
+/* 準備中はまだ話せないので赤くしない（灰色＋回る輪） */
+.voice-pill .voice-mic.is-starting, .voice-pill .voice-mic.is-starting:hover { background: #94a3b8; color: #f1f5f9; }
 .voice-pill .voice-mic.is-speaking::after { content: ""; position: absolute; inset: -5px; border-radius: 999px; border: 2px solid #b4231880; animation: voice-pulse 1.2s ease-out infinite; }
 .voice-pill .voice-mic.is-busy::before { content: ""; position: absolute; inset: -4px; border-radius: 999px; border: 3px solid transparent; border-top-color: #2563eb; border-right-color: #2563eb; animation: voice-spin .9s linear infinite; }
 .voice-bubble { position: relative; box-sizing: border-box; min-width: 160px; max-width: 100%; padding: 10px 30px 10px 12px; border-radius: 12px; background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 6px 20px #0f172a26; font-size: 13px; line-height: 1.5; color: #1e293b; animation: voice-bubble-in 160ms ease-out; }

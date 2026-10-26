@@ -131,7 +131,7 @@ export function EditingControls(props: Props) {
       </select></label>}
       <button className="secondary" disabled={blocked || !state.canUndo || state.pending > 0} onClick={() => run(async () => { const saved = await props.store.undoResource(); await latest.current.onSaved(saved); })}><FiRotateCcw />元に戻す</button>
     </div>
-    <p className={voice.error && !error && !props.disabled ? "editing-status is-error" : "editing-status"} role="status">{props.disabled || error || voice.error || (state.question ? "" : (voice.utterance || (active && voice.message !== "音声入力中です。") ? voice.message : state.message || voice.message))}</p>
+    <p className={voice.error && !error && !props.disabled ? "editing-status is-error" : "editing-status"} role="status">{props.disabled || error || voice.error || (state.question ? "" : statusText(voice.utterance || active ? voice.message : state.message || voice.message))}</p>
     {!error && capabilities !== null && (!configured || (remaining !== null && remaining < 1800)) && <p className="editing-help">{!configured
       ? remaining !== null && remaining < 300 && capabilities.voiceConnected ? "本日の音声入力時間を使い切りました。明日になると再び使えます。手動で編集・保存できます。" : "音声入力は現在利用できません。手動で編集・保存できます。"
       : `本日の音声入力の残りは約${Math.floor((remaining ?? 0) / 60)}分です。`}</p>}
@@ -151,7 +151,13 @@ export function EditingControls(props: Props) {
 }
 
 /** Progress messages are shown as the listening/thinking animation, not as a result bubble. */
-const TRANSIENT = new Set(["音声入力中です。", "聞き取り中…", "音声接続を準備しています。", "指示を整理しています。", "変更を保存しています。", "音声を受信・指示を整理中"]);
+const TRANSIENT = new Set(["音声入力中です。", "聞き取り中…", "音声接続を準備しています。", "指示を整理しています。", "変更を保存しています。", "音声を受信・指示を整理中",
+  "マイクの使用許可を待っています。", "選択欄の指示を録音しています。", "音声を認識しています。", "音声取得を停止しました。"]);
+
+/** A progress line ("聞き取り中…" and the like) is left to the mic's animation; results and problems are kept. */
+function statusText(message: string): string {
+  return TRANSIENT.has(message) ? "" : message;
+}
 
 /** 「売却子牛一覧・1行目・3列目 体重」 → 「1行目の体重」 with the table as a small note. */
 function choiceLabel(label: string) {

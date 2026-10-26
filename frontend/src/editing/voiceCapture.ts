@@ -60,7 +60,10 @@ export class VoiceCapture {
       if (epoch !== this.epoch) { await vad.destroy(); return; }
       this.vad = vad; await this.connect(epoch);
       if (epoch !== this.epoch) return;
-      this.set({ mode, message: "音声入力中です。" }); await vad.start();
+      // Shown as listening only once the microphone really takes sound.
+      await vad.start();
+      if (epoch !== this.epoch) return;
+      this.set({ mode, message: "音声入力中です。" });
     } catch (error) { if (epoch === this.epoch) this.fail(error); }
   }
   private async connect(epoch: number) {
