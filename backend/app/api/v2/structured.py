@@ -234,11 +234,17 @@ def question_line(
 
 
 def chat_log(request: Request, entry: dict[str, Any]) -> None:
-    """Opt-in local log (VOICE_TRANSCRIPT_LOG): chat questions, answers or errors, removals."""
+    """Opt-in local log (VOICE_TRANSCRIPT_LOG): chat questions, answers or errors, removals.
+
+    The deployed beta keeps the same lines in S3 instead (BETA_CHAT_LOG, cloud/chat_feedback).
+    """
     settings = get_app_settings(request)
+    line = {"at": datetime.now(UTC).isoformat(), **entry}
+    sink = getattr(request.app.state, "chat_log_sink", None)
+    if sink is not None:
+        sink(line)
     if not settings.voice.transcript_log:
         return
-    line = {"at": datetime.now(UTC).isoformat(), **entry}
     path = settings.storage.data_dir / "logs" / "chat-questions.jsonl"
     with suppress(OSError):
         path.parent.mkdir(parents=True, exist_ok=True)

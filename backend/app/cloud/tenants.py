@@ -88,6 +88,13 @@ class TenantApplications:
                     bucket=str(self.config.object_bucket), tenant=tenant,
                     access_check=app.state.access_check,
                 )
+                if self.config.chat_log:
+                    from app.cloud.chat_feedback import ChatFeedback
+                    app.state.chat_log_sink = ChatFeedback(
+                        s3_client(), str(self.config.object_bucket),
+                        self.registry.control.installation, tenant,
+                        self.registry.subject(tenant),
+                    )
             app.state.api_budget = (
                 self.operations.budget(tenant) if self.operations else ClosedBudget()
             )

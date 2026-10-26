@@ -33,6 +33,8 @@ class CloudSettings(BaseSettings):
     # Cognito subs (comma separated) that get admin_seed_template_dir instead of seed_template_dir.
     admin_subjects: str = ""
     admin_seed_template_dir: Path | None = None
+    # Keep every chat question/answer in the objects bucket (feedback/chat/, chat_feedback.py).
+    chat_log: bool = False
     # ECS service of this task: during a rolling update, relay to its previous task (handoff.py).
     ecs_service: str | None = None
     relay_port: int = 8000

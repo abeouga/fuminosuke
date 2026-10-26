@@ -823,9 +823,65 @@ class LayoutService:
             candidate_count=0,
         )
 
+    def _keep_clean_template(
+        self, version_id: str, layout: LayoutDefinition
+    ) -> _HandwritingFinalization | None:
+        """パッケージから取り込んだテンプレートは元の写真がなく、手書きを消し直せない。
+
+        今の手書きを消した画像とマスクをそのまま使い、枠の検出だけを行う。
+        """
+        with self._database.session() as session:
+            version = TemplateRepository(session).get_version(version_id)
+            if version is None:
+                raise self._not_found()
+            source_job = JobRepository(session).get(version.source_job_id or "")
+            if source_job is None or ArtifactRepository(session).get_by_name(
+                job_id=source_job.id,
+                attempt_number=source_job.attempt_number,
+                artifact_name="normalized",
+            ) is not None:
+                return None
+            clean = (
+                session.get(JobArtifact, version.clean_template_artifact_id)
+                if version.clean_template_artifact_id
+                else None
+            )
+            if clean is None:
+                return None
+            clean_path = clean.relative_path
+            clean_id = clean.id
+            mask_id = version.mask_artifact_id
+            quality = dict(version.quality_json)
+        image_rgb = self._read_rgb(clean_path)
+        detected = self._detector.detect(image_rgb)
+        cells = {cell.id: cell for cell in layout.cells}
+        input_ids = {
+            relation.input_cell_id
+            for relation in layout.relations
+            if cells.get(relation.input_cell_id) is not None
+            and cells[relation.input_cell_id].role == "input"
+        }
+        sha = quality.get("editedMaskAppliedSha256")
+        return _HandwritingFinalization(
+            detector=detected.detector,
+            clean_artifact_id=clean_id,
+            mask_artifact_id=mask_id,
+            mask_source=str(quality.get("maskSource") or "PACKAGE_CLEAN_TEMPLATE"),
+            edited_mask_applied=bool(quality.get("editedMaskApplied")),
+            edited_mask_applied_sha256=sha if isinstance(sha, str) else None,
+            input_cell_count=len(input_ids),
+            coverage_ratio=float(quality.get("handwritingCoverageRatio") or 0.0),
+            opencv_applied=True,
+            paddle_ocr_available=detected.ocr_available,
+            candidate_count=int(quality.get("layoutVerificationCandidateCount") or 0),
+        )
+
     def _finalize_handwriting(
         self, version_id: str, layout: LayoutDefinition
     ) -> _HandwritingFinalization:
+        kept = self._keep_clean_template(version_id, layout)
+        if kept is not None:
+            return kept
         with self._database.session() as session:
             version = TemplateRepository(session).get_version(version_id)
             if version is None:

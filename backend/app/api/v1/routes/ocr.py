@@ -323,6 +323,15 @@ def confirm_ocr_result(
         get_app_settings(request),
         ApiBudget(database),
     )
+    # 2026-10-26: keep the reading's print for the comparison with later photos (照合).
+    from app.services.document_continuation_service import DocumentContinuationService
+
+    background.add_task(
+        DocumentContinuationService(
+            get_database(request), request.app.state.storage, request.app.state.settings,
+        ).prepare,
+        job_id,
+    )
     return result
 
 

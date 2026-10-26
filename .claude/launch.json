@@ -456,6 +456,26 @@
                                                    "C:/Users/hanam/AppData/Local/Temp/claude/C--Users-hanam-Desktop-llm-ocr-deploy/e229dad1-586d-427d-8a83-6a51bf5b45e4/scratchpad/serve_pg_front.cmd"
                                                ],
                                "port":  5231
+                           },
+                           {
+                               "name":  "pkgedit-backend",
+                               "runtimeExecutable":  "C:/Users/hanam/Desktop/llm-ocr-deploy/backend/.venv/Scripts/python.exe",
+                               "runtimeArgs":  [
+                                                   "D:/llm-ocr-archive/chat-scale-20261025/serve.py",
+                                                   "D:/llm-ocr-archive/pkg-edit-verify-20261026/gui",
+                                                   "8140",
+                                                   "5240"
+                                               ],
+                               "port":  8140
+                           },
+                           {
+                               "name":  "pkgedit-frontend",
+                               "runtimeExecutable":  "cmd",
+                               "runtimeArgs":  [
+                                                   "/c",
+                                                   "set LLM_OCR_BACKEND_URL=http://127.0.0.1:8140\u0026\u0026 npm --prefix C:/Users/hanam/Desktop/llm-ocr-deploy/frontend run dev -- --port 5240 --strictPort"
+                                               ],
+                               "port":  5240
                            }
                        ]
 }
