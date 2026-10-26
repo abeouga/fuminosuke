@@ -7,6 +7,7 @@ import hashlib
 import re
 import shutil
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,10 @@ from app.storage.local_storage import LocalStorageService, StoragePathError
 
 MAX_FILE = 64 * 1024**2
 BUSINESS = {"uploads", "artifacts", "templates", "exports"}
+# Parallel uploads of one batch (one document is about 700 files).
+UPLOAD_WORKERS = 8
+# Keys per DeleteObjects call (the S3 maximum).
+DELETE_BATCH = 1000
 
 
 class S3StorageService(LocalStorageService):
@@ -62,7 +67,7 @@ class S3StorageService(LocalStorageService):
             raise StoragePathError("Invalid cloud file path")
         supplied = Path(value)
         self._reject_symlink_components(supplied)
-        super().resolve(supplied)
+        self._path(supplied)  # Access was checked above.
         return supplied.as_posix()
 
     def _check_access(self) -> None:
@@ -142,23 +147,88 @@ class S3StorageService(LocalStorageService):
                     raise StoragePathError("Unpublished file in cloud directory")
         return target
 
-    def write_bytes(self, relative_path: str | Path, content: bytes) -> str:
+    def object_location(self, relative_path: str | Path) -> dict[str, Any]:
+        """The immutable S3 object of a published business file (for the extraction Lambda)."""
         name = self._name(relative_path)
-        if Path(name).parts[0] not in BUSINESS:
-            return super().write_bytes(name, content)
-        if len(content) > MAX_FILE:
-            raise StoragePathError("Cloud file exceeds 64 MiB")
-        sha = hashlib.sha256(content).hexdigest()
-        # Commit capacity reservation first. Unknown uploads remain counted after a crash.
+        row = self._record(name) if Path(name).parts[0] in BUSINESS else None
+        if row is None or row[2] != "READY":
+            raise StoragePathError("File publication is incomplete or deleted")
+        sha, size, _state = row
+        return {"key": self._key(name, sha), "sha256": sha, "size": int(size)}
+
+    def write_bytes(self, relative_path: str | Path, content: bytes) -> str:
+        return self.write_many([(str(relative_path), content)])[0]
+
+    def write_many(self, files: list[tuple[str, bytes]]) -> list[str]:
+        """Publish files: reserve them in one transaction, upload them in parallel outside the
+        catalog lock, then mark them READY in one transaction.
+
+        A deletion tombstone still wins over a late writer: deletion marks the row DELETED
+        under the lock, and publication then removes the object it uploaded instead of
+        marking it READY. An upload interrupted by a crash stays STAGING and counted, as before.
+        """
+        self._check_access()
+        names = [self._name_checked(path) for path, _content in files]
+        stored: list[str] = list(names)
+        durable: dict[str, tuple[bytes, str]] = {}
+        for index, (name, (_path, content)) in enumerate(zip(names, files, strict=True)):
+            if Path(name).parts[0] not in BUSINESS:
+                stored[index] = super().write_bytes(name, content)
+                continue
+            if len(content) > MAX_FILE:
+                raise StoragePathError("Cloud file exceeds 64 MiB")
+            sha = hashlib.sha256(content).hexdigest()
+            if name in durable and durable[name][1] != sha:
+                raise StoragePathError("Immutable cloud path cannot be replaced or revived")
+            durable[name] = (content, sha)
+        if not durable:
+            return stored
+        # Rows stay STAGING (counted) if an upload fails; the same content can be written again.
+        uploads = self._reserve(durable)
+        with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as pool:
+            list(pool.map(lambda name: self._upload(name, *durable[name]), uploads))
+        self._check_access()  # Revocation during remote I/O still prevents publication.
+        self._publish(durable, uploads)
+        for name, (content, _sha) in durable.items():
+            atomic_write_bytes(self._path(name), content)
+        return stored
+
+    def _name_checked(self, relative_path: str | Path) -> str:
+        """_name() for a batch whose access the caller has just checked."""
+        value = Path(relative_path).as_posix()
+        if "\\" in value or ":" in value or len(value) > 1024:
+            raise StoragePathError("Invalid cloud file path")
+        supplied = Path(value)
+        self._reject_symlink_components(supplied)
+        self._path(supplied)
+        return supplied.as_posix()
+
+    def _reserve(self, durable: dict[str, tuple[bytes, str]]) -> list[str]:
+        """Commit the capacity reservation first; returns the paths that still need uploading."""
+        uploads: list[str] = []
         with self.control.connect("objects") as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT sha,bytes,state FROM objects WHERE tenant=? AND path=?", (self.tenant, name)
-            ).fetchone()
-            if row:
-                if row[0] != sha or row[1] != len(content) or row[2] == "DELETED":
-                    raise StoragePathError("Immutable cloud path cannot be replaced or revived")
-            else:
+            rows = {
+                path: (sha, size, state)
+                for path, sha, size, state in db.execute(
+                    "SELECT path,sha,bytes,state FROM objects WHERE tenant=? AND path=ANY(?)",
+                    (self.tenant, list(durable)),
+                ).fetchall()
+            }
+            added = 0
+            for name, (content, sha) in durable.items():
+                row = rows.get(name)
+                if row:
+                    if row[0] != sha or row[1] != len(content) or row[2] == "DELETED":
+                        raise StoragePathError(
+                            "Immutable cloud path cannot be replaced or revived"
+                        )
+                    if row[2] != "READY":
+                        uploads.append(name)
+                else:
+                    added += len(content)
+                    uploads.append(name)
+            if added:
                 mine = db.execute(
                     "SELECT COALESCE(sum(bytes),0) FROM objects "
                     "WHERE tenant=? AND state!='DELETED'",
@@ -167,46 +237,64 @@ class S3StorageService(LocalStorageService):
                 total = db.execute(
                     "SELECT COALESCE(sum(bytes),0) FROM objects WHERE state!='DELETED'"
                 ).scalar_one()
-                if mine + len(content) > 500 * 1024**2 or total + len(content) > 5 * 1024**3:
+                if mine + added > 500 * 1024**2 or total + added > 5 * 1024**3:
                     raise refused(
                         "保存容量の上限に達しました。不要な帳票を削除してください。",
                         "BETA_STORAGE_LIMIT",
                         413,
                     )
-                db.execute(
-                    "INSERT INTO objects VALUES (?,?,?,?,'STAGING')",
-                    (self.tenant, name, sha, len(content)),
-                )
-        # Serialize remote publication and deletion. A deletion tombstone wins over a late writer.
+                for name, (content, sha) in durable.items():
+                    if name not in rows:
+                        db.execute(
+                            "INSERT INTO objects VALUES (?,?,?,?,'STAGING')",
+                            (self.tenant, name, sha, len(content)),
+                        )
+        return uploads
+
+    def _upload(self, name: str, content: bytes, sha: str) -> None:
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=self._key(name, sha),
+                Body=content,
+                IfNoneMatch="*",
+                ServerSideEncryption="AES256",
+                ChecksumSHA256=base64.b64encode(bytes.fromhex(sha)).decode(),
+            )
+        except ClientError as exc:
+            if exc.response["ResponseMetadata"]["HTTPStatusCode"] != 412:
+                raise
+            if self._fetch(name, sha, len(content)) != content:
+                raise StoragePathError("Existing immutable object differs") from exc
+
+    def _publish(self, durable: dict[str, tuple[bytes, str]], uploads: list[str]) -> None:
         with self.control.connect("objects") as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT sha,bytes,state FROM objects WHERE tenant=? AND path=?", (self.tenant, name)
-            ).fetchone()
-            if not row or row[0] != sha or row[2] == "DELETED":
+            rows = {
+                path: (sha, state)
+                for path, sha, state in db.execute(
+                    "SELECT path,sha,state FROM objects WHERE tenant=? AND path=ANY(?)",
+                    (self.tenant, list(durable)),
+                ).fetchall()
+            }
+            revoked = [
+                name for name, (_content, sha) in durable.items()
+                if name not in rows or rows[name][0] != sha or rows[name][1] == "DELETED"
+            ]
+            if revoked:
+                # Deleted while uploading: the tombstone wins, so remove what was just uploaded.
+                for name in revoked:
+                    if name in uploads:
+                        self.client.delete_object(
+                            Bucket=self.bucket, Key=self._key(name, durable[name][1])
+                        )
                 raise StoragePathError("Cloud file publication was revoked")
-            if row[2] != "READY":
-                try:
-                    self.client.put_object(
-                        Bucket=self.bucket,
-                        Key=self._key(name, sha),
-                        Body=content,
-                        IfNoneMatch="*",
-                        ServerSideEncryption="AES256",
-                        ChecksumSHA256=base64.b64encode(bytes.fromhex(sha)).decode(),
-                    )
-                except ClientError as exc:
-                    if exc.response["ResponseMetadata"]["HTTPStatusCode"] != 412:
-                        raise
-                    if self._fetch(name, sha, len(content)) != content:
-                        raise StoragePathError("Existing immutable object differs") from exc
-                self._check_access()
+            if uploads:
                 db.execute(
-                    "UPDATE objects SET state='READY' WHERE tenant=? AND path=?",
-                    (self.tenant, name),
+                    "UPDATE objects SET state='READY' WHERE tenant=? AND path=ANY(?) "
+                    "AND state='STAGING'",
+                    (self.tenant, uploads),
                 )
-        atomic_write_bytes(super().resolve(name), content)
-        return name
 
     def write_text(
         self, relative_path: str | Path, content: str, *, encoding: str = "utf-8"
@@ -246,25 +334,40 @@ class S3StorageService(LocalStorageService):
                 "(path=? OR (? AND left(path,?)=?))",
                 (self.tenant, name, tree, len(prefix), prefix),
             ).fetchall()
-            for path, sha in rows:
-                key = self._key(path, sha)
-                self.client.delete_object(Bucket=self.bucket, Key=key)
-                try:
-                    self.client.head_object(Bucket=self.bucket, Key=key)
-                except ClientError as exc:
-                    if exc.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
-                        raise
-                else:
+            # Still under the lock and confirmed before the tombstone, but batched: one
+            # DeleteObjects call per 1000 keys and parallel confirmation (a document is ~700).
+            keys = [self._key(path, sha) for path, sha in rows]
+            for start in range(0, len(keys), DELETE_BATCH):
+                response = self.client.delete_objects(
+                    Bucket=self.bucket,
+                    Delete={
+                        "Objects": [{"Key": key} for key in keys[start:start + DELETE_BATCH]],
+                        "Quiet": True,
+                    },
+                )
+                if response.get("Errors"):
                     raise StoragePathError("Remote deletion was not confirmed")
+            with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as pool:
+                list(pool.map(self._confirm_gone, keys))
+            if rows:
                 db.execute(
-                    "UPDATE objects SET state='DELETED' WHERE tenant=? AND path=?",
-                    (self.tenant, path),
+                    "UPDATE objects SET state='DELETED' WHERE tenant=? AND path=ANY(?)",
+                    (self.tenant, [path for path, _sha in rows]),
                 )
         if tree:
             if target.exists():
                 shutil.rmtree(target)
         else:
             target.unlink(missing_ok=True)
+
+    def _confirm_gone(self, key: str) -> None:
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if exc.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
+                raise
+        else:
+            raise StoragePathError("Remote deletion was not confirmed")
 
     def delete_file(self, relative_path: str | Path) -> None:
         name = self._name(relative_path)

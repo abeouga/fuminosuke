@@ -58,9 +58,8 @@ def _not_found() -> AppError:
     )
 
 
-def _artifact_file(request: Request, job_id: str, artifact_name: str) -> tuple[Path, JobArtifact]:
-    database = request.app.state.database
-    with database.session() as session:
+def _artifact_record(request: Request, job_id: str, artifact_name: str) -> JobArtifact:
+    with request.app.state.database.session() as session:
         job = request.app.state.job_service.get(job_id)
         artifact = ArtifactRepository(session).get_by_name(
             job_id=job_id,
@@ -69,6 +68,16 @@ def _artifact_file(request: Request, job_id: str, artifact_name: str) -> tuple[P
         )
     if artifact is None:
         raise _not_found()
+    return artifact
+
+
+def _artifact_file(
+    request: Request, job_id: str, artifact_name: str, artifact: JobArtifact | None = None,
+) -> tuple[Path, JobArtifact]:
+    database = request.app.state.database
+    job = request.app.state.job_service.get(job_id)
+    if artifact is None:
+        artifact = _artifact_record(request, job_id, artifact_name)
     path = request.app.state.storage.resolve(artifact.relative_path)
     if not path.is_file():
         request.app.state.artifact_recovery.ensure_artifact(job_id, artifact_name)
@@ -89,10 +98,17 @@ def _artifact_file(request: Request, job_id: str, artifact_name: str) -> tuple[P
 @router.get("/jobs/{job_id}/artifacts/{artifact_name}", response_class=FileResponse)
 def get_artifact(request: Request, job_id: str, artifact_name: str) -> FileResponse:
     path, artifact = _artifact_file(request, job_id, artifact_name)
+    # A URL that names the content (?v=, the list's links) never changes what it returns.
+    version = request.query_params.get("v", "")
+    headers = (
+        {"Cache-Control": "private, max-age=31536000, immutable"}
+        if len(version) >= 16 and artifact.sha256.startswith(version) else None
+    )
     return FileResponse(
         path=path,
         media_type=artifact.media_type,
         filename=artifact.artifact_name,
+        headers=headers,
     )
 
 
@@ -104,13 +120,15 @@ def get_artifact_thumbnail(
     width: int = Query(default=360, ge=120, le=800),
 ) -> Response:
     """A small JPEG of an image artifact (for document lists); the artifact itself is unchanged."""
-    path, artifact = _artifact_file(request, job_id, artifact_name)
+    artifact = _artifact_record(request, job_id, artifact_name)
     if not artifact.media_type.startswith("image/"):
         raise _not_found()
     tag = f'"{artifact.sha256[:32]}-{width}"'
     headers = {"ETag": tag, "Cache-Control": "private, max-age=300"}
+    # Compared before the file is fetched: an unchanged thumbnail costs only the record.
     if request.headers.get("if-none-match") == tag:
         return Response(status_code=304, headers=headers)
+    path, artifact = _artifact_file(request, job_id, artifact_name, artifact)
     image = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise _not_found()

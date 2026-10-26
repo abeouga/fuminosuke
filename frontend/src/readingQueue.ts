@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { privateLocalStorage } from "./auth/transport";
 import { showToast } from "./components/Toast";
 
@@ -94,11 +94,25 @@ export function useReadingQueue() {
 }
 
 /** Reads the current state of the given readings from the server and announces finished ones. */
+let syncing = false;
+
 export async function syncReadingQueue(ids = items.map((item) => item.jobId)) {
-  if (ids.length === 0) return;
-  const jobs = await Promise.all(ids.map((id) => api.job(id).catch(() => null)));
-  let changed = false;
-  const next = items.map((item) => {
+  // One sync at a time: a slow reply must not land after a newer one.
+  if (ids.length === 0 || syncing) return;
+  syncing = true;
+  const gone = new Set<string>();
+  let jobs: (Awaited<ReturnType<typeof api.job>> | null)[];
+  try {
+    jobs = await Promise.all(ids.map((id) => api.job(id).catch((error: unknown) => {
+      // Deleted elsewhere (another tab or device): nothing is left to wait for.
+      if (error instanceof ApiError && error.code === "JOB_NOT_FOUND") gone.add(id);
+      return null;
+    })));
+  } finally {
+    syncing = false;
+  }
+  let changed = gone.size > 0;
+  const next = items.filter((item) => !gone.has(item.jobId)).map((item) => {
     const job = jobs.find((candidate) => candidate?.id === item.jobId);
     if (!job) return item;
     const errorMessage = job.error?.message ?? null;

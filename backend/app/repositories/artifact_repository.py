@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -73,6 +75,37 @@ class ArtifactRepository:
         self._session.commit()
         self._session.refresh(artifact)
         return artifact
+
+    def upsert_many(self, rows: list[dict[str, Any]]) -> list[JobArtifact]:
+        """upsert() for several artifacts of one job attempt, committed once."""
+        if not rows:
+            return []
+        job_id, attempt_number = rows[0]["job_id"], rows[0]["attempt_number"]
+        if any(r["job_id"] != job_id or r["attempt_number"] != attempt_number for r in rows):
+            raise ValueError("upsert_many takes one job attempt")
+        existing = {
+            artifact.artifact_name: artifact
+            for artifact in self._session.scalars(
+                select(JobArtifact).where(
+                    JobArtifact.job_id == job_id,
+                    JobArtifact.attempt_number == attempt_number,
+                    JobArtifact.artifact_name.in_([r["artifact_name"] for r in rows]),
+                )
+            )
+        }
+        artifacts: list[JobArtifact] = []
+        for row in rows:
+            artifact = existing.get(row["artifact_name"])
+            if artifact is None:
+                artifact = JobArtifact(**row)
+                self._session.add(artifact)
+                existing[row["artifact_name"]] = artifact
+            else:
+                for key in ("media_type", "relative_path", "sha256", "width", "height"):
+                    setattr(artifact, key, row.get(key))
+            artifacts.append(artifact)
+        self._session.commit()
+        return artifacts
 
     def get_by_name(
         self, *, job_id: str, attempt_number: int, artifact_name: str

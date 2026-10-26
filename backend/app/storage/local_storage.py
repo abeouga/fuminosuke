@@ -38,6 +38,10 @@ class LocalStorageService:
     def resolve(self, relative_path: str | Path) -> Path:
         if self._access_check is not None:
             self._access_check()
+        return self._path(relative_path)
+
+    def _path(self, relative_path: str | Path) -> Path:
+        """resolve() without the access check, for a caller that has just checked it."""
         supplied = Path(relative_path)
         if supplied.is_absolute():
             raise StoragePathError("Absolute paths are not accepted")
@@ -63,6 +67,10 @@ class LocalStorageService:
         target = self.resolve(relative_path)
         atomic_write_bytes(target, content)
         return self.relative_name(target)
+
+    def write_many(self, files: list[tuple[str, bytes]]) -> list[str]:
+        """Write several files; returns the stored names in the same order."""
+        return [self.write_bytes(relative_path, content) for relative_path, content in files]
 
     def write_text(
         self, relative_path: str | Path, content: str, *, encoding: str = "utf-8"

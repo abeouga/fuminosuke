@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import secrets
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -10,6 +12,18 @@ import jwt
 
 from app.cloud.config import CloudSettings
 from app.cloud.registry import AccessDenied
+
+
+class CognitoUnavailable(Exception):
+    """Cognito could not answer (network, 5xx); not a verdict on the user."""
+
+
+@dataclass(frozen=True)
+class Login:
+    subject: str
+    # Seconds the verified ID token is still valid; the session is renewed after it.
+    lifetime: int
+    refresh_token: str | None
 
 
 class Cognito:
@@ -21,39 +35,75 @@ class Cognito:
         self.refreshed = float("-inf")
         self.lock = asyncio.Lock()
 
-    async def identity(self, code: str, verifier: str, nonce: str) -> tuple[str, int]:
+    async def identity(self, code: str, verifier: str, nonce: str) -> Login:
         try:
             response = await self.client.post(self.config.cognito_domain + "/oauth2/token", data={
                 "grant_type": "authorization_code", "client_id": self.config.cognito_client_id,
                 "redirect_uri": self.config.callback, "code": code, "code_verifier": verifier,
             })
             response.raise_for_status()
-            return await self._verify(response.json()["id_token"], nonce)
+            tokens = response.json()
+            subject, lifetime = await self._verify(tokens["id_token"], nonce)
+            return Login(subject, lifetime, _refresh_token(tokens.get("refresh_token")))
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise AccessDenied from exc
 
-    async def password_identity(self, username: str, password: str) -> tuple[str, int]:
+    async def password_identity(self, username: str, password: str) -> Login:
         """The app's own login form: USER_PASSWORD_AUTH with the public client, server side.
 
         Any challenge (new password, MFA) is refused; users are created with permanent passwords.
         """
         try:
-            response = await self.client.post(
-                f"https://cognito-idp.{self.config.cognito_region}.amazonaws.com/",
-                headers={
-                    "Content-Type": "application/x-amz-json-1.1",
-                    "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
-                },
-                json={
-                    "AuthFlow": "USER_PASSWORD_AUTH", "ClientId": self.config.cognito_client_id,
-                    "AuthParameters": {"USERNAME": username, "PASSWORD": password},
-                },
-            )
+            response = await self._initiate("USER_PASSWORD_AUTH",
+                                            {"USERNAME": username, "PASSWORD": password})
             if response.status_code != 200:
                 raise AccessDenied
-            return await self._verify(response.json()["AuthenticationResult"]["IdToken"], None)
+            result = response.json()["AuthenticationResult"]
+            subject, lifetime = await self._verify(result["IdToken"], None)
+            return Login(subject, lifetime, _refresh_token(result.get("RefreshToken")))
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise AccessDenied from exc
+
+    async def refresh(self, refresh_token: str) -> Login:
+        """A new ID token from the refresh token; refused once Cognito revokes or expires it.
+
+        Raises CognitoUnavailable (not AccessDenied) when Cognito itself cannot answer, so a
+        network blip does not sign the user out.
+        """
+        try:
+            response = await self._initiate("REFRESH_TOKEN_AUTH",
+                                            {"REFRESH_TOKEN": refresh_token})
+        except httpx.HTTPError as exc:
+            raise CognitoUnavailable from exc
+        if response.status_code >= 500 or response.status_code == 429:
+            raise CognitoUnavailable
+        if response.status_code != 200:
+            raise AccessDenied
+        try:
+            result = response.json()["AuthenticationResult"]
+            subject, lifetime = await self._verify(result["IdToken"], None)
+            # Present only when the app client rotates refresh tokens.
+            return Login(subject, lifetime, _refresh_token(result.get("RefreshToken")))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AccessDenied from exc
+
+    async def revoke(self, refresh_token: str) -> None:
+        """Best effort at logout: the refresh token stops working at Cognito too."""
+        with contextlib.suppress(httpx.HTTPError):
+            await self.client.post(self.config.cognito_domain + "/oauth2/revoke", data={
+                "token": refresh_token, "client_id": self.config.cognito_client_id,
+            }, timeout=5)
+
+    async def _initiate(self, flow: str, parameters: dict[str, str]) -> httpx.Response:
+        return await self.client.post(
+            f"https://cognito-idp.{self.config.cognito_region}.amazonaws.com/",
+            headers={
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+            },
+            json={"AuthFlow": flow, "ClientId": self.config.cognito_client_id,
+                  "AuthParameters": parameters},
+        )
 
     async def _verify(self, token: object, nonce: str | None) -> tuple[str, int]:
         try:
@@ -93,3 +143,7 @@ class Cognito:
             return str(claims["sub"]), lifetime
         except (httpx.HTTPError, jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
             raise AccessDenied from exc
+
+
+def _refresh_token(value: object) -> str | None:
+    return value if isinstance(value, str) and 0 < len(value) <= 8192 else None

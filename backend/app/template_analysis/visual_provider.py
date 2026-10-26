@@ -13,6 +13,7 @@ from jsonschema.exceptions import (  # type: ignore[import-untyped]
     ValidationError as SchemaValidationError,
 )
 
+from app.ai.claude_bridge import answered_by
 from app.editing.domain.command import digest
 from app.editing.errors import reject
 from app.template_analysis.binding_resolution import POLICY as RESOLUTION_POLICY
@@ -271,7 +272,7 @@ class VisualAnalysisProvider(OpenAIAnalysisProvider):
                 else 60,
             )
             metrics["usage"] = result.get("usage")
-            if result.get("model") != self.model:
+            if not answered_by(result.get("model"), self.model):
                 raise reject("PROVIDER_MODEL_MISMATCH", "解析モデルが指定と一致しません。", 422)
             if result.get("status") != "completed":
                 code = (

@@ -364,6 +364,17 @@ class _SseStream(httpx.AsyncByteStream):
         await self.events.aclose()  # type: ignore[attr-defined]
 
 
+def answered_by(model: object, expected: str) -> bool:
+    """Whether a Responses answer came from the requested model, or Claude standing in for it."""
+    if model == expected:
+        return True
+    from app.core.config import get_settings
+
+    ocr = get_settings().ocr
+    return (ocr.responses_provider == "claude" and bool(ocr.anthropic_api_key)
+            and model == ocr.claude_model)
+
+
 def bridged(upstream: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncBaseTransport:
     """The transport for OpenAI clients: Claude for Responses when configured, else OpenAI."""
     from app.core.config import get_settings

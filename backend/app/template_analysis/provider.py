@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from app.ai.claude_bridge import answered_by
 from app.editing.errors import reject
 from app.template_analysis.contracts import PageProposal
 from app.template_analysis.graph import ROLE_NAMES
@@ -160,7 +161,7 @@ class OpenAIAnalysisProvider:
             }
             result = await self.post("decisions", body, reserved, metrics, start)
             proposal = self.decode_decisions(result, page)
-        if result.get("model") != self.model:
+        if not answered_by(result.get("model"), self.model):
             raise reject("PROVIDER_MODEL_MISMATCH", "解析モデルが指定と一致しません。", 422)
         metrics.update(
             providerMs=round((time.perf_counter() - start) * 1000, 3), usage=result.get("usage")

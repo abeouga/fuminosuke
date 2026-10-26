@@ -18,6 +18,9 @@ class CloudSettings(BaseSettings):
     cognito_client_id: str = Field(min_length=1, max_length=128)
     cognito_domain: str
     session_seconds: int = Field(default=3600, ge=60, le=3600)
+    # How long a login lasts through the Cognito refresh token (renewed every ID token hour).
+    # Keep it within the app client's refresh_token_validity; 0 ends sessions with the ID token.
+    session_days: int = Field(default=30, ge=0, le=30)
     max_users: int = Field(default=10, ge=1, le=100)
     ai_enabled: bool = False
     journal_bucket: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -39,6 +42,10 @@ class CloudSettings(BaseSettings):
     database_name: str | None = None
     database_user: str | None = None
     database_password: SecretStr | None = None
+
+    @property
+    def session_keep_seconds(self) -> int:
+        return self.session_days * 86400
 
     @model_validator(mode="after")
     def validate_boundary(self) -> CloudSettings:

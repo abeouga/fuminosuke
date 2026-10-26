@@ -41,7 +41,9 @@ class TenantApplications:
         self.apps: dict[str, FastAPI] = {}
         self.stack = AsyncExitStack()
         self.lock = asyncio.Lock()
-        self.job_gate = asyncio.Semaphore(1)
+        # Shared by every owner: JOB_MAX_CONCURRENCY readings at once for the whole task.
+        # The semaphore wakes waiters in order, so one owner's batch does not hold others back.
+        self.job_gate = asyncio.Semaphore(settings.jobs.max_concurrency)
         self.operations = operations
 
     async def get(self, tenant: str) -> FastAPI:

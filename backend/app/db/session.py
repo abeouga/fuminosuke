@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import Connection, Engine, create_engine, event, text
 from sqlalchemy.engine import make_url
@@ -48,7 +49,8 @@ def create_database_engine(settings: DatabaseSettings) -> Engine:
         raise ValueError("PostgreSQL requires psycopg and an explicit schema")
     # UTC keeps stored times meaning what the SQLite rows (naive UTC) meant.
     return create_engine(
-        settings.url, pool_size=2, max_overflow=1, pool_pre_ping=True, pool_recycle=300,
+        # JOB_MAX_CONCURRENCY readings (cloud: 4) plus the screen's requests share this pool.
+        settings.url, pool_size=4, max_overflow=2, pool_pre_ping=True, pool_recycle=300,
         connect_args={"options": f"-c search_path={settings.schema_name} -c lock_timeout=10000"
                                  " -c timezone=UTC"},
     )
@@ -62,6 +64,46 @@ def begin_write(session: Session) -> None:
         session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(current_schema(), 0))"))
 
 
+_GUARDED = "fuminosuke_transaction_guarded"
+
+
+def guard(engine: Engine, access_check: Callable[[], None] | None,
+          transaction_fence: Callable[[Connection], None] | None) -> None:
+    """Cloud access check and runtime fence, once per transaction instead of per statement.
+
+    Covers ORM, Core and raw SQL, including background work and commit-time flushes: the first
+    statement of every transaction checks access and takes the fence's row lock, which lasts
+    through the commit, and every commit checks access again. So a revoked owner or a replaced
+    runtime still cannot commit anything, without a registry round-trip for each statement.
+    """
+    def first_statement(conn: Connection, *_: object) -> None:
+        if conn.info.get(_GUARDED):
+            return
+        if access_check is not None:
+            access_check()
+        if transaction_fence is not None:
+            transaction_fence(conn)
+        conn.info[_GUARDED] = True
+
+    def commit(conn: Connection) -> None:
+        if access_check is not None:
+            access_check()
+        conn.info.pop(_GUARDED, None)
+
+    def ended(conn: Connection) -> None:
+        conn.info.pop(_GUARDED, None)
+
+    def checkin(_dbapi_connection: object, record: Any, *_: object) -> None:
+        # A pooled connection's info outlives the checkout; its next transaction checks again.
+        record.info.pop(_GUARDED, None)
+
+    event.listen(engine, "before_cursor_execute", first_statement)
+    event.listen(engine, "commit", commit)
+    event.listen(engine, "rollback", ended)
+    event.listen(engine.pool, "checkin", checkin)
+    event.listen(engine.pool, "reset", lambda dbapi, record, _state: checkin(dbapi, record))
+
+
 class Database:
     def __init__(
         self, settings: DatabaseSettings, *, access_check: Callable[[], None] | None = None,
@@ -71,13 +113,8 @@ class Database:
     ) -> None:
         self.api_budget, self.before_delete = api_budget, before_delete
         self.engine = create_database_engine(settings)
-        if access_check is not None:
-            # Covers ORM, Core and raw SQL, including background work and commit-time flushes.
-            event.listen(self.engine, "before_cursor_execute", lambda *_: access_check())
-            event.listen(self.engine, "commit", lambda *_: access_check())
-        if transaction_fence is not None:
-            event.listen(self.engine, "before_cursor_execute",
-                         lambda conn, *_: transaction_fence(conn))
+        if access_check is not None or transaction_fence is not None:
+            guard(self.engine, access_check, transaction_fence)
         self.session_factory = sessionmaker(
             bind=self.engine,
             class_=Session,

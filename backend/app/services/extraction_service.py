@@ -17,14 +17,17 @@ from app.domain.template_config import (
     TemplateConfig,
     load_template_config,
 )
-from app.extraction.handwriting_isolator import HandwritingIsolator
-from app.extraction.image_variants import create_variants
-from app.extraction.mark_detector import MarkDetector
-from app.extraction.region_cropper import RegionCropper, RegionCrops
+from app.extraction.pipeline import (
+    PipelineSettings,
+    artifact_images,
+    failure_images,
+    run_pipeline,
+)
+from app.extraction.region_cropper import RegionCrops
+from app.extraction.remote import EncodedImage, RemoteExtraction, encode_images
 from app.image_processing.artifacts import ArtifactWriter
 from app.image_processing.image_loader import ImageLoader
-from app.image_processing.photo_registration import register_document
-from app.image_processing.registration import RegistrationFailure, TemplateAligner
+from app.image_processing.registration import RegistrationFailure
 from app.repositories.job_repository import JobRepository
 from app.storage.local_storage import LocalStorageService, StoragePathError
 
@@ -70,9 +73,8 @@ class ImageExtractionService:
         self._storage = storage
         self._config: TemplateConfig = load_template_config()
         self._loader = ImageLoader(settings.storage, settings.image_processing)
-        self._aligner = TemplateAligner(settings.registration)
-        self._isolator = HandwritingIsolator(threshold=settings.segmentation.threshold)
         self._writer = ArtifactWriter(database, storage)
+        self._remote: RemoteExtraction | None = RemoteExtraction.configured(storage)
 
     def process(self, job_id: str, *, page_id: str | None = None) -> ExtractionOutput:
         started = time.perf_counter()
@@ -137,67 +139,54 @@ class ImageExtractionService:
         crop_regions = (
             config.mapped_ocr_regions() if strict_mapped_ocr else config.ocr_regions()
         )
-        cropper = RegionCropper(config, crop_regions)
-        mark_detector = MarkDetector(config)
-        source = self._loader.load(
-            self._storage.read_bytes(source_input.relative_path), source_input.media_type
-        ).rgb
         template = template_snapshot.template_rgb
-        self._progress(job_id, "NORMALIZING_DOCUMENT", 12)
-        self._progress(job_id, "REGISTERING_TEMPLATE", 28)
-        try:
-            document = register_document(
-                source, template, aligner=self._aligner,
-                validation_regions=[(r.x, r.y, r.width, r.height) for r in crop_regions],
-            )
-        except RegistrationFailure as exc:
-            writer = ArtifactWriter(self._database, self._storage, page_id=page_id)
-            normalized_failure = (
-                exc.normalized_rgb if exc.normalized_rgb is not None else exc.debug_rgb
-            )
-            for name, pixels in (
-                ("registrationNormalized", normalized_failure),
-                ("registrationReference", template),
-                ("registrationRejectedDebug", exc.debug_rgb),
-            ):
-                writer.image(
-                    job_id=job_id, attempt_number=attempt, name=name,
-                    file_name=f"{name}.png", image=pixels, replace=True,
-                )
-            writer.json(
-                job_id=job_id, attempt_number=attempt, name="registrationFailure",
-                file_name="registration_failure.json", replace=True,
-                value={
-                    "inputSha256": source_input.sha256,
-                    "templateSnapshotSha256": template_snapshot.clean_template_sha256,
-                    "templateConfigSnapshotSha256": template_snapshot.config_sha256,
-                    "registrationSettings": self._settings.registration.model_dump(mode="json"),
-                    "diagnostics": exc.metadata,
-                },
-            )
-            raise
-        normalized, registered = document.normalized, document.registered
-        self._progress(job_id, "ISOLATING_HANDWRITING", 48)
-        handwriting = self._isolator.isolate(registered.aligned_rgb, template)
-        variants = create_variants(
-            registered.aligned_rgb, template, handwriting.handwriting_only_rgb
+        pipeline_settings = PipelineSettings(
+            storage=self._settings.storage,
+            image_processing=self._settings.image_processing,
+            registration=self._settings.registration,
+            segmentation=self._settings.segmentation,
         )
-        self._progress(job_id, "DETECTING_MARKS", 58)
-        marks = [
-            result.to_dict()
-            for result in mark_detector.detect_all(registered.aligned_rgb, template)
-        ]
-        self._progress(job_id, "CROPPING_FIELDS", 68)
-        crops = cropper.crop(variants)
+        encoded: list[EncodedImage] | None = None
+        remote = None
+        if page_id is None and self._remote is not None:
+            # Cloud: the image part runs in the extraction Lambda (same code and image);
+            # None when it is unavailable, and the reading continues here.
+            self._progress(job_id, "NORMALIZING_DOCUMENT", 12)
+            self._progress(job_id, "REGISTERING_TEMPLATE", 28)
+            remote = self._remote.run(
+                job_id=job_id, attempt=attempt, settings=pipeline_settings,
+                source_path=source_input.relative_path, source_sha256=source_input.sha256,
+                source_media_type=source_input.media_type,
+                template_path=str(job_snapshot["templateSnapshot"]["cleanTemplatePath"]),
+                template_sha256=template_snapshot.clean_template_sha256,
+                template=template, config=config, crop_regions=crop_regions,
+                mapped=strict_mapped_ocr,
+            )
+        if remote is not None and remote.failure is not None:
+            self._write_failure(
+                job_id, attempt, page_id, remote.images, source_input.sha256,
+                template_snapshot, remote.failure,
+            )
+            raise remote.failure
+        if remote is not None and remote.result is not None:
+            result, encoded = remote.result, remote.images
+        else:
+            try:
+                result = run_pipeline(
+                    pipeline_settings,
+                    source_bytes=self._storage.read_bytes(source_input.relative_path),
+                    source_media_type=source_input.media_type, template=template,
+                    config=config, crop_regions=crop_regions,
+                    progress=lambda stage, percent: self._progress(job_id, stage, percent),
+                )
+            except RegistrationFailure as exc:
+                self._write_failure(
+                    job_id, attempt, page_id, encode_images(failure_images(exc, template)),
+                    source_input.sha256, template_snapshot, exc,
+                )
+                raise
         quality: dict[str, Any] = {
-            **normalized.quality.to_dict(),
-            **registered.quality.to_dict(),
-            "handwritingCoverageRatio": handwriting.coverage_ratio,
-            "unknownOverlapRegionCount": len(handwriting.unknown_overlap_regions),
-            "warnings": [
-                *normalized.quality.warnings,
-                *registered.quality.warnings,
-            ],
+            **result.quality_head,
             "durationMsBeforeOcr": round((time.perf_counter() - started) * 1000, 2),
             "fieldMappingCount": len(config.mapped_ocr_regions()),
             "fieldMappingHash": job_snapshot.get("fieldMappingHash"),
@@ -210,23 +199,16 @@ class ImageExtractionService:
                 else "CONFIGURED_REGIONS"
             ),
         }
-        if registered.diagnostics is not None:
-            quality["registrationDiagnostics"] = registered.diagnostics
-        quality["photoRegistration"] = document.info
-        unknown: list[dict[str, object]] = [
-            dict(item.to_dict()) for item in handwriting.unknown_overlap_regions
-        ]
+        if result.registration_diagnostics is not None:
+            quality["registrationDiagnostics"] = result.registration_diagnostics
+        quality["photoRegistration"] = result.photo_registration
+        crops, marks, unknown = result.crops, result.marks, result.unknown
         artifacts = self._write_artifacts(
             job_id=job_id,
             attempt=attempt,
-            normalized=document.registration_input,
-            registered=registered.aligned_rgb,
-            template=template,
-            handwriting_probability=handwriting.probability,
-            handwriting_mask=handwriting.mask,
-            handwriting_only=handwriting.handwriting_only_rgb,
-            debug_overlay=handwriting.debug_overlay_rgb,
-            registration_debug=registered.debug_rgb,
+            images=encoded if encoded is not None else encode_images(
+                artifact_images(result, template)
+            ),
             crops=crops,
             marks=marks,
             quality=quality,
@@ -237,7 +219,7 @@ class ImageExtractionService:
             job_id=job_id,
             attempt_number=attempt,
             template_version_id=template_snapshot.template_version_id,
-            aligned_rgb=registered.aligned_rgb,
+            aligned_rgb=result.aligned,
             template_rgb=template,
             crops=crops,
             marks=marks,
@@ -352,19 +334,31 @@ class ImageExtractionService:
             ),
         )
 
+    def _write_failure(
+        self, job_id: str, attempt: int, page_id: str | None, images: list[EncodedImage],
+        input_sha256: str, template_snapshot: TemplateProcessingSnapshot,
+        failure: RegistrationFailure,
+    ) -> None:
+        writer = ArtifactWriter(self._database, self._storage, page_id=page_id)
+        writer.encoded_images(job_id=job_id, attempt_number=attempt, images=images)
+        writer.json(
+            job_id=job_id, attempt_number=attempt, name="registrationFailure",
+            file_name="registration_failure.json", replace=True,
+            value={
+                "inputSha256": input_sha256,
+                "templateSnapshotSha256": template_snapshot.clean_template_sha256,
+                "templateConfigSnapshotSha256": template_snapshot.config_sha256,
+                "registrationSettings": self._settings.registration.model_dump(mode="json"),
+                "diagnostics": failure.metadata,
+            },
+        )
+
     def _write_artifacts(
         self,
         *,
         job_id: str,
         attempt: int,
-        normalized: NDArray[np.uint8],
-        registered: NDArray[np.uint8],
-        template: NDArray[np.uint8],
-        handwriting_probability: NDArray[np.float32],
-        handwriting_mask: NDArray[np.uint8],
-        handwriting_only: NDArray[np.uint8],
-        debug_overlay: NDArray[np.uint8],
-        registration_debug: NDArray[np.uint8],
+        images: list[EncodedImage],
         crops: dict[str, RegionCrops],
         marks: list[dict[str, object]],
         quality: dict[str, Any],
@@ -373,56 +367,16 @@ class ImageExtractionService:
     ) -> dict[str, str]:
         artifacts: dict[str, str] = {}
         writer = ArtifactWriter(self._database, self._storage, page_id=page_id)
-
-        def image(name: str, file_name: str, value: NDArray[np.uint8], *, rgb: bool = True) -> None:
-            artifact = writer.image(
-                job_id=job_id,
-                attempt_number=attempt,
-                name=name,
-                file_name=file_name,
-                image=value,
-                rgb=rgb,
-                replace=True,
-            )
+        # The page images and the per-field crops (4 per field, about 700 for a large form)
+        # are stored as one batch.
+        for (name, *_), artifact in zip(
+            images,
+            writer.encoded_images(job_id=job_id, attempt_number=attempt, images=images),
+            strict=True,
+        ):
             artifacts[name] = artifact.artifact_name
-
-        image("normalized", "normalized.png", normalized)
-        image("alignedSource", "aligned_source.png", registered)
-        image("cleanTemplate", "clean_template.png", template)
-        image(
-            "handwritingProbability",
-            "handwriting_probability.png",
-            np.clip(handwriting_probability * 255, 0, 255).astype(np.uint8),
-            rgb=False,
-        )
-        image("handwritingMask", "handwriting_mask.png", handwriting_mask, rgb=False)
-        image("handwritingOnly", "handwriting_only.png", handwriting_only)
-        image("debugOverlay", "debug_overlay.png", debug_overlay)
-        image("registrationDebug", "registration_debug.png", registration_debug)
         field_metadata: dict[str, object] = {}
         for region_id, region in crops.items():
-            prefix = f"field_crops/{region_id}"
-            image(
-                f"fieldCrop.{region_id}.alignedColor",
-                f"{prefix}/aligned_color.png",
-                region.aligned_color,
-            )
-            image(
-                f"fieldCrop.{region_id}.cleanReference",
-                f"{prefix}/clean_reference.png",
-                region.clean_reference,
-            )
-            image(
-                f"fieldCrop.{region_id}.handwritingOnly",
-                f"{prefix}/handwriting_only.png",
-                region.handwriting_only,
-            )
-            image(
-                f"fieldCrop.{region_id}.enhancedGray",
-                f"{prefix}/enhanced_gray.png",
-                region.enhanced_gray,
-                rgb=False,
-            )
             field_metadata[region_id] = {
                 "bbox": region.bbox,
                 "fieldType": region.config.field_type,

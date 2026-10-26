@@ -47,7 +47,8 @@ class Operations:
         self.storages: dict[str, LocalStorageService] = {}
 
     def budget(self, tenant: str) -> TenantBudget:
-        return TenantBudget(self.journal, tenant, lambda: self.registry.require_access(tenant))
+        return TenantBudget(self.journal, tenant, lambda: self.registry.require_access(tenant),
+                            limited=self.settings.ocr.limits_enabled)
 
     def deletion(self, tenant: str, kind: str, identity: str) -> None:
         self.registry.require_access(tenant)

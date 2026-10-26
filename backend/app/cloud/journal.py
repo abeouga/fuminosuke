@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from app.ai.api_budget import refused
+from app.ai.api_budget import UNLIMITED, refused
 from app.cloud.relational import ControlDatabase
 
 
@@ -220,11 +220,19 @@ class Journal:
 
 
 class TenantBudget:
-    """All provider paths bind to this shared budget through their existing Database."""
-    def __init__(self, journal: Journal, tenant: str, access_check: Callable[[], None]) -> None:
+    """All provider paths bind to this shared budget through their existing Database.
+
+    limited=False (AI_LIMITS_ENABLED=false, as locally) keeps recording every call in the
+    journal but removes the call counts and the voice connection time.
+    """
+    def __init__(self, journal: Journal, tenant: str, access_check: Callable[[], None],
+                 limited: bool = True) -> None:
         self.journal, self.tenant, self.access_check = journal, tenant, access_check
+        self.limited = limited
 
     def remaining(self, records: list[dict[str, Any]]) -> int:
+        if not self.limited:
+            return UNLIMITED
         day = self.journal.clock().astimezone(UTC) + timedelta(hours=9)
         api = [r for r in records if r["kind"] == "api"]
         today = [r for r in api if (datetime.fromisoformat(r["at"])
@@ -242,7 +250,7 @@ class TenantBudget:
         used = sum(r["kind"] == "api" and r["tenant"] == self.tenant
                    and (datetime.fromisoformat(r["at"]) + timedelta(hours=9)).date() == day
                    for r in records)
-        return {"used": used, "limit": 20, "remaining": remaining}
+        return {"used": used, "limit": 20 if self.limited else UNLIMITED, "remaining": remaining}
 
     def reserve(self, purpose: str) -> str:
         self.access_check()
@@ -252,7 +260,7 @@ class TenantBudget:
             if self.remaining(records) < 1:
                 raise refused("AI利用上限に達しました。手動編集は継続できます。",
                               "AI_API_BUDGET_EXHAUSTED", 429)
-            if purpose.endswith("connect"):
+            if self.limited and purpose.endswith("connect"):
                 seconds = 300 * sum(r["kind"] == "api" and r["tenant"] == self.tenant
                                     and r["purpose"].endswith("connect") for r in records)
                 if seconds + 300 > 1200:

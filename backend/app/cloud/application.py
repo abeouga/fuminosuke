@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.types import Message, Receive, Scope, Send
 
-from app.cloud.cognito import Cognito
+from app.cloud.cognito import Cognito, CognitoUnavailable
 from app.cloud.config import CloudSettings
 from app.cloud.handoff import HandoffRelay, PreviousTask
 from app.cloud.journal import Journal, ReceiptStore, S3Receipts, s3_client
@@ -141,10 +141,17 @@ class TenantGateway:
         async def private_send(message: dict[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 message = dict(message)
+                headers = message.get("headers", [])
+                # Owner data is never stored by shared caches. An image the app marks
+                # "private, max-age" (content-addressed or ETag-checked) may stay in this
+                # browser only; logout clears it with Clear-Site-Data.
+                cache = next((v for k, v in headers if k.lower() == b"cache-control"), b"")
+                if not (cache.startswith(b"private, max-age") and b"public" not in cache):
+                    cache = b"private, no-store"
                 message["headers"] = [
-                    (k, v) for k, v in message.get("headers", [])
+                    (k, v) for k, v in headers
                     if k.lower() not in {b"cache-control", b"referrer-policy"}
-                ] + [(b"cache-control", b"private, no-store"), (b"referrer-policy", b"no-referrer")]
+                ] + [(b"cache-control", cache), (b"referrer-policy", b"no-referrer")]
             await send(message)
 
         async def watch() -> None:
@@ -253,6 +260,54 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
+    # Session token hash -> when to look at it again (renewal through the refresh token).
+    renew_at: dict[str, float] = {}
+    renew_locks: dict[str, asyncio.Lock] = {}
+
+    async def renew(token: str) -> None:
+        """Keep a long session only while Cognito still accepts its refresh token.
+
+        Every ID token lifetime (an hour) the refresh token is exchanged for a new verified ID
+        token, so a user disabled or signed out at Cognito loses the session within the hour.
+        """
+        if len(token) != 43:
+            return
+        key = hashlib.sha256(token.encode()).hexdigest()
+        if renew_at.get(key, 0.0) > time.time():
+            return
+        lock = renew_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if renew_at.get(key, 0.0) > time.time():
+                return
+            registry = app.state.registry
+            state = await asyncio.to_thread(registry.renewal, token)
+            if state is None:
+                renew_at.pop(key, None)
+                return
+            when, refresh_token, subject = state
+            if when - 60 > time.time() or refresh_token is None:
+                # Sessions without a refresh token simply end at their expiry.
+                renew_at[key] = min(when - 60, time.time() + 300)
+                return
+            try:
+                login = await app.state.cognito.refresh(refresh_token)
+                if login.subject != subject:
+                    raise AccessDenied
+            except CognitoUnavailable:
+                logging.getLogger(__name__).warning("Session renewal deferred: Cognito unavailable")
+                renew_at[key] = time.time() + 60
+                return
+            except AccessDenied:
+                await asyncio.to_thread(registry.revoke, token)
+                renew_at.pop(key, None)
+                return
+            await asyncio.to_thread(registry.renew, token, login.lifetime, login.refresh_token)
+            renew_at[key] = time.time() + min(login.lifetime - 60, 300)
+        if len(renew_locks) > 1000:
+            renew_locks.clear()
+            for stale in [k for k, t in renew_at.items() if t <= time.time()]:
+                renew_at.pop(stale, None)
+
     @app.middleware("http")
     async def boundary(request: Request, call_next: Any):  # type: ignore[no-untyped-def]
         # Never trust forwarded host headers to construct callback or tenant identity.
@@ -260,8 +315,13 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
             return problem("ORIGIN_REJECTED", 403)
         if request.url.path != "/api/health" and not await runtime_ready(app):
             return problem("RUNTIME_STARTING", 503)
+        if request.url.path not in {"/api/health", "/api/auth/logout"}:
+            await renew(request.cookies.get(SESSION, ""))
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        # Only a browser-private image cache the owner app allowed (see private_send).
+        cache = response.headers.get("Cache-Control", "")
+        if not (cache.startswith("private, max-age") and "public" not in cache):
+            response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
@@ -302,8 +362,10 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
             verifier, nonce = app.state.registry.consume_login(
                 state, request.cookies.get(LOGIN, ""),
             )
-            subject, lifetime = await app.state.cognito.identity(code, verifier, nonce)
-            token, _ = app.state.registry.issue(subject, lifetime)
+            login = await app.state.cognito.identity(code, verifier, nonce)
+            token, _, lifetime = app.state.registry.issue(
+                login.subject, login.lifetime, login.refresh_token, config.session_keep_seconds,
+            )
         except AccessDenied:
             return problem("LOGIN_REJECTED", 401)
         app.state.registry.revoke(request.cookies.get(SESSION, ""))
@@ -342,8 +404,10 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
             return JSONResponse({"code": "LOGIN_THROTTLED", "detail": detail},
                                 status_code=429, headers={"Cache-Control": "no-store"})
         try:
-            subject, lifetime = await app.state.cognito.password_identity(username, password)
-            token, identity = app.state.registry.issue(subject, lifetime)
+            login = await app.state.cognito.password_identity(username, password)
+            token, identity, lifetime = app.state.registry.issue(
+                login.subject, login.lifetime, login.refresh_token, config.session_keep_seconds,
+            )
         except AccessDenied:
             for key in keys:
                 failures[key].append(time.monotonic())
@@ -369,8 +433,12 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
                 return problem("CSRF_REJECTED", 403)
         except AccessDenied:
             return problem("AUTH_REQUIRED", 401)
+        state = app.state.registry.renewal(token)
         app.state.registry.revoke(token)
-        response = JSONResponse({"authenticated": False})
+        if state is not None and state[1] is not None:
+            await app.state.cognito.revoke(state[1])
+        # Cached document images stay in this browser until logout (see private_send).
+        response = JSONResponse({"authenticated": False}, headers={"Clear-Site-Data": '"cache"'})
         response.delete_cookie(SESSION, secure=True, httponly=True, samesite="lax")
         return response
 

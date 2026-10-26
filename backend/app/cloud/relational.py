@@ -131,8 +131,9 @@ class ControlDatabase:
             bootstrap.dispose()
         self.engine: Engine = create_engine(
             url,
-            pool_size=3,
-            max_overflow=2,
+            # One connection is the runtime lease; concurrent readings each publish files here.
+            pool_size=5,
+            max_overflow=5,
             pool_pre_ping=True,
             pool_recycle=300,
             connect_args={"options": "-c search_path=beta_control -c lock_timeout=10000"},
@@ -143,6 +144,17 @@ class ControlDatabase:
         with self.engine.begin() as connection:
             self.fence(connection)
             yield ControlConnection(connection, lock_name)
+
+    @contextmanager
+    def read(self) -> Iterator[ControlConnection]:
+        """A single read outside a transaction and without the runtime fence.
+
+        Only for reads that decide nothing durable by themselves (the per-operation access
+        check runs thousands of times while a document is stored); every write still goes
+        through connect(), which fences.
+        """
+        with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            yield ControlConnection(connection, "read")
 
     def fence(self, connection: Connection) -> None:
         if self.administrative:

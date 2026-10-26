@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import secrets
 import sqlite3
@@ -11,6 +12,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.cloud.relational import ControlDatabase
 
@@ -29,6 +33,26 @@ shutdown_tenants: ContextVar[frozenset[str]] = ContextVar(
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _key(token: str) -> AESGCM:
+    # Only the browser holds the session token, so a copy of the registry alone cannot use
+    # the stored Cognito refresh tokens.
+    return AESGCM(hashlib.sha256(b"fuminosuke-refresh/" + token.encode()).digest())
+
+
+def seal(token: str, refresh_token: str) -> str:
+    nonce = secrets.token_bytes(12)
+    sealed = _key(token).encrypt(nonce, refresh_token.encode(), digest(token).encode())
+    return base64.b64encode(nonce + sealed).decode()
+
+
+def unseal(token: str, sealed: str) -> str | None:
+    try:
+        raw = base64.b64decode(sealed)
+        return _key(token).decrypt(raw[:12], raw[12:], digest(token).encode()).decode()
+    except (InvalidTag, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -77,6 +101,18 @@ class Registry:
                 db.execute("UPDATE registry_version SET version=2 WHERE version=1")
             elif versions != [(2,)]:
                 raise RuntimeError("Unsupported cloud registry schema")
+            # Long sessions: the sealed Cognito refresh token and when the ID token runs out.
+            # Nullable and last, so a previous task's 4-value INSERT still works (PostgreSQL).
+            if control is None:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+            else:
+                columns = {str(row[0]) for row in db.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema='beta_control' AND table_name='sessions'")}
+            for column, kind in (("refresh", "TEXT"), ("renew", "REAL")):
+                if column not in columns:
+                    kind = "DOUBLE PRECISION" if control is not None and kind == "REAL" else kind
+                    db.execute(f"ALTER TABLE sessions ADD COLUMN {column} {kind}")
         if control is None:
             self.path.chmod(0o600)
 
@@ -144,7 +180,7 @@ class Registry:
         return str(row[0]) if row else ""
 
     def require_active(self, tenant: str) -> None:
-        with self.connect() as db:
+        with self.control.read() if self.control is not None else self.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE tenant_id=? AND active=1",
                               (tenant,)).fetchone():
                 raise AccessDenied
@@ -178,8 +214,15 @@ class Registry:
             db.execute("DELETE FROM logins WHERE state_hash=?", (digest(state),))
             return str(row[0]), str(row[1])
 
-    def issue(self, subject: str, seconds: int) -> tuple[str, Identity]:
+    def issue(self, subject: str, seconds: int, refresh_token: str | None = None,
+              keep_seconds: int = 0) -> tuple[str, Identity, int]:
+        """A browser session. With a refresh token it lasts keep_seconds, renewed every
+        `seconds` (the ID token lifetime) through Cognito; without one it ends with the ID token.
+        Returns the token, identity and the session's lifetime in seconds.
+        """
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        now = time.time()
+        lifetime = max(keep_seconds, seconds) if refresh_token else seconds
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM sessions WHERE expires<=?", (time.time(),))
@@ -187,9 +230,13 @@ class Registry:
                              (subject,)).fetchone()
             if row is None:
                 raise AccessDenied
-            db.execute("INSERT INTO sessions VALUES (?,?,?,?)",
-                       (digest(token), subject, csrf, time.time() + seconds))
-        return token, Identity(str(row[0]), subject, digest(token), csrf)
+            db.execute(
+                "INSERT INTO sessions (token_hash,subject,csrf,expires,refresh,renew) "
+                "VALUES (?,?,?,?,?,?)",
+                (digest(token), subject, csrf, now + lifetime,
+                 seal(token, refresh_token) if refresh_token else None, now + seconds),
+            )
+        return token, Identity(str(row[0]), subject, digest(token), csrf), lifetime
 
     def authenticate(self, token: str) -> Identity:
         if len(token) != 43:
@@ -203,6 +250,30 @@ class Registry:
             if row is None:
                 raise AccessDenied
             return Identity(str(row[0]), str(row[1]), digest(token), str(row[2]))
+
+    def renewal(self, token: str) -> tuple[float, str | None, str] | None:
+        """(renew at, refresh token, subject) of a live session, or None."""
+        if len(token) != 43:
+            return None
+        with self.control.read() if self.control is not None else self.connect() as db:
+            row = db.execute(
+                "SELECT s.renew,s.refresh,s.subject FROM sessions s JOIN users u "
+                "ON u.subject=s.subject WHERE s.token_hash=? AND s.expires>? AND u.active=1",
+                (digest(token), time.time()),
+            ).fetchone()
+        if row is None:
+            return None
+        renew = float(row[0]) if row[0] is not None else float("inf")
+        return renew, unseal(token, str(row[1])) if row[1] else None, str(row[2])
+
+    def renew(self, token: str, seconds: int, refresh_token: str | None) -> None:
+        with self.connect() as db:
+            if refresh_token is None:
+                db.execute("UPDATE sessions SET renew=? WHERE token_hash=?",
+                           (time.time() + seconds, digest(token)))
+            else:
+                db.execute("UPDATE sessions SET renew=?,refresh=? WHERE token_hash=?",
+                           (time.time() + seconds, seal(token, refresh_token), digest(token)))
 
     def revoke(self, token: str) -> None:
         with self.connect() as db:

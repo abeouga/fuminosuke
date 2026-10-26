@@ -85,7 +85,9 @@
   height: 64px; padding: 0 24px; border: 0; border-bottom: 1px solid var(--ui-border);
   background: white; box-shadow: none;
 }
-.deploy-shell .brand { min-height: 0; width: auto; flex: 0 0 auto; padding: 0; border: 0; }
+.deploy-shell .brand { min-height: 0; width: auto; flex: 0 0 auto; margin-right: 0; padding: 0; border: 0; }
+/* The old side menu hid the name below 980px; the header bar keeps it. */
+.deploy-shell .brand div { display: block; }
 .deploy-shell .brand > span, .deploy-shell .brand img { width: 32px; height: 32px; flex-basis: 32px; }
 .deploy-shell .brand strong { font-size: 22px; }
 .deploy-shell .side-nav nav { display: flex; flex: 0 0 auto; align-items: center; width: auto; overflow: visible; padding: 0; gap: 6px; }
@@ -212,7 +214,8 @@
   .deploy-shell .side-nav { height: auto; min-height: 56px; gap: 12px; padding: 8px 12px; flex-wrap: wrap; }
   .deploy-shell .brand strong { font-size: 18px; }
   .deploy-shell .side-nav nav button { padding: 6px 9px; }
-  .deploy-shell .side-footer { display: none; }
+  /* Keep the logout reachable; only the connection text goes. */
+  .deploy-shell .side-footer > span { display: none; }
   .ux-shell .main-content { padding: 16px 12px 40px; }
   .ux-shell .layout-workbench { grid-template-columns: minmax(0, 1fr); }
   .ux-shell .layout-workbench .layout-properties { max-height: none; }
