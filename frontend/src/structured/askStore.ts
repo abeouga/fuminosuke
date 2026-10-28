@@ -150,12 +150,18 @@ function titleOf(turns: Turn[], images: string[]): string {
   return line.length > 40 ? `${line.slice(0, 40)}…` : line || "新しい会話";
 }
 
+function sameContent(a: unknown[], b: unknown[]): boolean {
+  return a === b || (a.length === b.length && JSON.stringify(a) === JSON.stringify(b));
+}
+
 /** The current conversation written into the history (moved to the top when it changed). */
 function withCurrent(current: AskState): Conversation[] {
   const others = current.history.filter((item) => item.id !== current.conversationId);
   if (current.turns.length === 0 && current.images.length === 0) return others;
   const previous = current.history.find((item) => item.id === current.conversationId);
-  const changed = !previous || previous.turns !== current.turns || (previous.images ?? []) !== current.images;
+  // Compared by content: opening a conversation from the history or reloading the page makes new
+  // arrays of the same turns and images, and only a real change moves it to the top.
+  const changed = !previous || !sameContent(previous.turns, current.turns) || !sameContent(previous.images ?? [], current.images);
   const entry: Conversation = {
     id: current.conversationId,
     title: titleOf(current.turns, current.images),
