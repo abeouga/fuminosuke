@@ -771,11 +771,7 @@ function readingValueAtFixedRegion(value: FieldReading, fixedRegion: FieldReadin
     };
 }
 
-/** Identity comparison with the previous version: width, spacing and case are ignored (same as the server). */
-// Words written for a blank before it could be confirmed blank (folded), as the server reads them.
-const IDENTITY_BLANK_WORDS = new Set(["なし", "無し", "空欄", "-", "ー", "\u2015", "\u2010"]);
-/** An identity value as documents are compared: spacing and width ignored, "" for a blank. */
+/** An identity value as documents are compared: width, spacing and case ignored (same as the server). */
 function identityText(value: string | null | undefined): string {
-    const folded = (value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
-    return IDENTITY_BLANK_WORDS.has(folded) ? "" : folded;
+    return (value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 }
