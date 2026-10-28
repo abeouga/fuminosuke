@@ -262,11 +262,20 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     // An update keeps the earlier version's name: the field shows it, greyed out, and confirming sends it.
     const fixedName = isUpdate ? series?.predecessorDocumentName?.trim() || null : null;
     const sentName = (fixedName ?? name).trim();
-    const identityMismatches = series ? series.predecessorIdentity.filter(item => {
-        const reading = entries.find(entry => entry.path === item.targetPath)?.value;
-        const current = foldIdentity(reading?.normalized ?? reading?.raw);
-        return current !== foldIdentity(item.value) && !(item.raw && current === foldIdentity(item.raw));
-    }) : [];
+    // Only fields with a value in both versions are compared; with none to compare, the earlier version's
+    // fields with a value are reported (as the server does).
+    const identityMismatches = (() => {
+        if (!series) return [];
+        const compared = series.predecessorIdentity.flatMap(item => {
+            const reading = entries.find(entry => entry.path === item.targetPath)?.value;
+            const current = identityText(reading?.normalized ?? reading?.raw);
+            const before = [identityText(item.value), identityText(item.raw)].filter(Boolean);
+            return current && before.length > 0 ? [{ item, differs: !before.includes(current) }] : [];
+        });
+        if (compared.length > 0) return compared.filter(entry => entry.differs).map(entry => entry.item);
+        const known = series.predecessorIdentity.filter(item => identityText(item.value) || identityText(item.raw));
+        return known.length > 0 ? known : series.predecessorIdentity;
+    })();
     const mismatchBlocked = identityMismatches.length > 0 && !acceptMismatch;
     const templateId = result?.result.templateId ?? null;
     useEffect(() => {
@@ -318,10 +327,17 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     const shownWarnings = result?.confirmed ? new Set<string>() : warningPaths;
     const choices = new Set(previews.filter(preview => preview.mappingType === "mark").map(preview => preview.targetPath));
     const readingFor = (field: DocumentIdentity) => entries.find(entry => entry.path === field.targetPath)?.value;
+    // A field left blank on the paper is confirmed blank (「空欄」); the document needs one field with a value.
+    const identityBlank = (field: DocumentIdentity) => {
+        const reading = readingFor(field);
+        return !reading || reading.status === "blank" || !identityText(reading.normalized ?? reading.raw);
+    };
     const identityInvalid = (field: DocumentIdentity) => {
         const reading = readingFor(field), value = reading?.normalized ?? reading?.raw ?? "";
-        return !reading || reading.status !== "readable" || !value.trim() || (field.valueType === "digits" && (!/^[0-9]+$/.test(value) || (field.exactLength != null && value.length !== field.exactLength)));
+        if (reading?.status === "uncertain") return true;
+        return !identityBlank(field) && field.valueType === "digits" && (!/^[0-9]+$/.test(value) || (field.exactLength != null && value.length !== field.exactLength));
     };
+    const identityMissing = identities.length > 0 && identities.every(identityBlank);
     const update = (path: string, patch: Partial<FieldReading>) => {
         if (locked)
             return;
@@ -487,12 +503,16 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
             const previous = series.predecessorIdentity.find(item => item.targetPath === field.targetPath);
             const differs = identityMismatches.some(item => item.targetPath === field.targetPath);
             const entry = entries.find(item => item.path === field.targetPath);
-            return <p className={`identity-previous${differs ? " differs" : ""}`}>前の版「{series.predecessorDocumentName ?? "名称なし"}」: <strong>{previous?.value ?? "（なし）"}</strong>
-              {previous?.raw && previous.raw !== previous.value && <small>（読み取り「{previous.raw}」）</small>}{differs ? " · 一致しません" : " · 一致"}
+            // A field blank in the earlier version is not compared: it is shown as blank, not as matching.
+            const blankBefore = !identityText(previous?.value) && !identityText(previous?.raw);
+            return <p className={`identity-previous${differs ? " differs" : ""}`}>前の版「{series.predecessorDocumentName ?? "名称なし"}」: <strong>{blankBefore ? "（空欄）" : previous?.value}</strong>
+              {previous?.raw && previous.raw !== previous.value && <small>（読み取り「{previous.raw}」）</small>}{differs ? " · 一致しません" : blankBefore ? "" : " · 一致"}
               {previous?.value && entry && !locked && (entry.value.normalized ?? entry.value.raw) !== previous.value
                 && <button type="button" className="ghost compact" onClick={() => editText(entry, previous.value!)}>前の版の値にする</button>}</p>;
         })()}
-        <label className="field-label"><span className="identity-result-label"><FiEdit2 aria-hidden="true"/>検出結果</span><input aria-label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} disabled={locked || !readingFor(field)} inputMode={field.valueType === "digits" ? "numeric" : "text"} aria-invalid={identityInvalid(field)} onChange={event => editText(entries.find(entry => entry.path === field.targetPath)!, event.target.value)}/><small>{field.valueType === "digits" ? `数字${field.exactLength ? `${field.exactLength}桁` : ""}で確認してください。` : "書類に記載された内容を確認してください。"}</small></label></article>)}
+        <label className="field-label"><span className="identity-result-label"><FiEdit2 aria-hidden="true"/>検出結果</span><span className="identity-input-row"><input aria-label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} placeholder="空欄" disabled={locked || !readingFor(field)} inputMode={field.valueType === "digits" ? "numeric" : "text"} aria-invalid={identityInvalid(field)} onChange={event => editText(entries.find(entry => entry.path === field.targetPath)!, event.target.value)}/>
+          <button type="button" className={`identity-blank-button${readingFor(field)?.status === "blank" ? " is-on" : ""}`} disabled={locked || !readingFor(field)} aria-pressed={readingFor(field)?.status === "blank"}
+            title="書類のこの欄が空欄のとき" onClick={() => editText(entries.find(entry => entry.path === field.targetPath)!, "")}>空欄</button></span><small>{field.valueType === "digits" ? `数字${field.exactLength ? `${field.exactLength}桁` : ""}で確認してください。` : "書類に記載された内容を確認してください。"}</small></label></article>)}
       {!identities.length && <article className="identity-confirm-card"><h2>読み取り対象の書類</h2><p>識別項目は設定されていません。帳票全体を確認してください。</p>{fullImage && <img className="identity-full-image" src={fullImage} alt="読み取った帳票全体"/>}</article>}
     </section>}
     {/* Only a differing identity needs a word here; a matching one is shown on each card. */}
@@ -510,17 +530,18 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
               }}>更新をやめる（この読み取りを取り消す）</button>
             </span>)}
     </aside>}
+    {identityMissing && <p className="notice compact warn">書類を見分ける項目を、少なくとも1つ入力してください。</p>}
     {error && <p className="error-box" role="alert">{error}</p>}
     <div className="page-actions identity-next">
       {canDiscard && <span className="identity-discard"><DiscardReading jobId={jobId} disabled={busy || saving} onDiscarded={() => onClose(true)}/></span>}
       <label className="identity-agree"><input type="checkbox" checked={identityAgreed} onChange={event => setIdentityAgreed(event.target.checked)}/><FiCheck aria-hidden="true"/>確認しました</label>
-      <button className="primary" disabled={!identityAgreed || busy || saving || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => setIdentityChecked(true)}>次へ<FiArrowRight /></button>
+      <button className="primary" disabled={!identityAgreed || busy || saving || contextError || identities.some(identityInvalid) || identityMissing || mismatchBlocked} onClick={() => setIdentityChecked(true)}>次へ<FiArrowRight /></button>
     </div>
     {presenceDialog}
   </div>;
     // The document name sits right beside 「内容を確定する」, which needs it. A phone keeps both in a bar above the tabs.
     const nameAndConfirm = <>
-      <label className={`document-name-field${nameWanted && !sentName ? " is-wanted" : ""}${fixedName ? " is-fixed" : ""}`} title={fixedName ? "書類の更新では、前の版の書類名をそのまま使います" : undefined}><span>書類名</span><input key={nameWanted} ref={nameInput} value={fixedName ?? name} maxLength={180} disabled={locked || Boolean(fixedName)} readOnly={Boolean(fixedName)} placeholder="書類名を入力" onChange={event => setName(event.target.value)}/></label><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || mismatchBlocked} onClick={() => {
+      <label className={`document-name-field${nameWanted && !sentName ? " is-wanted" : ""}${fixedName ? " is-fixed" : ""}`} title={fixedName ? "書類の更新では、前の版の書類名をそのまま使います" : undefined}><span>書類名</span><input key={nameWanted} ref={nameInput} value={fixedName ?? name} maxLength={180} disabled={locked || Boolean(fixedName)} readOnly={Boolean(fixedName)} placeholder="書類名を入力" onChange={event => setName(event.target.value)}/></label><button className="primary" disabled={locked || inlineDirty || contextError || identities.some(identityInvalid) || identityMissing || mismatchBlocked} onClick={() => {
         // Without a name the name field glows and takes the focus instead of opening the dialog.
         if (!sentName) { setNameWanted(value => value + 1); return; }
         setConfirmDialog(true);
@@ -750,7 +771,7 @@ function readingValueAtFixedRegion(value: FieldReading, fixedRegion: FieldReadin
     };
 }
 
-/** Identity comparison with the previous version: width, spacing and case are ignored (same as the server). */
-function foldIdentity(value: string | null | undefined): string {
+/** An identity value as documents are compared: width, spacing and case ignored (same as the server). */
+function identityText(value: string | null | undefined): string {
     return (value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 }
