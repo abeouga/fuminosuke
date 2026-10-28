@@ -64,6 +64,11 @@ export type AskViewer = {
   focus: string | null;
   /** Only the sheet's picture (a reading not confirmed yet, which has no document to show). */
   image?: boolean;
+  /**
+   * A photo sent in the chat (its reading's id): the photo itself while this page has it,
+   * else its reading's aligned sheet. `jobId` is then the reading's job, or `photo:<id>` before it has one.
+   */
+  photo?: string;
 };
 
 const STORAGE_KEY = "fuminosuke-ask-v1";
