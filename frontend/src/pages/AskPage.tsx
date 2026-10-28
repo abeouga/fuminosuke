@@ -201,6 +201,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const submit = (raw: string) => {
     const text = raw.trim();
     if (!canSend) return;
+    // Sending ends the voice input: what was said is in the message, and later speech must not fill the box again.
+    if (voiceState.mode !== "stopped") void voice.stop();
     // Images and text sent together are one message with one answer: the text is answered and the
     // images' readings (template guess, then the reading queue) are shown under that answer.
     // Text that only asks for the images to be read gets a short reply here, without the AI.
