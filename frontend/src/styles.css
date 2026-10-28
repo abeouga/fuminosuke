@@ -555,6 +555,16 @@ button,.primary,.secondary,.ghost,.danger-button,a.button-link{
 .identity-confirm-preview img{display:block;width:100%;max-height:240px;object-fit:contain;background:#fff}
 .identity-confirm-preview span{padding:24px;color:#6b7b84;font-size:11px;text-align:center}
 .identity-confirm-card .field-label{margin:0}
+.identity-crop{position:relative;display:block;width:100%}
+.identity-crop-value{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;margin:0;padding:0 12px;border:0;border-radius:0;background:#ffffffb3;color:#173f63;font-size:30px;font-weight:800;letter-spacing:.04em;cursor:text;transition:background .15s ease,color .15s ease}
+.identity-crop-value strong{max-width:100%;overflow:hidden;font:inherit;text-overflow:ellipsis;white-space:nowrap}
+.identity-crop-value.is-blank{color:#7b8b95;font-size:20px}
+.identity-crop-value.is-invalid{color:#b93838}
+.identity-crop-value:hover:not(:disabled){background:#ffffff1a;color:#173f6333}
+.identity-crop-value:focus-visible{outline:3px solid #2468a2;outline-offset:-3px}
+.identity-crop-value:disabled{cursor:default}
+.identity-crop-value.is-editing{background:#ffffffd9;box-shadow:inset 0 0 0 3px #2468a2}
+.identity-confirm-card .identity-crop-value.is-editing input{width:100%;height:100%;border:0;background:transparent;color:#173f63;font:inherit;font-size:30px;font-weight:800;letter-spacing:.04em;text-align:center;outline:none}
 .identity-input-row{display:flex;gap:8px;align-items:stretch}
 .identity-input-row input{flex:1;min-width:0}
 .identity-blank-button{flex:none;min-width:64px;border:1px solid #9fadb7;border-radius:8px;background:#fff;color:#33505f;font-size:14px;font-weight:800;cursor:pointer}
