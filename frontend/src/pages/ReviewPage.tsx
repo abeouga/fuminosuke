@@ -95,16 +95,10 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
     const changePen = (on: boolean) => { setPen(on); if (!on) { setMode("edit"); setSelected(null); } };
     const nextWarning = () => { const warnings = entries.filter(entry => warningPaths.has(entry.path)), index = warnings.findIndex(entry => entry.path === selected); setSelected(warnings[(index + 1) % warnings.length]?.path ?? null); };
     const { painted, paint } = useReviewPaint(jobId);
-    // 一覧 | 帳票: the chosen view is kept in this browser. On a narrow screen only the list fits.
+    // 一覧 | 帳票: the chosen view is kept in this browser. Offered on a PC at any window width
+    // (the form takes the whole width there); a phone shows the list only.
     const [view, setView] = useState<ReviewView>(readStoredReviewView);
-    const [formAllowed, setFormAllowed] = useState(() => window.matchMedia?.("(min-width: 1051px)").matches ?? true);
-    useEffect(() => {
-        const query = window.matchMedia?.("(min-width: 1051px)");
-        if (!query) return;
-        const listen = () => setFormAllowed(query.matches);
-        query.addEventListener("change", listen);
-        return () => query.removeEventListener("change", listen);
-    }, []);
+    const formAllowed = !phone;
     const targetView: ReviewView = formAllowed ? view : "list";
     // Switching: the list closes (to-form), then the cells appear over the form (form); back the
     // other way the cells fade (to-list) while the list opens again.

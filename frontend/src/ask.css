@@ -274,8 +274,6 @@ body.ask-resizing .ask-layout{transition:none}
   .ask-layout.with-history{grid-template-columns:56px minmax(0,1fr)}
   .ask-layout.with-history.with-document,.ask-layout.with-rail.with-document{grid-template-columns:minmax(0,1fr)}
   .ask-side{overflow:visible}
-  .ask-layout.with-document .ask-side{position:absolute;width:0;height:0;border:0}
-  .ask-layout.with-document .ask-rail{display:none}
   .ask-side.open .ask-rail{opacity:1}
   .ask-history,.ask-side.open .ask-history{position:fixed;z-index:46;width:min(300px,86vw);border:1px solid #c2cdd7;border-radius:0 18px 18px 0;background:#f6f8fa;box-shadow:0 18px 50px #172a3a40;opacity:1;transform:translateX(-110%);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
   .ask-side.open .ask-history{transform:none}
@@ -410,6 +408,12 @@ body.ask-resizing{cursor:col-resize;user-select:none}
   .ask-layout.with-document .ask-chat{border-right:1px solid var(--ui-border);border-radius:14px}
   .ask-layout.with-document .ask-document-panel{border-radius:14px}
   .ask-splitter{display:none}
+  /* The rail stays with a document open too (新しい会話 and the history must not depend on the
+     width): it runs down the left while the chat and the document stack on the right. */
+  .ask-layout.with-document:is(.with-rail,.with-history){grid-template-columns:56px minmax(0,1fr) !important}
+  .ask-layout.with-document:is(.with-rail,.with-history) .ask-side{position:relative;grid-column:1;grid-row:1 / span 2;width:auto;height:auto;margin-right:0}
+  .ask-layout.with-document:is(.with-rail,.with-history) .ask-rail{display:flex}
+  .ask-layout.with-document:is(.with-rail,.with-history) :is(.ask-chat,.ask-document-panel){grid-column:2}
 }
 
 /* 会話はスクロールできるがスクロールバーは出さない（回答の表・右の書類は従来どおり出す） */
