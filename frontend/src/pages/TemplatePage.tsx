@@ -1653,7 +1653,7 @@ function TemplateReview({
           disabled={operationBusy || printDirty || editorDirty || identityDirty || documentNameDirty || maskDirty
             || approvalPendingConfirmation || (printSaved ? !meaningSaved || !printState?.revision
               : maskRequiresReprocess || !meaningSaved)}
-          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? <><Spinner />{isRevision ? <><Spinner />反映中…</> : "作成中…"}</> : isRevision ? "変更を反映する" : "テンプレートを作成する"}</button>
+          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? <><Spinner />{isRevision ? "反映中…" : "作成中…"}</> : isRevision ? "変更を反映する" : "テンプレートを作成する"}</button>
       </div>}
     </div>
   );
