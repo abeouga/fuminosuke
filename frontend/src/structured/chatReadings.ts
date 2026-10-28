@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, createIdempotencyKey, type TemplateClassification } from "../api";
 import { readingQueue, syncReadingQueue } from "../readingQueue";
 import { findConfirmedMatch } from "../confirmedMatch";
+import { privateLocalStorage, storageScope } from "../auth/transport";
 
 // Images put into the chat: first attached to the message box, sent with the send button. The server
 // then guesses the template, the user picks one only when it is unsure, and the reading is sent to the
@@ -9,6 +10,8 @@ import { findConfirmedMatch } from "../confirmedMatch";
 // of the same template looks like an earlier photo of the same sheet, the user is asked first whether
 // the new photo continues it, replaces it or is another document. Otherwise, when it looks like a later
 // photo of a confirmed document of the same template, it is read as that document's next version.
+// Each image belongs to the conversation it was sent in, and is kept with it (per signed-in user) so
+// opening the conversation from the history shows its images again.
 
 export type ChatCandidate = TemplateClassification["candidates"][number];
 
@@ -24,6 +27,8 @@ export type EarlierReading = {
 
 export type ChatReading = {
   id: string;
+  /** The conversation it was sent in. */
+  conversationId: string;
   /** The chat turn this image was added after (null: before any turn). */
   afterTurnId: number | null;
   /** The turn sent together with this image (its text): shown in that turn's message and answer. */
@@ -51,8 +56,10 @@ export type ChatReading = {
 
 export type ChatAttachment = { id: string; fileName: string; preview: string };
 
-const STORAGE_KEY = "fuminosuke-chat-readings-v2";
-const MAX_READINGS = 40;
+const STORAGE_KEY = "fuminosuke-chat-readings-v3";
+/** The tab-wide list of every user before v3 (another user signing in on the tab saw it). */
+const SHARED_KEY = "fuminosuke-chat-readings-v2";
+const MAX_READINGS = 300;
 const MAX_ATTACHMENTS = 10;
 const WAIT_POLL_MS = 4000;
 const ENDED = new Set(["FAILED", "INTERRUPTED", "CANCELLED"]);
@@ -60,14 +67,17 @@ const ENDED = new Set(["FAILED", "INTERRUPTED", "CANCELLED"]);
 const files = new Map<string, File>();
 const previews = new Map<string, string>();
 const listeners = new Set<() => void>();
+// Read again once the signed-in user's storage is known (this module loads before the session).
+let loadedScope = storageScope();
 let readings: ChatReading[] = load();
 let attachments: ChatAttachment[] = [];
 
 function load(): ChatReading[] {
+  try { sessionStorage.removeItem(SHARED_KEY); } catch { /* storage may be off */ }
   try {
-    const stored: unknown = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "[]");
+    const stored: unknown = JSON.parse(privateLocalStorage.getItem(STORAGE_KEY) ?? "[]");
     if (!Array.isArray(stored)) return [];
-    return (stored as ChatReading[]).map((reading) =>
+    return (stored as ChatReading[]).filter((reading) => typeof reading?.conversationId === "string").map((reading) =>
       ["classifying", "comparing", "waiting", "starting"].includes(reading.state)
         ? { ...reading, state: "failed", error: "画面を再読み込みしたため中断しました。画像をもう一度送ってください。" }
         : reading);
@@ -76,14 +86,27 @@ function load(): ChatReading[] {
   }
 }
 
+function sync(): ChatReading[] {
+  const scope = storageScope();
+  if (scope !== loadedScope) {
+    loadedScope = scope;
+    readings.forEach((reading) => release(reading.id));
+    readings = load();
+  }
+  return readings;
+}
+
 function notify() {
   listeners.forEach((listener) => listener());
 }
 
 function update(next: ChatReading[]) {
-  readings = next.slice(-MAX_READINGS);
+  sync();
+  const kept = next.slice(-MAX_READINGS);
+  next.slice(0, -MAX_READINGS).forEach((reading) => release(reading.id));
+  readings = kept;
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(readings));
+    privateLocalStorage.setItem(STORAGE_KEY, JSON.stringify(readings));
   } catch {
     // Storage can be disabled; the list then lasts until the page is reloaded.
   }
@@ -256,7 +279,7 @@ export const chatReadings = {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   },
-  snapshot: () => readings,
+  snapshot: sync,
   attachments: () => attachments,
   preview: (id: string) => previews.get(id) ?? null,
 
@@ -289,11 +312,11 @@ export const chatReadings = {
    * Sends the attached images: each is classified and read (or asked about). With `turnId` they belong
    * to the message sent with them, and their reading is shown under that message's answer.
    */
-  send(afterTurnId: number | null, turnId: number | null = null) {
+  send(conversationId: string, afterTurnId: number | null, turnId: number | null = null) {
     if (attachments.length === 0) return 0;
     const batch = createIdempotencyKey("ocr").slice(4);
     const sent = attachments.map((item): ChatReading => ({
-      id: item.id, afterTurnId, turnId, batch, fileName: item.fileName, state: "classifying", candidates: [], matched: false,
+      id: item.id, conversationId, afterTurnId, turnId, batch, fileName: item.fileName, state: "classifying", candidates: [], matched: false,
       template: null, templateName: null, earlier: null, outcome: null, jobId: null, error: null,
       key: createIdempotencyKey("ocr"),
     }));
@@ -378,10 +401,20 @@ export const chatReadings = {
 
   hasFile: (id: string) => files.has(id),
 
-  /** Forgets the conversation's images (the images still attached to the message box stay). */
-  clear() {
-    readings.forEach((reading) => release(reading.id));
-    update([]);
+  /** Forgets the images of a conversation removed from the history (their readings go on). */
+  dropConversation(conversationId: string) {
+    const gone = sync().filter((reading) => reading.conversationId === conversationId);
+    if (gone.length === 0) return;
+    gone.forEach((reading) => release(reading.id));
+    update(readings.filter((reading) => reading.conversationId !== conversationId));
+  },
+
+  /** Forgets the images of conversations no longer in the history (pushed out of it, or removed in another tab). */
+  keepConversations(conversationIds: Set<string>) {
+    const gone = sync().filter((reading) => !conversationIds.has(reading.conversationId));
+    if (gone.length === 0) return;
+    gone.forEach((reading) => release(reading.id));
+    update(readings.filter((reading) => conversationIds.has(reading.conversationId)));
   },
 };
 

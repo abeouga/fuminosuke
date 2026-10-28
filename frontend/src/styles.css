@@ -2922,3 +2922,27 @@ button.reading-float-open { cursor: pointer; }
 .info-tip.is-end .info-tip-bubble{left:auto;right:-6px}
 .info-tip.is-above .info-tip-bubble{top:auto;bottom:calc(100% + 8px);transform:translateY(3px)}
 .info-tip:hover .info-tip-bubble,.info-tip:focus-within .info-tip-bubble{opacity:1;visibility:visible;transform:none}
+
+/* 修正率（管理者）：OCRが読んだ欄のうち人が直した割合 */
+.correction-rate-page{max-width:1100px;margin:0 auto;padding:24px 28px 48px}
+.correction-rate-title{display:flex;align-items:center;gap:6px;margin-left:auto}
+.correction-rate-title h1{margin:0}
+.correction-rate-page .correction-rate-reload{display:inline-flex;align-items:center;justify-content:center;width:38px;padding:0}
+.correction-rate-empty{display:flex;align-items:center;gap:8px;color:#526873}
+.correction-rate-card{margin-top:18px;padding:20px 22px;border:1px solid var(--ui-border,#c9d3db);border-radius:12px;background:#fff;box-shadow:0 4px 14px #1d354510}
+.correction-rate-user{margin:0 0 14px;color:#33505f;font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.correction-rate-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.correction-rate-tile{display:grid;gap:4px;padding:14px 16px;border:1px solid #dbe3e9;border-radius:10px;background:#f7f9fb}
+.correction-rate-tile span{color:#526873;font-size:12px;font-weight:700}
+.correction-rate-tile strong{color:#173f63;font-size:24px;font-variant-numeric:tabular-nums}
+.correction-rate-tile small{color:#6b7b84;font-size:12px}
+.correction-rate-tile.is-main{border-color:#9cc0de;background:#eef5fb}
+.correction-rate-tile.is-main strong{font-size:30px}
+.correction-rate-table-wrap{margin-top:20px;overflow-x:auto}
+.correction-rate-table-wrap h3{margin:0 0 8px;color:#33505f;font-size:14px}
+.correction-rate-table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+.correction-rate-table th,.correction-rate-table td{padding:8px 10px;border-bottom:1px solid #e3e9ee;text-align:right;white-space:nowrap}
+.correction-rate-table thead th{color:#526873;font-size:12px;font-weight:700}
+.correction-rate-table tbody th{color:#172f3e;font-weight:600;text-align:left;white-space:normal}
+.correction-rate-table td.is-rate{color:#173f63;font-weight:800}
+@media (max-width:640px){.correction-rate-page{padding:16px 12px 40px}.correction-rate-card{padding:16px 14px}}

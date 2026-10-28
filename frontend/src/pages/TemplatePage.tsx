@@ -37,6 +37,7 @@ import { TemplateFieldSettingsEditor } from "../components/TemplateFieldSettings
 import { TemplateDeleteDialog, TemplateTrashPanel } from "../components/TemplateTrash";
 import { ITEM_JOIN_EDITING_VISIBLE, openItemJoinEditor } from "../components/TemplateItemJoinEditor";
 import { showToast } from "../components/Toast";
+import { privateLocalStorage } from "../auth/transport";
 import { useJobPoller } from "../hooks/useJobPoller";
 import { templatePreviewKey, useTemplatePreviews } from "../hooks/useTemplatePreviews";
 import type { Artifact, DocumentIdentity, DocumentNameRule, FieldMappingsResponse, Job, LayoutDefinition, Template, TemplateVersion } from "../types";
@@ -174,7 +175,7 @@ export function TemplatePage({
     if (!openedTemplateId) return;
     setOpenedAt((current) => {
       const next = { ...current, [openedTemplateId]: Date.now() };
-      try { window.localStorage.setItem(OPENED_AT_KEY, JSON.stringify(next)); } catch { /* per-browser order only */ }
+      try { privateLocalStorage.setItem(OPENED_AT_KEY, JSON.stringify(next)); } catch { /* per-browser order only */ }
       return next;
     });
   }, [openedTemplateId]);
@@ -1653,7 +1654,7 @@ function TemplateReview({
           disabled={operationBusy || printDirty || editorDirty || identityDirty || documentNameDirty || maskDirty
             || approvalPendingConfirmation || (printSaved ? !meaningSaved || !printState?.revision
               : maskRequiresReprocess || !meaningSaved)}
-          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? <><Spinner />{isRevision ? <><Spinner />反映中…</> : "作成中…"}</> : isRevision ? "変更を反映する" : "テンプレートを作成する"}</button>
+          onClick={() => void approveVersion()}><FiCheck aria-hidden="true" />{decisionBusy === "approve" ? <><Spinner />{isRevision ? "反映中…" : "作成中…"}</> : isRevision ? "変更を反映する" : "テンプレートを作成する"}</button>
       </div>}
     </div>
   );
@@ -1885,7 +1886,7 @@ function documentNameSignature(rule: DocumentNameRule | null) {
 const OPENED_AT_KEY = "fuminosuke.templateOpenedAt";
 function readOpenedAt(): Record<string, number> {
   try {
-    const value = JSON.parse(window.localStorage.getItem(OPENED_AT_KEY) ?? "{}") as unknown;
+    const value = JSON.parse(privateLocalStorage.getItem(OPENED_AT_KEY) ?? "{}") as unknown;
     return value && typeof value === "object" ? value as Record<string, number> : {};
   } catch {
     return {};
