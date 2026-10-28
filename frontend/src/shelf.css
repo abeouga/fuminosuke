@@ -181,7 +181,7 @@
   .shelf-viewer-pane{top:0;z-index:3;gap:6px;padding:6px 0;background:var(--ui-surface)}
   .shelf-viewer-scroll{max-height:40dvh;min-height:180px}
   .shelf-picked{padding:6px 10px}
-  .shelf-picked>img{display:none}
+  .shelf-picked>img{max-height:64px}
   .shelf-picked-text strong{font-size:15px}
     .shelf-value{scroll-margin-top:calc(40dvh + 150px)}
 }
