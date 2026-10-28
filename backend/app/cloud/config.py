@@ -116,8 +116,11 @@ class CloudSettings(BaseSettings):
         pattern = r"http://(localhost|127\.0\.0\.1):\d{2,5}"
         return re.fullmatch(pattern, self.public_origin) is not None
 
-    def template_dir_for(self, subject: str) -> Path | None:
+    def is_admin(self, subject: str) -> bool:
         admins = {value.strip() for value in self.admin_subjects.split(",") if value.strip()}
-        if subject in admins and self.admin_seed_template_dir is not None:
+        return subject in admins
+
+    def template_dir_for(self, subject: str) -> Path | None:
+        if self.is_admin(subject) and self.admin_seed_template_dir is not None:
             return self.admin_seed_template_dir
         return self.seed_template_dir

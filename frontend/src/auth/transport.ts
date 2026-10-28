@@ -1,5 +1,7 @@
 export type AuthSession = {
   mode: "local" | "cognito"; authenticated: boolean; csrfToken?: string; storageScope?: string;
+  /** May read everyone's correction rate (always true without sign-in). */
+  admin?: boolean;
 };
 let current: AuthSession | null = null;
 let sessionEpoch = 0;
@@ -71,6 +73,12 @@ export async function authenticatedFetch(input: RequestInfo | URL, init?: Reques
     window.dispatchEvent(new Event("fuminosuke-auth-required"));
   }
   return response;
+}
+export function isAdmin(): boolean {
+  return current?.authenticated === true && current.admin === true;
+}
+export function isSignInMode(): boolean {
+  return current?.mode === "cognito";
 }
 /** Which user's storage the private stores read now (changes once the session is known). */
 export function storageScope(): string {
