@@ -41,6 +41,7 @@ import { VoiceMeter } from "../components/VoiceMeter";
 import { isPhoneDevice } from "../hooks/usePhoneDevice";
 import { ImageLightbox, type LightboxImage } from "../components/ImageLightbox";
 import { visibleHeight } from "../phone/phoneKeyboard";
+import { useServiceHoursNotice } from "../serviceHours";
 
 /** Less than this between the window and what is seen of it is the browser's bars, not a keyboard. */
 const KEYBOARD_GAP = 80;
@@ -187,13 +188,23 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
 
   const enabled = status !== null && status !== "unavailable" && status.enabled;
 
+  // While the server cannot be reached (for example during the night stop), keep asking so the chat comes back by itself.
   useEffect(() => {
     let stopped = false;
-    void structuredClient.status()
-      .then((value) => { cachedStatus = value; if (!stopped) setStatus(value); })
-      .catch(() => { if (!stopped) setStatus("unavailable"); });
-    return () => { stopped = true; };
+    let timer = 0;
+    const check = () => {
+      void structuredClient.status()
+        .then((value) => { cachedStatus = value; if (!stopped) setStatus(value); })
+        .catch(() => {
+          if (stopped) return;
+          setStatus("unavailable");
+          timer = window.setTimeout(check, 30_000);
+        });
+    };
+    check();
+    return () => { stopped = true; window.clearTimeout(timer); };
   }, []);
+  const hoursNotice = useServiceHoursNotice(status !== "unavailable");
   const busy = turns.some((turn) => turn.pending);
   const open = openQuestion(state);
   const answering = open !== null && replyMode;
@@ -386,7 +397,9 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
 
   return (
     <div className="ask-page" ref={pageRef}>
-      {status === "unavailable" && (
+      {hoursNotice ? (
+        <aside className="notice danger" role="status"><strong>{hoursNotice.title}</strong><span>{hoursNotice.detail}</span></aside>
+      ) : status === "unavailable" && (
         <aside className="notice danger"><strong>接続を確認できません</strong><span>サーバーへ接続できるまで質問は送れません。</span></aside>
       )}
       {status !== null && status !== "unavailable" && !status.enabled && (
