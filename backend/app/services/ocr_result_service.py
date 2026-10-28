@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.db.models import ConfirmedResult, ProcessingJob
 from app.db.session import Database, begin_write
+from app.domain.document_identity import identity_text
 from app.domain.enums import JobStatus, JobType, RevisionSource
 from app.domain.field_targets import field_key
 from app.domain.ocr_models import OcrDocument, ReadingStatus
@@ -278,13 +279,21 @@ class OcrResultService:
             config = job.config_snapshot_json.get("templateSnapshot", {}).get("config", {})
             from app.domain.checklist import require_resolved_checklists
             require_resolved_checklists(document, config.get("fieldMappings", []))
-            for hint in config.get("documentIdentityFields", []):
+            # A field blank on the paper is confirmed blank; one field must have a value.
+            identity_fields = config.get("documentIdentityFields", [])
+            present = 0
+            for hint in identity_fields:
                 reading = document.fields.get(field_key(hint["targetPath"]))
                 value = (reading.normalized or reading.raw) if reading else None
-                if reading is None or reading.status != ReadingStatus.READABLE or not value:
+                if reading is not None and reading.status == ReadingStatus.UNCERTAIN:
                     raise self._error(
-                        "DOCUMENT_IDENTITY_REQUIRED", f"{hint['label']}を確認して入力してください。"
+                        "DOCUMENT_IDENTITY_REQUIRED",
+                        f"{hint['label']}を確認して入力するか、空欄にしてください。",
                     )
+                blank = reading is None or reading.status == ReadingStatus.BLANK
+                if blank or not value or not identity_text(value):
+                    continue
+                present += 1
                 if hint.get("valueType") == "digits":
                     compact = unicodedata.normalize("NFKC", value)
                     if not re.fullmatch(r"[0-9]+", compact) or (
@@ -294,6 +303,11 @@ class OcrResultService:
                             "DOCUMENT_IDENTITY_FORMAT_INVALID",
                             f"{hint['label']}の形式を確認してください。",
                         )
+            if identity_fields and present == 0:
+                raise self._error(
+                    "DOCUMENT_IDENTITY_REQUIRED",
+                    "書類を見分ける項目を、少なくとも1つ入力してください。",
+                )
             name = (
                 re.sub(
                     r'[\\/:*?"<>|\x00-\x1f]',

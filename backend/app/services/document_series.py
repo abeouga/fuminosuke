@@ -15,7 +15,6 @@ the same template version and fieldMappingHash; values outside the mappings are 
 from __future__ import annotations
 
 import hashlib
-import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
@@ -32,6 +31,7 @@ from app.db.models import (
     TemplateVersion,
 )
 from app.db.session import Database
+from app.domain.document_identity import identity_text
 from app.domain.enums import JobStatus, JobType
 from app.domain.field_targets import field_key
 from app.template_packages.canonical_json import canonical_json_bytes
@@ -306,23 +306,35 @@ class DocumentSeries:
 
         The same paper read again yields the predecessor's raw text, while its confirmed value
         may have been corrected by the user; matching either one counts as the same document.
+        Only the fields with a value in both versions are compared (one blank on either side,
+        e.g. a birth date written in later, is no difference); when no field can be compared,
+        nothing shows it is the same document and the predecessor's fields with a value are
+        reported.
         """
         series = job.config_snapshot_json.get(SNAPSHOT_KEY)
         if not isinstance(series, dict):
             return []
         fields = document.get("fields")
         fields = fields if isinstance(fields, dict) else {}
-
-        def fold(value: str | None) -> str:
-            return "".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
-
-        return [
-            str(item.get("label"))
-            for item in series.get("predecessorIdentity") or []
-            if isinstance(item, dict)
-            and fold(_reading_value(fields.get(field_key(str(item.get("targetPath"))) or "")))
-            not in {fold(item.get("value")), fold(item.get("raw")) if item.get("raw") else None}
+        items = [item for item in series.get("predecessorIdentity") or [] if isinstance(item, dict)]
+        differing: list[str] = []
+        compared = False
+        for item in items:
+            reading = fields.get(field_key(str(item.get("targetPath"))) or "")
+            now = identity_text(_reading_value(reading))
+            before = {identity_text(item.get("value")), identity_text(item.get("raw"))} - {""}
+            if not now or not before:
+                continue
+            compared = True
+            if now not in before:
+                differing.append(str(item.get("label")))
+        if compared:
+            return differing
+        known = [
+            item for item in items
+            if identity_text(item.get("value")) or identity_text(item.get("raw"))
         ]
+        return [str(item.get("label")) for item in known or items]
 
     # ---- lifecycle checks ------------------------------------------------------------
 
