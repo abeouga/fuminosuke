@@ -493,6 +493,11 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 .ask-turn-images{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:min(100%,420px);margin-bottom:6px}
 .ask-turn-image{flex:0 1 auto;max-width:200px}
 .ask-turn-images .ask-image{max-height:160px}
+/* A sent photo on a PC: a click shows it in the document panel; the one shown is outlined. */
+.ask-image.viewable{cursor:zoom-in;transition:box-shadow .15s ease,border-color .15s ease}
+.ask-image.viewable:hover{border-color:#7f9db3;box-shadow:0 6px 16px #1d354524}
+.ask-image.viewable:focus-visible{outline:2px solid #2468a2;outline-offset:2px}
+.ask-image.viewable.is-shown{border-color:#2468a2;box-shadow:0 0 0 2px #2468a2,0 6px 16px #1d354524}
 .ask-turn-readings{display:grid;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--ui-border)}
 .ask-turn-readings:first-child{margin-top:0;padding-top:0;border-top:0}
 .ask-turn-reading{display:grid;gap:10px}

@@ -44,6 +44,23 @@ def cookie(scope: Scope, name: str) -> str:
         return ""
 
 
+def everyone_correction_rates(registry: Registry, operations: Operations) -> list[dict[str, Any]]:
+    """The correction rate of each admitted user (named by their sign-in subject)."""
+    from app.services.correction_rate_service import CorrectionRateService
+
+    users: list[dict[str, Any]] = []
+    for tenant in registry.active_tenants():
+        database = operations.database(tenant)
+        if database is None:
+            continue
+        try:
+            summary = CorrectionRateService(database).summary()
+        finally:
+            database.dispose()
+        users.append({"user": registry.subject(tenant), **summary})
+    return sorted(users, key=lambda item: -item["total"]["read"])
+
+
 def problem(code: str, status: int) -> JSONResponse:
     return JSONResponse({"code": code, "detail": "ログイン状態または要求元を確認してください。"},
                         status_code=status, headers={"Cache-Control": "no-store"})
@@ -331,9 +348,26 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
         try:
             identity = app.state.registry.authenticate(request.cookies.get(SESSION, ""))
             return JSONResponse({"mode": "cognito", "authenticated": True,
-                                 "csrfToken": identity.csrf, "storageScope": identity.tenant_id})
+                                 "csrfToken": identity.csrf, "storageScope": identity.tenant_id,
+                                 "admin": config.is_admin(identity.subject)})
         except AccessDenied:
             return JSONResponse({"mode": "cognito", "authenticated": False})
+
+    @app.get("/api/admin/correction-rates")
+    async def correction_rates(request: Request) -> JSONResponse:
+        """Every user's correction rate, for the admin only (each user's database is read)."""
+        try:
+            identity = app.state.registry.authenticate(request.cookies.get(SESSION, ""))
+        except AccessDenied:
+            return problem("AUTH_REQUIRED", 401)
+        if not config.is_admin(identity.subject):
+            return problem("ADMIN_REQUIRED", 403)
+        if app.state.operations is None:
+            return problem("ADMIN_UNAVAILABLE", 503)
+        users = await asyncio.to_thread(
+            everyone_correction_rates, app.state.registry, app.state.operations
+        )
+        return JSONResponse({"users": users}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/auth/login")
     async def login() -> RedirectResponse:

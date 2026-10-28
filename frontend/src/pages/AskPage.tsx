@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   FiAlertTriangle,
@@ -145,7 +145,13 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const readings = useChatReadings();
+  // The images sent in the shown conversation (each conversation keeps its own).
+  const allReadings = useChatReadings();
+  const readings = useMemo(() => allReadings.filter((reading) => reading.conversationId === conversationId),
+    [allReadings, conversationId]);
+  // The images of conversations gone from the history (pushed out, or removed in another tab) are forgotten.
+  const keptConversations = [conversationId, ...history.map((item) => item.id)].join(" ");
+  useEffect(() => { chatReadings.keepConversations(new Set(keptConversations.split(" "))); }, [keptConversations]);
   const attachments = useChatAttachments();
   const [dragging, setDragging] = useState(false);
   // Where the images were in the message box when sent; they fly from there into the conversation.
@@ -195,6 +201,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const submit = (raw: string) => {
     const text = raw.trim();
     if (!canSend) return;
+    // Sending ends the voice input: what was said is in the message, and later speech must not fill the box again.
+    if (voiceState.mode !== "stopped") void voice.stop();
     // Images and text sent together are one message with one answer: the text is answered and the
     // images' readings (template guess, then the reading queue) are shown under that answer.
     // Text that only asks for the images to be read gets a short reply here, without the AI.
@@ -208,7 +216,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       turnId = answering ? askStore.replyText(text) : askStore.ask(text, []);
     }
     if (turnId !== null) askStore.set({ draft: "" });
-    chatReadings.send(afterTurnId, turnId);
+    askStore.addImages(attachments.map((item) => item.fileName));
+    chatReadings.send(conversationId, afterTurnId, turnId);
   };
   // Dropped, pasted or picked images only go into the message box; the send button reads them.
   const addImages = (list: FileList | File[] | null | undefined) => {
@@ -371,7 +380,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const shownConversation = useRef(conversationId);
   const switched = shownConversation.current !== conversationId;
   useEffect(() => { shownConversation.current = conversationId; }, [conversationId]);
-  const startNew = () => { askStore.clear(); chatReadings.clear(); inputRef.current?.focus(); };
+  const startNew = () => { askStore.clear(); inputRef.current?.focus(); };
   const narrow = () => phone || window.matchMedia("(max-width: 900px)").matches;
   const topTools = phone ? document.getElementById("phone-top-tools") : null;
 
@@ -424,8 +433,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             busy={busy}
             onClose={() => setSidebar(false)}
             onNew={() => { startNew(); if (narrow()) setSidebar(false); }}
-            onOpen={(id) => { chatReadings.clear(); askStore.open(id); if (narrow()) setSidebar(false); }}
-            onRemove={(id) => askStore.remove(id)}
+            onOpen={(id) => { askStore.open(id); if (narrow()) setSidebar(false); }}
+            onRemove={(id) => { askStore.remove(id); chatReadings.dropConversation(id); }}
           />
         </div>
         <button type="button" className={sidebar ? "ask-history-backdrop show" : "ask-history-backdrop"} tabIndex={-1}
@@ -841,28 +850,39 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize, 
   phone: boolean;
 }) {
   const [expanded, setExpanded] = useState<LightboxImage | null>(null);
+  const allReadings = useChatReadings();
+  const photo = viewer.photo ? allReadings.find((reading) => reading.id === viewer.photo) ?? null : null;
+  // The photo as sent while this page has it; after a reload only its reading's aligned sheet is left.
+  const photoSource = viewer.photo
+    ? chatReadings.preview(viewer.photo) ?? (photo?.jobId ? `/api/v1/jobs/${encodeURIComponent(photo.jobId)}/artifacts/alignedSource` : null)
+    : null;
   const [loaded, setDocument] = useState<StructuredDocument | null>(documentCache.get(viewer.jobId) ?? null);
   // Never the previous document for the moment after a switch: the new one's preview starts fresh.
   const fetched = loaded?.jobId === viewer.jobId ? loaded : documentCache.get(viewer.jobId) ?? null;
   // A reading not confirmed yet shows its aligned sheet only.
-  const imageOnly = useMemo(() => viewer.image ? {
+  const imageOnly = useMemo(() => viewer.photo ? (photoSource ? {
+    fields: [] as StructuredReading[],
+    pages: [{ pageId: null, pageNumber: 1, imageUrl: photoSource }],
+  } : null) : viewer.image ? {
     fields: [] as StructuredReading[],
     pages: [{ pageId: null, pageNumber: 1, imageUrl: `/api/v1/jobs/${encodeURIComponent(viewer.jobId)}/artifacts/alignedSource` }],
-  } : null, [viewer.image, viewer.jobId]);
+  } : null, [viewer.photo, photoSource, viewer.image, viewer.jobId]);
   const document = imageOnly ?? fetched;
-  const [failed, setFailed] = useState(false);
+  const [fetchFailed, setFailed] = useState(false);
+  // A photo whose picture is gone (the page was reloaded before its reading started) cannot be shown.
+  const failed = fetchFailed || (Boolean(viewer.photo) && !photoSource);
   const [appear] = useState(entrance);
   useEffect(() => {
     const cached = documentCache.get(viewer.jobId);
     setDocument(cached ?? null);
     setFailed(false);
-    if (cached || viewer.image) return;
+    if (cached || viewer.image || viewer.photo) return;
     let stopped = false;
     void structuredClient.document(viewer.jobId)
       .then((value) => { documentCache.set(viewer.jobId, value); if (!stopped) setDocument(value); })
       .catch(() => { if (!stopped) setFailed(true); });
     return () => { stopped = true; };
-  }, [viewer.image, viewer.jobId]);
+  }, [viewer.image, viewer.photo, viewer.jobId]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !expanded) onClose(); };
     window.addEventListener("keydown", close);
@@ -889,7 +909,7 @@ function DocumentPanel({ entrance, viewer, hovered, onFocus, onClose, onResize, 
         : (
           <>
             <div className="ask-panel-head">{title}{close}</div>
-            {failed ? <p className="ask-panel-lead">書類を読み込めませんでした。</p>
+            {failed ? <p className="ask-panel-lead">{viewer.photo ? "この画像は、画面を読み込み直したため表示できません。" : "書類を読み込めませんでした。"}</p>
               : <p className="ask-panel-lead"><Spinner />書類を読み込んでいます…</p>}
           </>
         )}
@@ -925,6 +945,11 @@ function ReadingImage({ reading, replaced }: { reading: ChatReading; replaced: b
   const shownState = useRef(reading.state);
   const [phone] = useState(isPhoneDevice);
   const [expanded, setExpanded] = useState(false);
+  // On a PC the photo opens in the document panel beside the chat (a phone shows it over the whole screen).
+  const shown = useSyncExternalStore(askStore.subscribe, () => askStore.getSnapshot().viewer?.photo === reading.id);
+  const showBeside = () => askStore.set({ viewer: shown ? null : {
+    jobId: reading.jobId ?? `photo:${reading.id}`, documentName: reading.fileName, evidence: [], focus: null, photo: reading.id,
+  } });
   useEffect(() => {
     if (shownState.current !== "queued" && reading.state === "queued" && !replaced && imageRef.current) {
       flyToReadingQueue(imageRef.current);
@@ -933,8 +958,13 @@ function ReadingImage({ reading, replaced }: { reading: ChatReading; replaced: b
   }, [reading.state, replaced]);
   return preview
     ? <>
-      <img ref={imageRef} className={`ask-image${phone ? " expandable" : ""}`} src={preview} alt={reading.fileName} draggable={false} data-reading-image={reading.id}
-        onClick={phone ? () => setExpanded(true) : undefined} />
+      <img ref={imageRef} className={`ask-image${phone ? " expandable" : " viewable"}${shown && !phone ? " is-shown" : ""}`} src={preview} alt={reading.fileName}
+        draggable={false} data-reading-image={reading.id}
+        {...(phone ? { onClick: () => setExpanded(true) } : {
+          role: "button", tabIndex: 0, "aria-pressed": shown, title: shown ? "右の画像を閉じる" : "右に大きく表示",
+          onClick: showBeside,
+          onKeyDown: (event: ReactKeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); showBeside(); } },
+        })} />
       {expanded && <ImageLightbox image={{ src: preview, alt: reading.fileName }} onClose={() => setExpanded(false)} />}
     </>
     : <div className="ask-bubble"><FiImage aria-hidden="true" /> {reading.fileName}</div>;

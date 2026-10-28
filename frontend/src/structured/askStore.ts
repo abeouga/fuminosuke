@@ -1,4 +1,4 @@
-import { privateLocalStorage, storageScope } from "../auth/transport";
+import { privateLocalStorage, privateSessionStorage, storageScope } from "../auth/transport";
 import { EditingError } from "../editing/client";
 import { structuredClient, type Evidence, type QuestionContext, type QuestionResult } from "./client";
 
@@ -7,9 +7,9 @@ import { structuredClient, type Evidence, type QuestionContext, type QuestionRes
  *
  * Leaving the page (opening a document, going home) unmounts the component but not this
  * store, so the conversation, the chosen documents, the unsent text and an answer still on
- * its way are all there when the user comes back. The same state is mirrored to
- * sessionStorage so a reload of the tab keeps it too (a request in flight at reload time
- * is shown as interrupted, with a retry).
+ * its way are all there when the user comes back. The same state is mirrored to the signed-in
+ * user's sessionStorage so a reload of the tab keeps it too (a request in flight at reload time
+ * is shown as interrupted, with a retry); another user signing in on this tab never sees it.
  *
  * Finished conversations are kept in this browser's history (privateLocalStorage) and can be
  * opened again from the side bar; the current one is written there on every change.
@@ -33,11 +33,14 @@ export type Turn = {
   /** An answer made here without asking the server (「読み取って」 sent with images). */
   local?: string;
 };
-export type Conversation = { id: string; title: string; updatedAt: number; turns: Turn[] };
+/** `images`: the names of the images sent in it (a conversation of images only is kept too). */
+export type Conversation = { id: string; title: string; updatedAt: number; turns: Turn[]; images?: string[] };
 export type AskState = {
   /** The conversation being shown; it is in `history` as soon as it has a turn. */
   conversationId: string;
   turns: Turn[];
+  /** The names of the images sent in the shown conversation. */
+  images: string[];
   /** Past conversations, newest first. */
   history: Conversation[];
   scope: string[];
@@ -61,6 +64,11 @@ export type AskViewer = {
   focus: string | null;
   /** Only the sheet's picture (a reading not confirmed yet, which has no document to show). */
   image?: boolean;
+  /**
+   * A photo sent in the chat (its reading's id): the photo itself while this page has it,
+   * else its reading's aligned sheet. `jobId` is then the reading's job, or `photo:<id>` before it has one.
+   */
+  photo?: string;
 };
 
 const STORAGE_KEY = "fuminosuke-ask-v1";
@@ -96,12 +104,13 @@ function loadHistory(): Conversation[] {
 
 function initial(): AskState {
   const history = loadHistory();
-  const empty: AskState = { conversationId: newConversationId(), turns: [], history, scope: [], filter: "", templateId: "", draft: "", replyMode: true, viewer: null, viewers: {} };
+  const empty: AskState = { conversationId: newConversationId(), turns: [], images: [], history, scope: [], filter: "", templateId: "", draft: "", replyMode: true, viewer: null, viewers: {} };
   try {
-    const stored = window.sessionStorage.getItem(STORAGE_KEY);
+    const stored = privateSessionStorage.getItem(STORAGE_KEY);
     if (!stored) return empty;
     const value = JSON.parse(stored) as Partial<AskState>;
     const turns = Array.isArray(value.turns) ? value.turns : [];
+    const images = Array.isArray(value.images) ? value.images : [];
     const conversationId = typeof value.conversationId === "string" ? value.conversationId : empty.conversationId;
     const viewers = value.viewers && typeof value.viewers === "object" ? value.viewers : {};
     return {
@@ -112,49 +121,58 @@ function initial(): AskState {
       viewers,
       viewer: viewers[conversationId] ?? null,
       turns: settled(turns),
+      images,
     };
   } catch {
     return empty;
   }
 }
 
-// The history is kept per signed-in user in the cloud, and this module loads before the session is
-// known: read it again once the user's storage is known, or the first save would write an empty list
-// over the user's history.
+// The conversation and the history are kept per signed-in user in the cloud, and this module loads
+// before the session is known: read both again once the user's storage is known. What was read
+// before belongs to nobody (or to the user signed in before) and is dropped, never merged into the
+// user's history.
 let loadedScope = storageScope();
 let state: AskState = initial();
-let nextId = [...state.turns, ...state.history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1;
+const nextTurnId = () => [...state.turns, ...state.history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1;
+let nextId = nextTurnId();
 
 function current(): AskState {
   const scope = storageScope();
   if (scope !== loadedScope) {
     loadedScope = scope;
-    const history = loadHistory();
-    state = { ...state, history };
-    state = { ...state, history: withCurrent(state) };
-    nextId = Math.max(nextId, [...state.turns, ...history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1);
+    state = initial();
+    nextId = Math.max(nextId, nextTurnId());
   }
   return state;
 }
 const listeners = new Set<() => void>();
 
-function titleOf(turns: Turn[]): string {
+function titleOf(turns: Turn[], images: string[]): string {
   const first = turns.find((turn) => !turn.request.replyTo)?.text ?? turns[0]?.text ?? "";
   const line = first.replace(/\s+/g, " ").trim();
+  if (!line && images.length > 0) return images.length > 1 ? `画像：${images[0]} ほか${images.length - 1}枚` : `画像：${images[0]}`;
   return line.length > 40 ? `${line.slice(0, 40)}…` : line || "新しい会話";
+}
+
+function sameContent(a: unknown[], b: unknown[]): boolean {
+  return a === b || (a.length === b.length && JSON.stringify(a) === JSON.stringify(b));
 }
 
 /** The current conversation written into the history (moved to the top when it changed). */
 function withCurrent(current: AskState): Conversation[] {
   const others = current.history.filter((item) => item.id !== current.conversationId);
-  if (current.turns.length === 0) return others;
+  if (current.turns.length === 0 && current.images.length === 0) return others;
   const previous = current.history.find((item) => item.id === current.conversationId);
-  const changed = !previous || previous.turns !== current.turns;
+  // Compared by content: opening a conversation from the history or reloading the page makes new
+  // arrays of the same turns and images, and only a real change moves it to the top.
+  const changed = !previous || !sameContent(previous.turns, current.turns) || !sameContent(previous.images ?? [], current.images);
   const entry: Conversation = {
     id: current.conversationId,
-    title: titleOf(current.turns),
+    title: titleOf(current.turns, current.images),
     updatedAt: changed ? Date.now() : previous.updatedAt,
     turns: current.turns,
+    ...(current.images.length > 0 ? { images: current.images } : {}),
   };
   return changed ? [entry, ...others].slice(0, MAX_CONVERSATIONS) : current.history.map((item) => item.id === entry.id ? entry : item);
 }
@@ -162,7 +180,7 @@ function withCurrent(current: AskState): Conversation[] {
 function save() {
   try {
     const { history: _history, viewer: _viewer, ...rest } = state;  // viewer lives in viewers
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
+    privateSessionStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
   } catch {
     // Storage full or blocked: the conversation still lives for this page visit.
   }
@@ -199,16 +217,17 @@ function syncHistory(event: StorageEvent) {
   const keep = new Set(history.map((item) => item.id));
   const viewers = Object.fromEntries(Object.entries(state.viewers).filter(([id]) => keep.has(id) || id === state.conversationId));
   if (removedHere) {
-    state = { ...state, history, viewers, conversationId: newConversationId(), turns: [], viewer: null, replyMode: true };
+    state = { ...state, history, viewers, conversationId: newConversationId(), turns: [], images: [], viewer: null, replyMode: true };
   } else {
     // The shown conversation keeps this tab's turns (they may be newer) without moving in the list.
-    const mine = history.map((item) => item.id === state.conversationId ? { ...item, turns: state.turns } : item);
+    const mine = history.map((item) => item.id === state.conversationId
+      ? { ...item, turns: state.turns, ...(state.images.length > 0 ? { images: state.images } : {}) } : item);
     state = { ...state, history: mine, viewers };
     if (!mine.some((item) => item.id === state.conversationId)) state = { ...state, history: withCurrent(state) };
   }
   try {
     const { history: _history, viewer: _viewer, ...rest } = state;
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
+    privateSessionStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
   } catch {
     // The conversation still lives for this page visit.
   }
@@ -423,23 +442,28 @@ export const askStore = {
     set({ turns, viewer, replyMode: true });
   },
 
+  /** Images sent in the shown conversation: it is kept in the history even without a message. */
+  addImages(names: string[]) {
+    if (names.length > 0) set((current) => ({ images: [...current.images, ...names] }));
+  },
+
   /** Start a new conversation; the current one stays in the history. */
   clear() {
-    set({ conversationId: newConversationId(), turns: [], viewer: null, replyMode: true, draft: "" });
+    set({ conversationId: newConversationId(), turns: [], images: [], viewer: null, replyMode: true, draft: "" });
   },
 
   /** Show a conversation from the history. */
   open(id: string) {
     const conversation = state.history.find((item) => item.id === id);
     if (!conversation || askStore.busy() || id === state.conversationId) return;
-    set({ conversationId: id, turns: settled(conversation.turns), viewer: state.viewers[id] ?? null, replyMode: true, draft: "" });
+    set({ conversationId: id, turns: settled(conversation.turns), images: conversation.images ?? [], viewer: state.viewers[id] ?? null, replyMode: true, draft: "" });
   },
 
   /** Remove a conversation from the history (the shown one is replaced by an empty one). */
   remove(id: string) {
     if (id === state.conversationId) {
       if (askStore.busy()) return;
-      set((current) => ({ history: current.history.filter((item) => item.id !== id), conversationId: newConversationId(), turns: [], viewer: null, replyMode: true }));
+      set((current) => ({ history: current.history.filter((item) => item.id !== id), conversationId: newConversationId(), turns: [], images: [], viewer: null, replyMode: true }));
       return;
     }
     set((current) => {
