@@ -145,7 +145,13 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const readings = useChatReadings();
+  // The images sent in the shown conversation (each conversation keeps its own).
+  const allReadings = useChatReadings();
+  const readings = useMemo(() => allReadings.filter((reading) => reading.conversationId === conversationId),
+    [allReadings, conversationId]);
+  // The images of conversations gone from the history (pushed out, or removed in another tab) are forgotten.
+  const keptConversations = [conversationId, ...history.map((item) => item.id)].join(" ");
+  useEffect(() => { chatReadings.keepConversations(new Set(keptConversations.split(" "))); }, [keptConversations]);
   const attachments = useChatAttachments();
   const [dragging, setDragging] = useState(false);
   // Where the images were in the message box when sent; they fly from there into the conversation.
@@ -208,7 +214,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
       turnId = answering ? askStore.replyText(text) : askStore.ask(text, []);
     }
     if (turnId !== null) askStore.set({ draft: "" });
-    chatReadings.send(afterTurnId, turnId);
+    askStore.addImages(attachments.map((item) => item.fileName));
+    chatReadings.send(conversationId, afterTurnId, turnId);
   };
   // Dropped, pasted or picked images only go into the message box; the send button reads them.
   const addImages = (list: FileList | File[] | null | undefined) => {
@@ -371,7 +378,7 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   const shownConversation = useRef(conversationId);
   const switched = shownConversation.current !== conversationId;
   useEffect(() => { shownConversation.current = conversationId; }, [conversationId]);
-  const startNew = () => { askStore.clear(); chatReadings.clear(); inputRef.current?.focus(); };
+  const startNew = () => { askStore.clear(); inputRef.current?.focus(); };
   const narrow = () => phone || window.matchMedia("(max-width: 900px)").matches;
   const topTools = phone ? document.getElementById("phone-top-tools") : null;
 
@@ -424,8 +431,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
             busy={busy}
             onClose={() => setSidebar(false)}
             onNew={() => { startNew(); if (narrow()) setSidebar(false); }}
-            onOpen={(id) => { chatReadings.clear(); askStore.open(id); if (narrow()) setSidebar(false); }}
-            onRemove={(id) => askStore.remove(id)}
+            onOpen={(id) => { askStore.open(id); if (narrow()) setSidebar(false); }}
+            onRemove={(id) => { askStore.remove(id); chatReadings.dropConversation(id); }}
           />
         </div>
         <button type="button" className={sidebar ? "ask-history-backdrop show" : "ask-history-backdrop"} tabIndex={-1}

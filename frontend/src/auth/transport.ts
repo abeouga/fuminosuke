@@ -3,6 +3,22 @@ export type AuthSession = {
 };
 let current: AuthSession | null = null;
 let sessionEpoch = 0;
+/**
+ * What earlier versions kept for whoever used the tab, not per user (the open conversation, the
+ * images sent in the chat, the template order): with sign-in it could show one user's data to the
+ * next, so it is removed once the app knows it runs with sign-in.
+ */
+const SHARED_KEYS: Record<"localStorage" | "sessionStorage", string[]> = {
+  sessionStorage: ["fuminosuke-ask-v1", "fuminosuke-chat-readings-v2"],
+  localStorage: ["fuminosuke-ask-history-v1", "fuminosuke-chat-readings-v3", "fuminosuke.templateOpenedAt"],
+};
+function removeSharedKeys() {
+  for (const kind of ["localStorage", "sessionStorage"] as const) {
+    for (const key of SHARED_KEYS[kind]) {
+      try { window[kind].removeItem(key); } catch { /* storage may be off */ }
+    }
+  }
+}
 export function endBrowserSession(): AuthSession {
   sessionEpoch++;
   current = { ...current, mode: "cognito", authenticated: false, csrfToken: undefined };
@@ -23,6 +39,7 @@ export async function loadSession(): Promise<AuthSession> {
     window.dispatchEvent(new Event("fuminosuke-auth-required"));
   }
   current = next.authenticated ? next : { ...next, storageScope: current?.storageScope };
+  if (next.mode === "cognito") removeSharedKeys();
   return next;
 }
 /** The app's own login form (cloud mode): the server checks the password with Cognito. */
