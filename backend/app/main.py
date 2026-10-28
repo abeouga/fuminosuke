@@ -51,7 +51,7 @@ def create_business_app(settings: Settings | None = None) -> FastAPI:
     if resolved_settings.app.environment != "cloud":
         @app.get("/api/auth/session")
         async def local_auth_session() -> dict[str, object]:
-            return {"mode": "local", "authenticated": True}
+            return {"mode": "local", "authenticated": True, "admin": True}
     return app
 
 

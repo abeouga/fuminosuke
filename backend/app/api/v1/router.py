@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.routes import (
     artifacts,
     assistant,
+    correction_rates,
     editing,
     editing_voice,
     health,
@@ -27,5 +28,6 @@ for module in (
     assistant,
     editing,
     editing_voice,
+    correction_rates,
 ):
     router.include_router(module.router)

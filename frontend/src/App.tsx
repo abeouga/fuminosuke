@@ -1,4 +1,4 @@
-import { privateLocalStorage } from "./auth/transport";
+import { isAdmin, privateLocalStorage } from "./auth/transport";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { ToastViewport, showToast } from "./components/Toast";
@@ -6,6 +6,7 @@ import { PendingJobs } from "./components/PendingJobs";
 import { JobPage } from "./pages/JobPage";
 const AskPage = lazy(() => import("./pages/AskPage").then(module => ({ default: module.AskPage })));
 const ShelfPage = lazy(() => import("./pages/ShelfPage").then(module => ({ default: module.ShelfPage })));
+const CorrectionRatePage = lazy(() => import("./pages/CorrectionRatePage").then(module => ({ default: module.CorrectionRatePage })));
 import type { ShelfSelection } from "./pages/ShelfPage";
 import { ItemJoinEditorHost } from "./components/TemplateItemJoinEditor";
 import { DocumentNameEditorHost } from "./components/TemplateDocumentNameEditor";
@@ -23,7 +24,7 @@ import { newerReleaseDeployed, useNewerRelease } from "./appVersion";
 const OcrPage = lazy(() => import("./pages/OcrPage").then(module => ({ default: module.OcrPage })));
 const ReviewPage = lazy(() => import("./pages/ReviewPage").then(module => ({ default: module.ReviewPage })));
 
-type Page = "ocr" | "review" | "job" | "ask" | "shelf";
+type Page = "ocr" | "review" | "job" | "ask" | "shelf" | "quality";
 type ReviewReturn = "ocr" | "ask" | "shelf";
 const REVIEW_CLOSE_LABELS: Record<ReviewReturn, string> = { ocr: "戻る", ask: "戻る", shelf: "戻る" };
 type NavigationGuard = "review" | "ocr" | "template";
@@ -45,7 +46,7 @@ export default function App() {
   const initialReviewEdit = initialSearchParams.get("edit") === "1";
   const initialView = initialSearchParams.get("view");
   const [page, setPage] = useState<Page>(
-    initialReviewJobId ? "review" : initialView === "ocr" ? "ocr" : initialView === "shelf" ? "shelf" : "ask",
+    initialReviewJobId ? "review" : initialView === "ocr" ? "ocr" : initialView === "shelf" ? "shelf" : initialView === "quality" ? "quality" : "ask",
   );
   const [health, setHealth] = useState<Health | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -223,7 +224,7 @@ export default function App() {
       url.searchParams.delete("field");
       url.searchParams.delete("edit");
       // The chat is the landing page (no `view`); the reading page and the shelf are kept in the address so a reload comes back to them.
-      if (nextPage === "ocr" || nextPage === "shelf") url.searchParams.set("view", nextPage);
+      if (nextPage === "ocr" || nextPage === "shelf" || nextPage === "quality") url.searchParams.set("view", nextPage);
       else url.searchParams.delete("view");
       if (nextPage === "shelf" && shelfSelection.jobId) url.searchParams.set("doc", shelfSelection.jobId);
       else url.searchParams.delete("doc");
@@ -340,6 +341,7 @@ export default function App() {
           <NavButton active={chatActive} icon="ask" label="チャット" onClick={() => navigateTo("ask")} />
           <NavButton active={readingActive} icon="ocr" label="読み取り" onClick={openReadingRoot} />
           <NavButton active={shelfActive} icon="shelf" label="ライブラリ" onClick={() => navigateTo("shelf")} />
+          {isAdmin() && <NavButton active={page === "quality"} icon="quality" label="修正率" onClick={() => navigateTo("quality")} />}
         </nav>
         <ReadingQueueMenu onOpen={openQueuedReading} />
         <div className="side-footer" role="status">
@@ -395,6 +397,7 @@ export default function App() {
             applyNavigation("ask");
             showToast({ tone: "success", quiet: true, title: `「${documentName}」を確定しました` });
           }} />}
+        {page === "quality" && <CorrectionRatePage />}
         {page === "shelf" && <ShelfPage templateNames={templateNames} selection={shelfSelection} onSelectionChange={updateShelfSelection} onOpenReview={(id, field) => openReview(id, true, { returnTo: "shelf", field })} />}
         {page === "ask" && <AskPage onOpenReview={(id, field) => openReview(id, true, { returnTo: "ask", field })} />}
         {page === "job" && monitoredJobId && <JobPage
@@ -538,7 +541,7 @@ function writeRecentJobIds(ids: string[]) {
   }
 }
 
-type SidebarIconName = "ocr" | "ask" | "shelf";
+type SidebarIconName = "ocr" | "ask" | "shelf" | "quality";
 
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: SidebarIconName; label: string; onClick: () => void }) {
   return <button type="button" className={`nav-${icon}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={label} onClick={onClick}><span><SidebarIcon name={icon} /></span><span className="nav-label">{label}</span></button>;
@@ -548,6 +551,7 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (name === "ocr") return <svg {...props}><path d="M7 3.75h7l4 4v12.5H7z" /><path d="M14 3.75v4h4M10 12h5M10 15.5h5" /></svg>;
   if (name === "shelf") return <svg {...props}><path d="M3.5 6.5a1 1 0 0 1 1-1h4.75l2 2h8.25a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" /><path d="M3.5 10h17" /></svg>;
+  if (name === "quality") return <svg {...props}><path d="M4 19.5h16" /><path d="M7 16v-5M12 16V7M17 16v-3" /></svg>;
   // チャットの回答のAIの印（ask-avatar）を小さくしたもの
   if (name === "ask") return <i className="nav-ask-mark"><b>文</b></i>;
   return null;
