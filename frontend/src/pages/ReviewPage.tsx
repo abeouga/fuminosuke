@@ -498,7 +498,9 @@ export function ReviewPage({ jobId, onClose, onConfirmed, onNavigationGuardChang
                     }
                 }}>再取得</button></aside> : <section className="identity-confirm-grid">
       {identities.map(field => <article className={`identity-confirm-card ${identityInvalid(field) ? "invalid" : ""}`} key={field.mappingId}><header><h2>{phone ? field.label : `「${field.label}」はこの内容ですか？`}</h2></header>
-        <div className="identity-confirm-preview"><img src={previews.find(preview => preview.mappingId === field.mappingId)?.artifactUrl} alt={`${field.label}の読み取り範囲`}/></div>
+        <div className="identity-confirm-preview"><div className="identity-crop"><img src={previews.find(preview => preview.mappingId === field.mappingId)?.artifactUrl} alt={`${field.label}の読み取り範囲`}/>
+          <CropValue label={field.label} value={readingFor(field)?.normalized ?? readingFor(field)?.raw ?? ""} disabled={locked || !readingFor(field)} invalid={identityInvalid(field)}
+            numeric={field.valueType === "digits"} onChange={text => editText(entries.find(entry => entry.path === field.targetPath)!, text)}/></div></div>
         {series && (() => {
             const previous = series.predecessorIdentity.find(item => item.targetPath === field.targetPath);
             const differs = identityMismatches.some(item => item.targetPath === field.targetPath);
@@ -775,6 +777,31 @@ function readingValueAtFixedRegion(value: FieldReading, fixedRegion: FieldReadin
 // Words written for a blank before it could be confirmed blank (folded), as the server reads them.
 const IDENTITY_BLANK_WORDS = new Set(["なし", "無し", "空欄", "-", "ー", "\u2015", "\u2010"]);
 /** An identity value as documents are compared: spacing and width ignored, "" for a blank. */
+/**
+ * The value written over its own crop, as on the sheet: pointing at it shows the handwriting through,
+ * a click edits it in place (Enter or leaving keeps it, Esc puts back what it was). The field below stays.
+ */
+function CropValue({ label, value, disabled, invalid, numeric, onChange }: {
+    label: string; value: string; disabled: boolean; invalid: boolean; numeric: boolean; onChange: (text: string) => void;
+}) {
+    const [editing, setEditing] = useState(false);
+    const before = useRef(value);
+    const start = () => { if (disabled) return; before.current = value; setEditing(true); };
+    if (editing)
+        return <div className="identity-crop-value is-editing">
+          <input autoFocus aria-label={`${label}（画像の上で入力）`} value={value} inputMode={numeric ? "numeric" : "text"} onChange={event => onChange(event.target.value)}
+            onFocus={event => event.currentTarget.select()} onBlur={() => setEditing(false)}
+            onKeyDown={event => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); setEditing(false); }
+                else if (event.key === "Escape") { event.preventDefault(); onChange(before.current); setEditing(false); }
+            }}/>
+        </div>;
+    return <button type="button" className={`identity-crop-value${value ? "" : " is-blank"}${invalid ? " is-invalid" : ""}`} disabled={disabled}
+      aria-label={`${label}：${value || "空欄"}（押すと画像の上で書き換え）`} title="押すと、画像の上で書き換えられます" onClick={start}>
+      <strong>{value || "空欄"}</strong>
+    </button>;
+}
+
 function identityText(value: string | null | undefined): string {
     const folded = (value ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
     return IDENTITY_BLANK_WORDS.has(folded) ? "" : folded;
