@@ -28,7 +28,6 @@
 }
 .phone-brand img { width: 28px; height: 28px; }
 .phone-brand strong { font-family: "Yuji Boku", serif; font-size: 21px; font-weight: 400; letter-spacing: .04em; }
-.phone-offline { padding: 3px 9px; border-radius: 999px; background: #fdecea; color: #9b2f27; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .phone-top-tools { display: flex; align-items: center; gap: 2px; }
 .phone-top-button {
   display: grid; place-items: center; width: 42px; height: 42px; min-height: 0; padding: 0;
