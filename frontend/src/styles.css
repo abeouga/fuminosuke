@@ -2276,6 +2276,9 @@ small{font-size:12px;line-height:1.5}
 .login-mark { width: 52px; height: 52px; margin: 0 auto; }
 .login-card h1 { margin: 0 0 4px; text-align: center; color: var(--ui-text, #1d2b38); font-size: 24px; font-weight: 800; letter-spacing: .04em; }
 .login-note { margin: 0; padding: 10px 12px; border-radius: 8px; background: #f1f5f8; color: #4b5b6b; font-size: 13px; line-height: 1.6; }
+.service-hours-card { text-align: center; }
+.service-hours-card strong { color: var(--ui-text, #1d2b38); font-size: 18px; }
+.service-hours-card p { margin: 0; color: #4b5b6b; font-size: 14px; }
 .login-field { display: grid; gap: 6px; color: #4b5b6b; font-size: 13px; font-weight: 700; }
 .login-field input { height: 44px; padding: 0 12px; border: 1px solid #b7c5d2; border-radius: 8px; font-size: 16px; color: var(--ui-text, #1d2b38); background: #fff; }
 .login-field input:focus { outline: none; border-color: #2f6f9f; box-shadow: 0 0 0 3px #2f6f9f26; }

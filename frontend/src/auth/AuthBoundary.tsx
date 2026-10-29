@@ -4,6 +4,8 @@ import { FiLogOut } from "react-icons/fi";
 import { authenticatedFetch, endBrowserSession, loadSession, signIn } from "./transport";
 import type { AuthSession } from "./transport";
 import { Spinner } from "../components/Spinner";
+import { useServiceHoursNotice } from "../serviceHours";
+import type { ServiceHoursNotice } from "../serviceHours";
 
 type Account = { logout: () => void; loggingOut: boolean };
 const AccountContext = createContext<Account | null>(null);
@@ -17,6 +19,18 @@ export function LogoutButton({ className = "" }: { className?: string }) {
     {account.loggingOut ? <Spinner /> : <FiLogOut aria-hidden="true" />}
     <span>ログアウト</span>
   </button>;
+}
+
+/** Shown instead of the login when the server is stopped for the night (or still starting in the morning). */
+function ServiceHoursPage({ notice }: { notice: ServiceHoursNotice }) {
+  return <main className="login-page">
+    <section className="login-card service-hours-card" role="status" aria-labelledby="service-hours-title">
+      <img className="login-mark" src="/favicon.svg" alt="" />
+      <h1>文之助</h1>
+      <strong id="service-hours-title">{notice.title}</strong>
+      <p>{notice.detail}</p>
+    </section>
+  </main>;
 }
 
 function LoginPage({ expired, notice, onSignedIn }: {
@@ -65,6 +79,8 @@ function LoginPage({ expired, notice, onSignedIn }: {
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [message, setMessage] = useState("");
+  // Why the last session check failed (the server is unreachable, e.g. stopped for the night); cleared once it answers.
+  const [checkError, setCheckError] = useState("");
   const [ready, setReady] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -88,8 +104,8 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const refresh = () => { void loadSession().then(value => {
-      if (active) { setSession(value); if (value.authenticated) { setReady(true); setMessage(""); } }
-    }).catch(error => { if (active) setMessage(String(error.message)); }); };
+      if (active) { setCheckError(""); setSession(value); if (value.authenticated) { setReady(true); setMessage(""); } }
+    }).catch(error => { if (active) setCheckError(String(error.message)); }); };
     const expired = () => { setSession(previous => previous ? { ...previous, authenticated: false } : null); };
     refresh();
     const timer = window.setInterval(refresh, 15_000);
@@ -102,13 +118,17 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
     };
   }, []);
   const signedIn = session?.authenticated === true;
+  // Only when the server does not answer: at night it may still be up (e.g. kept running for work), and then login works.
+  const scheduleNotice = useServiceHoursNotice(!checkError);
+  const hoursNotice = checkError ? scheduleNotice : null;
   const account = signedIn && session.mode === "cognito" ? { logout: requestLogout, loggingOut } : null;
   return <AccountContext.Provider value={account}>
-    {!session && !message && <main className="auth-screen auth-checking" aria-busy="true">
+    {!session && !checkError && <main className="auth-screen auth-checking" aria-busy="true">
       <p><Spinner />ログイン中</p>
     </main>}
-    {!session && message && <main className="auth-screen"><p role="alert">{message}</p></main>}
-    {session && !signedIn && session.mode === "cognito" && <LoginPage expired={ready} notice={message}
+    {!signedIn && hoursNotice && <ServiceHoursPage notice={hoursNotice} />}
+    {!session && checkError && !hoursNotice && <main className="auth-screen"><p role="alert">{checkError}</p></main>}
+    {session && !signedIn && !hoursNotice && session.mode === "cognito" && <LoginPage expired={ready} notice={message}
       onSignedIn={value => { setSession(value); setReady(true); setMessage(""); }} />}
     {/* Kept mounted while signed out after expiry, so unsaved input survives the re-login. */}
     {ready && <div hidden={!signedIn}>{children}</div>}
