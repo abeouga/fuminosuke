@@ -215,8 +215,6 @@
   .deploy-shell .side-nav { height: auto; min-height: 56px; gap: 12px; padding: 8px 12px; flex-wrap: wrap; }
   .deploy-shell .brand strong { font-size: 18px; }
   .deploy-shell .side-nav nav button { padding: 6px 9px; }
-  /* Keep the logout reachable; only the connection text goes. */
-  .deploy-shell .side-footer > span { display: none; }
   .ux-shell .main-content { padding: 16px 12px 40px; }
   .ux-shell .layout-workbench { grid-template-columns: minmax(0, 1fr); }
   .ux-shell .layout-workbench .layout-properties { max-height: none; }

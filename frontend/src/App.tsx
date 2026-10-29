@@ -325,7 +325,6 @@ export default function App() {
           <button type="button" className="phone-brand" onClick={() => navigateTo("ask")} aria-label="文之助（チャット）">
             <img src="/favicon.svg" alt="" /><strong>文之助</strong>
           </button>
-          {!health && <span className="phone-offline" role="status">接続待ち</span>}
           {/* Pages put their own tools here (the chat: history and new conversation). */}
           <div className="phone-top-tools" id="phone-top-tools" />
           <ReadingQueueMenu onOpen={openQueuedReading} />
@@ -344,9 +343,7 @@ export default function App() {
           {isAdmin() && <NavButton active={page === "quality"} icon="quality" label="修正率" onClick={() => navigateTo("quality")} />}
         </nav>
         <ReadingQueueMenu onOpen={openQueuedReading} />
-        <div className="side-footer" role="status">
-          <span className={health ? "status-dot ok" : "status-dot"} />
-          <span>{health ? "接続中" : "接続待ち"}</span>
+        <div className="side-footer">
           <LogoutButton />
         </div>
       </aside>
