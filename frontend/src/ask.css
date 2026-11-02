@@ -450,7 +450,7 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 @media (prefers-reduced-motion:reduce){.ask-document-panel.switched{animation:none}}
 
 /* 回答の右下のごみ箱：そのやり取りを会話から消す（回答を待っている間は出さない） */
-.ask-remove-turn{grid-column:2;justify-self:end;display:grid;place-items:center;width:28px;height:28px;min-height:0;margin-top:-8px;padding:0;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,color .15s,border-color .15s}
+.ask-remove-turn{display:grid;place-items:center;width:28px;height:28px;min-height:0;padding:0;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,color .15s,border-color .15s}
 .ask-msg.bot:hover .ask-remove-turn,.ask-remove-turn:focus-visible{opacity:1}
 .ask-remove-turn:hover{border-color:#efc9c0;background:#fff1ee;color:#b5432f}
 .ask-remove-turn svg{width:15px;height:15px}
@@ -527,3 +527,33 @@ button.ask-continuation-earlier.is-showing{border-color:var(--ui-primary);backgr
 /* 会話と入力欄の境の線は、両端を入力欄の角と同じ丸さで下へ曲げる（白い面の上の角を丸め、外側は会話の背景色） */
 .ask-composer{--ask-composer-pad:12px;border-top:0;background:#eef2f6}
 .ask-composer::before{content:"";position:absolute;inset:0;z-index:-1;border-top:1px solid #d2dbe3;border-radius:calc(var(--ask-row-radius,28px) + var(--ask-composer-pad)) calc(var(--ask-row-radius,28px) + var(--ask-composer-pad)) 0 0;background:#fff}
+
+/* Under an answer: 👍/👎 and the trash can on the right. 👎 opens a small box asking why. */
+.ask-turn-actions{grid-column:2;justify-self:end;position:relative;display:flex;align-items:center;gap:2px;margin-top:-8px}
+.ask-rating{position:relative;display:flex;align-items:center;gap:2px}
+.ask-rate{display:grid;place-items:center;width:28px;height:28px;min-height:0;padding:0;border:1px solid transparent;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer;opacity:.55;transition:opacity .15s,background .15s,color .15s,border-color .15s,transform .15s}
+.ask-rate svg{width:15px;height:15px}
+.ask-msg.bot:hover .ask-rate,.ask-rate:focus-visible,.ask-rate.on{opacity:1}
+.ask-rate.good:hover,.ask-rate.good.on{border-color:#bfe3cc;background:#ecf8f0;color:#16805d}
+.ask-rate.bad:hover,.ask-rate.bad.on{border-color:#efc9c0;background:#fff1ee;color:#b5432f}
+.ask-rate.on svg{fill:currentColor;fill-opacity:.18}
+.ask-rate:active{transform:scale(.9)}
+.ask-rating-box{position:absolute;right:0;top:calc(100% + 6px);z-index:20;display:grid;gap:10px;width:280px;max-width:calc(100vw - 32px);padding:12px 14px 14px;border:1px solid #d2dbe3;border-radius:14px;background:#fff;box-shadow:0 2px 6px #1d354514,0 14px 36px #1d354524;animation:ask-rating-in .18s ease-out}
+@keyframes ask-rating-in{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
+.ask-rating-box-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ask-rating-box-head strong{font-size:15px}
+.ask-rating-close{display:grid;place-items:center;width:26px;height:26px;min-height:0;padding:0;border:0;border-radius:999px;background:transparent;color:var(--ui-text-muted);cursor:pointer}
+.ask-rating-close:hover{background:#eef2f6}
+.ask-rating-reasons{display:grid;gap:6px}
+.ask-rating-reasons button{display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 12px;border:1px solid #d2dbe3;border-radius:10px;background:#f8fafc;color:var(--ui-text);font-size:15px;text-align:left;cursor:pointer;transition:background .15s,border-color .15s}
+.ask-rating-reasons button:hover{border-color:#9fb4c6;background:#eef3f8}
+.ask-rating-reasons svg{width:15px;height:15px;color:#2f6f9f}
+.ask-rating-comment{display:grid;gap:8px}
+.ask-rating-comment textarea{width:100%;min-height:72px;padding:8px 10px;border:1px solid #c2cdd7;border-radius:10px;font:inherit;font-size:15px;resize:vertical}
+.ask-rating-comment-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.ask-rating-mic{display:grid;place-items:center;width:36px;height:36px;min-height:0;padding:0;border:1px solid #c2cdd7;border-radius:999px;background:#fff;color:var(--ui-text);cursor:pointer}
+.ask-rating-mic.listening{border-color:#e2a29a;background:#fff1ee;color:#b5432f;animation:ask-rating-pulse 1.4s ease-in-out infinite}
+@keyframes ask-rating-pulse{50%{box-shadow:0 0 0 6px #b5432f1f}}
+.ask-rating-caption{margin:0;color:var(--ui-text-muted);font-size:13px}
+.ask-rating-error{margin:0;color:#b5432f;font-size:13px}
+@media (prefers-reduced-motion:reduce){.ask-rating-box,.ask-rating-mic.listening{animation:none}}

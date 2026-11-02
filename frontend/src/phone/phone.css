@@ -307,7 +307,9 @@ html.phone-chat-pinned .phone-shell .ask-page { margin-bottom: 0 !important; }
 html.phone-chat-pinned .phone-shell .ask-composer, html.phone-chat-pinned .phone-shell .ask-messages { overscroll-behavior: contain; }
 
 /* 回答は横いっぱいに。ごみ箱は回答の右下へ（横に列を取らない）。 */
-.phone-shell .ask-msg.bot .ask-remove-turn { grid-column: 1; justify-self: end; margin-top: -2px; opacity: .7; }
+.phone-shell .ask-msg.bot .ask-turn-actions { grid-column: 1; justify-self: end; margin-top: -2px; }
+.phone-shell .ask-msg.bot .ask-remove-turn, .phone-shell .ask-msg.bot .ask-rate { opacity: .7; }
+.phone-shell .ask-msg.bot .ask-rate.on { opacity: 1; }
 .phone-shell .ask-msg.bot .ask-bubble { padding: 12px 13px; gap: 10px; }
 /* 会話の文字はスマホでは小さめに。出典の表（ask-table）は今の大きさのまま。 */
 .phone-shell .ask-answer { font-size: 15px; line-height: 1.7; }

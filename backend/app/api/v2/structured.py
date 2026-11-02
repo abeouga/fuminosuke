@@ -164,15 +164,21 @@ async def ask(request: Request, body: QuestionRequest) -> dict[str, Any]:
 
 @router.post("/events", dependencies=[Depends(enabled)], status_code=204)
 async def chat_event(request: Request, body: ChatEvent) -> Response:
-    """Chat actions the server does not otherwise see (removing an exchange), for the log only."""
-    chat_log(
-        request,
-        {
-            "type": body.type,
-            "conversationId": body.conversation_id,
-            "turns": [turn.model_dump(by_alias=True) for turn in body.turns],
-        },
-    )
+    """Chat actions the server does not otherwise see (removing an exchange, rating an answer),
+    for the log only."""
+    entry: dict[str, Any] = {
+        "type": body.type,
+        "conversationId": body.conversation_id,
+        "turns": [turn.model_dump(by_alias=True) for turn in body.turns],
+    }
+    if body.type == "rating":
+        entry["rating"] = body.rating
+        if body.reason is not None:
+            entry["reason"] = body.reason
+        if body.comment:
+            entry["comment"] = body.comment
+            entry["commentBy"] = body.comment_by
+    chat_log(request, entry)
     return Response(status_code=204)
 
 

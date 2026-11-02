@@ -1,6 +1,6 @@
 import { privateLocalStorage, privateSessionStorage, storageScope } from "../auth/transport";
 import { EditingError } from "../editing/client";
-import { structuredClient, type Evidence, type QuestionContext, type QuestionResult } from "./client";
+import { structuredClient, type AnswerRating, type Evidence, type QuestionContext, type QuestionResult } from "./client";
 
 /**
  * The question page's conversation, kept outside the page component.
@@ -32,6 +32,8 @@ export type Turn = {
   picked: string | null;
   /** An answer made here without asking the server (「読み取って」 sent with images). */
   local?: string;
+  /** The user's 👍/👎 on this answer. */
+  rating?: AnswerRating | null;
 };
 /** `images`: the names of the images sent in it (a conversation of images only is kept too). */
 export type Conversation = { id: string; title: string; updatedAt: number; turns: Turn[]; images?: string[] };
@@ -440,6 +442,24 @@ export const askStore = {
       pending: target.pending,
     }]);
     set({ turns, viewer, replyMode: true });
+  },
+
+  /**
+   * Rate an answer 👍/👎 (null takes the rating back). Every change is sent to the chat log, with the
+   * question and the answer, so how users felt about the answers can be read later.
+   */
+  rate(turnId: number, rating: AnswerRating | null) {
+    const target = state.turns.find((item) => item.id === turnId);
+    if (!target || target.pending || !target.result) return;
+    void structuredClient.logRating(state.conversationId, {
+      turnId: target.id,
+      text: target.text,
+      reply: Boolean(target.request.replyTo),
+      state: target.result.state,
+      answer: target.result.answer.slice(0, 4000),
+      pending: false,
+    }, rating);
+    updateTurn(turnId, { rating });
   },
 
   /** Images sent in the shown conversation: it is kept in the history even without a message. */

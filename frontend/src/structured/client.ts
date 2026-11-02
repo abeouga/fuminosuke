@@ -78,7 +78,10 @@ export type QuestionRequest = {
 export type QuestionContext = { documentIds: string[]; previous: string | null; previousAnswer?: string | null };
 /** Where a question was sent from in the chat; only written to the local chat log. */
 export type ChatClient = { conversationId: string; turnId: number; recovered?: boolean };
-export type ChatTurnRecord = { turnId: number; text: string; reply: boolean; state: string | null; answer: string | null; pending: boolean };
+export type RatingReason = "wrong_value" | "not_wanted" | "unclear" | "other";
+/** The user's 👍/👎 on an answer; with 👎, why (and for "other" what they said or typed). */
+export type AnswerRating = { value: "good" | "bad"; reason?: RatingReason; comment?: string; commentBy?: "voice" | "text" };
+export type ChatTurnRecord ={ turnId: number; text: string; reply: boolean; state: string | null; answer: string | null; pending: boolean };
 
 const base = "/api/v2/structured";
 
@@ -114,4 +117,9 @@ export const structuredClient = {
   /** Tell the local chat log about removed exchanges (best effort; never blocks the chat). */
   logRemoved: (conversationId: string, turns: ChatTurnRecord[]) =>
     request<unknown>("/events", { type: "remove", conversationId, turns }).catch(() => undefined),
+  logRating: (conversationId: string, turn: ChatTurnRecord, rating: AnswerRating | null) =>
+    request<unknown>("/events", {
+      type: "rating", conversationId, turns: [turn], rating: rating?.value ?? null,
+      reason: rating?.reason ?? null, comment: rating?.comment || null, commentBy: rating?.comment ? rating.commentBy ?? "text" : null,
+    }).catch(() => undefined),
 };
