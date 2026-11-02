@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { FiLogOut } from "react-icons/fi";
 import { authenticatedFetch, endBrowserSession, loadSession, signIn } from "./transport";
@@ -76,8 +76,25 @@ function LoginPage({ expired, notice, onSignedIn }: {
   </main>;
 }
 
+const MODE_KEY = "fuminosuke.authMode";
+const UNREACHABLE = "サーバーに接続できませんでした。少し待ってから、もう一度ログインしてください。";
+
+/** Whether this address uses sign-in, from the last answered check (the server may not answer now). */
+function signInExpected(): boolean {
+  try {
+    const known = window.localStorage.getItem(MODE_KEY);
+    if (known) return known === "cognito";
+  } catch { /* storage may be off */ }
+  return !/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(window.location.hostname);
+}
+
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
+  // The session an API call just refused: while the check still calls it signed in, ask for a new login
+  // instead of showing the workspace again (that only flips back and forth between the two screens).
+  const refused = useRef<string | null>(null);
+  const sessionRef = useRef<AuthSession | null>(null);
+  sessionRef.current = session;
   const [message, setMessage] = useState("");
   // Why the last session check failed (the server is unreachable, e.g. stopped for the night); cleared once it answers.
   const [checkError, setCheckError] = useState("");
@@ -104,9 +121,22 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const refresh = () => { void loadSession().then(value => {
-      if (active) { setCheckError(""); setSession(value); if (value.authenticated) { setReady(true); setMessage(""); } }
-    }).catch(error => { if (active) setCheckError(String(error.message)); }); };
-    const expired = () => { setSession(previous => previous ? { ...previous, authenticated: false } : null); };
+      if (!active) return;
+      try { window.localStorage.setItem(MODE_KEY, value.mode); } catch { /* storage may be off */ }
+      setCheckError("");
+      if (value.authenticated && refused.current !== null && value.csrfToken === refused.current) {
+        setSession({ ...value, authenticated: false });
+        return;
+      }
+      refused.current = null;
+      setSession(value);
+      if (value.authenticated) { setReady(true); setMessage(""); }
+    }).catch(() => { if (active) setCheckError(UNREACHABLE); }); };
+    const expired = () => {
+      const previous = sessionRef.current;
+      if (previous?.authenticated) refused.current = previous.csrfToken ?? "";
+      setSession(value => value ? { ...value, authenticated: false } : null);
+    };
     refresh();
     const timer = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh);
@@ -127,9 +157,12 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       <p><Spinner />ログイン中</p>
     </main>}
     {!signedIn && hoursNotice && <ServiceHoursPage notice={hoursNotice} />}
-    {!session && checkError && !hoursNotice && <main className="auth-screen"><p role="alert">{checkError}</p></main>}
-    {session && !signedIn && !hoursNotice && session.mode === "cognito" && <LoginPage expired={ready} notice={message}
-      onSignedIn={value => { setSession(value); setReady(true); setMessage(""); }} />}
+    {!session && checkError && !hoursNotice && !signInExpected() && <main className="auth-screen">
+      <p role="alert">サーバーに接続できません。起動しているか確かめてください。</p>
+    </main>}
+    {!signedIn && !hoursNotice && (session ? session.mode === "cognito" : Boolean(checkError) && signInExpected())
+      && <LoginPage expired={ready && !checkError} notice={checkError || message}
+        onSignedIn={value => { refused.current = null; setCheckError(""); setSession(value); setReady(true); setMessage(""); }} />}
     {/* Kept mounted while signed out after expiry, so unsaved input survives the re-login. */}
     {ready && <div hidden={!signedIn}>{children}</div>}
     {confirmLogout && signedIn && <div className="navigation-confirm-backdrop">
