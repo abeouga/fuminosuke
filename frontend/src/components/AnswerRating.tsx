@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { FiMic, FiMicOff, FiSend, FiThumbsDown, FiThumbsUp, FiX } from "react-icons/fi";
 import type { AnswerRating, RatingReason } from "../structured/client";
 import { QuestionVoiceCapture } from "../structured/voiceCapture";
@@ -25,11 +26,12 @@ export function AnswerRatingBar({ rating, onRate, voiceAvailable, onVoiceStart }
   onVoiceStart: () => void;
 }) {
   const [asking, setAsking] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
   const good = rating?.value === "good";
   const bad = rating?.value === "bad";
   const badTitle = bad && rating?.reason ? `良くない（${REASON_LABEL[rating.reason]}）` : "良くない";
   return (
-    <div className="ask-rating" role="group" aria-label="この回答の評価">
+    <div ref={anchor} className="ask-rating" role="group" aria-label="この回答の評価">
       <button type="button" className={good ? "ask-rate good on" : "ask-rate good"} aria-pressed={good}
         aria-label="良い" title={good ? "良い（押すと取り消し）" : "良い"}
         onClick={() => { setAsking(false); onRate(good ? null : { value: "good" }); }}>
@@ -45,7 +47,7 @@ export function AnswerRatingBar({ rating, onRate, voiceAvailable, onVoiceStart }
         <FiThumbsDown aria-hidden="true" />
       </button>
       {asking && (
-        <ReasonBox voiceAvailable={voiceAvailable} onVoiceStart={onVoiceStart}
+        <ReasonBox anchor={anchor} voiceAvailable={voiceAvailable} onVoiceStart={onVoiceStart}
           onClose={() => setAsking(false)}
           onPick={(reason, comment, commentBy) => {
             onRate({ value: "bad", reason, ...(comment ? { comment, commentBy } : {}) });
@@ -56,7 +58,16 @@ export function AnswerRatingBar({ rating, onRate, voiceAvailable, onVoiceStart }
   );
 }
 
-function ReasonBox({ voiceAvailable, onVoiceStart, onPick, onClose }: {
+/** Room kept between the box and the window's edge. */
+const EDGE = 8;
+
+/**
+ * The reasons box. It is put on top of the whole page (each chat message is its own stacking
+ * context, so a box inside the answer was covered by the next message and cut by the input area)
+ * and placed by the 👍/👎 buttons: below them, or above when there is no room below.
+ */
+function ReasonBox({ anchor, voiceAvailable, onVoiceStart, onPick, onClose }: {
+  anchor: RefObject<HTMLDivElement | null>;
   voiceAvailable: boolean;
   onVoiceStart: () => void;
   onPick: (reason: RatingReason, comment?: string, commentBy?: "voice" | "text") => void;
@@ -67,6 +78,7 @@ function ReasonBox({ voiceAvailable, onVoiceStart, onPick, onClose }: {
   const [other, setOther] = useState(false);
   const [comment, setComment] = useState("");
   const [spoken, setSpoken] = useState(false);
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
   const [voice] = useState(() => new QuestionVoiceCapture((text) => {
     setSpoken(true);
     setComment((current) => current.trim() ? `${current.trimEnd()} ${text}` : text);
@@ -74,8 +86,29 @@ function ReasonBox({ voiceAvailable, onVoiceStart, onPick, onClose }: {
   const voiceState = useSyncExternalStore(voice.subscribe, voice.getSnapshot);
   const listening = voiceState.mode !== "stopped";
   useEffect(() => () => { void voice.stop(); }, [voice]);
-  // It opens under the answer, which may be at the bottom of the conversation: bring it into view.
-  useEffect(() => { box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [other]);
+  // Follow the buttons while the conversation scrolls or the window changes size.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const by = anchor.current?.getBoundingClientRect();
+      const own = box.current;
+      if (!by || !own) return;
+      const width = own.offsetWidth, height = own.offsetHeight;
+      const viewport = window.visualViewport?.height ?? window.innerHeight;
+      const below = by.bottom + 6;
+      const top = below + height <= viewport - EDGE ? below : Math.max(EDGE, by.top - 6 - height);
+      const left = Math.min(Math.max(EDGE, by.right - width), window.innerWidth - width - EDGE);
+      setPlace((current) => current && current.left === left && current.top === top ? current : { left, top });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [anchor, other]);
   useEffect(() => {
     const outside = (event: PointerEvent) => {
       if (box.current && !box.current.contains(event.target as Node)
@@ -97,8 +130,9 @@ function ReasonBox({ voiceAvailable, onVoiceStart, onPick, onClose }: {
     void voice.stop();
     onPick("other", text.slice(0, 1000), spoken ? "voice" : "text");
   };
-  return (
-    <div ref={box} className="ask-rating-box" role="dialog" aria-label="良くなかった理由">
+  return createPortal(
+    <div ref={box} className="ask-rating-box" role="dialog" aria-label="良くなかった理由"
+      style={place ? { left: place.left, top: place.top } : { visibility: "hidden" }}>
       <div className="ask-rating-box-head">
         <strong>どこが良くなかったですか？</strong>
         <button type="button" className="ask-rating-close" aria-label="閉じる" onClick={onClose}><FiX aria-hidden="true" /></button>
@@ -134,6 +168,7 @@ function ReasonBox({ voiceAvailable, onVoiceStart, onPick, onClose }: {
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
