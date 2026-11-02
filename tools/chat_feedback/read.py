@@ -47,10 +47,27 @@ def lines(session: Any, bucket: str, since: str | None) -> list[dict[str, Any]]:
     return sorted(found, key=lambda line: line["at"])
 
 
+REASONS = {
+    "wrong_value": "数値が違う",
+    "not_wanted": "探していたものと違う",
+    "unclear": "分かりにくい",
+    "other": "その他",
+}
+
+
 def describe(line: dict[str, Any]) -> list[str]:
     if line.get("type") == "remove":
         texts = [turn.get("text") or "" for turn in line.get("turns") or []]
         return [f"- ×で削除: {' / '.join(texts)}"]
+    if line.get("type") == "rating":
+        turn = (line.get("turns") or [{}])[0]
+        mark = {"good": "👍", "bad": "👎"}.get(line.get("rating") or "", "評価を取り消し")
+        reason = REASONS.get(line.get("reason") or "", "")
+        out = [f"- {mark}{'（' + reason + '）' if reason else ''}: {turn.get('text') or ''}"]
+        if line.get("comment"):
+            by = "音声" if line.get("commentBy") == "voice" else "文字"
+            out.append(f"  - ひとこと（{by}）: {line['comment']}")
+        return out
     reply = line.get("replyTo") or {}
     text = line.get("text") or reply.get("text") or reply.get("value") or ""
     head = "- 聞き返しへの回答" if line.get("type") == "reply" else "- 質問"

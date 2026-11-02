@@ -233,11 +233,19 @@ class ChatTurnRecord(Contract):
 
 
 class ChatEvent(Contract):
-    """Something done in the chat that the server does not otherwise see (for the local log)."""
+    """Something done in the chat that the server does not otherwise see (for the local log).
 
-    type: Literal["remove"]
+    `rating`: the user's 👍/👎 on an answer (None = taken back); with 👎 the reason picked and,
+    for "other", what they said or typed.
+    """
+
+    type: Literal["remove", "rating"]
     conversation_id: str = Field(min_length=1, max_length=100)
     turns: list[ChatTurnRecord] = Field(default_factory=list, max_length=60)
+    rating: Literal["good", "bad"] | None = None
+    reason: Literal["wrong_value", "not_wanted", "unclear", "other"] | None = None
+    comment: str | None = Field(default=None, max_length=1000)
+    comment_by: Literal["voice", "text"] | None = None
 
 
 class QuestionChoice(Contract):

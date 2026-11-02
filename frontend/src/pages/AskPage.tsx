@@ -42,6 +42,7 @@ import { isPhoneDevice } from "../hooks/usePhoneDevice";
 import { ImageLightbox, type LightboxImage } from "../components/ImageLightbox";
 import { visibleHeight } from "../phone/phoneKeyboard";
 import { useServiceHoursNotice } from "../serviceHours";
+import { AnswerRatingBar } from "../components/AnswerRating";
 
 /** Less than this between the window and what is seen of it is the browser's bars, not a keyboard. */
 const KEYBOARD_GAP = 80;
@@ -493,6 +494,8 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
                   onChoose={(choice) => askStore.choose(turn.id, choice)}
                   onRetry={() => askStore.retry(turn.id)}
                   onRemove={() => { askStore.removeTurn(turn.id); chatReadings.dismissTurn(turn.id); }}
+                  voiceAvailable={voiceConnected}
+                  onVoiceStart={() => { if (voiceState.mode !== "stopped") void voice.stop(); }}
                   attached={attachedTo(turn.id)}
                   replacedJobs={replaced}
                   onOpenReview={onOpenReview}
@@ -625,8 +628,11 @@ function AnswerNotes({ notes }: { notes: string[] }) {
 /** A row's cell on the document; no cell for a row that is a document itself (the list of documents). */
 type RowSource = { jobId: string; fieldId: string | null };
 
-function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onShowDocument, onHoverRow, attached, replacedJobs, onOpenReview }: {
+function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onShowDocument, onHoverRow, attached, replacedJobs, onOpenReview, voiceAvailable, onVoiceStart }: {
   turn: Turn;
+  /** For the 👎 box: the reason may be told by voice. */
+  voiceAvailable: boolean;
+  onVoiceStart: () => void;
   /** Images sent with this message: shown in it, their readings under the answer. */
   attached: ChatReading[];
   replacedJobs: Set<string>;
@@ -781,9 +787,16 @@ function TurnView({ turn, latest, busy, viewer, onChoose, onRetry, onRemove, onS
         </div>
         {/* このやり取りを会話から消す。消したものは以後の文脈に使わない。回答を待っている間は出さない（止めるのは送信ボタン）。 */}
         {!turn.pending && (
-          <button type="button" className="ask-remove-turn" onClick={onRemove} aria-label="このやり取りを削除" title="このやり取りを削除">
-            <FiTrash2 aria-hidden="true" />
-          </button>
+          <div className="ask-turn-actions">
+            {/* 👍/👎 on a real answer (not while it is asking back), sent to the chat log. */}
+            {result && result.state !== "clarifying" && (
+              <AnswerRatingBar rating={turn.rating} onRate={(rating) => askStore.rate(turn.id, rating)}
+                voiceAvailable={voiceAvailable} onVoiceStart={onVoiceStart} />
+            )}
+            <button type="button" className="ask-remove-turn" onClick={onRemove} aria-label="このやり取りを削除" title="このやり取りを削除">
+              <FiTrash2 aria-hidden="true" />
+            </button>
+          </div>
         )}
       </div>
     </>
