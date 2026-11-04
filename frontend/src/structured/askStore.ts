@@ -1,6 +1,6 @@
 import { privateLocalStorage, privateSessionStorage, storageScope } from "../auth/transport";
 import { EditingError } from "../editing/client";
-import { structuredClient, type AnswerRating, type Evidence, type QuestionContext, type QuestionResult } from "./client";
+import { structuredClient, type AnswerRating, type Evidence, type QuestionContext, type QuestionResult, type SavedConversation } from "./client";
 
 /**
  * The question page's conversation, kept outside the page component.
@@ -13,6 +13,13 @@ import { structuredClient, type AnswerRating, type Evidence, type QuestionContex
  *
  * Finished conversations are kept in this browser's history (privateLocalStorage) and can be
  * opened again from the side bar; the current one is written there on every change.
+ *
+ * The history is also kept on the server (the user's own database), so every device the user
+ * signs in on shows the same conversations: a changed conversation is sent there, a removed one
+ * is removed there, and the server's list is read when the chat opens and when the tab comes back.
+ * The ids known to be on the server are remembered, so a conversation removed on another device
+ * is removed here too instead of being sent back; one never sent (older browser history, or made
+ * while the server could not be reached) is sent.
  */
 
 export type ScopeItem = { jobId: string; label: string };
@@ -75,6 +82,9 @@ export type AskViewer = {
 
 const STORAGE_KEY = "fuminosuke-ask-v1";
 const HISTORY_KEY = "fuminosuke-ask-history-v1";
+/** The conversation ids known to be on the server, and those removed here but not yet there. */
+const SYNCED_KEY = "fuminosuke-ask-synced-v1";
+const REMOVED_KEY = "fuminosuke-ask-removed-v1";
 const MAX_TURNS = 60;
 const MAX_CONVERSATIONS = 50;
 const INTERRUPTED = "画面の再読み込みで回答を受け取れませんでした。もう一度送ってください。";
@@ -136,6 +146,11 @@ function initial(): AskState {
 // user's history.
 let loadedScope = storageScope();
 let state: AskState = initial();
+let synced = loadIds(SYNCED_KEY);
+let removedHere = loadIds(REMOVED_KEY);
+/** When the server's list was last read (it is read again at most every PULL_SECONDS). */
+let lastPull = 0;
+const PULL_SECONDS = 15;
 const nextTurnId = () => [...state.turns, ...state.history.flatMap((item) => item.turns)].reduce((max, turn) => Math.max(max, turn.id), 0) + 1;
 let nextId = nextTurnId();
 
@@ -144,6 +159,9 @@ function current(): AskState {
   if (scope !== loadedScope) {
     loadedScope = scope;
     state = initial();
+    synced = loadIds(SYNCED_KEY);
+    removedHere = loadIds(REMOVED_KEY);
+    lastPull = 0;
     nextId = Math.max(nextId, nextTurnId());
   }
   return state;
@@ -195,6 +213,7 @@ function save() {
 
 function set(patch: Partial<AskState> | ((current: AskState) => Partial<AskState>)) {
   current();
+  const before = state.history;
   const next = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
   // Remember the shown conversation's document panel, so switching back reopens it.
   const viewers = { ...next.viewers };
@@ -202,7 +221,140 @@ function set(patch: Partial<AskState> | ((current: AskState) => Partial<AskState
   else delete viewers[next.conversationId];
   state = { ...next, viewers, history: withCurrent(next) };
   save();
+  sendChanges(before, state.history);
   for (const listener of listeners) listener();
+}
+
+function loadIds(key: string): Set<string> {
+  try {
+    const value: unknown = JSON.parse(privateLocalStorage.getItem(key) ?? "[]");
+    return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveIds(key: string, ids: Set<string>) {
+  try {
+    privateLocalStorage.setItem(key, JSON.stringify([...ids]));
+  } catch {
+    // Without storage a removed conversation may come back from the server after a reload.
+  }
+}
+
+const pushTimers = new Map<string, number>();
+
+/** Send the history's changes to the server: changed conversations (after a short pause) and removed ones. */
+function sendChanges(before: Conversation[], after: Conversation[]) {
+  const kept = new Set(after.map((item) => item.id));
+  for (const item of before) {
+    if (!kept.has(item.id)) removeOnServer(item.id);
+  }
+  const previous = new Map(before.map((item) => [item.id, item]));
+  for (const item of after) {
+    if (previous.get(item.id)?.updatedAt !== item.updatedAt) schedulePush(item.id);
+  }
+}
+
+function schedulePush(id: string) {
+  window.clearTimeout(pushTimers.get(id));
+  pushTimers.set(id, window.setTimeout(() => { pushTimers.delete(id); void sendConversation(id); }, 800));
+}
+
+/** Send one conversation as it is now; an answer still on its way is sent once it has arrived. */
+async function sendConversation(id: string) {
+  const scope = loadedScope;
+  const conversation = state.history.find((item) => item.id === id);
+  if (!conversation || conversation.turns.some((turn) => turn.pending)) return;
+  try {
+    await structuredClient.saveConversation(conversation);
+  } catch {
+    return;  // Sent again on its next change, or by the next read of the server's list.
+  }
+  if (scope !== loadedScope) return;
+  synced.add(id);
+  saveIds(SYNCED_KEY, synced);
+}
+
+function removeOnServer(id: string) {
+  window.clearTimeout(pushTimers.get(id));
+  pushTimers.delete(id);
+  removedHere.add(id);
+  saveIds(REMOVED_KEY, removedHere);
+  void structuredClient.removeConversation(id).then(() => {
+    removedHere.delete(id);
+    synced.delete(id);
+    saveIds(REMOVED_KEY, removedHere);
+    saveIds(SYNCED_KEY, synced);
+  }, () => undefined);  // Kept in REMOVED_KEY and sent again by the next read of the server's list.
+}
+
+/**
+ * Read the server's history and merge it with this browser's: the newer copy of each conversation
+ * wins, one removed on another device is removed here, and what only this browser has is sent.
+ * The conversation shown here keeps its turns while an answer is on its way.
+ */
+async function pull(force: boolean) {
+  const scope = loadedScope;
+  if (!force && Date.now() - lastPull < PULL_SECONDS * 1000) return;
+  lastPull = Date.now();
+  let items: SavedConversation[];
+  try {
+    items = (await structuredClient.conversations()).items;
+  } catch {
+    return;  // No server history (switched off, or not reachable): the browser's history stays.
+  }
+  if (scope !== loadedScope) return;
+  for (const id of [...removedHere]) removeOnServer(id);
+  const server = new Map(items.filter((item) => !removedHere.has(item.id)).map((item) => [item.id, item]));
+  const merged: Conversation[] = [];
+  const send: string[] = [];
+  for (const local of state.history) {
+    const remote = server.get(local.id);
+    if (!remote) {
+      // Known to the server and gone from it: removed on another device.
+      if (synced.has(local.id) && !(local.id === state.conversationId && askStore.busy())) continue;
+      merged.push(local);
+      send.push(local.id);
+      continue;
+    }
+    server.delete(local.id);
+    if (remote.updatedAt > local.updatedAt) merged.push(fromServer(remote));
+    else {
+      merged.push(local);
+      if (local.updatedAt > remote.updatedAt) send.push(local.id);
+    }
+  }
+  for (const remote of server.values()) merged.push(fromServer(remote));
+  merged.sort((a, b) => b.updatedAt - a.updatedAt);
+  const history = merged.slice(0, MAX_CONVERSATIONS);
+  synced = new Set(items.map((item) => item.id).filter((id) => !removedHere.has(id)));
+  saveIds(SYNCED_KEY, synced);
+  const shown = history.find((item) => item.id === state.conversationId);
+  const gone = !shown && state.history.some((item) => item.id === state.conversationId);
+  if (gone && !askStore.busy()) {
+    // Removed on another device: this tab starts an empty conversation.
+    state = { ...state, history, conversationId: newConversationId(), turns: [], images: [], viewer: null, replyMode: true };
+  } else if (shown && !askStore.busy() && !sameContent(shown.turns, state.turns)) {
+    // Continued on another device: show its newer turns.
+    state = { ...state, history, turns: shown.turns, images: shown.images ?? [] };
+  } else {
+    state = { ...state, history };
+  }
+  nextId = Math.max(nextId, nextTurnId());
+  save();
+  for (const id of send) void sendConversation(id);
+  for (const listener of listeners) listener();
+}
+
+function fromServer(item: SavedConversation): Conversation {
+  return {
+    id: item.id,
+    title: item.title,
+    updatedAt: item.updatedAt,
+    turns: settled(item.turns as Turn[]),
+    ...(item.images?.length ? { images: item.images } : {}),
+  };
 }
 
 /**
@@ -356,6 +508,11 @@ export const askStore = {
   },
   getSnapshot: current,
   set,
+  /** Read the server's history (on opening the chat, `force`; later at most every 15 seconds). */
+  sync(force = false) {
+    current();
+    void pull(force);
+  },
   busy: () => state.turns.some((turn) => turn.pending),
 
   /** A new question over the given documents (none: every confirmed document). */

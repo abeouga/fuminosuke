@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -328,3 +328,16 @@ class QuestionResult(Contract):
     general: bool = False
     # The document the user asked to see (「はじめを出して」): opened beside the chat.
     open: str | None = None
+
+
+class ConversationSave(Contract):
+    """A chat conversation as the chat page keeps it, saved so the user's other devices see it.
+
+    The turns are the page's own records (questions, answers, ratings); the server keeps them
+    as they are and only checks their size.
+    """
+
+    title: str = Field(max_length=200)
+    updated_at: int = Field(ge=0)
+    turns: list[dict[str, Any]] = Field(max_length=60)
+    images: list[str] = Field(default_factory=list, max_length=100)
