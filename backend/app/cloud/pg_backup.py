@@ -34,7 +34,7 @@ from app.cloud.backup import S3Backups, file_hash
 from app.cloud.config import CloudSettings
 from app.cloud.journal import Journal, ReceiptStore
 from app.cloud.operations import Operations
-from app.cloud.postgres import initialize_tenant, tenant_settings
+from app.cloud.postgres import initialize_tenant, missing_tables, tenant_settings
 from app.cloud.registry import Registry
 from app.cloud.runtime import cloud_runtime
 from app.core.config import Settings
@@ -298,10 +298,17 @@ def restore_postgres(
                     actual = db.execute(
                         text("SELECT fingerprint FROM cloud_schema_version WHERE id=1")
                     ).scalar_one()
-                    if actual != fingerprint:
+                    # A backup made before tables were added restores without them (left empty).
+                    absent = (
+                        () if actual == fingerprint
+                        else missing_tables(database.engine.dialect, fingerprint)
+                    )
+                    if absent is None:
                         raise ValueError("Backup requires an explicit schema migration")
                     db.execute(text("SET CONSTRAINTS ALL DEFERRED"))
                     for table in sorted(Base.metadata.tables.values(), key=lambda t: t.name):
+                        if table.name in absent:
+                            continue
                         load_table(
                             db,
                             table,

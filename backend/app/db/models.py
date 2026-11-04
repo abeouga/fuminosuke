@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -806,4 +807,22 @@ class DocumentSeriesLink(Base):
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class ChatConversation(Base):
+    """One chat conversation, kept on the server so the user sees it on every device.
+
+    `data` holds what the chat page keeps for it (its turns and the names of the images sent
+    in it); `updated_at_ms` is the page's own clock for the last change, newest first.
+    """
+
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    saved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )

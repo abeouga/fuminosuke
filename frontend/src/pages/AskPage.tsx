@@ -186,6 +186,15 @@ export function AskPage({ onOpenReview }: { onOpenReview: (jobId: string, field?
   }));
   const voiceState = useSyncExternalStore(voice.subscribe, voice.getSnapshot);
   useEffect(() => () => { void voice.stop(); }, [voice]);
+  // The history is kept on the server too: read it on opening the chat and when this tab comes back,
+  // so conversations from the user's other devices show here.
+  useEffect(() => {
+    askStore.sync(true);
+    const back = () => { if (document.visibilityState === "visible") askStore.sync(); };
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => { window.removeEventListener("focus", back); document.removeEventListener("visibilitychange", back); };
+  }, []);
 
   const enabled = status !== null && status !== "unavailable" && status.enabled;
 

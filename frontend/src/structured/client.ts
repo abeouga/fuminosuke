@@ -78,6 +78,8 @@ export type QuestionRequest = {
 export type QuestionContext = { documentIds: string[]; previous: string | null; previousAnswer?: string | null };
 /** Where a question was sent from in the chat; only written to the local chat log. */
 export type ChatClient = { conversationId: string; turnId: number; recovered?: boolean };
+/** A chat conversation as kept on the server; `turns` are the chat page's own records. */
+export type SavedConversation = { id: string; title: string; updatedAt: number; turns: unknown[]; images?: string[] };
 export type RatingReason = "wrong_value" | "not_wanted" | "unclear" | "other";
 /** The user's 👍/👎 on an answer; with 👎, why (and for "other" what they said or typed). */
 export type AnswerRating = { value: "good" | "bad"; reason?: RatingReason; comment?: string; commentBy?: "voice" | "text" };
@@ -85,15 +87,15 @@ export type ChatTurnRecord ={ turnId: number; text: string; reply: boolean; stat
 
 const base = "/api/v2/structured";
 
-async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function request<T>(path: string, body?: unknown, signal?: AbortSignal, method?: "PUT" | "DELETE"): Promise<T> {
   const response = await authenticatedFetch(base + path, {
-    method: body === undefined ? "GET" : "POST",
+    method: method ?? (body === undefined ? "GET" : "POST"),
     credentials: "include",
     ...(signal ? { signal } : {}),
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const value = await response.json();
+  const value = response.status === 204 ? null : await response.json();
   if (!response.ok) {
     throw new EditingError(value.message ?? value.detail ?? "質問を処理できませんでした。", value.code ?? "STRUCTURED_FAILED", response.status);
   }
@@ -115,6 +117,13 @@ export const structuredClient = {
     question: result.question ? { ...result.question, optional: result.question.optional ?? false } : null,
   })),
   /** Tell the local chat log about removed exchanges (best effort; never blocks the chat). */
+  /** The user's chat history kept on the server (the same on every device), newest first. */
+  conversations: () => request<{ items: SavedConversation[] }>("/conversations"),
+  saveConversation: (conversation: SavedConversation) =>
+    request<SavedConversation>(`/conversations/${encodeURIComponent(conversation.id)}`, {
+      title: conversation.title, updatedAt: conversation.updatedAt, turns: conversation.turns, images: conversation.images ?? [],
+    }, undefined, "PUT"),
+  removeConversation: (id: string) => request<null>(`/conversations/${encodeURIComponent(id)}`, undefined, undefined, "DELETE"),
   logRemoved: (conversationId: string, turns: ChatTurnRecord[]) =>
     request<unknown>("/events", { type: "remove", conversationId, turns }).catch(() => undefined),
   logRating: (conversationId: string, turn: ChatTurnRecord, rating: AnswerRating | null) =>

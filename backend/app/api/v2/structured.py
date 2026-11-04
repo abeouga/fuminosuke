@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from app.core.errors import AppError
 from app.editing.errors import reject
 from app.structured.contracts import (
     ChatEvent,
+    ConversationSave,
     DocumentList,
     FieldNameList,
     QuestionRequest,
@@ -179,6 +181,44 @@ async def chat_event(request: Request, body: ChatEvent) -> Response:
             entry["comment"] = body.comment
             entry["commentBy"] = body.comment_by
     chat_log(request, entry)
+    return Response(status_code=204)
+
+
+# A saved conversation larger than this is refused (60 turns of answers fit well within it).
+MAX_CONVERSATION_BYTES = 4 * 1024**2
+
+
+@router.get("/conversations", dependencies=[Depends(enabled)])
+def conversations(request: Request) -> dict[str, Any]:
+    """The user's chat history (newest first), the same on every device they sign in on."""
+    from app.services.chat_conversation_service import ChatConversationService
+
+    return {"items": ChatConversationService(get_database(request)).list()}
+
+
+@router.put("/conversations/{conversation_id}", dependencies=[Depends(enabled)])
+def save_conversation(
+    request: Request, conversation_id: str, body: ConversationSave
+) -> dict[str, Any]:
+    from app.services.chat_conversation_service import ChatConversationService
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", conversation_id):
+        raise reject("CONVERSATION_ID_INVALID", "会話を保存できませんでした。", 422)
+    data: dict[str, Any] = {"turns": body.turns, **({"images": body.images} if body.images else {})}
+    if len(json.dumps(data, ensure_ascii=False, default=str).encode()) > MAX_CONVERSATION_BYTES:
+        raise reject("CONVERSATION_TOO_LARGE", "会話が長すぎて保存できませんでした。", 413)
+    return ChatConversationService(get_database(request)).save(
+        conversation_id, body.title, body.updated_at, data
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}", dependencies=[Depends(enabled)], status_code=204
+)
+def remove_conversation(request: Request, conversation_id: str) -> Response:
+    from app.services.chat_conversation_service import ChatConversationService
+
+    ChatConversationService(get_database(request)).remove(conversation_id)
     return Response(status_code=204)
 
 
