@@ -218,7 +218,9 @@ sequenceDiagram
 
 ### 4.1 返す形
 
-各道具は、**構造化データ**（structuredContent、Agorack が画面に使う）と、**短い文章**（Claude Desktop などがそのまま読む）の両方を返す。中身は同じ。
+各道具は、**構造化データ**（structuredContent、Agorack が画面に使う）と、**短い文章**（Claude Desktop などがそのまま読む）の両方を返す。
+
+（実装後の訂正 2026-11-09）値・欄名・書類ID・欄IDは両方で同じ。文章の方は、位置（box）とURLを省いた短い形にした。構造化データをそのままJSONの文章にすると、表の多い書類（繁殖台帳1021「こよみ」の全部）で約107KBになり、AIが読む量が大きすぎるため。位置とURLは構造化データの `location` にあり、切り抜きは `get_field_image` で見られる。
 
 ### 4.2 根拠の形
 
@@ -449,12 +451,13 @@ AI が次の手を決められるよう、文章で返す。
     "fuminosuke": {
       "command": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy\\backend\\.venv\\Scripts\\python.exe",
       "args": ["-m", "app.mcp_server"],
-      "cwd": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy\\backend",
       "env": { "FUMINOSUKE_API_URL": "http://127.0.0.1:8010" }
     }
   }
 }
 ```
+
+（実装後の訂正 2026-11-09）Claude Desktop の設定では作業フォルダ（`cwd`）の指定が効くとは限らないため外した。`backend` は仮想環境に編集可能な形で入っている（`uv sync` で入る）ので、どのフォルダから起動しても `app.mcp_server` を読める。仮想環境に `mcp` が入っていない場合は、通常の 8010 を止めてから `backend` で `uv pip install --python .venv\Scripts\python.exe mcp==1.30.0`（開発用の道具を消さない入れ方）で入れる。
 
 - 標準出力は MCP の通信に使うので、ログは標準エラーに出す。
 - 文之助の `.env`（AIのキーなど）は読まない。MCPサーバーはAIを呼ばない。
