@@ -1,0 +1,45 @@
+name: Spike
+description: 実装の前に、できるかどうかを短く調べて確かめる
+title: "[Spike] "
+labels:
+  - Spike
+
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 確かめたいこと
+      placeholder: 例）Claude の MCP Apps で、道具が返した画面をチャットに表示できるか
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: この結果で何を決めるか
+      placeholder: 例）埋め込み画面を iframe で作るか、MCP Apps で返すかを決める
+    validations:
+      required: true
+
+  - type: textarea
+    id: method
+    attributes:
+      label: 調べ方
+      placeholder: |
+        例）
+        - 公式の資料で対応状況を確認する
+        - 最小のMCPサーバーを作って Claude Desktop から呼ぶ
+
+  - type: input
+    id: budget
+    attributes:
+      label: 使ってよい時間・APIの回数
+      placeholder: 例）半日まで、API 20回まで
+    validations:
+      required: true
+
+  - type: textarea
+    id: result
+    attributes:
+      label: 結果
+      description: 終わったら、分かったことと次に作るIssueを記載してください。

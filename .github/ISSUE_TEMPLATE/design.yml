@@ -1,0 +1,62 @@
+name: Design
+description: 設計の判断を記録する（選択肢と決定理由を残す）
+title: "[Design] "
+labels:
+  - Design
+
+body:
+  - type: textarea
+    id: decision_target
+    attributes:
+      label: 決めること
+      description: 何を決めるのか記載してください。
+      placeholder: 例）画像を受け付ける窓口をチャットに置くか、文之助に置くか
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景・制約
+      description: この判断が必要になった背景と、守るべき制約を記載してください。
+      placeholder: |
+        例）
+        - 値を確定するのは文之助の中の人だけ（設計図§4）
+        - 11/13までに見せられる形にしたい
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: 選択肢
+      description: 検討した案と、それぞれの長所・短所を記載してください。
+      value: |
+        | 案 | 長所 | 短所 |
+        |---|---|---|
+        | A |  |  |
+        | B |  |  |
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: 決定
+      description: 決めた案と理由を記載してください。まだ決まっていなければ「未定」と書いてください。
+      placeholder: 例）未定
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影響を受けるもの
+      description: 影響する画面、API、契約（Safety Contract・AGENTS.md）などを記載してください。
+
+  - type: checkboxes
+    id: records
+    attributes:
+      label: 書き残す先
+      options:
+        - label: docs/strategy/ に追記する
+        - label: AGENTS.md の更新が必要か確認した
+        - label: docs/ocr-safety-contract.md の更新が必要か確認した
