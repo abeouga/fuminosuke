@@ -21,6 +21,8 @@ from app.structured.contracts import (
     ChatEvent,
     ConversationSave,
     DocumentList,
+    DocumentSearch,
+    DocumentSearchResult,
     FieldNameList,
     QuestionRequest,
     QuestionResult,
@@ -120,6 +122,18 @@ async def list_fields(
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(runtime(request).service.field_names, template_id)
     return {"items": items}
+
+
+@router.post(
+    "/documents/search",
+    dependencies=[Depends(enabled)],
+    response_model=DocumentSearchResult,
+    response_model_by_alias=True,
+)
+async def search_documents(request: Request, body: DocumentSearch) -> dict[str, Any]:
+    """Confirmed documents narrowed by template, name, ids, field values and confirmed date."""
+    query = StructuredQueryService(runtime(request).service)
+    return await asyncio.to_thread(query.search, body)
 
 
 @router.post(
