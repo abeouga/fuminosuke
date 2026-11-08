@@ -1,0 +1,65 @@
+name: Improvement
+description: 動きを変えずにコードを整理する（リファクタリング・共通化・技術的負債の解消）
+title: "[Improvement] "
+labels:
+  - Improvement
+
+body:
+  - type: textarea
+    id: target
+    attributes:
+      label: 整理する対象
+      description: どのファイル・処理を、どう整理するのか記載してください。
+      placeholder: |
+        例）
+        - structured/qa.py の _numbers から「数として読む」部分を structured/aggregation.py に取り出す
+        - チャットと新しい集計APIの両方から同じ処理を使う
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: なぜ整理するか
+      description: 整理しないと何が困るのかを記載してください。
+      placeholder: 例）同じ計算を3か所に書くと、チャットとAgorackで合計が食い違うおそれがある
+    validations:
+      required: true
+
+  - type: textarea
+    id: unchanged
+    attributes:
+      label: 変えないもの
+      description: 整理の前後で同じでなければならないもの（画面の表示、回答の文、APIの応答、保存される値など）を記載してください。
+      placeholder: |
+        例）
+        - チャットの回答の文・注意の文・計算の過程
+        - 一覧の検索（q）の当たり方
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: 同じであることの確かめ方
+      description: 整理の前に結果を保存し、後の結果と比べる方法を記載してください。
+      placeholder: |
+        例）
+        1. 直す前に、確定済みの全書類・全欄・5つの計算の結果を保存する
+        2. 直した後に同じことをして、全件が一字一句同じことを確かめる
+        3. 外部のAIは呼ばない
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: OCRの契約
+      options:
+        - label: OCRの値・対応関係・保存・確定・出力に影響しない（影響する場合は docs/ocr-safety-contract.md を確認した）
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 関連する設計・Issue
+      placeholder: 例）docs/strategy/fuminosuke-mcp-implementation-2026-11-08.md §2.2
