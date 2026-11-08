@@ -18,7 +18,10 @@ from app.mcp_server.client import FuminosukeClient, NotFoundResponse
 from app.mcp_server.errors import NotFound, ToolProblem
 from app.mcp_server.models import (
     DocumentValues,
+    TableColumns,
+    TemplateFields,
     TemplateList,
+    TemplateRef,
     TemplateSummary,
 )
 
@@ -91,6 +94,27 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
         return await server.ask(work)
 
     @server.tool()
+    async def get_template_fields(
+        template: Annotated[str, Field(description="テンプレートの名前又はID")],
+    ) -> Annotated[CallToolResult, TemplateFields]:
+        """その種類の書類にある欄の名前と、表ごとの列の名前を返す。
+
+        欄名が分からないとき、他の道具で欄を正しく指定するために使う。名前は直近の
+        確定済みの書類にあるものから取る（確定済みの書類が1件もなければ出せない）。
+        """
+
+        def work(client: FuminosukeClient) -> CallToolResult:
+            chosen = resolve.template(client, template)
+            result = _template_fields(chosen.id, chosen.name, client.fields(chosen.id))
+            lines = [result.summary]
+            if result.fields:
+                lines.append("欄：" + "、".join(result.fields))
+            lines.extend(f"表「{t.title}」の列：" + "、".join(t.columns) for t in result.tables)
+            return _answer(result, "\n".join(lines))
+
+        return await server.ask(work)
+
+    @server.tool()
     async def get_document(
         document: Annotated[
             str, Field(description="書類名・識別値（名号・受付番号など）又は書類ID")
@@ -157,6 +181,24 @@ def _template_list(listed: resolve.Catalog) -> TemplateList:
 
 def _stamp(value: str | None) -> float:
     return datetime.fromisoformat(value).timestamp() if value else 0.0
+
+
+def _template_fields(template_id: str, name: str, names: list[dict[str, Any]]) -> TemplateFields:
+    fields = [n["label"] for n in names if n["kind"] == "field"]
+    tables: dict[str, list[str]] = {}
+    for n in names:
+        if n["kind"] == "column":
+            tables.setdefault(n.get("tableTitle") or "（表名なし）", []).append(n["label"])
+    if names:
+        summary = f"{name}：表の外の欄 {len(fields)}個、表 {len(tables)}つ。"
+    else:
+        summary = f"{name}：確定済みの書類がまだないため、欄の名前を出せません。"
+    return TemplateFields(
+        template=TemplateRef(template_id=template_id, name=name),
+        fields=fields,
+        tables=[TableColumns(title=title, columns=columns) for title, columns in tables.items()],
+        summary=summary,
+    )
 
 
 def _answer(model: BaseModel, text: str) -> CallToolResult:

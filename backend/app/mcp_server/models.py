@@ -89,3 +89,19 @@ class TemplateList(BaseModel):
     templates: list[TemplateSummary]
     summary: str
 
+
+class TemplateRef(BaseModel):
+    template_id: str
+    name: str
+
+
+class TableColumns(BaseModel):
+    title: str
+    columns: list[str]
+
+
+class TemplateFields(BaseModel):
+    template: TemplateRef
+    fields: list[str] = Field(description="表の外の欄の名前")
+    tables: list[TableColumns] = Field(description="表ごとの列の名前")
+    summary: str
