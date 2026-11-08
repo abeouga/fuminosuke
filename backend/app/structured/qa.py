@@ -27,6 +27,7 @@ from uuid import uuid4
 
 from app.core.errors import AppError
 from app.editing.errors import reject
+from app.structured.aggregation import average, compute, extremes, read_numbers
 from app.structured.contracts import CONTRACT_VERSION
 from app.structured.decisions import DecisionChooser, decode_choice
 from app.structured.general import GeneralWriter
@@ -36,6 +37,8 @@ from app.structured.interpretation import (
     elapsed_between,
     number_value,
 )
+from app.structured.matching import compact as _compact
+from app.structured.matching import fold as _fold
 from app.structured.service import StructuredDocumentService, field_crop_url
 
 # At or above CONFIDENT a pick is used silently; between LENIENT and CONFIDENT it is used and
@@ -65,8 +68,6 @@ _LEFTOVER = re.compile(r"\{\{[^{}]*\}\}")
 _CONTACT = re.compile(
     r"https?://\S+|(?<!\d)0\d{1,4}[-‐－―ー]\d{1,4}[-‐－―ー]\d{3,4}(?!\d)|(?<!\d)0\d{9,10}(?!\d)"
 )
-_DOTTED_THOUSANDS = re.compile(r"^\d{1,3}\.\d{3}$")
-_PLAIN_INTEGER = re.compile(r"^\d{4,}$")
 # A line that drops the open question (「いったん中止だ」「やめて」「キャンセル」).
 _CANCEL = re.compile(
     r"^\s*(?:いったん|一旦|ひとまず|とりあえず)?\s*"
@@ -308,19 +309,6 @@ def _md(text: str | None) -> str:
 
 def jst_today() -> date:
     return datetime.now(JST).date()
-
-
-_KANA = {code: code - 0x60 for code in range(0x30A1, 0x30F7)}
-
-
-def _fold(value: str) -> str:
-    """For matching only: width, case and katakana/hiragana (「コヨミ」 is 「こよみ」) folded."""
-    return unicodedata.normalize("NFKC", value).casefold().translate(_KANA)
-
-
-def _compact(value: str) -> str:
-    """For matching a written value: folded, without spaces (「田中 太郎」 is 「田中太郎」)."""
-    return re.sub(r"\s+", "", _fold(value))
 
 
 def _core(label: str) -> str:
@@ -2977,33 +2965,23 @@ class QuestionEngine:
     def _numbers(
         self, outcome: Outcome, readings: list[Reading], operation: str, multi: bool, noun: str
     ) -> None:
-        def folded(reading: Reading) -> str:
-            return unicodedata.normalize("NFKC", reading.value or "").replace(",", "").strip()
-
+        # How each value is read as a number is shared with the structured APIs (aggregation.py):
         # 「762.300」 next to plain values like 「540000」 is a thousands separator, not a decimal.
-        large_integers = any(_PLAIN_INTEGER.match(folded(r)) for r in readings if r.value)
+        read = read_numbers([r.value for r in readings])
+        if operation != "count":
+            for skip in read.skipped:
+                reading = readings[skip.index]
+                outcome.caveats.append(
+                    f"{self._where(reading, multi)}の「{reading.value}」は"
+                    "数字として読めなかったので、外しています。"
+                )
         numbers: list[tuple[Reading, Decimal]] = []
-        grouped: list[Reading] = []  # 「.」 read as a thousands separator
-        dotted: list[Reading] = []  # 「.」 read as a decimal point, possibly a separator
-        for reading in readings:
-            if reading.value is None:
-                continue
-            if _DOTTED_THOUSANDS.match(folded(reading)) and large_integers:
-                number: Decimal | None = Decimal(folded(reading).replace(".", ""))
-                grouped.append(reading)
-            else:
-                number = number_value(reading.value)
-            if number is None:
-                if operation != "count":
-                    outcome.caveats.append(
-                        f"{self._where(reading, multi)}の「{reading.value}」は"
-                        "数字として読めなかったので、外しています。"
-                    )
-                continue
-            reading.interpreted_as = f"{number:f}"
-            numbers.append((reading, number))
-            if _DOTTED_THOUSANDS.match(folded(reading)) and not large_integers:
-                dotted.append(reading)
+        for item in read.read:
+            readings[item.index].interpreted_as = f"{item.number:f}"
+            numbers.append((readings[item.index], item.number))
+        # 「.」 read as a thousands separator / as a decimal point (possibly a separator).
+        grouped = [readings[n.index] for n in read.read if n.how == "dots_as_thousands"]
+        dotted = [readings[n.index] for n in read.read if n.how == "dots_as_decimal"]
         # One line per kind of reading, not one per row.
         if grouped:
             outcome.caveats.append(
@@ -3026,17 +3004,16 @@ class QuestionEngine:
             outcome.answer = f"{noun}には、数字として読める値が見当たりませんでした。"
         else:
             values = [n for _, n in numbers]
-            total = sum(values, Decimal(0))
-            result = {
-                "sum": total,
-                "avg": (total / len(values)).quantize(Decimal("0.01")),
-                "max": max(values),
-                "min": min(values),
-            }[operation]
+            result = compute(read, operation)  # type: ignore[arg-type]
+            assert isinstance(result, Decimal)
             word = {"sum": "合計", "avg": "平均", "max": "最大", "min": "最小"}[operation]
             amount = self._format(result)
             # Where the largest / smallest is: the row (and document) it was read from.
-            at = [r for r, n in numbers if n == result] if operation in {"max", "min"} else []
+            at = (
+                [readings[n.index] for n in extremes(read, result)]
+                if operation in {"max", "min"}
+                else []
+            )
             where = f"で、{self._row_place(at[0], multi)}の値です" if len(at) == 1 else ""
             if len(at) > 1:
                 where = f"で、{len(at)}件あります"
@@ -3053,12 +3030,7 @@ class QuestionEngine:
                     each.setdefault(reading.document_name or "（名称なし）", []).append(number)
                 parts = []
                 for owner_name, own in each.items():
-                    total_own = sum(own, Decimal(0))
-                    own_result = (
-                        total_own
-                        if operation == "sum"
-                        else (total_own / len(own)).quantize(Decimal("0.01"))
-                    )
+                    own_result = sum(own, Decimal(0)) if operation == "sum" else average(own)
                     parts.append(f"「{_md(owner_name)}」は**{self._format(own_result)}**")
                 outcome.answer += "書類ごとには、" + "、".join(parts) + "です。"
             shown = [self._format(v) for v in values[:STEP_TERMS]]
