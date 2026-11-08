@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
@@ -341,3 +341,77 @@ class ConversationSave(Contract):
     updated_at: int = Field(ge=0)
     turns: list[dict[str, Any]] = Field(max_length=60)
     images: list[str] = Field(default_factory=list, max_length=100)
+
+
+# --- Confirmed documents filtered and aggregated (for the MCP server and other callers) ---
+
+AggregationOperation = Literal["sum", "avg", "count", "max", "min"]
+
+
+class FieldCondition(Contract):
+    """A field outside any table whose value equals ``value`` (compared as the chat does)."""
+
+    label: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=200)
+
+
+class DocumentFilter(Contract):
+    """Which confirmed documents (newest version of each, none from the trash) to look at."""
+
+    template_id: str | None = Field(default=None, max_length=100)
+    document_ids: list[str] | None = Field(default=None, max_length=200)
+    # A document's name or identity value, as the list's ``q``.
+    query: str | None = Field(default=None, max_length=200)
+    field_equals: list[FieldCondition] = Field(default_factory=list, max_length=3)
+    # The confirmed date in Japan time, both ends included.
+    confirmed_from: date | None = None
+    confirmed_to: date | None = None
+
+
+class FieldSelector(Contract):
+    """A field outside any table (``section`` narrows it to one heading), or with
+    ``table_title`` a column of that table."""
+
+    label: str = Field(min_length=1, max_length=100)
+    section: str | None = Field(default=None, max_length=100)
+    table_title: str | None = Field(default=None, max_length=100)
+
+
+class AggregationRequest(DocumentFilter):
+    field: FieldSelector
+    operation: AggregationOperation
+
+
+class AggregationItem(Contract):
+    job_id: str
+    document_name: str | None = None
+    field_id: str | None = None
+    label: str
+    section: str | None = None
+    table_title: str | None = None
+    row_number: int | None = None
+    page_id: str | None = None
+    value: str | None = None
+    # The number the value was read as (a string: no float rounding).
+    number: str | None = None
+    # How it was read when not plainly: 「.」 as a thousands separator, as a decimal point,
+    # or not a number at all.
+    note: str | None = None
+
+
+class AggregationResult(Contract):
+    contract_version: Literal["structured.v1"] = CONTRACT_VERSION
+    operation: AggregationOperation
+    field: FieldSelector
+    # Null when no value could be read as a number (sum, avg, max, min).
+    result: str | None
+    count_used: int = Field(ge=0)
+    blank: int = Field(ge=0)
+    # The values used (for count: every written value); at most ITEM_LIMIT of each.
+    used: list[AggregationItem]
+    excluded: list[AggregationItem]
+    # For max / min: the values that are the result.
+    at: list[AggregationItem] = Field(default_factory=list)
+    documents: int = Field(ge=0)
+    # More documents matched than are read (DOCUMENT_LIMIT), or more items than are listed.
+    truncated: bool
