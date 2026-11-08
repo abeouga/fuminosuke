@@ -1,5 +1,0 @@
-C:\Users\hanam\Desktop\llm-ocr-deploy\sysover-ray\app\SysOverRay.pdb
-C:\Users\hanam\Desktop\llm-ocr-deploy\sysover-ray\app\overlay-settings.json
-C:\Users\hanam\Desktop\llm-ocr-deploy\sysover-ray\app\scripts\Stop-LlmOcr.ps1
-C:\Users\hanam\Desktop\llm-ocr-deploy\sysover-ray\app\scripts\Stop-LlmOcrPorts.ps1
-C:\Users\hanam\Desktop\llm-ocr-deploy\sysover-ray\app\SysOverRay.exe

@@ -41,3 +41,9 @@ backend/data/**
 !backend/bootstrap/
 !backend/bootstrap/templates/
 !backend/bootstrap/templates/**
+
+# Built per machine; they hold this PC's paths and change on every build.
+sysover-ray/SysOverRay/bin/
+sysover-ray/SysOverRay/obj/
+# Local preview servers point at this PC's folders.
+.claude/launch.json
