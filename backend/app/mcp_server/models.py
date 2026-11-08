@@ -46,3 +46,33 @@ class Evidence(BaseModel):
         default=None, description="保存値が画面の値と違うときだけ（例：黒2）"
     )
     status: Literal["readable", "uncertain", "blank"]
+
+
+class DocumentInfo(BaseModel):
+    document_id: str
+    document_name: str | None
+    template_id: str
+    template_name: str
+    version: int = Field(description="書類の版（更新して確定し直すと増える。返すのは最新の版だけ）")
+    confirmed_at: str | None = Field(description="確定した日時（日本時間）")
+
+
+class TableRowValues(BaseModel):
+    row_number: int
+    cells: dict[str, Evidence] = Field(description="列の名前 → その行のセル（空欄も含む）")
+
+
+class TableValues(BaseModel):
+    table_id: str
+    title: str
+    columns: list[str]
+    rows: list[TableRowValues] = Field(description="値のある行だけ（番号だけの行は除く）")
+    truncated: bool = Field(description="行が多く、上限で切ったとき true")
+
+
+class DocumentValues(BaseModel):
+    document: DocumentInfo
+    fields: list[Evidence] = Field(description="表の外の欄（帳票の上から順）")
+    tables: list[TableValues]
+    not_found_fields: list[str] = Field(description="fields で指定した名前のうち、無かったもの")
+    summary: str
