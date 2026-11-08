@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Annotated, Any, TypeVar
 
 import anyio
@@ -15,7 +16,11 @@ from pydantic import BaseModel, Field
 from app.mcp_server import evidence, resolve
 from app.mcp_server.client import FuminosukeClient, NotFoundResponse
 from app.mcp_server.errors import NotFound, ToolProblem
-from app.mcp_server.models import DocumentValues
+from app.mcp_server.models import (
+    DocumentValues,
+    TemplateList,
+    TemplateSummary,
+)
 
 DEFAULT_API_URL = "http://127.0.0.1:8010"
 
@@ -65,6 +70,27 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
     server = FuminosukeServer(base_url)
 
     @server.tool()
+    async def list_templates() -> Annotated[CallToolResult, TemplateList]:
+        """使用中の書類の種類（テンプレート）と、確定済みの書類の件数・最新の確定日を返す。
+
+        最初に呼んで、どんな書類があるかを確かめる。件数0のテンプレートも返す。
+        ごみ箱のテンプレートと、確定前の書類は含まない。
+        """
+
+        def work(client: FuminosukeClient) -> CallToolResult:
+            listed = resolve.catalog(client)
+            result = _template_list(listed)
+            lines = [result.summary]
+            lines.extend(
+                f"- {t.name}（ID {t.template_id}）：{t.document_count}件"
+                + (f"、最新の確定 {t.latest_confirmed_at[:10]}" if t.latest_confirmed_at else "")
+                for t in result.templates
+            )
+            return _answer(result, "\n".join(lines))
+
+        return await server.ask(work)
+
+    @server.tool()
     async def get_document(
         document: Annotated[
             str, Field(description="書類名・識別値（名号・受付番号など）又は書類ID")
@@ -100,6 +126,37 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
         return await server.ask(work)
 
     return server
+
+
+def _template_list(listed: resolve.Catalog) -> TemplateList:
+    counts: dict[str, int] = {}
+    latest: dict[str, str] = {}
+    for document in listed.documents:
+        template_id = document["templateId"]
+        counts[template_id] = counts.get(template_id, 0) + 1
+        latest[template_id] = max(latest.get(template_id, ""), document["confirmedAt"])
+    templates = [
+        TemplateSummary(
+            template_id=t["id"],
+            name=t["name"],
+            document_count=counts.get(t["id"], 0),
+            latest_confirmed_at=resolve.local_time(latest.get(t["id"])),
+        )
+        for t in listed.templates
+    ]
+    # 書類の多い順、同じなら最近確定した順（ライブラリで目に付く順に近い）。
+    templates.sort(key=lambda t: (-t.document_count, -_stamp(t.latest_confirmed_at)))
+    return TemplateList(
+        templates=templates,
+        summary=(
+            f"使用中のテンプレートは{len(templates)}種類、"
+            f"確定済みの書類は{len(listed.documents)}件です。"
+        ),
+    )
+
+
+def _stamp(value: str | None) -> float:
+    return datetime.fromisoformat(value).timestamp() if value else 0.0
 
 
 def _answer(model: BaseModel, text: str) -> CallToolResult:

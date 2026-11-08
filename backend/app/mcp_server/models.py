@@ -76,3 +76,16 @@ class DocumentValues(BaseModel):
     tables: list[TableValues]
     not_found_fields: list[str] = Field(description="fields で指定した名前のうち、無かったもの")
     summary: str
+
+
+class TemplateSummary(BaseModel):
+    template_id: str
+    name: str
+    document_count: int = Field(description="確定済みの書類の件数（最新の版だけを数える）")
+    latest_confirmed_at: str | None = Field(description="最後に確定した日時（日本時間）")
+
+
+class TemplateList(BaseModel):
+    templates: list[TemplateSummary]
+    summary: str
+
