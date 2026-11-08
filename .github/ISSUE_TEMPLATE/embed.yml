@@ -1,0 +1,59 @@
+name: Embed
+description: 親のチャットなどに iframe で埋め込む画面を作る
+title: "[Embed] "
+labels:
+  - Embed
+
+body:
+  - type: textarea
+    id: screen
+    attributes:
+      label: 埋め込む画面
+      description: どんな画面を埋め込むのか記載してください。
+      placeholder: 例）書類を開いて、指定した欄を強調するだけの画面
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: URLの決まり
+      placeholder: 例）/embed/document/{書類ID}?field={欄ID}
+    validations:
+      required: true
+
+  - type: textarea
+    id: messages
+    attributes:
+      label: 親とのやり取り（postMessage）
+      description: 親と埋め込み画面の間で送る内容を記載してください。
+      value: |
+        | 向き | 内容 |
+        |---|---|
+        | 親 → 画面 | 例）この欄を強調して |
+        | 画面 → 親 | 例）高さが変わった、確認画面を開きたい |
+    validations:
+      required: true
+
+  - type: textarea
+    id: auth
+    attributes:
+      label: ログインの受け渡し
+      description: 埋め込み画面がどうやってログイン状態を得るか記載してください。
+
+  - type: textarea
+    id: hidden
+    attributes:
+      label: 埋め込み時に出さないもの
+      placeholder: 例）上部バー、左のメニュー、読み取り状況
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      value: |
+        - [ ] チャットの右の欄に表示できる
+        - [ ] 親の作りが変わっても、埋め込み画面を直さずに済む
+        - [ ] 別のオリジンからの不正なメッセージを受け付けない
+    validations:
+      required: true

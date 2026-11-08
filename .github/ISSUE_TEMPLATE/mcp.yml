@@ -1,0 +1,91 @@
+name: MCP Tool
+description: AIが呼び出すMCPの道具（ツール）を追加・変更する
+title: "[MCP] "
+labels:
+  - MCP
+
+body:
+  - type: textarea
+    id: tool
+    attributes:
+      label: 道具の名前と役目
+      description: 道具の名前と、何をする道具かを記載してください。AIはこの説明を読んで道具を選びます。
+      placeholder: 例）search_documents：確定済みの書類を名前やテンプレートで探す
+    validations:
+      required: true
+
+  - type: dropdown
+    id: service
+    attributes:
+      label: どのサービスの道具か
+      options:
+        - 文之助
+        - カブロガー
+        - その他
+    validations:
+      required: true
+
+  - type: textarea
+    id: input
+    attributes:
+      label: 入力
+      description: 引数とその型・既定値を記載してください。
+      placeholder: |
+        例）
+        - query: string
+        - template: string（省略可）
+        - limit: int（既定10、最大50）
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: 出力
+      description: 返す欄と件数の上限を記載してください。回答の根拠に使う情報（kind・出典・位置）も入れてください。
+      placeholder: |
+        例）
+        - documents: [{id, name, template, confirmedAt}]
+        - sources: [{kind: "document", documentId, fieldId}]
+    validations:
+      required: true
+
+  - type: textarea
+    id: backend
+    attributes:
+      label: 呼び出す中身
+      description: 道具の中で呼ぶ既存の処理を記載してください。検索や計算の規則を道具の中に二重に書かないでください。
+      placeholder: 例）StructuredDocumentService.list
+
+  - type: dropdown
+    id: permission
+    attributes:
+      label: 権限
+      options:
+        - 読み取りだけ
+        - 書き込みあり（理由を補足に書く）
+    validations:
+      required: true
+
+  - type: textarea
+    id: errors
+    attributes:
+      label: エラーのときに返す文
+      description: AIが次にどうすればよいか分かるよう、何が足りないかを文章で返してください。
+      placeholder: 例）「こよみ」という名前の書類が2件あります。テンプレート名を指定してください。
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      value: |
+        - [ ] Claude Desktop につないで呼び出せる
+        - [ ] 説明文だけを読んで、AIが正しい場面でこの道具を選ぶ
+        - [ ] 返す量が上限を超えない
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足

@@ -1,0 +1,59 @@
+name: Epic
+description: 複数のIssueにまたがる大きな作業をまとめる親Issue
+title: "[Epic] "
+labels:
+  - Epic
+
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: ゴール
+      description: この一連の作業で何ができるようになるか記載してください。
+      placeholder: 例）チャットから文之助とカブロガーの両方に質問できる
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: なぜ今やるか
+      description: この作業に取り組む理由や期限の事情を記載してください。
+      placeholder: 例）11/13の面接で「部品＋親エージェント」の構成を見せる
+    validations:
+      required: true
+
+  - type: textarea
+    id: stages
+    attributes:
+      label: 段階と子Issue
+      description: 段階ごとに子Issueを記載してください。子Issueを作ったら番号を入れてください。
+      value: |
+        - [ ] 段階1：#
+        - [ ] 段階2：#
+        - [ ] 段階3：#
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 今回やらないこと
+      description: この一連の作業では扱わないことを記載してください。
+      placeholder: |
+        例）
+        - チャットを文之助から独立したアプリに切り出す
+        - 既存のQAの処理を置き換える
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 関連する設計
+      description: 関連する設計メモや資料があれば記載してください。
+      placeholder: 例）docs/strategy/agent-integration-architecture-2026-11-07.md
+
+  - type: input
+    id: deadline
+    attributes:
+      label: 期限
+      placeholder: 例）2026-11-13
