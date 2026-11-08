@@ -134,3 +134,28 @@ class DocumentList(BaseModel):
     total: int = Field(description="条件に合った件数（limit で切る前）")
     truncated: bool = Field(description="読む上限（200件）を超える書類が条件に合ったとき true")
     summary: str
+
+
+class AggregatedValue(Evidence):
+    """集計に使った（又は除いた）値と根拠。"""
+
+    number: str | None = Field(default=None, description="数として読んだ値（文字列）")
+    note: str | None = Field(
+        default=None,
+        description="読み方の注意（「.」を千の区切りとして読んだ・数として読めない等）",
+    )
+
+
+class AggregationValues(BaseModel):
+    operation: Literal["sum", "avg", "count", "max", "min"]
+    field: str = Field(description="集計した欄（表の列は「表名 列名」）")
+    template: TemplateRef
+    result: str | None = Field(description="結果（文字列、平均は小数2桁）。計算できなければ null")
+    count_used: int = Field(description="計算に使った値の数（count は空欄以外の値の数）")
+    blank: int = Field(description="空欄の数")
+    documents: int = Field(description="対象にした書類の数")
+    used: list[AggregatedValue]
+    excluded: list[AggregatedValue] = Field(description="数として読めず、除いた値")
+    at: list[AggregatedValue] = Field(description="max・min のとき、その値だった欄")
+    truncated: bool = Field(description="書類や値が多く、上限で切ったとき true")
+    summary: str

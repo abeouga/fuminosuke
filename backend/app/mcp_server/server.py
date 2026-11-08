@@ -6,7 +6,7 @@ import functools
 import io
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -20,6 +20,7 @@ from app.mcp_server import evidence, queries, resolve
 from app.mcp_server.client import FuminosukeClient, NotFoundResponse
 from app.mcp_server.errors import NotFound, ToolProblem
 from app.mcp_server.models import (
+    AggregationValues,
     DocumentList,
     DocumentValues,
     FieldEquals,
@@ -37,8 +38,8 @@ MAX_IMAGE_EDGE = 1024
 INSTRUCTIONS = """\
 このサーバーは、文之助（帳票の読み取りシステム）で人が確認・確定した帳票の値だけを返します。
 - 返した値をそのまま使い、推測で埋めたり言い換えたりしないでください。
-- 数の計算（合計・平均・件数・最大・最小）は自分でしないでください。
-  計算の道具がないときは、その旨を利用者に伝えてください。
+- 数の計算（合計・平均・件数・最大・最小）は自分でせず、aggregate を使ってください。
+  読めなかった値は除かれて理由が返るので、それも利用者に伝えてください。
 - 「毛色が黒の牛」のように欄の値・確定日で書類を探すときは search_documents を使ってください。
 - 答えには、書類名と欄名を根拠として添えてください。
 - 値が違いそうなときは直そうとせず、文之助の確認画面で確かめるよう利用者に勧めてください。
@@ -221,6 +222,65 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
             )
             result = queries.search(client, body, limit)
             return _answer(result, queries.search_text(result))
+
+        return await server.ask(work)
+
+    @server.tool()
+    async def aggregate(
+        template: Annotated[str, Field(description="テンプレートの名前又はID")],
+        field: Annotated[
+            str,
+            Field(
+                description=(
+                    "集計する欄の名前。表の列は「表名 列名」（例：売却子牛一覧 価格）、"
+                    "同じ名前の欄が複数の見出しにあれば「見出し 欄名」でもよい"
+                )
+            ),
+        ],
+        operation: Annotated[
+            Literal["sum", "avg", "count", "max", "min"],
+            Field(description="sum=合計、avg=平均、count=値のある欄の件数、max=最大、min=最小"),
+        ],
+        document: Annotated[
+            str | None, Field(description="1件の書類だけで計算するときの書類名・識別値又はID")
+        ] = None,
+        section: Annotated[
+            str | None, Field(description="欄のある見出し（同じ名前の欄が複数あるとき）")
+        ] = None,
+        field_equals: Annotated[
+            list[FieldEquals] | None,
+            Field(description="表の外の欄の値が一致する書類だけを対象にする（最大3つ）"),
+        ] = None,
+        confirmed_from: Annotated[
+            str | None, Field(description="確定日の始め（YYYY-MM-DD、日本時間）")
+        ] = None,
+        confirmed_to: Annotated[
+            str | None, Field(description="確定日の終わり（YYYY-MM-DD、日本時間）")
+        ] = None,
+    ) -> Annotated[CallToolResult, AggregationValues]:
+        """数値の欄（又は表の列）の合計・平均・件数・最大・最小を、文之助のサーバーで計算して返す。
+
+        「こよみの売却子牛の価格の合計は？」「一番高く売れた子牛は？」のように数を聞かれたら、
+        自分で足し算せずにこれを使う。数として読めない値（826-100 など）は推測せず除かれ、
+        理由付きで返る。使った値・最大最小の値だった欄は、根拠（書類・行・欄）付きで返る。
+        """
+
+        def work(client: FuminosukeClient) -> CallToolResult:
+            body, chosen_template, chosen_document = queries.filter_body(
+                client,
+                template=template,
+                document=document,
+                text=None,
+                field_equals=field_equals,
+                confirmed_from=confirmed_from,
+                confirmed_to=confirmed_to,
+            )
+            assert chosen_template is not None
+            selected = queries.selector(client, chosen_template.id, field, section)
+            result = queries.aggregate(
+                client, body, chosen_template, chosen_document, selected, operation
+            )
+            return _answer(result, queries.aggregate_text(result))
 
         return await server.ask(work)
 
