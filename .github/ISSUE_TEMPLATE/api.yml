@@ -1,0 +1,103 @@
+name: API
+description: 画面・MCP・ほかのシステムから呼ぶREST APIを追加・変更する
+title: "[API] "
+labels:
+  - API
+
+body:
+  - type: input
+    id: endpoint
+    attributes:
+      label: メソッドとパス
+      placeholder: 例）POST /api/v2/structured/aggregations
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 役目と呼び出す側
+      description: 何をするAPIか、誰（画面・MCPサーバー・ほかのシステム）が呼ぶかを記載してください。
+      placeholder: 例）確定済みの書類の数値の欄を集計する。文之助MCPの aggregate が呼ぶ。あとでチャットや統合画面からも使う
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: 要求
+      description: 引数とその型・既定値・上限を記載してください。
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: response
+    attributes:
+      label: 応答
+      description: 返す項目を記載してください。値を返すときは、根拠（書類ID・欄ID・位置）も返してください。
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: errors
+    attributes:
+      label: エラー
+      value: |
+        | 状態 | コード | どんなとき | 返す中身 |
+        |---|---|---|---|
+        | 404 |  |  |  |
+        | 409 |  |  |  |
+    validations:
+      required: true
+
+  - type: textarea
+    id: rules
+    attributes:
+      label: 守る規則
+      description: このAPIが守る業務の規則と、その規則を持っている既存の処理を記載してください。規則を新しく二重に書かないでください。
+      placeholder: |
+        例）
+        - 確定済みの書類だけ・最新の版だけ・ごみ箱を除く（StructuredDocumentService）
+        - 数値の読み方はチャットと同じ（structured/aggregation.py）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: access
+    attributes:
+      label: 受け付ける要求
+      options:
+        - 手元の画面・同じPCからだけ（今の構造化APIと同じ）
+        - ログインした利用者（クラウド）
+        - 機械用の鍵（外向けAPI）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: permission
+    attributes:
+      label: 権限
+      options:
+        - 読み取りだけ
+        - 書き込みあり（理由を補足に書く）
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      value: |
+        - [ ] 通常データで要求し、期待どおりの応答が返る
+        - [ ] 確定前の書類・ごみ箱の書類が含まれない
+        - [ ] エラーの表のとおりに返る
+        - [ ] 既存のAPIの応答が変わらない
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
