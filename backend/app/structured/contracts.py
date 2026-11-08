@@ -368,6 +368,20 @@ class DocumentFilter(Contract):
     confirmed_to: date | None = None
 
 
+class DocumentSearch(DocumentFilter):
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class DocumentSearchResult(Contract):
+    contract_version: Literal["structured.v1"] = CONTRACT_VERSION
+    # The list's summaries, newest first, at most ``limit``.
+    items: list[DocumentSummary]
+    # How many matched (before ``limit``).
+    total: int = Field(ge=0)
+    # More documents than are read (DOCUMENT_LIMIT) matched the template, name, ids and dates.
+    truncated: bool
+
+
 class FieldSelector(Contract):
     """A field outside any table (``section`` narrows it to one heading), or with
     ``table_title`` a column of that table."""

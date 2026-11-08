@@ -15,8 +15,8 @@ from typing import Any
 
 from app.editing.errors import reject
 from app.structured.aggregation import compute, extremes, read_numbers
-from app.structured.contracts import AggregationRequest, DocumentFilter
-from app.structured.matching import compact, value_equals
+from app.structured.contracts import AggregationRequest, DocumentFilter, DocumentSearch
+from app.structured.matching import compact, shown_value, value_equals
 from app.structured.service import StructuredDocumentService
 
 JST = timezone(timedelta(hours=9))
@@ -64,6 +64,29 @@ class StructuredQueryService:
     def documents(self, request: DocumentFilter) -> tuple[list[dict[str, Any]], bool]:
         """The matching confirmed documents (newest first, as the list), read in full; and
         whether more matched before the field conditions than DOCUMENT_LIMIT."""
+        summaries, truncated = self._summaries(request)
+        documents = [self._documents.get(s["jobId"]) for s in summaries]
+        if request.field_equals:
+            documents = [d for d in documents if self._holds(d, request)]
+        return documents, truncated
+
+    def search(self, request: DocumentSearch) -> dict[str, Any]:
+        """The matching confirmed documents as the list's summaries (newest first). A document
+        is read in full only when a field condition needs its values."""
+        summaries, truncated = self._summaries(request)
+        if request.field_equals:
+            summaries = [
+                s for s in summaries if self._holds(self._documents.get(s["jobId"]), request)
+            ]
+        return {
+            "items": summaries[: request.limit],
+            "total": len(summaries),
+            "truncated": truncated,
+        }
+
+    def _summaries(self, request: DocumentFilter) -> tuple[list[dict[str, Any]], bool]:
+        """The list's summaries narrowed by template, name, ids and confirmed date; at most
+        DOCUMENT_LIMIT of them, and whether there were more."""
         summaries = self._documents.list(
             limit=_LIST_LIMIT, template_id=request.template_id, query=request.query
         )
@@ -72,11 +95,7 @@ class StructuredQueryService:
             summaries = [s for s in summaries if s["jobId"] in wanted]
         if request.confirmed_from or request.confirmed_to:
             summaries = [s for s in summaries if self._in_range(s, request)]
-        truncated = len(summaries) > DOCUMENT_LIMIT
-        documents = [self._documents.get(s["jobId"]) for s in summaries[:DOCUMENT_LIMIT]]
-        if request.field_equals:
-            documents = [d for d in documents if self._holds(d, request)]
-        return documents, truncated
+        return summaries[:DOCUMENT_LIMIT], len(summaries) > DOCUMENT_LIMIT
 
     @staticmethod
     def _in_range(summary: dict[str, Any], request: DocumentFilter) -> bool:
@@ -89,12 +108,17 @@ class StructuredQueryService:
 
     @staticmethod
     def _holds(document: dict[str, Any], request: DocumentFilter) -> bool:
-        """Every condition is met by some field outside the tables with that name."""
+        """Every condition is met by some field outside the tables with that name, by its
+        stored value or as people see it."""
         outside = [f for f in document["fields"] if f["tableId"] is None]
         return all(
             any(
                 compact(f["label"]) == compact(condition.label)
-                and value_equals(f["value"], condition.value)
+                and (
+                    value_equals(f["value"], condition.value)
+                    # A selection as people see it: 「黒」 for the stored 「黒2」.
+                    or value_equals(shown_value(f["value"], f.get("choiceLabels")), condition.value)
+                )
                 for f in outside
             )
             for condition in request.field_equals
