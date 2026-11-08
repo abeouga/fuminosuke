@@ -29,6 +29,7 @@ dependencies = [
   "sqlalchemy==2.0.41",
   "uvicorn[standard]==0.35.0",
   "websockets==16.1.1",
+  "mcp==1.30.0",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The MCP server's texts (tool descriptions, messages to the AI) are Japanese with fullwidth punctuation.
+"app/mcp_server/*" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"
