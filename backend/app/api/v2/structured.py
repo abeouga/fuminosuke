@@ -16,6 +16,8 @@ from app.api.editing_transport import EditingRoute, local_request
 from app.core.errors import AppError
 from app.editing.errors import reject
 from app.structured.contracts import (
+    AggregationRequest,
+    AggregationResult,
     ChatEvent,
     ConversationSave,
     DocumentList,
@@ -28,6 +30,7 @@ from app.structured.contracts import (
 from app.structured.decisions import OpenAIDecisions
 from app.structured.general import OpenAIGeneral
 from app.structured.qa import QuestionEngine
+from app.structured.query import StructuredQueryService
 from app.structured.service import StructuredDocumentService
 from app.structured.voice import QuestionVoice
 
@@ -117,6 +120,19 @@ async def list_fields(
 ) -> dict[str, Any]:
     items = await asyncio.to_thread(runtime(request).service.field_names, template_id)
     return {"items": items}
+
+
+@router.post(
+    "/aggregations",
+    dependencies=[Depends(enabled)],
+    response_model=AggregationResult,
+    response_model_by_alias=True,
+)
+async def aggregate(request: Request, body: AggregationRequest) -> dict[str, Any]:
+    """Sum, average, count, maximum or minimum of a field over confirmed documents, read as
+    numbers with the chat's rules; what could not be read is listed, not guessed."""
+    query = StructuredQueryService(runtime(request).service)
+    return await asyncio.to_thread(query.aggregate, body)
 
 
 @router.post(
