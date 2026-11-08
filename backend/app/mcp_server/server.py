@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import io
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Annotated, Any, TypeVar
@@ -10,7 +11,9 @@ from typing import Annotated, Any, TypeVar
 import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.utilities.types import Image
 from mcp.types import CallToolResult, ContentBlock, TextContent
+from PIL import Image as PILImage
 from pydantic import BaseModel, Field
 
 from app.mcp_server import evidence, resolve
@@ -26,6 +29,8 @@ from app.mcp_server.models import (
 )
 
 DEFAULT_API_URL = "http://127.0.0.1:8010"
+# get_field_image で返す画像の長い辺の上限。
+MAX_IMAGE_EDGE = 1024
 
 INSTRUCTIONS = """\
 このサーバーは、文之助（帳票の読み取りシステム）で人が確認・確定した帳票の値だけを返します。
@@ -149,6 +154,33 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
 
         return await server.ask(work)
 
+    @server.tool(structured_output=False)
+    async def get_field_image(
+        document_id: Annotated[str, Field(description="get_document が返した書類ID")],
+        field_id: Annotated[str, Field(description="get_document が返した欄ID（field_id）")],
+    ) -> list[Image | str]:
+        """欄の切り抜き画像（元の手書き）を返す。PNG、長い辺1024pxまで、1回に1枚。
+
+        読み取った値を元の手書きで確かめたいとき、利用者に元の記入を見せたいときに使う。
+        画像の文字を読んで値を直さない（値は get_document が返した確定済みの値を使う）。
+        """
+
+        def work(client: FuminosukeClient) -> list[Image | str]:
+            chosen = resolve.document(client, document_id)
+            document = _read(client, chosen.id)
+            reading = _field(document, field_id)
+            if not reading.get("cropUrl"):
+                raise ToolProblem(f"欄 {field_id} には切り抜き画像がありません。")
+            item = evidence.reading_evidence(client, document, reading)
+            data = _shrink(client.image(reading["cropUrl"]))
+            value = item.value if item.value is not None else "空欄"
+            return [
+                Image(data=data, format="png"),
+                f"{item.label}の切り抜き（確定済みの値：{value}）",
+            ]
+
+        return await server.ask(work)
+
     return server
 
 
@@ -207,6 +239,31 @@ def _answer(model: BaseModel, text: str) -> CallToolResult:
         content=[TextContent(type="text", text=text)],
         structuredContent=model.model_dump(mode="json"),
     )
+
+
+def _field(document: dict[str, Any], wanted: str) -> dict[str, Any]:
+    """欄ID の一致。無ければ欄名（文字のそろえ方は compact）が1つだけ当たるもの。"""
+    readings: list[dict[str, Any]] = document["fields"]
+    hit = next((r for r in readings if r["fieldId"] == wanted.strip()), None)
+    if hit is not None:
+        return hit
+    named = [r for r in readings if resolve.compact(r["label"]) == resolve.compact(wanted)]
+    if len(named) == 1:
+        return named[0]
+    raise ToolProblem(f"この書類に欄 {wanted} はありません。get_document で欄を確かめてください。")
+
+
+def _shrink(data: bytes) -> bytes:
+    """長い辺を MAX_IMAGE_EDGE までに縮めて PNG に。"""
+    with PILImage.open(io.BytesIO(data)) as image:
+        image.load()
+        if max(image.size) > MAX_IMAGE_EDGE:
+            image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE))
+        if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA"}:
+            image = image.convert("RGB")
+        out = io.BytesIO()
+        image.save(out, format="PNG", optimize=True)
+        return out.getvalue()
 
 
 def _read(client: FuminosukeClient, job_id: str) -> dict[str, Any]:
