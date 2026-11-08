@@ -18,7 +18,19 @@ DEFAULT_TIMEOUT = 15.0
 LIST_LIMIT = 1000
 
 
-class NotFoundResponse(Exception):
+class Refused(ServerFailure):
+    """呼び先が 4xx を返した（409 の候補・422 の項目の誤りを持つ）。道具が文章に直す。"""
+
+    def __init__(self, status: int, problem: dict[str, Any]) -> None:
+        self.status = status
+        self.code: str | None = problem.get("code")
+        self.message = str(problem.get("message") or problem.get("detail") or f"HTTP {status}")
+        self.candidates: list[dict[str, Any]] = list(problem.get("candidateHandles") or [])
+        self.field_errors: list[dict[str, Any]] = list(problem.get("fieldErrors") or [])
+        super().__init__(self.message)
+
+
+class NotFoundResponse(Refused):
     """呼び先が 404 を返した。何が見つからなかったかは呼び出し側が文章にする。"""
 
 
@@ -60,6 +72,18 @@ class FuminosukeClient:
         body = self._get("/api/v2/structured/fields", params={"templateId": template_id}).json()
         return cast(list[dict[str, Any]], body["items"])
 
+    def search(self, body: dict[str, Any]) -> dict[str, Any]:
+        """欄の値・確定日などで絞った確定済みの書類（POST /documents/search）。"""
+        return cast(
+            dict[str, Any], self._send("POST", "/api/v2/structured/documents/search", body).json()
+        )
+
+    def aggregate(self, body: dict[str, Any]) -> dict[str, Any]:
+        """数値の欄・列の集計（POST /aggregations）。計算は文之助のサーバーが行う。"""
+        return cast(
+            dict[str, Any], self._send("POST", "/api/v2/structured/aggregations", body).json()
+        )
+
     def image(self, path: str) -> bytes:
         """文之助が返した相対のURL（/api/v1/jobs/…/artifacts/…）の画像だけを読む。"""
         if not path.startswith("/api/v1/jobs/"):
@@ -73,8 +97,18 @@ class FuminosukeClient:
         return path if path.startswith(("http://", "https://")) else self.base_url + path
 
     def _get(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+        return self._send("GET", path, params=params)
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
         try:
-            response = self._http.get(path, params=params)
+            response = self._http.request(method, path, params=params, json=body)
         except httpx.TransportError as error:
             if isinstance(error, httpx.ConnectError | httpx.ConnectTimeout):
                 raise Unavailable(self.base_url) from error
@@ -83,9 +117,11 @@ class FuminosukeClient:
             return response
         problem = _problem(response)
         if response.status_code == 404:
-            raise NotFoundResponse(problem.get("code"))
+            raise NotFoundResponse(404, problem)
         if response.status_code == 503 and problem.get("code") == "STRUCTURED_DATA_DISABLED":
             raise Disabled()
+        if 400 <= response.status_code < 500:
+            raise Refused(response.status_code, problem)
         message = problem.get("message") or problem.get("detail") or f"HTTP {response.status_code}"
         raise ServerFailure(str(message))
 

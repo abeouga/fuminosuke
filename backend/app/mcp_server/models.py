@@ -105,3 +105,32 @@ class TemplateFields(BaseModel):
     fields: list[str] = Field(description="表の外の欄の名前")
     tables: list[TableColumns] = Field(description="表ごとの列の名前")
     summary: str
+
+
+class FieldEquals(BaseModel):
+    """表の外の欄の値が一致する書類だけに絞る条件（保存値でも画面の値でも一致する）。"""
+
+    field: str = Field(min_length=1, max_length=100, description="欄の名前（例：毛色）")
+    value: str = Field(min_length=1, max_length=200, description="値（例：黒）")
+
+
+class IdentityValue(BaseModel):
+    label: str
+    value: str | None
+
+
+class DocumentSummary(BaseModel):
+    document_id: str
+    document_name: str | None
+    template_id: str
+    template_name: str
+    version: int
+    confirmed_at: str | None
+    identity: list[IdentityValue] = Field(description="書類を見分ける欄（名号・受付番号など）")
+
+
+class DocumentList(BaseModel):
+    documents: list[DocumentSummary] = Field(description="新しく確定した順")
+    total: int = Field(description="条件に合った件数（limit で切る前）")
+    truncated: bool = Field(description="読む上限（200件）を超える書類が条件に合ったとき true")
+    summary: str

@@ -16,11 +16,13 @@ from mcp.types import CallToolResult, ContentBlock, TextContent
 from PIL import Image as PILImage
 from pydantic import BaseModel, Field
 
-from app.mcp_server import evidence, resolve
+from app.mcp_server import evidence, queries, resolve
 from app.mcp_server.client import FuminosukeClient, NotFoundResponse
 from app.mcp_server.errors import NotFound, ToolProblem
 from app.mcp_server.models import (
+    DocumentList,
     DocumentValues,
+    FieldEquals,
     TableColumns,
     TemplateFields,
     TemplateList,
@@ -37,6 +39,7 @@ INSTRUCTIONS = """\
 - 返した値をそのまま使い、推測で埋めたり言い換えたりしないでください。
 - 数の計算（合計・平均・件数・最大・最小）は自分でしないでください。
   計算の道具がないときは、その旨を利用者に伝えてください。
+- 「毛色が黒の牛」のように欄の値・確定日で書類を探すときは search_documents を使ってください。
 - 答えには、書類名と欄名を根拠として添えてください。
 - 値が違いそうなときは直そうとせず、文之助の確認画面で確かめるよう利用者に勧めてください。
 - 名前が1つに決まらないと返されたら、候補から選び直すか、利用者に聞いてください。
@@ -178,6 +181,46 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
                 Image(data=data, format="png"),
                 f"{item.label}の切り抜き（確定済みの値：{value}）",
             ]
+
+        return await server.ask(work)
+
+    @server.tool()
+    async def search_documents(
+        template: Annotated[str | None, Field(description="テンプレートの名前又はID")] = None,
+        text: Annotated[
+            str | None, Field(description="書類名・識別値（名号・受付番号など）に含まれる語")
+        ] = None,
+        field_equals: Annotated[
+            list[FieldEquals] | None,
+            Field(description="表の外の欄の値が一致する書類だけに絞る（最大3つ、全部に合うもの）"),
+        ] = None,
+        confirmed_from: Annotated[
+            str | None, Field(description="確定日の始め（YYYY-MM-DD、日本時間、その日を含む）")
+        ] = None,
+        confirmed_to: Annotated[
+            str | None, Field(description="確定日の終わり（YYYY-MM-DD、日本時間、その日を含む）")
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=50, description="返す件数（既定20、最大50）")] = 20,
+    ) -> Annotated[CallToolResult, DocumentList]:
+        """確定済みの書類を探して、一覧（書類名・識別値・確定日）と件数を返す。値は返さない。
+
+        「毛色が黒の牛は？」「10月に確定した書類は？」のように、条件に合う書類を探す・数える
+        ときに使う。絞り込みは文之助のサーバーが行う（欄の値は保存値でも画面の値でも一致）。
+        値が要るときは、見つかった書類を get_document で読む。
+        """
+
+        def work(client: FuminosukeClient) -> CallToolResult:
+            body, _, _ = queries.filter_body(
+                client,
+                template=template,
+                document=None,
+                text=text,
+                field_equals=field_equals,
+                confirmed_from=confirmed_from,
+                confirmed_to=confirmed_to,
+            )
+            result = queries.search(client, body, limit)
+            return _answer(result, queries.search_text(result))
 
         return await server.ask(work)
 
