@@ -37,8 +37,12 @@ class NotFoundResponse(Refused):
 class FuminosukeClient:
     """1回の道具の呼び出しの間だけ使う。同じ書類を2回読まないよう、その間だけ覚える。"""
 
-    def __init__(self, base_url: str, timeout: float = DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self, base_url: str, timeout: float = DEFAULT_TIMEOUT, *, web_url: str | None = None
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        # 文之助の画面の住所。API のサーバーは画面を配らないので、埋め込み用の画面はこちらで作る。
+        self.web_url = web_url.rstrip("/") if web_url else None
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout)
         self._documents: dict[str, dict[str, Any]] = {}
 
@@ -47,6 +51,15 @@ class FuminosukeClient:
 
     def __exit__(self, *_: object) -> None:
         self._http.close()
+
+    def embed(self, job_id: str, field_id: str | None) -> str | None:
+        """書類（と欄）を見るだけの埋め込み用の画面の絶対URL。画面の住所の設定がなければ None。"""
+        if not self.web_url:
+            return None
+        query = f"job={quote(job_id, safe='')}"
+        if field_id:
+            query += f"&field={quote(field_id, safe='')}"
+        return f"{self.web_url}/embed?{query}"
 
     def templates(self) -> list[dict[str, Any]]:
         return cast(list[dict[str, Any]], self._get("/api/v1/templates").json())
