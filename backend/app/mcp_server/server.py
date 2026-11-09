@@ -203,11 +203,12 @@ def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
         ] = None,
         limit: Annotated[int, Field(ge=1, le=50, description="返す件数（既定20、最大50）")] = 20,
     ) -> Annotated[CallToolResult, DocumentList]:
-        """確定済みの書類を探して、一覧（書類名・識別値・確定日）と件数を返す。値は返さない。
+        """確定済みの書類を探して、一覧（書類名・識別値・確定日）と件数を返す。
 
         「毛色が黒の牛は？」「10月に確定した書類は？」のように、条件に合う書類を探す・数える
         ときに使う。絞り込みは文之助のサーバーが行う（欄の値は保存値でも画面の値でも一致）。
-        値が要るときは、見つかった書類を get_document で読む。
+        field_equals で探したときは、各書類の matched に一致した欄の値と根拠が入る。
+        ほかの欄の値が要るときは、見つかった書類を get_document で読む。
         """
 
         def work(client: FuminosukeClient) -> CallToolResult:
