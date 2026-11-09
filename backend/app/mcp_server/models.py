@@ -42,6 +42,10 @@ class Evidence(BaseModel):
     label: str = Field(description="人が読む根拠の名前（例：繁殖台帳1021「はじめ」の毛色）")
     location: DocumentLocation
     value: str | None = Field(description="画面（ライブラリ）に出す値。空欄は null")
+    embed_url: str | None = Field(
+        default=None,
+        description="この書類と欄を見るだけの文之助の画面（iframe に埋め込める）。無ければ null",
+    )
     stored_value: str | None = Field(
         default=None, description="保存値が画面の値と違うときだけ（例：黒2）"
     )

@@ -9,9 +9,15 @@ https://{$BETA_SITE} {
     header {
         Referrer-Policy no-referrer
         X-Content-Type-Options nosniff
+    }
+    # Only the embed page may be framed, and only by EMBED_ORIGINS (space separated); unset, by no one.
+    @embed path /embed
+    @not_embed not path /embed
+    header @not_embed {
         X-Frame-Options DENY
         Content-Security-Policy "frame-ancestors 'none'"
     }
+    header @embed Content-Security-Policy "frame-ancestors {$EMBED_ORIGINS:'none'}"
     handle /api/* {
         reverse_proxy backend:8000
     }

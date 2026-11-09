@@ -1,0 +1,15 @@
+/* The embed page (/embed): the document viewer filling the frame, nothing else of the app. */
+html.embed-root, html.embed-root body, html.embed-root #root { height: 100%; margin: 0; background: var(--ui-surface, #fff); }
+.embed-page { box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; height: 100dvh; padding: 8px; }
+.embed-page .shelf-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.embed-page .shelf-viewer-scroll { flex: 1; min-height: 0; max-height: none; }
+.embed-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; margin: 0; font-size: 14px; font-weight: 700; color: var(--ui-text, #1d3545); }
+.embed-title svg { flex: none; align-self: center; }
+.embed-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.embed-title small { flex: none; color: var(--ui-text-muted, #5f7180); font-size: 12px; font-weight: 400; }
+.embed-open { display: inline-flex; flex: none; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--ui-border, #c2cdd7); border-radius: 7px; background: #fff; color: var(--ui-primary, #23699e); font-size: 13px; text-decoration: none; white-space: nowrap; }
+.embed-open:hover { border-color: var(--ui-primary, #23699e); }
+.embed-message { display: flex; align-items: center; gap: 8px; margin: auto; color: var(--ui-text-muted, #5f7180); font-size: 14px; text-align: center; }
+.embed-note { display: flex; gap: 10px; margin: 0; padding: 8px 12px; border: 1px solid var(--ui-border, #c2cdd7); border-left: 3px solid var(--ui-primary, #23699e); border-radius: 10px; background: #fff; font-size: 14px; overflow-wrap: anywhere; }
+.embed-note-label { flex: none; color: var(--ui-text-muted, #5f7180); }
+.embed-note-blank { color: var(--ui-text-muted, #5f7180); }

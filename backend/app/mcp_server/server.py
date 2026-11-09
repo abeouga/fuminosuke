@@ -53,9 +53,10 @@ T = TypeVar("T")
 class FuminosukeServer(FastMCP):
     """道具の中の ToolProblem を、その文章だけの isError の結果として返す。"""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, web_url: str | None = None) -> None:
         super().__init__("fuminosuke", instructions=INSTRUCTIONS)
         self.base_url = base_url
+        self.web_url = web_url
 
     async def call_tool(  # type: ignore[override]  # the low-level server accepts CallToolResult
         self, name: str, arguments: dict[str, Any]
@@ -72,14 +73,14 @@ class FuminosukeServer(FastMCP):
         """1回の道具の呼び出しを、その間だけの接続で、別スレッドで行う（通信を待つ間も応答できる）。"""
 
         def run() -> T:
-            with FuminosukeClient(self.base_url) as client:
+            with FuminosukeClient(self.base_url, web_url=self.web_url) as client:
                 return work(client)
 
         return await anyio.to_thread.run_sync(functools.partial(run))
 
 
-def build_server(base_url: str = DEFAULT_API_URL) -> FuminosukeServer:
-    server = FuminosukeServer(base_url)
+def build_server(base_url: str = DEFAULT_API_URL, web_url: str | None = None) -> FuminosukeServer:
+    server = FuminosukeServer(base_url, web_url)
 
     @server.tool()
     async def list_templates() -> Annotated[CallToolResult, TemplateList]:

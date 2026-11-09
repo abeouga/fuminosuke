@@ -86,6 +86,9 @@ def reading_evidence(
             image_url=client.absolute(page_image(document, reading.get("pageId"))),
         ),
         value=shown,
+        embed_url=client.embed(document["jobId"], reading.get("fieldId"))
+        if document.get("templateId")
+        else None,
         stored_value=stored if stored != shown else None,
         status=reading["status"],
     )
