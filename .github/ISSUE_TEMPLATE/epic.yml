@@ -18,8 +18,8 @@ body:
     id: reason
     attributes:
       label: なぜ今やるか
-      description: この作業に取り組む理由や期限の事情を記載してください。
-      placeholder: 例）11/13の面接で「部品＋親エージェント」の構成を見せる
+      description: この作業に取り組む理由を、技術や業務の言葉で記載してください。
+      placeholder: 例）部品の MCP がそろったので、親のチャットから呼び分けられるようにする
     validations:
       required: true
 
@@ -56,4 +56,4 @@ body:
     id: deadline
     attributes:
       label: 期限
-      placeholder: 例）2026-11-13
+      placeholder: 例）2026-12-01

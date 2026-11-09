@@ -22,7 +22,7 @@ body:
       placeholder: |
         例）
         - 値を確定するのは文之助の中の人だけ（設計図§4）
-        - 11/13までに見せられる形にしたい
+        - 部品とは MCP か API だけでつなぐ
     validations:
       required: true
 
