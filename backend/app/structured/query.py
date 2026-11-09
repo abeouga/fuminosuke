@@ -74,13 +74,18 @@ class StructuredQueryService:
         """The matching confirmed documents as the list's summaries (newest first). A document
         is read in full only when a field condition needs its values."""
         summaries, truncated = self._summaries(request)
-        if request.field_equals:
-            summaries = [
-                s for s in summaries if self._holds(self._documents.get(s["jobId"]), request)
-            ]
+        items: list[dict[str, Any]] = []
+        for summary in summaries:
+            matched: list[str] = []
+            if request.field_equals:
+                found = self._matches(self._documents.get(summary["jobId"]), request)
+                if found is None:
+                    continue
+                matched = found
+            items.append({**summary, "matchedFieldIds": matched})
         return {
-            "items": summaries[: request.limit],
-            "total": len(summaries),
+            "items": items[: request.limit],
+            "total": len(items),
             "truncated": truncated,
         }
 
@@ -106,23 +111,32 @@ class StructuredQueryService:
             return False
         return not (request.confirmed_to and day > request.confirmed_to)
 
+    @classmethod
+    def _holds(cls, document: dict[str, Any], request: DocumentFilter) -> bool:
+        return cls._matches(document, request) is not None
+
     @staticmethod
-    def _holds(document: dict[str, Any], request: DocumentFilter) -> bool:
-        """Every condition is met by some field outside the tables with that name, by its
-        stored value or as people see it."""
+    def _matches(document: dict[str, Any], request: DocumentFilter) -> list[str] | None:
+        """The ids of the fields that meet the conditions, in condition order; None when some
+        condition is met by no field. A condition is met by a field outside the tables with
+        that name, by its stored value or as people see it."""
         outside = [f for f in document["fields"] if f["tableId"] is None]
-        return all(
-            any(
-                compact(f["label"]) == compact(condition.label)
+        matched: list[str] = []
+        for condition in request.field_equals:
+            hits = [
+                f["fieldId"]
+                for f in outside
+                if compact(f["label"]) == compact(condition.label)
                 and (
                     value_equals(f["value"], condition.value)
                     # A selection as people see it: 「黒」 for the stored 「黒2」.
                     or value_equals(shown_value(f["value"], f.get("choiceLabels")), condition.value)
                 )
-                for f in outside
-            )
-            for condition in request.field_equals
-        )
+            ]
+            if not hits:
+                return None
+            matched.extend(h for h in hits if h not in matched)
+        return matched
 
     # --- Aggregation -----------------------------------------------------------------------
 

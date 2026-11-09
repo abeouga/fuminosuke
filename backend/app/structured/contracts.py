@@ -372,10 +372,16 @@ class DocumentSearch(DocumentFilter):
     limit: int = Field(default=20, ge=1, le=200)
 
 
+class DocumentSearchItem(DocumentSummary):
+    # The fields outside the tables that met ``field_equals``, in condition order (empty
+    # without conditions).
+    matched_field_ids: list[str] = Field(default_factory=list)
+
+
 class DocumentSearchResult(Contract):
     contract_version: Literal["structured.v1"] = CONTRACT_VERSION
     # The list's summaries, newest first, at most ``limit``.
-    items: list[DocumentSummary]
+    items: list[DocumentSearchItem]
     # How many matched (before ``limit``).
     total: int = Field(ge=0)
     # More documents than are read (DOCUMENT_LIMIT) matched the template, name, ids and dates.

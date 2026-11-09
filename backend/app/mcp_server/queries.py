@@ -14,6 +14,7 @@ from app.mcp_server.models import (
     AggregationValues,
     DocumentList,
     DocumentSummary,
+    Evidence,
     FieldEquals,
     IdentityValue,
     TemplateRef,
@@ -71,6 +72,7 @@ def search(client: FuminosukeClient, body: dict[str, Any], limit: int) -> Docume
             identity=[
                 IdentityValue(label=i["label"], value=i.get("value")) for i in item["identity"]
             ],
+            matched=_matched(client, item),
         )
         for item in found["items"]
     ]
@@ -87,14 +89,37 @@ def search(client: FuminosukeClient, body: dict[str, Any], limit: int) -> Docume
     )
 
 
+def _matched(client: FuminosukeClient, item: dict[str, Any]) -> list[Evidence]:
+    """検索の条件に一致した欄（文之助のサーバーが判定した欄ID）を、根拠の形に。"""
+    wanted = item.get("matchedFieldIds") or []
+    if not wanted:
+        return []
+    try:
+        document = client.document(item["jobId"])
+    except NotFoundResponse:
+        return []  # 検索の後に再編集・削除された。
+    by_id = {f["fieldId"]: f for f in document["fields"]}
+    return [
+        evidence.reading_evidence(client, document, by_id[field_id])
+        for field_id in wanted
+        if field_id in by_id
+    ]
+
+
 def search_text(result: DocumentList) -> str:
     lines = [result.summary]
     for d in result.documents:
         identity = "、".join(f"{i.label}={i.value}" for i in d.identity if i.value)
+        matched = "、".join(
+            f"{m.location.field_label}={m.value if m.value is not None else '空欄'}"
+            f"〔{m.location.field_id}〕"
+            for m in d.matched
+        )
         lines.append(
             f"- {d.document_name or '書類名なし'}（書類ID {d.document_id}、{d.template_name}"
             + (f"、{identity}" if identity else "")
             + f"、版{d.version}、確定 {(d.confirmed_at or '')[:10]}）"
+            + (f" 一致した欄：{matched}" if matched else "")
         )
     return "\n".join(lines)
 

@@ -127,6 +127,10 @@ class DocumentSummary(BaseModel):
     version: int
     confirmed_at: str | None
     identity: list[IdentityValue] = Field(description="書類を見分ける欄（名号・受付番号など）")
+    matched: list[Evidence] = Field(
+        default_factory=list,
+        description="field_equals の条件に一致した欄の値と根拠（条件の順、条件がなければ空）",
+    )
 
 
 class DocumentList(BaseModel):
