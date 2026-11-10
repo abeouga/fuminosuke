@@ -161,9 +161,9 @@
 
 /* source document beside the chat */
 .ask-document-panel{gap:10px;padding:12px;overflow:hidden}
-.ask-document-panel .shelf-viewer{flex:1;min-height:0;display:flex;flex-direction:column}
-.ask-document-panel .shelf-viewer-scroll{flex:1;max-height:none;min-height:160px}
-.ask-document-panel .ask-panel-lead{display:flex;align-items:center;gap:8px;margin:0;color:var(--ui-text-muted);font-size:13px}
+:is(.ask-document-panel,.embed-page) .shelf-viewer{flex:1;min-height:0;display:flex;flex-direction:column}
+:is(.ask-document-panel,.embed-page) .shelf-viewer-scroll{flex:1;max-height:none;min-height:160px}
+:is(.ask-document-panel,.embed-page) .ask-panel-lead{display:flex;align-items:center;gap:8px;margin:0;color:var(--ui-text-muted);font-size:13px}
 .ask-document-focus{display:grid;gap:3px;padding:10px 12px;border:1px solid #f0c9a8;border-left:4px solid #d9480f;border-radius:10px;background:#fff7f0}
 .ask-document-focus p{margin:0}
 .ask-document-label{display:flex;align-items:center;gap:8px;color:var(--ui-text-secondary);font-size:13px}
@@ -422,10 +422,10 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 
 /* 書類欄：書類名・倍率・閉じるを1行に */
 .ask-document-panel{padding:0}
-.ask-document-panel .shelf-viewer{border:0;border-radius:0}
-.ask-document-panel .shelf-viewer-tools{min-height:48px;padding:6px 8px 6px 14px}
-.ask-document-panel .ask-panel-head{min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--ui-border)}
-.ask-document-panel .ask-panel-lead{padding:12px 14px}
+:is(.ask-document-panel,.embed-page) .shelf-viewer{border:0;border-radius:0}
+:is(.ask-document-panel,.embed-page) .shelf-viewer-tools{min-height:48px;padding:6px 8px 6px 14px}
+:is(.ask-document-panel,.embed-page) .ask-panel-head{min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--ui-border)}
+:is(.ask-document-panel,.embed-page) .ask-panel-lead{padding:12px 14px}
 .ask-document-title{display:flex;align-items:center;gap:7px;min-width:0;margin:0;color:var(--ui-text);font-size:16px;font-weight:800}
 .ask-document-title span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ask-document-title svg{flex:none;color:var(--ui-text-muted)}
@@ -435,7 +435,7 @@ body.ask-resizing{cursor:col-resize;user-select:none}
 
 /* 右の書類欄は右から滑り込んで開き、中の画像はフェードで出る（狭い画面では下から） */
 .ask-document-panel{animation:ask-panel-in .38s cubic-bezier(.2,.8,.2,1)}
-.ask-document-panel .shelf-viewer-scroll{animation:ask-panel-content .5s .08s cubic-bezier(.2,.8,.2,1) both}
+:is(.ask-document-panel,.embed-page) .shelf-viewer-scroll{animation:ask-panel-content .5s .08s cubic-bezier(.2,.8,.2,1) both}
 @keyframes ask-panel-in{from{opacity:0;transform:translateX(36px)}to{opacity:1;transform:none}}
 @keyframes ask-panel-content{from{opacity:0}to{opacity:1}}
 @media (max-width:900px){
@@ -443,7 +443,7 @@ body.ask-resizing{cursor:col-resize;user-select:none}
   @keyframes ask-panel-up{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:none}}
 }
 @media (prefers-reduced-motion:reduce){
-  .ask-document-panel,.ask-document-panel .shelf-viewer-scroll{animation:none}
+  .ask-document-panel,:is(.ask-document-panel,.embed-page) .shelf-viewer-scroll{animation:none}
 }
 /* 会話を切り替えたときは、書類欄も会話の中身と同じく下から浮き上がる */
 .ask-document-panel.switched{animation:ask-rise .45s cubic-bezier(.2,.8,.2,1)}
