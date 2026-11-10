@@ -6,10 +6,18 @@ declare const __EMBED_ORIGINS__: string[];
 /** Origins allowed to embed this page (the same list as the frame-ancestors header). */
 export const EMBED_ORIGINS: readonly string[] = typeof __EMBED_ORIGINS__ === "undefined" ? [] : __EMBED_ORIGINS__;
 
+/** At most this many cells in one `fieldIds`, each id 1 to `MAX_ID_LENGTH` characters. */
+export const MAX_FIELD_IDS = 500;
+const MAX_ID_LENGTH = 200;
+
 export type EmbedErrorCode = "DOCUMENT_NOT_FOUND" | "FIELD_NOT_FOUND" | "LOAD_FAILED";
 
-export type ParentMessage = { type: "agorack:highlight"; fieldId: string | null };
-export type EmbedMessage = { type: "embed:ready" } | { type: "embed:error"; code: EmbedErrorCode };
+/**
+ * `fieldId` is the cell to show most; `fieldIds`, when given, are all of the answer's cells on this
+ * document, drawn together the way the chat's document panel draws them.
+ */
+export type ParentMessage = { type: "agorack:highlight"; fieldId: string | null; fieldIds: string[] | null };
+export type EmbedMessage = { type: "embed:ready" } | { type: "embed:error"; code: EmbedErrorCode } | { type: "embed:close" };
 
 export function allowedOrigin(origin: string | null | undefined): origin is string {
   return Boolean(origin) && EMBED_ORIGINS.includes(origin!);
@@ -25,15 +33,21 @@ export function initialParentOrigin(): string | null {
   return allowedOrigin(origin) ? origin : null;
 }
 
+function validId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH;
+}
+
 /** A message from the parent, or null when it is not one this page understands. */
 export function parentMessage(data: unknown): ParentMessage | null {
   if (!data || typeof data !== "object") return null;
   const value = data as Record<string, unknown>;
   if (value.type !== "agorack:highlight") return null;
-  const fieldId = value.fieldId;
-  if (fieldId === null || fieldId === undefined) return { type: "agorack:highlight", fieldId: null };
-  if (typeof fieldId !== "string" || fieldId.length === 0 || fieldId.length > 200) return null;
-  return { type: "agorack:highlight", fieldId };
+  const fieldId = value.fieldId ?? null;
+  if (fieldId !== null && !validId(fieldId)) return null;
+  const fieldIds = value.fieldIds ?? null;
+  if (fieldIds === null) return { type: "agorack:highlight", fieldId, fieldIds: null };
+  if (!Array.isArray(fieldIds) || fieldIds.length > MAX_FIELD_IDS || !fieldIds.every(validId)) return null;
+  return { type: "agorack:highlight", fieldId, fieldIds: [...fieldIds] };
 }
 
 export function postToParent(origin: string | null, message: EmbedMessage): void {
