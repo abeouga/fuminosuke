@@ -793,7 +793,7 @@ def build_mapped_input_content(
     return content
 
 
-# 2026-10-18: a text cell whose crop still shows the printed template (date slashes,
+# A text cell whose crop still shows the printed template (date slashes,
 # empty brackets, units, printed choices) also carries the same crop with the
 # template removed, so a blank cell is not read from its print and handwriting is
 # read in full. Mark candidates keep their own pool instructions.
@@ -817,7 +817,7 @@ HANDWRITING_HINT_INSTRUCTIONS = (
     "候補プールが指定されたIDの読み方と判定はこの段落で変えません。"
 )
 
-# 2026-10-19: a field can carry the reading rule its template settings give
+# A field can carry the reading rule its template settings give
 # (for example "write 10-2-10 as 10.2.10"). The rule is the user's, not image text.
 READING_INSTRUCTION_INSTRUCTIONS = (
     "\nreadingInstruction が付いたIDは、"

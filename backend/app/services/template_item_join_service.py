@@ -1,4 +1,4 @@
-"""Items shown as one value: 「調査場所」 = 高槻市美大町3丁目1番12号 (2026-10-20).
+"""Items shown as one value: 「調査場所」 = 高槻市美大町3丁目1番12号.
 
 Display only, per template series like the display names: each joined item keeps its own
 reading, crop, warning and correction, and accepted job snapshots are never touched. The

@@ -57,7 +57,7 @@ def canonical_managed_candidate(
     return None
 
 
-# 2026-10-19: per-field reading settings (keywords and a reading instruction).
+# Per-field reading settings (keywords and a reading instruction).
 MAX_FIELD_HINT_COUNT = 300
 MAX_FIELD_KEYWORD_COUNT = 500
 MAX_FIELD_KEYWORD_LENGTH = 100

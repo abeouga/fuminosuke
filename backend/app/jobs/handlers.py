@@ -14,7 +14,7 @@ class JobHandler(Protocol):
 
 
 class PendingPipelineHandler:
-    """Temporary dispatcher replaced by the image pipelines in Phase 3 and later."""
+    """A handler that leaves the job untouched. Not wired in: jobs run through PipelineJobHandler."""
 
     def __call__(self, job_id: str) -> None:
         del job_id

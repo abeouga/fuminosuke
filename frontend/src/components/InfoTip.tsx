@@ -2,7 +2,7 @@ import { useId, type ReactNode } from "react";
 import { FiInfo } from "react-icons/fi";
 
 /**
- * A small 「i」 beside a heading: the explanation that used to sit under it opens on hover or
+ * A small 「i」 beside a heading: the heading's explanation opens on hover or
  * keyboard focus. `align` is the side the bubble lines up with (`end` under a right-aligned
  * title); `side` is where it opens (`above` for a bar at the bottom of the screen).
  */

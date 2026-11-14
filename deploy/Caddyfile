@@ -1,4 +1,5 @@
-# Phase 2: host port is loopback-only. HTTPS/domain and authentication follow later.
+# Local Compose: the host port is loopback-only, without HTTPS or a domain.
+# The cloud deployment uses Caddyfile.cloud (HTTPS) instead.
 :8080 {
     handle /api/* {
         reverse_proxy backend:8000

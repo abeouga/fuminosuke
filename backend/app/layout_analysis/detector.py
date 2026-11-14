@@ -168,7 +168,7 @@ def _parse_paddle_result(raw: Any) -> list[TextRegion]:
 
 # A lone horizontal rule at least this long (pixels, or share of the page width)
 # outside every ruled box is a writing space drawn as an underline; the field above
-# it is this share of the page height tall (2026-10-17).
+# it is this share of the page height tall.
 UNDERLINE_MIN_PIXELS = 90
 UNDERLINE_MIN_RATIO = 0.06
 UNDERLINE_FIELD_RATIO = 0.03

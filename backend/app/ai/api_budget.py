@@ -42,9 +42,8 @@ UNLIMITED = 1_000_000_000
 class ApiBudget:
     """Commit a reservation before each actual HTTP send, across all AI providers."""
 
-    # 2026-10-13: 500 calls authorized from 424 already used; keep the ledger intact.
-    # 2026-10-17: 300 calls authorized from 445 already used (AI template drafts).
-    # 2026-10-24: the limit is AI_CALL_LIMIT (default 1224); AI_LIMITS_ENABLED=false removes it.
+    # The limit comes from the settings: AI_CALL_LIMIT (default 1224); AI_LIMITS_ENABLED=false
+    # removes it. Changing the limit never resets the ledger: every recorded call still counts.
     def __init__(self, database: Database) -> None:
         from app.core.config import get_settings
 

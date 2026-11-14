@@ -1,4 +1,4 @@
-"""Memory: writing rules learned from the corrections made before confirming (2026-10-22).
+"""Memory: writing rules learned from the corrections made before confirming.
 
 When a result is confirmed, each text field whose confirmed value differs from what OCR
 read is a correction. One GPT-6 Luna Responses request (shared API budget) turns the

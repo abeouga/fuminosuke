@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # Unconfirmed readings in the queue, or a template's latest confirmed documents.
 MAX_JOBS = 24
-# Measured on the stored readings (2026-10-25, within the reading regions): photos of one
+# Measured on stored readings (within the reading regions): photos of one
 # sheet taken again with writing added since 0.95-0.97 (whole-sheet comparison: 0.46-0.57),
 # other sheets filled on the same form -0.26-0.41.
 CONTINUATION_SIMILARITY = 0.75
@@ -365,7 +365,7 @@ class DocumentContinuationService:
 
         The whole-page alignment is enough to tell one sheet from another, and a bent page that
         reading must align field by field (3-9 s) takes it in under a second (measured
-        2026-10-26 on the stored photos: same sheet 0.93-1.0, other sheets unchanged). A photo
+        on stored photos: same sheet 0.93-1.0, other sheets unchanged). A photo
         it cannot align takes the reading's full registration.
         """
         template = template_view.rgb

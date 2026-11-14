@@ -1,4 +1,4 @@
-"""How the documents of a template series are named (2026-10-21).
+"""How the documents of a template series are named.
 
 The template's own ``documentName`` is set while it is made; afterwards a person changes it
 in a small dialog without making a new version. The saved rule only proposes the name on

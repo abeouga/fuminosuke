@@ -4,7 +4,7 @@ import { api } from "../api";
 import { Spinner } from "./Spinner";
 
 /**
- * 2026-10-25: tells a review screen when the same reading is open on another screen (another
+ * Tells a review screen when the same reading is open on another screen (another
  * tab, the phone…), before anything is changed there. The other screen can be taken over; the
  * one that had it then learns so. A notice only: saving is still guarded by the result revision.
  */

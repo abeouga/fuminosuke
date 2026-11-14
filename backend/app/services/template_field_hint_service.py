@@ -1,6 +1,6 @@
-"""Per-item reading settings of a template series (2026-10-19): keywords.
+"""Per-item reading settings of a template series: keywords.
 
-The reading instruction is the item's memory since 2026-10-22 (template_field_memory_service).
+The reading instruction is the item's memory (template_field_memory_service).
 
 An item is one field, or every row cell of a table column (the screen groups them).
 Settings belong to the template series like the former candidate sets: saving does
@@ -93,7 +93,7 @@ class TemplateFieldHintService:
     def snapshot(session: Session, template_id: str) -> dict[str, object]:
         """Keywords of the settings and, as the reading instruction, each item's memory.
 
-        2026-10-22: the instruction is no longer typed; it is the rules the memory learned
+        The instruction is not typed; it is the rules the memory learned
         (``TemplateFieldMemoryService``). Targets of one keyword item with different
         memories become separate entries; memory-only targets get entries without keywords.
         """

@@ -13,7 +13,7 @@ MAX_LINKS = 4096
 MAX_METADATA_BYTES = 65536
 CONTACT_PIXELS = 2
 # Photographed cells overlap their neighbours by a few pixels; a touching pair may
-# overlap up to this fraction of the smaller cell along the axis (2026-10-17).
+# overlap up to this fraction of the smaller cell along the axis.
 CONTACT_OVERLAP_RATIO = .2
 MIN_OVERLAP_RATIO = .5
 Axis = Literal["horizontal", "vertical"]

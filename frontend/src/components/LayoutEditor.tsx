@@ -348,7 +348,7 @@ export const LayoutEditor = forwardRef<LayoutEditorHandle, LayoutEditorProps>(fu
     setLayoutSystem(next);
     facetsCallbackRef.current?.(changedFacets(previous, next));
   }, [setLayoutSystem]);
-  // Restored drafts are no longer held for review, so this gate stays closed.
+  // Restored drafts are not held for review, so this gate stays closed.
   const [draftReviewRequired, setDraftReviewRequired] = useState(false);
   const [baselineSignature, setBaselineSignature] = useState(
     () => layoutSignature(normalizeLayout(initialLayout)),

@@ -352,7 +352,7 @@ class ReferenceQualificationService(PrintLayoutService):
         plan: dict[str, Any],
         prepared: PreparedReference,
     ) -> dict[str, Any] | None:
-        """Load independently bound Phase 2 evidence for formal reevaluation.
+        """Load independently bound WSL diagnostic evidence for formal reevaluation.
 
         The former report is not treated as a certificate. Its summary flags and
         former qualification fingerprint are ignored; every referenced artifact
@@ -618,7 +618,7 @@ class ReferenceQualificationService(PrintLayoutService):
         version: TemplateVersion,
         expected_revision: str,
     ) -> dict[str, Any]:
-        """Revalidate and require the formal Phase 3 certificate for approval.
+        """Revalidate and require the formal qualification certificate for approval.
 
         This deliberately calls the same full validator as GET.  The returned
         booleans are accepted only as outputs of that current evidence check;

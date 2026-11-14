@@ -249,7 +249,7 @@ class TemplateFieldHint(Base):
     keywords_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     keywords_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     keywords_forced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # No longer read or written (2026-10-22): the reading instruction is the item's memory
+    # Not read or written: the reading instruction is the item's memory
     # (``template_field_memories``); kept so old rows stay readable for the migration.
     instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -261,7 +261,7 @@ class TemplateFieldHint(Base):
 
 
 class TemplateFieldMemory(Base):
-    """A writing rule learned from corrections made before confirming (2026-10-22).
+    """A writing rule learned from corrections made before confirming.
 
     Rules only (e.g. thousands separated by a comma), never a document's own values. The
     rules of an item are sent as its reading instruction; accepted jobs keep the rules

@@ -2304,7 +2304,7 @@ small{font-size:12px;line-height:1.5}
 .paged-review-navigation button { flex: none; min-width: 28px; padding: 4px; }
 
 /* 質問ページのスタイルは ask.css */
-/* 確定済みの書類の更新として読み込む（2026-10-17） */
+/* 確定済みの書類の更新として読み込む */
 .series-picker{display:grid;gap:10px;margin:0;padding:0;border:0;min-width:0}.series-picker-body{display:grid;gap:8px}
 .series-picker-search{display:flex;align-items:center;gap:8px;border:1px solid #c9d5ce;border-radius:9px;background:white;padding:8px 12px;color:#71837e}.series-picker-search input{flex:1;min-width:0;border:0;outline:none;color:#173a37;font:inherit}
 .series-picker-list{display:grid;gap:6px;margin:0;padding:0;list-style:none;max-height:260px;overflow-y:auto}
@@ -2331,7 +2331,7 @@ small{font-size:12px;line-height:1.5}
 .document-name-details[open] { display:grid; gap:8px; }
 .document-name-details>p { margin:4px 0 0; color:#536673; font-size:11px; font-weight:700; }
 .document-name-details label { font-size:11px; }
-/* 確定済みの書類の更新：追加した欄は緑の帯、前の版から引き継いだ欄は灰色（2026-10-18、2026-10-24に常時表示） */
+/* 確定済みの書類の更新：追加した欄は緑の帯、前の版から引き継いだ欄は灰色（常に表示） */
 .ocr-edit-table td.ocr-cell-added{background:#d9f0e2;box-shadow:inset 3px 0 0 #1f8a4c}.ocr-edit-table td.ocr-cell-added small{color:#1f7040;font-weight:700}
 .ocr-edit-table td.ocr-cell-carried:not(.ocr-cell-selected):not(.ocr-cell-warning){background:#eef1f4;color:#6f7d88}.ocr-edit-table td.ocr-cell-carried:not(.ocr-cell-warning)>button{color:#66737e}.ocr-edit-table td.ocr-cell-carried small{color:#8a9893}
 .series-identity-notice{display:grid;gap:6px}.series-identity-notice.warn{color:#8d4537;border-color:#e6c2b8;background:#fff5f2}

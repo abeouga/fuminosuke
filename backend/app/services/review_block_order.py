@@ -1,4 +1,4 @@
-"""The order of the blocks on the result screens (2026-10-23).
+"""The order of the blocks on the result screens.
 
 A block is a table, a heading with its items, or a run of items under no heading. By
 default they follow the form from the top, and items on one line (their heights overlap)

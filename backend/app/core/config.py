@@ -137,7 +137,7 @@ class OcrSettings(BaseModel):
     responses_provider: Literal["openai", "claude"] = "openai"
     anthropic_api_key: SecretStr | None = None
     claude_model: str = "claude-sonnet-5-5"
-    # 2026-10-24: AI_LIMITS_ENABLED=false removes the shared call limit, the per-document call
+    # AI_LIMITS_ENABLED=false removes the shared call limit, the per-document call
     # limit and the daily voice time. The ledger still records every call.
     limits_enabled: bool = True
     call_limit: int = Field(default=1224, ge=1)

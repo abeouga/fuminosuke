@@ -123,7 +123,7 @@ class CommandController:
                     )
                 ):
                     # Choosing the offered table (or saying yes) is the table switch itself,
-                    # not another answer to plan, which used to ask the same question again.
+                    # not another answer to plan, which would ask the same question again.
                     current = await asyncio.to_thread(
                         self.repository.input_context, session_id, token
                     )

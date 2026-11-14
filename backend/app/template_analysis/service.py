@@ -39,7 +39,7 @@ class AnalysisService:
         self.database = self.repository.database
         self.provider = provider or VisualAnalysisProvider(settings, budget)
         self.visual = VisualRunner(self)
-        # Four lets a whole-page draft send its bands at once (2026-10-17).
+        # Four lets a whole-page draft send its bands at once.
         self.slots = asyncio.Semaphore(4)
         self.tasks: dict[str, asyncio.Task[None]] = {}
 

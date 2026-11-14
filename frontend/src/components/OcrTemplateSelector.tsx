@@ -197,7 +197,7 @@ function ReadingEditMenu({ templateName, disabled, onStructure, onFields, onJoin
 }
 
 /**
- * 「ファイル名の付け方」 is not offered (2026-10-26, unlikely to be used). Its dialog and the saved
+ * 「ファイル名の付け方」 is not offered from this menu. Its dialog and the saved
  * settings still work; set this to true to show the entry again.
  */
 const DOCUMENT_NAME_EDITING_VISIBLE = false;

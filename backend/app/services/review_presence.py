@@ -1,4 +1,4 @@
-"""Which screen is editing a reading's review (2026-10-25).
+"""Which screen is editing a reading's review.
 
 Only a notice: a second screen is told the reading is already open and may take it over; the
 first screen then learns it lost it. Saving is still guarded by the result revision, so this

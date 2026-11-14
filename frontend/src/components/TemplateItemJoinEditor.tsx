@@ -697,7 +697,7 @@ function errorText(error: unknown, fallback: string) {
 }
 
 /**
- * Whether 「項目のまとめ方・順番」 can be opened from the screens (2026-10-21: hidden, then shown again by request).
+ * Whether 「項目のまとめ方・順番」 can be opened from the screens.
  * Controls only the entry points (result headings, the reading screen's edit menu, the
  * activation notification); saved joins and orders are applied to the result screen, the
  * shelf and the list XLSX either way. Set to false to hide them again.

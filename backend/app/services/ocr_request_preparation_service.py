@@ -115,7 +115,7 @@ class OcrRequestPreparer:
                 if target_path
                 else None
             )
-            # 2026-10-19: the field settings fixed at acceptance (keywords and a
+            # The field settings fixed at acceptance (keywords and a
             # reading instruction). A former candidate pool of the same field wins.
             field_hint = (
                 field_hints.get(normalize_candidate_target(target_path)) if target_path else None
@@ -261,7 +261,7 @@ class OcrRequestPreparer:
         results: list[dict[str, object]],
     ) -> MarkState:
         if mapping.mark_recognition_mode in {"symbol", "checklist", "automatic", "manual"}:
-            # 2026-10-21: printed choices (automatic/manual) are read like checklists, from the
+            # Printed choices (automatic/manual) are read like checklists, from the
             # whole mapped crop by the provider, so a check, a line or a filled circle on a
             # choice counts and handwriting that is not a choice is kept for review. The
             # image-difference result stays diagnostic only. Even a blank crop needs a visual

@@ -212,7 +212,7 @@ class PlanningCatalog:
                 result = independent
             else:
                 # Another table is never switched to silently: its cells of that name become
-                # the choices of a question (2026-10-22), not a pool the planner picks from.
+                # the choices of a question, not a pool the planner picks from.
                 elsewhere = [
                     r
                     for r in self._pool(None, row, column, kind)

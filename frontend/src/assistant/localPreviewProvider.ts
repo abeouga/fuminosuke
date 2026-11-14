@@ -1,6 +1,6 @@
 import { CATEGORY_LABEL, type AssistantCategory, type AssistantPreviewProvider } from "./contracts";
 
-/** Deterministic typed previews for phase 2-3. No LLM, HTTP, or persistence. */
+/** Deterministic typed previews; not imported by the app (it uses the server provider). No LLM, HTTP, or persistence. */
 export const localPreviewProvider: AssistantPreviewProvider = {
   async preview(request, snapshot, signal) {
     signal.throwIfAborted();

@@ -282,7 +282,7 @@ body.ask-resizing .ask-layout{transition:none}
   .ask-history-remove{opacity:1}
 }
 
-/* Gemini風の動き：挨拶のグラデーション、メッセージの出入り、考え中のきらめき */
+/* 質問画面の動き：挨拶のグラデーション、メッセージの出入り、考え中のきらめき */
 .ask-messages{gap:20px}
 .ask-welcome{gap:16px}
 .ask-welcome-hello,.ask-welcome-ask{display:block;opacity:0;animation:ask-rise .7s cubic-bezier(.2,.8,.2,1) forwards}

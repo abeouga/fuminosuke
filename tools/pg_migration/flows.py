@@ -1,8 +1,8 @@
 """Run the same write flows on SQLite and on PostgreSQL copies and compare the outcomes.
 
-    python tools/pg_migration/flows.py --sqlite-data D:/copy/flow-sqlite \
-        --pg-data D:/copy/flow-pg --pg-url postgresql+psycopg://... [--schema app] \
-        --image D:/copy/photo.jpg --template-id <id>
+    python tools/pg_migration/flows.py --sqlite-data <dir>/flow-sqlite \
+        --pg-data <dir>/flow-pg --pg-url postgresql+psycopg://... [--schema app] \
+        --image <dir>/photo.jpg --template-id <id>
 
 Both data folders must hold the same files; the PostgreSQL schema holds a copy of the SQLite
 app.db (`python -m app.db.sqlite_to_postgres`). Mock OCR, no AI keys: nothing leaves the PC.

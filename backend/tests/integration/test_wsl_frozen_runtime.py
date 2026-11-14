@@ -1,4 +1,4 @@
-"""Requires an image built by scripts/build_wsl_renderer_runtime.py in test WSL."""
+"""Requires an image built by backend/scripts/build_wsl_renderer_runtime.py in test WSL."""
 
 import hashlib
 import json

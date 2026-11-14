@@ -76,7 +76,7 @@ def _create_queued_document_job(
     settings = settings_factory(
         data_dir=data_dir,
         ocr_provider="openai",
-        openai_api_key="phase4-test-only",
+        openai_api_key="execution-test-only",
     )
     database = Database(settings.database)
     Base.metadata.create_all(database.engine)
@@ -85,8 +85,8 @@ def _create_queued_document_job(
     clean_image = ledger_image()
     clean_bytes = encode_png(clean_image)
     canonical_height, canonical_width = clean_image.shape[:2]
-    clean_path = storage.write_bytes("phase4/clean.png", clean_bytes)
-    config_path = "phase4/template.json"
+    clean_path = storage.write_bytes("execution/clean.png", clean_bytes)
+    config_path = "execution/template.json"
 
     with database.session() as session:
         source_job = ProcessingJob(
@@ -107,7 +107,7 @@ def _create_queued_document_job(
             width=canonical_width,
             height=canonical_height,
         )
-        template = Template(name="Phase 4 execution", document_type="breeding-ledger")
+        template = Template(name="Document OCR execution", document_type="breeding-ledger")
         session.add_all([clean_artifact, template])
         session.flush()
         storage.write_text(
@@ -116,7 +116,7 @@ def _create_queued_document_job(
                 {
                     "templateId": template.id,
                     "templateVersion": 1,
-                    "name": "Phase 4 execution",
+                    "name": "Document OCR execution",
                     "canonicalWidth": canonical_width,
                     "canonicalHeight": canonical_height,
                     "registration": {
@@ -130,7 +130,7 @@ def _create_queued_document_job(
                     "regions": [],
                     "fieldMappings": [
                         {
-                            "mappingId": "phase4_cattle_name",
+                            "mappingId": "execution_cattle_name",
                             "targetPath": "document.cattleName",
                             "label": "牛名",
                             "x": 120,
@@ -271,8 +271,8 @@ def test_document_execution_runs_from_job_id_without_transport_or_runner(
         final_result = json.loads(case.storage.read_bytes(artifacts["result"].relative_path))
         mapped_cell = mapped_cells["cells"][0]
         assert mapped_cells["fieldMappingHash"] == case.accepted_snapshot["fieldMappingHash"]
-        assert mapped_cell["mappingId"] == "phase4_cattle_name"
-        assert mapped_cell["openAiMappingId"] == "phase4_cattle_name"
+        assert mapped_cell["mappingId"] == "execution_cattle_name"
+        assert mapped_cell["openAiMappingId"] == "execution_cattle_name"
         assert mapped_cell["targetPath"] == "document.cattleName"
         assert mapped_cell["boundingBox"] == {
             "x": 120,
@@ -280,9 +280,9 @@ def test_document_execution_runs_from_job_id_without_transport_or_runner(
             "width": 240,
             "height": 80,
         }
-        assert mapped_cell["alignedCellArtifact"] == "fieldCrop.phase4_cattle_name.alignedColor"
+        assert mapped_cell["alignedCellArtifact"] == "fieldCrop.execution_cattle_name.alignedColor"
         assert mapped_cell["alignedCellSha256"] == artifacts[
-            "fieldCrop.phase4_cattle_name.alignedColor"
+            "fieldCrop.execution_cattle_name.alignedColor"
         ].sha256
         assert final_result["jobId"] == case.job_id
         assert final_result["revision"] == 1

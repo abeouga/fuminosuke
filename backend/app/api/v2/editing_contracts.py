@@ -201,7 +201,7 @@ class Applied(Contract):
 class Choice(Contract):
     choice_id: Id
     label: str = Field(min_length=1, max_length=200)
-    # The target this choice would edit, for highlighting it on screen (added 2026-10-18).
+    # The target this choice would edit, for highlighting it on screen.
     handle: str | None = Field(default=None, max_length=200)
 
 

@@ -22,7 +22,7 @@ from app.template_analysis.snapshot import physical
 
 POLICY = "template-analysis.visual-input.v1"
 MAX_UNIT_CELLS = 320
-# Whole-page drafts run as parallel bands cut at blank horizontal gaps (2026-10-17).
+# Whole-page drafts run as parallel bands cut at blank horizontal gaps.
 DRAFT_MIN_GAP = 8
 DRAFT_MIN_BAND_CELLS = 6
 DRAFT_MAX_BANDS = 4

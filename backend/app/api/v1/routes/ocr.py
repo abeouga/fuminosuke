@@ -310,7 +310,7 @@ def confirm_ocr_result(
         document_name=body.document_name,
         accept_identity_mismatch=body.accept_identity_mismatch,
     )
-    # 2026-10-22: learn writing rules from the corrections (memory) after the response;
+    # Learn writing rules from the corrections (memory) after the response;
     # never shown and never affects the confirmation.
     from app.ai.api_budget import ApiBudget
     from app.api.dependencies import get_app_settings
@@ -323,7 +323,7 @@ def confirm_ocr_result(
         get_app_settings(request),
         ApiBudget(database),
     )
-    # 2026-10-26: keep the reading's print for the comparison with later photos (照合).
+    # Keep the reading's print for the comparison with later photos (照合).
     from app.services.document_continuation_service import DocumentContinuationService
 
     background.add_task(

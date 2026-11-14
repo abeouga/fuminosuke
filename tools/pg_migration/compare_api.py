@@ -1,7 +1,7 @@
 """Compare every read API of the app on SQLite and on PostgreSQL holding the same data.
 
-    python tools/pg_migration/compare_api.py --data D:/copy/data --pg-url postgresql+psycopg://... \
-        [--schema app] [--out D:/copy/compare]
+    python tools/pg_migration/compare_api.py --data <dir>/data --pg-url postgresql+psycopg://... \
+        [--schema app] [--out <dir>/compare]
 
 `--data` is a COPY of backend/data whose app.db was copied into the PostgreSQL schema with
 `python -m app.db.sqlite_to_postgres`. Both apps read the same files. The OCR provider is the mock

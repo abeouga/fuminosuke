@@ -82,7 +82,7 @@ test("a captured hand-drawn draft accepts its AI proposal but rejects later draw
 });
 
 test("a separate editor cannot automatically save a restored unconfirmed AI draft", async () => {
-  const key = "phase6-unconfirmed-ai", ref = createRef<LayoutEditorHandle>();
+  const key = "restored-unconfirmed-ai", ref = createRef<LayoutEditorHandle>();
   const props = { source: "preview.png", initialLayout: initial, targets: [], onSave: vi.fn(),
     onDetect: vi.fn(), operationEndSave: true, draftStorageKey: key };
   localStorage.removeItem(key); localStorage.removeItem(`${key}:baseline`);

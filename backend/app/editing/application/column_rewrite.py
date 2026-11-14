@@ -1,5 +1,5 @@
 # ruff: noqa: RUF001, RUF002
-"""Rewrites of many OCR values at once (2026-10-22).
+"""Rewrites of many OCR values at once.
 
 「価格を3桁ごとに区切って」「売却日はハイフンでそろえて」「二は同上の意味」のように、
 現在の値から新しい値を作る指示。AIが欄ごとの新しい値を返し、サーバーが

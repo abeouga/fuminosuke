@@ -2,7 +2,7 @@
 """Whole-page draft answer for a freshly prepared template.
 
 One paid request per page band (bands cut at blank gaps and sent in parallel), low
-reasoning, bounded to 30 s (2026-10-17 user limit). The wire format is the form.v2 answer without the ``unresolved`` channel, shortened so the
+reasoning, bounded to 30 s so the person preparing the template is not kept waiting. The wire format is the form.v2 answer without the ``unresolved`` channel, shortened so the
 answer streams inside that bound: a table returns its columns (the first data row) and
 the server expands the physical rows below; cells the model leaves out keep their
 existing label/ignored role. An omitted input surfaces through the missing-binding path.
@@ -37,7 +37,7 @@ from app.template_analysis.visual_form_answer import Annotation
 POLICY = "template-analysis.draft-answer.v4"
 REASONING_EFFORT = "low"
 MAX_OUTPUT_TOKENS = 32768
-# 2026-10-17: the user limited a draft to 30 s. One whole page with high reasoning took 175-190 s;
+# A draft is bounded to 30 s. One whole page with high reasoning took 175-190 s;
 # with none it fit (16-20 s) but placed cells poorly, so the page is split into parallel bands
 # that each leave room for low reasoning.
 TIMEOUT_SECONDS = 30
@@ -538,8 +538,8 @@ def complete_draft(
     }
 
 
-# A band whose answer leaves cells out may get one follow-up request in the time left
-# (2026-10-18). The follow-up only adds what the first answer omitted: fields on the
+# A band whose answer leaves cells out may get one follow-up request in the time left.
+# The follow-up only adds what the first answer omitted: fields on the
 # omitted cells, a table returned again with more columns, or annotations on them.
 FOLLOW_UP_MIN_SECONDS = 6
 FOLLOW_UP_MARGIN_SECONDS = 4

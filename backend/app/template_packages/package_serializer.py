@@ -181,7 +181,7 @@ class TemplatePackageSerializer:
 
 
 class GeneratedTemplatePackageValidator:
-    """Validates packages generated in memory; Phase 3 will add the untrusted reader limits."""
+    """Validates packages generated in memory; untrusted input goes through TemplatePackageReader."""
 
     def validate(self, content: bytes) -> TemplatePackageManifest:
         try:

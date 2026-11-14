@@ -5,8 +5,8 @@ is linked to the predecessor's confirmed snapshot it was based on; the predecess
 never modified and keeps its confirmed history. Only the newest confirmed version of a series
 is used for questions and lists.
 
-Stage 2 (2026-10-17): the link, candidate listing, confirm/reopen/delete checks and the
-"latest only" view. Stage 3 (2026-10-18): mode "blank_only" fixes at acceptance which mappings
+This module holds the link, candidate listing, confirm/reopen/delete checks and the
+"latest only" view. Mode "blank_only" fixes at acceptance which mappings
 keep the predecessor's confirmed reading ("carried") and which are read again (previously blank
 fields and every document identity field). Carrying is bound to the same mappingId/targetPath of
 the same template version and fieldMappingHash; values outside the mappings are never carried.
