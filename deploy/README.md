@@ -7,7 +7,7 @@
 
 通常の `compose.yaml` はフェーズ2のローカル検証用で、公開ポートをホストのloopbackに限定しています。認証構成はcloud overlayで提供します。クラウドの共通送信予算・実AWS公開は後続工程です。通常composeを認証なしでインターネットへ公開しないでください。
 
-AWS配備先は **`abe-deploy-user` / account `535562976288` / `ap-northeast-1`** です。この工程でAWSリソースは作成していません。ドメインは未定です。
+AWS配備先は **`abe-deploy-user` / account `<アカウントID>` / `ap-northeast-1`** です。`<アカウントID>` は `aws sts get-caller-identity --profile abe-deploy-user` で確かめます。この工程でAWSリソースは作成していません。ドメインは未定です。
 
 ## 構成
 
@@ -112,7 +112,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.cloud.yaml exec backend 
 docker compose -f deploy/compose.yaml -f deploy/compose.cloud.yaml exec backend python -m app.cloud.admin enable COGNITO_SUB_UUID
 ```
 
-`disable`／`enable`はいずれも既存cookie sessionを破棄します。enable後は再ログインが必要です。管理HTTP APIや匿名signupはありません。使用する実行profileは **abe-deploy-user**、account **535562976288**、東京 **ap-northeast-1**です。
+`disable`／`enable`はいずれも既存cookie sessionを破棄します。enable後は再ログインが必要です。管理HTTP APIや匿名signupはありません。使用する実行profileは **abe-deploy-user**、account **`<アカウントID>`**、東京 **ap-northeast-1**です。
 
 有料AIの共通quotaをフェーズ5で接続するまで、cloudは `OCR_PROVIDER=disabled`、`VOICE_PROVIDER=disabled`、OpenAI API keyなしでのみ起動します。開発台帳の924回や追加1,000回をtenantごとに発行しません。バックアップ・削除・復旧はregistryと全tenant領域の整合性を維持する必要があります。
 

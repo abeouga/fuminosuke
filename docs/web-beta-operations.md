@@ -3,7 +3,7 @@
 
 
 
-対象は `llm-ocr-deploy`。AWS CLIは **abe-deploy-user / 535562976288 / ap-northeast-1** を使用します。サーバーは専用instance roleを使用し、アクセスキー・通常DB・開発用.envを配布しません。配備定義は [infra.yaml](../deploy/infra.yaml)、設定のひな型は [cloud.env.example](../deploy/cloud.env.example) です。実AWS配備はフェーズ7で行います。
+対象は `llm-ocr-deploy`。AWS CLIは **abe-deploy-user / `<アカウントID>` / ap-northeast-1** を使用します。サーバーは専用instance roleを使用し、アクセスキー・通常DB・開発用.envを配布しません。配備定義は [infra.yaml](../deploy/infra.yaml)、設定のひな型は [cloud.env.example](../deploy/cloud.env.example) です。実AWS配備はフェーズ7で行います。
 
 ## 配備前の確認
 

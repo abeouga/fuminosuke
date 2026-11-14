@@ -2,7 +2,7 @@
 
 現在の公開方式は **Fargate＋S3/CloudFront、毎日23:00〜7:00 JST停止** へ移行中です。[移行設計](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/web-beta-fargate-plan-2026-10-16.md)の工程と終了条件を参照してください。
 
-AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-northeast-1**。全provider/backendで対象accountを固定します。Terraform 1.15以降、AWS provider 6系をlockfileで固定し、秘密値をtfvars・stateへ直接設定しません。通知先アドレスだけはignoredなterraform.tfvarsで指定し、plan/stateには非公開情報が含まれるものとして管理します。
+AWS profileは **abe-deploy-user**、account **`<アカウントID>`**、region **ap-northeast-1**。全provider/backendで対象accountを固定します。Terraform 1.15以降、AWS provider 6系をlockfileで固定し、秘密値をtfvars・stateへ直接設定しません。通知先アドレスだけはignoredなterraform.tfvarsで指定し、plan/stateには非公開情報が含まれるものとして管理します。
 
 | ディレクトリ | 状態 |
 | --- | --- |
@@ -16,7 +16,7 @@ AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-nort
 taskの起動は短い試験runnerからのみ行い、終了後に所有task・ENIと試験objectを照合します。
 保存planは実資源の作成/変更を管理し、実行時の署名URLはstateへ保存しません。
 
-state bucketは `fuminosuke-tfstate-535562976288-ap-northeast-1`。S3 lockfileを使い、DynamoDBは追加しません。bootstrapは初回だけlocal stateでbucketを作り、その後 `backend.tf` のS3へstate移行済みです。以後backendを削除して新しいlocal stateを作り直さないでください。
+state bucketは `fuminosuke-tfstate-<アカウントID>-ap-northeast-1`。S3 lockfileを使い、DynamoDBは追加しません。bootstrapは初回だけlocal stateでbucketを作り、その後 `backend.tf` のS3へstate移行済みです。以後backendを削除して新しいlocal stateを作り直さないでください。
 
 `terraform init` → `terraform validate` → 保存planの確認 → **そのplanのapply** の順で実行します。state、plan、`.terraform`、実通知先、資格情報をGitへ追加しません。OpenAIキーとCognitoパスワードはTerraformで作成・取得しません。
 

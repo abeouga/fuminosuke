@@ -3,7 +3,7 @@
 This is a disposable infrastructure probe, not a production renderer or a qualification issuer.
 The API, existing saved renderer reports, templates and OCR jobs do not call this code.
 
-AWS profile: **abe-deploy-user**, account **535562976288**, region **ap-northeast-1**.
+AWS profile: **abe-deploy-user**, account **`<アカウントID>`**, region **ap-northeast-1**.
 Infrastructure lives in `terraform/aws/renderer_probe`, with its own remote state key
 `probe/renderer/terraform.tfstate`. It reads the existing VPC/subnet without taking ownership.
 The cluster has no service, no recurring task and no inbound security-group rule.
