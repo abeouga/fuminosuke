@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +45,24 @@ class CloudSettings(BaseSettings):
     database_name: str | None = None
     database_user: str | None = None
     database_password: SecretStr | None = None
+    # Region of the S3 and Lambda clients. Fargate and Lambda set AWS_REGION; outside them the
+    # beta's Region is used.
+    aws_region: str = Field(
+        default="ap-northeast-1", validation_alias="AWS_REGION",
+        pattern=r"^[a-z]{2}(-[a-z]+)+-\d$",
+    )
+    # Lambda that runs the image part of a reading (extraction/remote.py); unset reads in the API.
+    extract_function: str | None = None
+
+    @field_validator("aws_region", mode="before")
+    @classmethod
+    def blank_region_is_default(cls, value: object) -> object:
+        return value or cls.model_fields["aws_region"].default
+
+    @field_validator("extract_function")
+    @classmethod
+    def blank_function_is_unset(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
     @property
     def session_keep_seconds(self) -> int:
@@ -124,3 +143,8 @@ class CloudSettings(BaseSettings):
         if self.is_admin(subject) and self.admin_seed_template_dir is not None:
             return self.admin_seed_template_dir
         return self.seed_template_dir
+
+
+@lru_cache(maxsize=1)
+def get_cloud_settings() -> CloudSettings:
+    return CloudSettings()

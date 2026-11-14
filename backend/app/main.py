@@ -59,9 +59,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or get_settings()
     if resolved.app.environment == "cloud":
         from app.cloud.application import create_cloud_app
-        from app.cloud.config import CloudSettings
+        from app.cloud.config import get_cloud_settings
 
-        return create_cloud_app(resolved, CloudSettings())
+        return create_cloud_app(resolved, get_cloud_settings())
     return create_business_app(resolved)
 
 

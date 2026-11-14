@@ -5,12 +5,28 @@ Add-Type -AssemblyName System.Drawing
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$projectRoot = 'C:\Users\hanam\Desktop\llm-ocr'
+# Machine-specific values (project folder, scanner software, printer, scanner address) live in
+# ocr-dev-launcher.local.json next to this script, which Git ignores.
+# Copy ocr-dev-launcher.local.json.example and fill in this PC's values.
+$localConfigPath = Join-Path $PSScriptRoot 'ocr-dev-launcher.local.json'
+if (-not (Test-Path -LiteralPath $localConfigPath -PathType Leaf)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "手元の設定ファイルがありません: $localConfigPath`r`nocr-dev-launcher.local.json.example を写して、この PC の値を書いてください。",
+        '設定エラー',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
+    exit 1
+}
+$localConfig = Get-Content -LiteralPath $localConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+$projectRoot = if ($localConfig.ProjectRoot) { [string]$localConfig.ProjectRoot } else { Split-Path -Parent $PSScriptRoot }
 $startBat = Join-Path $projectRoot 'start.bat'
 $scanFolder = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'LLM-OCR Scans'
-$epsonScan = 'C:\Program Files (x86)\epson\Epson Scan 2\Core\es2launcher.exe'
-$printerName = 'EPSON EW-M530F Series'
-$scannerAddress = '192.168.223.1'
+$epsonScan = [string]$localConfig.ScannerAppPath
+$printerName = [string]$localConfig.PrinterName
+$scannerAddress = [string]$localConfig.ScannerAddress
+$deviceLabel = $printerName -replace '\s+Series$', ''
 
 function Ensure-ScanFolder {
     if (-not (Test-Path -LiteralPath $scanFolder)) {
@@ -103,7 +119,7 @@ $title.Font = New-Object System.Drawing.Font('Yu Gothic UI', 15, [System.Drawing
 $header.Controls.Add($title)
 
 $subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = 'EPSON EW-M530F / ローカル開発環境'
+$subtitle.Text = "$deviceLabel / ローカル開発環境"
 $subtitle.Left = 25
 $subtitle.Top = 49
 $subtitle.Width = 330

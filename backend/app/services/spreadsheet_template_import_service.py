@@ -25,6 +25,7 @@ from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.core.errors import AppError
+from app.core.libreoffice import configured_libreoffice_path
 from app.db.models import ProcessingJob, TemplateVersion
 from app.db.session import Database
 from app.domain.enums import JobStatus, JobType, TemplateMode
@@ -1144,7 +1145,7 @@ class SpreadsheetTemplateImportService:
 
     @staticmethod
     def _find_soffice() -> Path | None:
-        configured = os.getenv("LIBREOFFICE_PATH")
+        configured = configured_libreoffice_path()
         candidates = [
             configured,
             shutil.which("soffice"),

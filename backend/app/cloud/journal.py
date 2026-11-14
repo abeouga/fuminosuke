@@ -65,14 +65,11 @@ class S3Receipts:
         )
 
 
-def s3_client() -> Any:
-    import os
-
+def s3_client(region: str) -> Any:
+    """S3 client in CloudSettings.aws_region."""
     import boto3
     from botocore.config import Config
 
-    # Fargate sets AWS_REGION; the original beta ran in Tokyo.
-    region = os.environ.get("AWS_REGION") or "ap-northeast-1"
     return boto3.client(
         "s3", region_name=region, endpoint_url=f"https://s3.{region}.amazonaws.com",
         config=Config(retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=15),

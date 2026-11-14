@@ -232,7 +232,8 @@ def create_cloud_app(settings: Settings, config: CloudSettings,
             operations = None
             if config.journal_bucket:
                 store = receipt_store or S3Receipts(
-                    s3_client(), config.journal_bucket, str(config.installation_id),
+                    s3_client(config.aws_region), config.journal_bucket,
+                    str(config.installation_id),
                 )
                 journal = Journal(config.root, str(config.installation_id), store, control=control)
                 await asyncio.to_thread(journal.reconcile)

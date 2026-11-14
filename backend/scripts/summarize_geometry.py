@@ -1,8 +1,10 @@
 """Recompute calibration diagnostics from saved rasters; no Office or remote API."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -15,7 +17,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.geometry_calibration import grid_boundaries, statistics
 
 
+def originals_dir(argv: list[str] | None = None) -> Path:
+    """Folder of the original workbooks whose hashes the evidence records.
+
+    --originals-dir, or the XLSX_ORIGINALS_DIR environment variable.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--originals-dir", type=Path,
+                        default=os.environ.get("XLSX_ORIGINALS_DIR") or None,
+                        help="folder of the original .xlsx files (default: $XLSX_ORIGINALS_DIR)")
+    folder = parser.parse_args(argv).originals_dir
+    if folder is None:
+        parser.error("set --originals-dir or XLSX_ORIGINALS_DIR")
+    return Path(folder)
+
+
 def main():
+    originals = originals_dir()
     root = Path(__file__).resolve().parents[2] / "docs/reference-renderer-evidence"
     folder = root / "calibration"
     dataset = json.loads((folder / "dataset.json").read_text())
@@ -74,7 +92,7 @@ def main():
         for row in rows:
             if "filename" not in row:
                 continue
-            path = Path("C:/Users/hanam/Desktop/xlsx") / row["filename"]
+            path = originals / row["filename"]
             current = hashlib.sha256(path.read_bytes()).hexdigest()
             result["originalHashes"].append({"filename": row["filename"],
                                             "sha256": current,

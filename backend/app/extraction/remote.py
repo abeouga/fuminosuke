@@ -13,7 +13,6 @@ import hashlib
 import io
 import json
 import logging
-import os
 import zipfile
 from dataclasses import dataclass
 from typing import Any
@@ -77,17 +76,24 @@ class RemoteOutcome:
 
 
 class RemoteExtraction:
-    def __init__(self, storage: Any, function: str, client: Any | None = None) -> None:
-        self.storage, self.function = storage, function
+    def __init__(
+        self, storage: Any, function: str, client: Any | None = None, *,
+        region: str,
+    ) -> None:
+        self.storage, self.function, self.region = storage, function, region
         self._client = client
 
     @classmethod
     def configured(cls, storage: Any) -> RemoteExtraction | None:
         """Only for the cloud object storage, and only when the function is configured."""
-        function = os.environ.get("BETA_EXTRACT_FUNCTION", "").strip()
-        if not function or not hasattr(storage, "object_location"):
+        if not hasattr(storage, "object_location"):
             return None
-        return cls(storage, function)
+        from app.cloud.config import get_cloud_settings
+
+        config = get_cloud_settings()
+        if config.extract_function is None:
+            return None
+        return cls(storage, config.extract_function, region=config.aws_region)
 
     @property
     def client(self) -> Any:
@@ -95,10 +101,9 @@ class RemoteExtraction:
             import boto3
             from botocore.config import Config
 
-            region = os.environ.get("AWS_REGION") or "ap-northeast-1"
             # No SDK retry: a timed-out invocation may still be running, and the API then
             # reads the document itself.
-            self._client = boto3.client("lambda", region_name=region, config=Config(
+            self._client = boto3.client("lambda", region_name=self.region, config=Config(
                 retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=170,
             ))
         return self._client

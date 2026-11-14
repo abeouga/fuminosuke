@@ -2,8 +2,10 @@
 
     backend/.venv/Scripts/python.exe tools/chat_feedback/read.py out.md [--since 2026-10-27]
 
-Uses the AWS profile fuminosuke-deploy. Cognito usernames (admin, tester01, ...) are looked
-up from the subject recorded in each line. Read only: nothing in S3 is changed.
+The AWS profile and Region come from --profile / --region, or else from AWS_PROFILE and
+AWS_REGION (or the profile's own region), like the other AWS tools here. Cognito usernames
+(admin, tester01, ...) are looked up from the subject recorded in each line. Read only:
+nothing in S3 is changed.
 """
 from __future__ import annotations
 
@@ -89,10 +91,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("out", type=Path)
     parser.add_argument("--since", help="UTC date YYYY-MM-DD")
-    parser.add_argument("--profile", default="fuminosuke-deploy")
+    parser.add_argument("--profile", help="AWS profile (default: AWS_PROFILE)")
+    parser.add_argument("--region", help="AWS Region (default: AWS_REGION or the profile's)")
     parser.add_argument("--raw", type=Path, help="also write every line as JSONL")
     args = parser.parse_args()
-    session = boto3.Session(profile_name=args.profile, region_name="ap-northeast-1")
+    session = boto3.Session(profile_name=args.profile, region_name=args.region)
+    if session.region_name is None:
+        parser.error("set --region, AWS_REGION or a region for the profile")
     account = session.client("sts").get_caller_identity()["Account"]
     found = lines(session, f"fuminosuke-objects-{account}", args.since)
     names = usernames(session)

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import importlib
 import io
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -28,6 +30,21 @@ from app.services.renderer_temp import render_directory
 ROOT = Path(__file__).resolve().parents[2] / "docs/reference-renderer-evidence"
 OUT = ROOT / "closure"
 LO_PYTHON = "C:/Program Files/LibreOffice/program/python.exe"
+
+
+def originals_dir(argv: list[str] | None = None) -> Path:
+    """Folder of the original workbooks whose hashes the evidence records.
+
+    --originals-dir, or the XLSX_ORIGINALS_DIR environment variable.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--originals-dir", type=Path,
+                        default=os.environ.get("XLSX_ORIGINALS_DIR") or None,
+                        help="folder of the original .xlsx files (default: $XLSX_ORIGINALS_DIR)")
+    folder = parser.parse_args(argv).originals_dir
+    if folder is None:
+        parser.error("set --originals-dir or XLSX_ORIGINALS_DIR")
+    return Path(folder)
 
 
 def save(name, data):
@@ -140,6 +157,7 @@ def sandbox_office(content, plan):
 
 
 def main():
+    originals = originals_dir()
     OUT.mkdir(exist_ok=True)
     net = network()
     content, plan = fixture(10, 3, ["A1:C10"])
@@ -223,7 +241,7 @@ def main():
     save("crop-clearance.json", crop)
     original = json.loads((ROOT / "calibration/analysis.json").read_text())["originalHashes"]
     for record in original:
-        path = Path("C:/Users/hanam/Desktop/xlsx") / record["filename"]
+        path = originals / record["filename"]
         record["unchanged"] = office.sha(path.read_bytes()) == record["sha256"]
         try:
             office.inspect_package(path.read_bytes())

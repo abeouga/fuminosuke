@@ -26,7 +26,7 @@ def main() -> None:
     settings, config = Settings.load(None), CloudSettings()
     if settings.app.environment != "cloud" or not config.journal_bucket:
         raise ValueError("Maintenance requires explicit cloud configuration and a remote journal")
-    client = s3_client()
+    client = s3_client(config.aws_region)
     receipts = S3Receipts(client, config.journal_bucket, str(config.installation_id))
     if args.action == "restore":
         if not config.backup_bucket or not args.backup_id or not args.target:

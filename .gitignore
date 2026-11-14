@@ -45,6 +45,10 @@ backend/data/**
 # Built per machine; they hold this PC's paths and change on every build.
 sysover-ray/SysOverRay/bin/
 sysover-ray/SysOverRay/obj/
+# Made by sysover-ray/Install-SysOverRay.ps1 with this checkout's absolute path.
+sysover-ray/app/SysOverRay.exe
+sysover-ray/app/*.pdb
+sysover-ray/*.lnk
 # Local preview servers point at this PC's folders.
 .claude/launch.json
 
@@ -57,3 +61,10 @@ sysover-ray/SysOverRay/obj/
 tools/chat_qa/last/
 backend/*.log
 frontend/*.log
+
+# Machine-specific launcher values (paths, printer, scanner address).
+tools/ocr-dev-launcher.local.json
+
+# Deployment values and Terraform backend settings for this project's AWS account.
+/deploy/cloud.env
+backend.hcl

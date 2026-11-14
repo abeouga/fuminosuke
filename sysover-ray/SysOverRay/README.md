@@ -5,6 +5,7 @@
 ## 使用方法
 
 1. 親フォルダーの `SysOverRayを起動.lnk` を開きます。配置先は `../app/SysOverRay.exe` です。
+   - ショートカット 2 つと `app/SysOverRay.exe` はこのフォルダーの絶対パスを持つため Git に入れていません。`../Install-SysOverRay.ps1` が作ります（`scripts/setup.ps1` からも呼ばれます）。exe を作り直すときは `-Rebuild` を付けます。
 2. 「起動」「再起動」「停止」のいずれかを押します。
    - 「関連ポートを全停止」は、確認画面を表示した後、設定範囲内で待受中のプロセスをまとめて停止します。
 3. `×` は画面を隠すだけです。再表示またはアプリ終了はタスクトレイのアイコンから行います。
@@ -41,6 +42,8 @@ dotnet build .\SysOverRay.csproj
 ```
 
 ## 配布用出力
+
+`../Install-SysOverRay.ps1` が次の publish とショートカットの作成をまとめて行います。手で出力するときは次のとおりです。
 
 ```powershell
 dotnet publish .\SysOverRay.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ..\app

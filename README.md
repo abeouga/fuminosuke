@@ -62,6 +62,7 @@ cd <文之助のフォルダー>
 
 - 画面は `http://127.0.0.1:5180`、API は `http://127.0.0.1:8010`（動いているかは `/api/v1/health`）で開きます。
 - 起動・停止・再起動は、`sysover-ray` のショートカットか、デスクトップの小さな操作画面（[sysover-ray/SysOverRay/README.md](sysover-ray/SysOverRay/README.md)）で行います。
+- ショートカットと操作画面の `SysOverRay.exe` は、このフォルダーの絶対パスを持つため Git に入れていません。`setup.ps1` の最後に `sysover-ray\Install-SysOverRay.ps1` が作ります（exe を作るには .NET SDK が要ります）。フォルダーを移したら `.\sysover-ray\Install-SysOverRay.ps1` を流し直します。
 - 最初の設定では、OCR は `mock`（外部の AI を呼ばない偽の読み取り）です。画面と確定までの流れを試せます。
 
 ## 使う AI と、有効にする設定

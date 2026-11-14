@@ -84,14 +84,14 @@ class TenantApplications:
                 from app.storage.s3_storage import S3StorageService
                 app.state.transaction_fence = self.registry.control.fence
                 app.state.storage_factory = lambda: S3StorageService(
-                    root, control=self.registry.control, client=s3_client(),
+                    root, control=self.registry.control, client=s3_client(self.config.aws_region),
                     bucket=str(self.config.object_bucket), tenant=tenant,
                     access_check=app.state.access_check,
                 )
                 if self.config.chat_log:
                     from app.cloud.chat_feedback import ChatFeedback
                     app.state.chat_log_sink = ChatFeedback(
-                        s3_client(), str(self.config.object_bucket),
+                        s3_client(self.config.aws_region), str(self.config.object_bucket),
                         self.registry.control.installation, tenant,
                         self.registry.subject(tenant),
                     )

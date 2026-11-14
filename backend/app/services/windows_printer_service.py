@@ -7,23 +7,24 @@ import subprocess
 import tempfile
 from typing import Any
 
+from app.core.config import PrinterSettings, get_settings
 from app.core.errors import AppError
+from app.core.libreoffice import configured_libreoffice_path
 
 
 class WindowsPrinterService:
-    def __init__(self) -> None:
+    def __init__(self, printer: PrinterSettings | None = None) -> None:
         self._office_path = Path(
-            os.getenv(
-                "LLM_OCR_LIBREOFFICE_PATH",
-                r"C:\Program Files\LibreOffice\program\soffice.exe",
-            )
+            configured_libreoffice_path()
+            or r"C:\Program Files\LibreOffice\program\soffice.exe"
         )
+        self._name_pattern = (printer or get_settings().printer).name_pattern
 
     def status(self) -> dict[str, Any]:
         script = r"""
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $printer = Get-CimInstance Win32_Printer |
-  Where-Object { $_.Name -like '*EPSON*' } |
+  Where-Object { $_.Name -like $env:LLM_OCR_PRINTER_NAME_PATTERN } |
   Sort-Object @{Expression={$_.Default};Descending=$true}, Name |
   Select-Object -First 1
 if ($null -eq $printer) {
@@ -42,6 +43,8 @@ if ($null -eq $printer) {
         try:
             completed = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                # The pattern goes in as data, never as part of the script text.
+                env={**os.environ, "LLM_OCR_PRINTER_NAME_PATTERN": self._name_pattern},
                 capture_output=True,
                 check=False,
                 timeout=15,

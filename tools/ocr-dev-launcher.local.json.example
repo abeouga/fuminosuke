@@ -1,0 +1,6 @@
+{
+  "ProjectRoot": "C:\\path\\to\\fuminosuke",
+  "ScannerAppPath": "C:\\Program Files (x86)\\<scanner software>\\<launcher>.exe",
+  "PrinterName": "<Windows printer name>",
+  "ScannerAddress": "<scanner IP address>"
+}

@@ -90,4 +90,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not install frontend dependencies.' }
 }
 finally { Pop-Location }
+# Shortcuts and the overlay app hold this checkout's absolute path, so they are made here.
+& (Join-Path $projectRoot 'sysover-ray\Install-SysOverRay.ps1')
 Write-Host 'Setup completed. Run scripts\dev.ps1 to start the application.'

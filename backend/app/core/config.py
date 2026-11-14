@@ -167,6 +167,12 @@ class VoiceSettings(BaseModel):
     transcript_log: bool = False
 
 
+class PrinterSettings(BaseModel):
+    # Windows printer chosen for direct printing: the first name matching this -like
+    # wildcard, the default printer first.
+    name_pattern: str = Field(default="*EPSON*", pattern=r"^[^\x00-\x1f]{1,128}$")
+
+
 class RawSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -292,6 +298,7 @@ class RawSettings(BaseSettings):
     min_ecc_score: float = Field(default=0.75, validation_alias="MIN_ECC_SCORE")
     min_edge_overlap: float = Field(default=0.7, validation_alias="MIN_EDGE_OVERLAP")
     min_template_confidence: float = Field(default=0.75, validation_alias="MIN_TEMPLATE_CONFIDENCE")
+    printer_name_pattern: str = Field(default="*EPSON*", validation_alias="PRINTER_NAME_PATTERN")
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +313,7 @@ class Settings:
     ocr: OcrSettings
     logging: LoggingSettings
     voice: VoiceSettings = dataclass_field(default_factory=VoiceSettings)
+    printer: PrinterSettings = dataclass_field(default_factory=PrinterSettings)
 
     @classmethod
     def load(cls, env_file: str | Path | None = ".env") -> Settings:
@@ -426,6 +434,7 @@ class Settings:
                 daily_seconds=raw.voice_daily_seconds,
                 transcript_log=raw.voice_transcript_log,
             ),
+            printer=PrinterSettings(name_pattern=raw.printer_name_pattern),
         )
 
 

@@ -5,10 +5,11 @@
 （`backend/app/cloud/chat_feedback.py`）。利用者の保存場所（tenants/）の外なので、容量・
 バックアップに数えず、利用者を消しても残る。書き込みに失敗してもチャットは止めない（ログだけ）。
 
-集めて読むには（AWS のプロファイル `fuminosuke-deploy`、S3 は読むだけ）：
+集めて読むには（S3 は読むだけ）。AWS のプロファイルとリージョンは `--profile`・`--region` か、
+環境変数 `AWS_PROFILE`・`AWS_REGION`（無ければプロファイルの region）で渡す：
 
 ```bash
-backend/.venv/Scripts/python.exe tools/chat_feedback/read.py out.md --since 2026-10-27
+AWS_PROFILE=<プロファイル名> backend/.venv/Scripts/python.exe tools/chat_feedback/read.py out.md --since 2026-10-27
 ```
 
 利用者ごと（Cognito のユーザー名）に時刻順で並べる。`--raw all.jsonl` で全行もそのまま書き出す。

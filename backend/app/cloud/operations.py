@@ -90,7 +90,8 @@ class Operations:
         storage: LocalStorageService
         if self.registry.control is not None:
             from app.storage.s3_storage import S3StorageService
-            storage = S3StorageService(root, control=self.registry.control, client=s3_client(),
+            storage = S3StorageService(root, control=self.registry.control,
+                                       client=s3_client(self.config.aws_region),
                                        bucket=str(self.config.object_bucket), tenant=tenant)
         else:
             storage = LocalStorageService(root)
