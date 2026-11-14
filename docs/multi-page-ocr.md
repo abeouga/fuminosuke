@@ -3,7 +3,7 @@
 2026-09-21追記: 以下は初期実装の履歴です。現在の候補OCR受付はSafety Contract §12.9、
 環境更新後の別準備確認は§12.10を正本とします。正式資格を偽装せず、現証拠を検証した
 `CANDIDATE_READY`でも人間レビュー前提の有効化/受付を可能にします。
-[検証記録](verification/candidate-readiness-20260921.md)で実環境到達状況を分けて記載します。
+[検証記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/candidate-readiness-20260921.md)で実環境到達状況を分けて記載します。
 
 2026-09-13追記: [ページ別レビュー](paged-review.md)で専用レビュー・補正と保存表を追加した。
 さらに[全ページ確定](paged-confirmation.md)と受付schemaVersion 2を追加した。
@@ -148,9 +148,6 @@ hiddenを解除したり、図形を落として「対応」とはしていま�
   Page 1 B2:D31 / Page 2 B32:D63、基準画像、未入力表示、実OCR禁止と無効ボタンをDOM・画面で確認。
   最終表示のconsole warning/errorは0。実ファイル選択と本番アプリ全体のE2Eは未実施。
 - OpenAI / Google実API: 0 calls。認識品質、実response association mismatch等の実測値は未測定。
-- `git diff --check`: 成功。staging・commit・pushなし。検証用9028／5198サーバーとブラウザーtabは終了済み。
-  今回生成したテスト用ディレクトリとハーネスは`C:\Users\hanam\.codex\tmp\llm-ocr-job-pages-20260907`へ移動し、
-  以前から存在する他の一時ディレクトリには触れていません。
   終了worktreeは18 modified、21 untracked成果物（前フェーズ分を含む）。HEADは開始時と同一です。
 
 ## 今回の変更ファイル

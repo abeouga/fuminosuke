@@ -47,3 +47,13 @@ sysover-ray/SysOverRay/bin/
 sysover-ray/SysOverRay/obj/
 # Local preview servers point at this PC's folders.
 .claude/launch.json
+
+# AI-agent instructions live in the development notes repository; only a short
+# local pointer is kept here.
+/AGENTS.md
+/CLAUDE.md
+
+# Local run records.
+tools/chat_qa/last/
+backend/*.log
+frontend/*.log

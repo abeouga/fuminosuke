@@ -1,6 +1,5 @@
 {
   "contractVersion": "editing.v2",
-  "status": "phase6-integration-verified-isolated",
   "operations": [
     "ocr.set_value",
     "cell.set_role",
@@ -35,27 +34,8 @@
     "http.schema.json",
     "voice.schema.json"
   ],
-  "semanticGuards": "../../voice-editing-redesign-phase1-2026-10-08.md",
-  "runtimeUnchanged": false,
   "policyVersion": "decisions-first-v2",
-  "implementationVerified": true,
   "examples": "examples.json",
-  "nextPhase": 7,
-  "limitations": [
-    "Policy calibration is a small labeled sample, not real microphone acceptance or a p95 guarantee",
-    "Voice wire uses controlled provider events; real microphone, free-answer model accuracy and end-to-end latency remain unverified",
-    "Browser UI acceptance used a fixed resolver with real HTTP/storage; all-operation regression, paged/XLSX verification and normal cutover remain later phases",
-    "External ChatGPT/MCP publication is outside this phase series"
-  ],
   "generator": "../../../backend/scripts/generate_editing_v2_contracts.py",
-  "runtimeTypes": "../../../backend/app/api/v2/editing_contracts.py",
-  "verification": "../../voice-editing-redesign-phase6-2026-10-09.md",
-  "implementationScope": {
-    "commandApi": "implemented; isolated copies verified",
-    "planner": "single Responses plan, owned selector/evidence binding, semantic operations; limited real API verification",
-    "decisions": "one request up to four complete pools; versioned confidence policy; limited real API verification",
-    "voice": "authenticated streaming, ordered full utterance, pending dialogue, hold and local capture; isolated controlled wire verified",
-    "ui": "implemented; 33 focused tests and build passed; terminal SSE consumption, parallel coherent reads and ordered publication verified; isolated Chrome with fixed interpretation and real persistence",
-    "normalDatabase": "not migrated; editing disabled"
-  }
+  "runtimeTypes": "../../../backend/app/api/v2/editing_contracts.py"
 }

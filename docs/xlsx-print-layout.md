@@ -9,7 +9,7 @@ ID・canonical座標とページ境界を維持する。以下の初期Phaseの�
 
 2026-09-08追記: 新規printLayoutのsource geometryは`lo-import-twip-v1`を使用する。
 旧保存プランとlegacy OCR座標は旧モデルを保持。以下は初期Phaseの記録であり、
-校正の現状・実測・制約は[Geometry Calibration](geometry-calibration.md)を参照。
+校正の現状・実測・制約は[Geometry Calibration](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/geometry-calibration.md)を参照。
 
 ## 到達範囲
 
@@ -23,7 +23,6 @@ ID・canonical座標とページ境界を維持する。以下の初期Phaseの�
 
 開始HEAD: `d33e192cb4483fe3a2a857a2b5f51f046a8f8fbe`、worktree: clean。
 前回の調査にあったdirty worktreeは現在の状態ではなかった。
-`AGENTS.md` と `ocr-safety-contract.md`、現実装・テストを再確認した。
 既存renderは `fitToPage=True`, `fitToWidth=1`, `fitToHeight=1`, `scale=None`,
 `PageRange=1`。既存alignmentのX/Y別倍率とともに維持した。
 実DB `backend/data/app.db` はread-only接続でrevision `0031_template_field_identity`を確認。
@@ -151,7 +150,7 @@ ADD_PAGE/RESCAN_PAGEは既存文書reconciliationであり、今回のtemplate p
   `frontend/src/components/PrintLayoutEditor.test.tsx`
 - docs: 本書と `docs/ocr-safety-contract.md`
 
-backendのパスは`backend/app/`を基準とする。staging/commit/pushなし。
+backendのパスは`backend/app/`を基準とする。
 既存OCRのprovider/model/prompt/schema/association、既存mapping/crop、補正・確定・XLSX出力は
 変更していない。旧経路のテストとsnapshot保護により既存OCR contractを維持した。
 新しい印刷設定に対する明示的な受付拒否を追加したが、統合要件全体の完成ではない。

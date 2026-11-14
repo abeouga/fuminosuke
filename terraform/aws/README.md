@@ -1,6 +1,6 @@
 # 文之助ベータのTerraform構成
 
-現在の公開方式は **Fargate＋S3/CloudFront、毎日23:00〜7:00 JST停止** へ移行中です。[移行設計](../../docs/web-beta-fargate-plan-2026-10-16.md)の工程と終了条件を参照してください。
+現在の公開方式は **Fargate＋S3/CloudFront、毎日23:00〜7:00 JST停止** へ移行中です。[移行設計](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/web-beta-fargate-plan-2026-10-16.md)の工程と終了条件を参照してください。
 
 AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-northeast-1**。全provider/backendで対象accountを固定します。Terraform 1.15以降、AWS provider 6系をlockfileで固定し、秘密値をtfvars・stateへ直接設定しません。通知先アドレスだけはignoredなterraform.tfvarsで指定し、plan/stateには非公開情報が含まれるものとして管理します。
 
@@ -11,7 +11,7 @@ AWS profileは **abe-deploy-user**、account **535562976288**、region **ap-nort
 | `modules/runtime_hours` | FargateとRDSの夜間停止制御。検証済み定義、未配備、既定無効。実task/service/DBの受入後に接続する |
 | `renderer_probe` | 7-Bの実検証用13資源。独立state、専用cluster/ECR/S3/SG/task definition。service・繰返し起動・task IAM roleなし。製品API/DBの配備rootではない |
 
-[7-Bの検証記録](../../docs/web-beta-phase7b-fargate-2026-10-16.md)を参照してください。
+[7-Bの検証記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/web-beta-phase7b-fargate-2026-10-16.md)を参照してください。
 `renderer_probe` のstate keyは `probe/renderer/terraform.tfstate` です。
 taskの起動は短い試験runnerからのみ行い、終了後に所有task・ENIと試験objectを照合します。
 保存planは実資源の作成/変更を管理し、実行時の署名URLはstateへ保存しません。

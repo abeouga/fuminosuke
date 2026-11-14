@@ -105,10 +105,7 @@ crop閲覧・ページ移動を維持する。成否不明時は明示再取得�
 拒否を迂回する起動は行わず、新APIの実稼働・ブラウザー反映は未検証。
 開発serverを通常の起動手順で再起動する必要がある。
 
-終了した当工程の試験用7ディレクトリは削除せず、
-`C:/Users/hanam/.codex/tmp/llmocr-paged-confirm-tests-20260913`へ退避した。
-他工程の一時ファイルは変更していない。最終`git diff --check`成功。
-既存未コミット差分を保持し、staging・commit・pushは行っていない。
+最終`git diff --check`成功。
 
 実OpenAI/Google API呼出し0回。
 実応答association/recognition error、実書類の確認→出力、ブラウザー操作は未測定・未検証。

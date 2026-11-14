@@ -114,8 +114,8 @@ def transition(current: str, following: str) -> None:
 class ResolvedInstruction:
     operations: tuple[BoundOperation, ...] = ()
     no_action: bool = False
-    # Full clarification assembly belongs to phase4. A versioned question can
-    # already be returned without converting it into a partial successful save.
+    # A versioned question is returned as-is; it is never turned into a
+    # partial successful save.
     question_json: str | None = None
     partial_plan_json: str | None = None
     undo_operation_id: str | None = None

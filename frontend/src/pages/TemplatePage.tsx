@@ -800,8 +800,8 @@ function TemplateReview({
       if (active) setEditingEnabled(status.enabled);
       if (active) setAnalysisEnabled(status.enabled && status.templateAnalysisEnabled === true);
     }).catch(error => {
-      // Before the phase19 server cutover, a running legacy server has no
-      // status endpoint. This discovery is not a fallback after a failed write.
+      // A server without the editing API has no status endpoint. This
+      // discovery is not a fallback after a failed write.
       if (error instanceof EditingError && error.status === 404) {
         if (active) setEditingEnabled(false);
         return;

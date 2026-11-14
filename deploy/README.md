@@ -1,14 +1,9 @@
 # Webベータのコンテナー実行
 
-2026-10-16最新指示：公開方式はTerraform＋Fargate API＋S3/CloudFrontへ変更する。[移行設計](../docs/web-beta-fargate-plan-2026-10-16.md)と[Terraform構成](../terraform/aws/README.md)を優先する。このディレクトリのEC2/Compose公開手順とinfra.yamlは旧方式であり、新規公開には使わない。コンテナーと隔離rendererの既存検証証拠は保持するが、Fargateで同じ制約が成立したとは扱わない。
 
-2026-10-16の[修正6-A](../docs/web-beta-phase6a-repair-2026-10-16.md)で削除中断回復と復元権限を修正しました。復元した利用者は全員停止し、現在の許可を確認したsubだけを`admin enable`で再承認します。6-B独立再審査待ちで、公開へ先行しません。[運用手順](../docs/web-beta-operations.md)の復元・再承認を使用してください。
 
-フェーズ5で共通上限・外部台帳・削除・backup/restore・配備定義を追加しました。[工程記録](../docs/web-beta-phase5-2026-10-16.md)と[運用手順](../docs/web-beta-operations.md)を現在地とします。cloud構成は実S3の初期化済み台帳を要求し、AIは別の `compose.ai.yaml` を追加するまで停止します。実AWS配備・公開は未実施です。以下のフェーズ3/4時点の構成説明は本手順より優先しません。
 
-フェーズ4で通常画面のAI/音声利用可否・手動復帰・paged結果導線を整理しました。[フェーズ4記録](../docs/web-beta-phase4-2026-10-15.md)を参照してください。cloud overlayでは共通の手動編集APIを有効にしますが、有料AIは引き続き停止します。通常composeの編集許可originは `BETA_HTTP_PORT` と同じloopbackの2表記に限定し、cloudでは `BETA_PUBLIC_ORIGIN` の正確なHTTPS originへ置き換えます。
 
-フェーズ3で `compose.cloud.yaml`／`Caddyfile.cloud` とCognito・利用者分離を追加しました。下記の通常composeは引き続きloopback専用です。cloud overlayは認証・HTTPSの検証構成で、共有quota・証明書永続化・運用・実AWS受入が未完了のため、公開手順の完成版ではありません。[フェーズ3記録](../docs/web-beta-phase3-2026-10-15.md)を併せて確認してください。
 
 通常の `compose.yaml` はフェーズ2のローカル検証用で、公開ポートをホストのloopbackに限定しています。認証構成はcloud overlayで提供します。クラウドの共通送信予算・実AWS公開は後続工程です。通常composeを認証なしでインターネットへ公開しないでください。
 
@@ -93,7 +88,6 @@ Linux新規準備は `linux-fods-physical-length-v1`、`linux-print-reference-v1
 
 ベースimageはdigest固定、Python/Node依存は既存lockを使用します。Debianのnative packageはbuild時の集合SHAを記録し、配布した完成imageのIDを実行正本にします。将来の再buildがbit単位で同一になるとは保証しません。
 
-実施結果、既知の画面課題、検証した範囲は[フェーズ2記録](../docs/web-beta-phase2-2026-10-15.md)を参照してください。
 
 ## 招待制クラウドの認証構成（フェーズ3）
 

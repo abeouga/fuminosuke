@@ -68,8 +68,7 @@ UI・保存planがこのimageを自動選択する設定は追加していない
   全4 PNGが保存artifact・DB reference SHA・旧reportとbyte一致した。
   保存済みXLSX/PDF/PNG/report、版quality_jsonの前後は一致し、実DBへの書込みなし。
 
-実比較scriptはrepo外の
-`C:/Users/hanam/.codex/tmp/paged-vector-inspection-20260913/compare_font_render.py`へ
+実比較scriptはrepo外に置き、
 上記runtime SHAを引数に渡した。無指定の従来比較も維持している。
 
 途中の失敗を区別する。
@@ -125,7 +124,7 @@ root権限を持つホスト管理者による同時改変全般の防御を証�
 ld.so.cacheのSHAを取得した。動的linkの一覧からもlibc・libmount・libselinux・libcap等への
 依存を確認し、実行ファイル本体のSHAだけを完全なbootstrap identityと扱わない。
 Pythonの動的import、systemd設定、WSL/Windows側の起動資源はこの一覧だけでは網羅されない。
-後続の[起動側依存観測](verification/wsl-bootstrap-observation-20260913.md)では、
+後続の[起動側依存観測](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-bootstrap-observation-20260913.md)では、
 Python source/cache・mapped runtime資源・起動ELF依存を含む187件を観測し、
 実reference変換前後の159件も比較した。全依存closure/正式認定の代替ではない。
 
@@ -141,15 +140,14 @@ Windows font directoryは通常のPowerShell一覧では576 files / 645,773,985 
 候補に出たfamily/fileだけではなく、追加fontや隠しfileも含む集合変化を検出する必要がある。
 同時の敵対的書換え全般、実Officeが使用した文字/glyph、性能上限、本番認定の証明ではない。
 この調査時点では製品の毎変換前後チェックへは組み込んでいなかった。
-後続で[font集合の前後照合](verification/wsl-font-directory-20260913.md)を、
+後続で[font集合の前後照合](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-font-directory-20260913.md)を、
 固定runtimeを明示したWindows font経路に限定して追加した。
-診断scriptはrepo外
-`C:/Users/hanam/.codex/tmp/paged-vector-inspection-20260913/probe_font_manifest.py`。
+診断scriptはrepo外に置いた。
 font copy 0、実DB/原本変更0、OpenAI/Google呼出し0。
 
 ## glyph解析用の追加環境
 
-2026-09-13に[専用の固定依存環境](verification/wsl-glyph-dependencies-20260913.md)を追加し、
+2026-09-13に[専用の固定依存環境](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-glyph-dependencies-20260913.md)を追加し、
 別SHAの新imageを作成した。既存image・実DRAFTのruntime選択は維持する。
 新image内の非特権・readonly・ネットワーク分離import probeは成功したが、
 PDF字形検証の製品経路への接続や本番資格発行は未完了である。

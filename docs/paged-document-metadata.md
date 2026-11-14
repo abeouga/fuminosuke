@@ -60,8 +60,6 @@ integrationを`test_paged_document_metadata_api.py`へ改名し、全assertion�
 --basetemp=.pt-paged-metadata-full2-0913`を実行した。skipと3件のdeprecated font.copy警告は既存。
 テスト削除・assertion弱体化なし。`git diff --check`も通過した。
 
-今回終了済みの4検証ディレクトリを、元と移動先の絶対パス・reparse属性を確認して
-`C:/Users/hanam/.codex/tmp/llmocr-paged-metadata-tests-20260913`へ退避し、過去の別検証tempは保持した。
 実アプリの8000/5173は確認時に停止中で、実Chrome操作は未検証。
 
 ## 残る範囲

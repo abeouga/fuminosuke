@@ -113,7 +113,7 @@ association tokenは変更しない。再送後も不成立なら従来どおり
 
 最初の全体試験は1006 passed / 1 failed / 1 skipped（1271.60秒）。
 失敗は既存のfont SHA cacheによる失効検査だったため、
-[依存SHAの再検証](renderer-identity-freshness.md)として原因と修正を分離した。
+[依存SHAの再検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/renderer-identity-freshness.md)として原因と修正を分離した。
 旧試験を弱めず、追加した同一metadata再現試験と全体回帰を再実行する。
 再試験`.pt-paged-budget-full2-0913`は、後続resource対象試験との並行実行を解消するため中断した。
 完走結果として数えず、[後続工程](paged-transcription-resources.md)で直列の全体回帰を行う。

@@ -22,13 +22,13 @@
 backend・保存payload・mapping生成・physical identity・OCR契約は変更しない。
 
 実テンプレートの局所修復とChrome検証は
-[警告誘導の検証記録](verification/template-warning-navigation-20260920.md#下書き不一致への共通対策と局所修復)に記載する。
+[警告誘導の検証記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/template-warning-navigation-20260920.md#下書き不一致への共通対策と局所修復)に記載する。
 
 以下は以前の実装・検証履歴であり、失敗後の再表示で無条件に自動保存する旧挙動は上記仕様へ更新した。
 
 2026-09-12。対象は `frontend/src/components/LayoutEditor.tsx` と
 `frontend/src/pages/TemplatePage.tsx` の一時UI状態と保存応答の反映。
-既存の未コミット変更を保持し、backend・DB schema・API payload生成・OCR処理は変更しない。
+backend・DB schema・API payload生成・OCR処理は変更しない。
 
 ## 原因と変更
 
@@ -52,7 +52,6 @@ backend・保存payload・mapping生成・physical identity・OCR契約は変更
 
 既存の区分・結合・親接続・意味づけ処理と保存payload、ページrevision検証は維持する。
 mapping identity・physical identity・crop・provider・公開版・過去jobに追加変更はなく、
-既存OCR contractを維持した。AGENTS.mdの追加編集は不要。
 
 ## 初回修正時の検証（履歴）
 
@@ -65,7 +64,6 @@ mapping identity・physical identity・crop・provider・公開版・過去job�
 
 保存応答を遅延／失敗させるテストはmockであり、実Chrome・実DBの連続操作E2Eではない。
 今回backend全体・OCR契約テストは再実行していない。OpenAI / Google実API呼出し0回。
-staging・commit・pushは行っていない。
 
 ## 追加修正：親画面のロックと接続候補の保持（履歴）
 
@@ -117,7 +115,7 @@ staging・commit・pushは行っていない。
 実測結果ではない。今回の変更はフロントエンドの操作状態と保存待機に限定し、
 保存payload・API経路・backend・OCR生成処理・page geometry gateは変更していない。
 既存OCR contractを維持した。backend全体・OCR契約テストは今回再実行していない。
-OpenAI / Google実API呼出し0回。既存差分を保持し、staging・commit・pushは未実施。
+OpenAI / Google実API呼出し0回。
 
 ## ステップ切替時の保存待ちを廃止
 
@@ -149,4 +147,3 @@ OCR処理は変更しない。既存OCR contractを維持した。
 検証結果：`frontend: npm.cmd test` は29ファイル・323 passed、
 `npm.cmd run build` 成功（既存の500kB超bundle警告あり）、`git diff --check` 通過。
 backend全体・OCR契約テストは今回再実行していない。OpenAI / Google実API呼出し0回。
-既存差分を保持し、staging・commit・pushは行っていない。

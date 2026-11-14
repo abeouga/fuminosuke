@@ -3,7 +3,6 @@
 This is not a general PDF writer model or an admission/qualification decision.
 Callers must establish that the Calc integer grid and this emission path apply.
 No saved rectangle, crop, legacy geometry, or raster image is changed here.
-See docs/verification/calc-pdf-coordinate-precision-20260914.md.
 """
 from __future__ import annotations
 

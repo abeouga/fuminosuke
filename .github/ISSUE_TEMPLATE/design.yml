@@ -50,7 +50,7 @@ body:
     id: impact
     attributes:
       label: 影響を受けるもの
-      description: 影響する画面、API、契約（Safety Contract・AGENTS.md）などを記載してください。
+      description: 影響する画面、API、契約（Safety Contract など）などを記載してください。
 
   - type: checkboxes
     id: records
@@ -58,5 +58,4 @@ body:
       label: 書き残す先
       options:
         - label: docs/strategy/ に追記する
-        - label: AGENTS.md の更新が必要か確認した
         - label: docs/ocr-safety-contract.md の更新が必要か確認した

@@ -99,7 +99,4 @@ AGENTS・Safety Contract・関連工程文書も更新した。今回の追加DB
 この工程では実DB・既存原本・ACTIVE gateを変更せず、OpenAI/Google呼出しは0。
 fixtureによるprovider/gate置換は実OCR・本番認定の証拠ではなく、OCR安全性を完全には検証できていない。
 
-終了済みの当工程テスト用5ディレクトリは削除せず、
-`C:/Users/hanam/.codex/tmp/llmocr-paged-output-tests-20260913`へ移動して保持した。
-補助readerと実原本への仮値診断は`C:/Users/hanam/.codex/tmp/paged-output-inspection-20260913`。
-既存の未コミット差分を保持し、staging・commit・pushは行っていない。最終`git diff --check`成功。
+最終`git diff --check`成功。

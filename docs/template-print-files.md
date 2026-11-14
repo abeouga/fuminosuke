@@ -7,7 +7,7 @@
 原本・PDFの保存SHAと版に保存したパスの内容を照合し、失敗時は別版や再変換へ切り替えない。
 OCR結果・補正値は含めない。`printLayout`がある版の既存取得経路は以下のままとする。
 
-2026-09-12追記: [複数ページ本番化](production-paged-ocr.md)で、利用者が導入を許可した
+2026-09-12追記: [複数ページ本番化](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/production-paged-ocr.md)で、利用者が導入を許可した
 WSL/bubblewrap/cgroup経路を印刷用PDFの選択肢に追加した。`PRINT_PDF_RENDERER=wsl`のときは
 この経路だけを使い、失敗時に非隔離/旧1ページへfallbackしない。人工1/2/3ページの実生成を確認した。
 2026-09-13追記: 同作業記録の新adapterは明示されたplanだけに適用する。
@@ -92,7 +92,6 @@ backend内にnative PDF parse/rasterを追加していない。
 - `frontend/src/pages/TemplatePage.test.tsx`
 - `docs/template-print-files.md`
 
-AGENTS.md・OCR Safety Contractの追加編集は不要。staging・commit・push・差分破棄なし。
 検証が追加したtemp/evidenceは保持した。原本・実DB・公開版・過去jobへの書込みなし。
 
 ### 検証結果
@@ -116,7 +115,7 @@ API integrationはsource SHA、保存range、版分離、stale拒否、元ZIP内
 ### 人工帳票の実生成
 
 既存scriptをbackendから実行:
-`.venv/Scripts/python.exe scripts/check_template_print.py --output C:/Users/hanam/.codex/tmp/template-print-card-20260912`
+`.venv/Scripts/python.exe scripts/check_template_print.py --output <出力先>`
 
 同directoryの `report.json` とXLSX/planを保持した。1/2/3ページとV1/V2相当のXLSXを生成し、
 元break=9に対し、保存breakのなし/16/10,20/20が成果物へ反映された。原本SHAは不変。
@@ -177,7 +176,6 @@ Office stubの成功を実Office・本番資格の成功としない。
 ## 2026-09-09 検証結果
 
 開始HEAD / 終了HEAD: `b880d76484e3c687b9efc3032fcc5d6cae1c0ff9`。
-commit / staging / pushなし。開始時からの`frontend/src/styles.css`差分は保持し、今回編集していない。
 
 | 検証 | 結果 |
 | --- | --- |
@@ -208,13 +206,10 @@ full収集後に、未参照worksheetパートへの不要な編集を防ぐ限�
 - backend: `python -m ruff check`に変更Python9ファイルを指定、`python -m mypy app --no-pretty`
 - 新規サービス限定: `python -m mypy app/services/print_workbook.py app/services/print_pdf.py app/services/print_pdf_worker.py app/services/template_print_service.py --follow-imports=silent --no-pretty`
 
-完了した今回のtest temp 5個は`C:/Users/hanam/.codex/tmp/template-print-tests-20260909-2102/`へ移動し、
-検証証拠を保持した。既存tempやユーザーデータの削除はしていない。
 
 ### 実renderer試行
 
 [実測report](template-print-evidence.json)に人工fixtureのrange・manual breaks・SHAを保存した。
-生成ファイルは`C:/Users/hanam/.codex/tmp/template-print-20260909-2101/`に保持している。
 
 | ケース | 保存range | 成果物のmanual breaks |
 | --- | --- | --- |

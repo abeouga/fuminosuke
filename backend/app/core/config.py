@@ -132,8 +132,8 @@ class OcrSettings(BaseModel):
     retry_uncertain_high_detail: bool = False
     max_concurrency: int = Field(default=2, ge=1, le=4)
     paddle_presence_audit_enabled: bool = False
-    # 2026-10-24: Responses requests are answered by Claude unless set back to "openai".
-    # Decisions and speech recognition stay on OpenAI either way.
+    # Which service answers Responses requests ("openai" or "claude").
+    # Decisions and speech recognition always use OpenAI.
     responses_provider: Literal["openai", "claude"] = "openai"
     anthropic_api_key: SecretStr | None = None
     claude_model: str = "claude-sonnet-5-5"

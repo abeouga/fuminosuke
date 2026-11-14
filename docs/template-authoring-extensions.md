@@ -53,7 +53,7 @@
   見出しへ意味づけが移るわけではない。記入欄自身を見出しに変える場合はinputCellIdのrelationを除く。
   項目4は調査のみの依頼なので、この保持仕様は変更していない。
 
-変更・検証の詳細は[操作改善の検証報告](template-authoring-2345-report.md)を参照。
+変更・検証の詳細は[操作改善の検証報告](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/template-authoring-2345-report.md)を参照。
 
 ### 同名項目
 
@@ -178,7 +178,7 @@ OCR除外、mapping APIの往復、旧版・logicalFieldIdの保持、版fork時
 同一bbox `(16, 16, 268, 268)` で矩形は両文字列を保持し、多角形は外側だけをマスクする。
 下図の青線は説明用の重ね描きであり、入力画像には含めていない。
 
-![矩形と多角形の切り出し比較](verification/template-authoring-crop.png)
+![矩形と多角形の切り出し比較](images/template-authoring-crop.png)
 
 目視確認サンプルのRGB画素列SHA-256:
 
@@ -238,5 +238,5 @@ schema error・recognition-only errorの件数は未実測。
   `frontend/src/components/LayoutEditor.authoring.test.tsx`、
   `backend/tests/unit/test_layout_authoring_extensions.py`、
   `backend/tests/integration/test_template_versioning.py`
-- 文書: `AGENTS.md`、`docs/ocr-safety-contract.md`、本書
-- 検証図: `docs/verification/template-authoring-crop.png`
+- 文書: `docs/ocr-safety-contract.md`、本書
+- 検証図: `docs/images/template-authoring-crop.png`

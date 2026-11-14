@@ -142,8 +142,8 @@ class TemplateRepository:
         paged = version.quality_json.get("printLayout") is not None
         if paged:
             # Older callers cannot accidentally activate a paged version.  The
-            # API supplies both the client's exact revision and the Phase 3
-            # validator; the validator performs the full current evidence read
+            # API supplies both the client's exact revision and the paged
+            # qualification validator; the validator performs the full current evidence read
             # inside this transaction.
             if qualification_service is None or expected_revision is None:
                 require_image_ocr(version.quality_json)

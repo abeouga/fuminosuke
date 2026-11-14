@@ -29,7 +29,7 @@ XLSX取込では元セル書式を使用する（top / center / bottom、未指�
 - backend/tests/unit/test_text_vertical_alignment.py：画像・XLSX・旧データ境界
 - docs/ocr-safety-contract.md：表示metadataの契約
 
-## 検証（2026-09-09、開始HEAD d33e192c、既存未コミット差分あり）
+## 検証（2026-09-09）
 
 - `backend/.venv/Scripts/python.exe scripts/verify_ocr_contract.py`：変更前194件、変更後194件通過。
 - backend対象4ファイルのpytest：40件通過。追加後の新規境界テストは14件通過。

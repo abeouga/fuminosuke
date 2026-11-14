@@ -2,7 +2,6 @@
 
 This is a disposable infrastructure probe, not a production renderer or a qualification issuer.
 The API, existing saved renderer reports, templates and OCR jobs do not call this code.
-See [migration design](../../docs/web-beta-fargate-plan-2026-10-16.md).
 
 AWS profile: **abe-deploy-user**, account **535562976288**, region **ap-northeast-1**.
 Infrastructure lives in `terraform/aws/renderer_probe`, with its own remote state key

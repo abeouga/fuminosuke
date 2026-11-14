@@ -1,9 +1,0 @@
-INFO:     127.0.0.1:51227 - "GET /api/v1/ocr-jobs/d6d64b99-0a3d-44ef-b0d9-5c001368d007/export?format=xlsx HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52878 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53787 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49840 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:58997 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51297 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61167 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51633 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51602 - "GET /api/v1/health HTTP/1.1" 200 OK

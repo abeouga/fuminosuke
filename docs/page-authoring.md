@@ -58,10 +58,10 @@ Excelのフォント・組版再現や本番OCRの座標保証を意味しない
 ページ編集の保存前比較で既定値と同値に扱う（通常セルと既存結合parts）。
 保存済みJSONを読み取り時に移行したり、revision / layout SHA照合を迂回したりしない。
 明示的な形状変更・既存結合情報の変更は従来どおり拒否する。
-詳細は [旧形状既定値の保存互換検証](verification/page-authoring-legacy-shape-save-20260920.md) を参照。
+詳細は [旧形状既定値の保存互換検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/page-authoring-legacy-shape-save-20260920.md) を参照。
 
 2026-10-05以降は共通authoring APIを使用する。旧print-layout/authoringは廃止した。
-保存契約と移行は[フェーズ4記録](voice-assistant-phase4-2026-10-05.md)を参照する。
+保存契約と移行は[フェーズ4記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/voice-assistant-phase4-2026-10-05.md)を参照する。
 
 `PUT /api/v1/template-versions/{id}/authoring?expectedRevision=...`
 
@@ -116,7 +116,7 @@ reference qualificationのモデル照合、Office adapterのhidden行列拒否�
 
 追加検証は `backend/tests/integration/test_page_virtual_headings.py` と
 `frontend/src/components/LayoutEditor.pages.test.tsx`。検証結果は
-[ページ仮想見出しの検証記録](verification/page-virtual-headings-20260912.md)を参照。
+[ページ仮想見出しの検証記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/page-virtual-headings-20260912.md)を参照。
 
 ## 検証対象
 
@@ -127,8 +127,7 @@ reference qualificationのモデル照合、Office adapterのhidden行列拒否�
 
 ## 結合・解除の追加（2026-09-11）
 
-開始HEAD: `b613c11a72b20d4c7cafc7ec3dd7ddf9adf52b55`。開始時は27 trackedファイルの
-未コミット変更と既存untrackedファイルがあった。それらを保持し、今回の結合対応を追加した。
+開始HEAD: `b613c11a72b20d4c7cafc7ec3dd7ddf9adf52b55`。
 実DBとmigration headはともに`0031_template_field_identity`。DB schema変更はない。
 
 変更境界はLayoutEditor/pageAuthoring、print_layout_source/service、追加の
@@ -167,13 +166,11 @@ OpenAI/Google実APIは0回。認識精度・実手書きのcrop安全性・実re
 変更対象は `LayoutEditor.tsx`、`pageAuthoring.ts`、`printLayout.ts`、
 `page_authoring_validation.py`（新規）、`print_layout_service.py`、`print_layout_source.py`、
 `spreadsheet_template_output_service.py`、対応するfrontend/backendテストと本節・Safety Contract・XLSX Print Layout文書。
-既存の未コミット差分は保持した。AGENTS.mdへの追加変更、staging、commit、pushは行っていない。
 
 ## 初回の実測結果（2026-09-09）
 
 開始・終了HEADはともに `b880d76484e3c687b9efc3032fcc5d6cae1c0ff9`。
-staging・commit・pushは実施していない。開始時の未コミット変更を保持し、
-今回の差分は開始時コピーとも照合した。既存の印刷成果物出力・元画像の寸法補正実装は今回の新規実装件数に含めない。
+既存の印刷成果物出力・元画像の寸法補正実装は今回の新規実装件数に含めない。
 
 | 検証 | 結果 |
 | --- | --- |

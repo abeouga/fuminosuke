@@ -57,9 +57,6 @@ provider/model、schemaクラス、画像、manifest、compact ID/token、mappin
   `3ecabcb5e70138fca0e25674760a7b41d66f4ef456e6fbea78e74d22f6e226e8`。
   応答model schema SHAは`3706a080be4bff52e6dcfa2ec009027838151efd422475ba5cb1db53c6b79208`。
   read-onlyでcapture→validate一致を確認した。原本・実版・過去jobへ保存していない。
-- 先行予算/renderer工程と本工程の完了・失敗・中断済みテスト専用14ディレクトリを
-  `C:/Users/hanam/.codex/tmp/llmocr-paged-budget-and-resources-tests-20260913`へ移動して保持した。
-  削除は行っていない。進行中の全体試験ディレクトリは移動していない。
 
 ## 未完了の境界
 

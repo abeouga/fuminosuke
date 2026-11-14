@@ -1,10 +1,7 @@
 # Webベータの運用手順
 
-2026-10-16最新指示により、公開方式をTerraform＋Fargate＋S3/CloudFrontへ変更し、毎日23:00〜7:00 JSTを停止時間とする。[移行設計と現在の実施状況](web-beta-fargate-plan-2026-10-16.md)を優先する。旧EC2案のホスト操作・日次04:00 backupは新構成の運用手順として流用しない。Fargate版では停止前の保存・バックアップと、DB起動後のAPI再開を実装・検証する。現在は未公開で、以下のEC2手順は旧方式の記録である。
 
-2026-10-16の[修正6-B独立再審査](web-beta-phase6b-review-2026-10-16.md)でR1〜R3の解消を確認した。[修正6-A](web-beta-phase6a-repair-2026-10-16.md)の削除中断回収と、復元時の**全利用者停止・管理者による明示再承認**を現在の仕様とする。次はフェーズ7の実環境受入であり、実AWS/HTTPS/Cognito/S3・マイク・負荷・容量・全容量復旧の受入前に公開済みとは扱わない。
 
-2026-10-16の[初回独立審査](web-beta-phase6-review-2026-10-16.md)は修正前の履歴として保持する。以下は現行の運用手順であり、実環境での障害復旧受入完了を示すものではない。
 
 対象は `llm-ocr-deploy`。AWS CLIは **abe-deploy-user / 535562976288 / ap-northeast-1** を使用します。サーバーは専用instance roleを使用し、アクセスキー・通常DB・開発用.envを配布しません。配備定義は [infra.yaml](../deploy/infra.yaml)、設定のひな型は [cloud.env.example](../deploy/cloud.env.example) です。実AWS配備はフェーズ7で行います。
 

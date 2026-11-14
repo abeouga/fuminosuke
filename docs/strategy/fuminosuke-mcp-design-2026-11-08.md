@@ -1,10 +1,10 @@
 # 文之助MCPサーバーの設計（2026-11-08）
 
-親エージェント「Agorack（アゴラック）」や Claude Desktop などのAIが、文之助の**確定済みの帳票データ**を読むための MCP サーバーの設計。実装はこの設計の承認後に行う。
+親エージェント「Agorack（アゴラック）」や Claude Desktop などのAIが、文之助の**確定済みの帳票データ**を読むための MCP サーバーの設計。
 
-ファイル・関数・要求と応答の形の単位の設計は [実装設計](fuminosuke-mcp-implementation-2026-11-08.md) にある。
+ファイル・関数・要求と応答の形の単位の設計は [実装設計](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-mcp-implementation-2026-11-08.md) にある。
 
-関連：[上位エージェントにつなぐ設計図](agent-integration-architecture-2026-11-07.md)（§4 守る約束、§7 MCP）、[文之助×カブロガー 統合エージェント 設計メモ](fuminosuke-cub-agent-2026-11-08.md)（§5 根拠の形式）。
+関連：[上位エージェントにつなぐ設計図](agent-integration-architecture-2026-11-07.md)（§4 守る約束、§7 MCP）、[文之助×カブロガー 統合エージェント 設計メモ](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-cub-agent-2026-11-08.md)（§5 根拠の形式）。
 
 ---
 
@@ -55,7 +55,7 @@ MCPサーバーの中にあるのは「API」ではなく**道具（tool）**。
 flowchart TB
   subgraph L1["① AI側（MCPを使う側）"]
     CD[Claude Desktop]
-    AG[Agorack（あとで）]
+    AG[Agorack]
   end
 
   subgraph L2["② 文之助MCPサーバー（AI用の入口・薄い層）<br/>backend/app/mcp_server/　別プロセス・標準入出力"]
@@ -224,7 +224,7 @@ sequenceDiagram
 
 ### 4.2 根拠の形
 
-[統合設計メモ §5-1](fuminosuke-cub-agent-2026-11-08.md#5-1-共通の根拠形式-訂正) の形を使う。カブロガーの MCP も同じ外枠（`kind`・`source_id`・`label`・`location`・`value`）にする。
+[統合設計メモ §5-1](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-cub-agent-2026-11-08.md#5-1-共通の根拠形式-訂正) の形を使う。カブロガーの MCP も同じ外枠（`kind`・`source_id`・`label`・`location`・`value`）にする。
 
 ```json
 {
@@ -461,40 +461,3 @@ AI が次の手を決められるよう、文章で返す。
 
 - 標準出力は MCP の通信に使うので、ログは標準エラーに出す。
 - 文之助の `.env`（AIのキーなど）は読まない。MCPサーバーはAIを呼ばない。
-
----
-
-## 8. 確かめ方
-
-ユニットテストは増やさず、実データで確かめる（AGENTS.md の検証の方針）。
-
-1. **道具ごとの呼び出し**：MCP Inspector（又は小さな呼び出しスクリプト）で、通常データの確定済みの書類（例：繁殖台帳1021「はじめ」「こよみ」、給水1018）に対して6つの道具を呼ぶ。
-2. **画面と同じ値か**：`get_document` の値・欄名・見出し・表を、ライブラリの表示と比べる。選択欄の番号を外した表示（「黒2」→「黒」）も確かめる。
-3. **計算**：`aggregate` の合計を、チャットの「価格の合計」の答えと比べる。読めない値の除外と、「.」を千の区切りとして読む例も1件ずつ確かめる。
-4. **チャットが変わらないこと**：計算の共通処理を取り出す前と後で、チャットの合計・平均・最大・件数の質問（`tools/chat_qa/` の台本のうち計算のもの）の答えが同じことを確かめる。外部のAIは呼ばない（台本の応答を使う）か、使う場合は回数を報告する。
-5. **決まらない場合**：同じ名前の書類（「こよみ」と「UX検証_こよみ」）、2つの表にある列名で、候補が返ることを確かめる。
-6. **サーバーが止まっているとき**：分かる文章のエラーになることを確かめる。
-7. **Claude Desktop**：つないで、「はじめの毛色は？」「こよみの子牛の価格の合計は？」「黒の書類は何件？」に、根拠付きで答えられることを確かめる。
-8. 外部のAI APIは使わない（Claude Desktop での確認と、上の4で使う場合を除く）。
-
----
-
-## 9. あとで足すもの
-
-| 項目 | 内容 |
-|---|---|
-| 取込の依頼 | `submit_documents`（画像を読み取りに回す、受付番号と状態だけを返す）、`get_ingestion_status` |
-| 外向けAPIへの切り替え | `/api/ext/v1` ができたら呼び先を切り替え、機械用の鍵を使う |
-| 遠隔の接続 | HTTP の接続と OAuth（Cognito）。Agorack が別のサーバーになったとき |
-| 画面の埋め込み | 道具の結果として書類の画面を返す（MCP Apps）。Agorack の iframe の埋め込みと同じ埋め込み用の画面を使う |
-| 照合をサーバーへ移す | 名前→IDの照合を、外向けAPIのときに文之助のサーバー側へ移すか決める |
-
----
-
-## 10. 決めておきたいこと
-
-1. **画像を返すか**：`get_field_image` は手書きの画像をAIに送る（Claude Desktop なら Anthropic に送られる）。個人情報を含む帳票では送らない設定が要るか。当面は通常データ（牛の台帳など）だけで使う。
-2. **欄の値での絞り込み**：`fieldEquals` は「値が一致」だけにする。「含む」「以上・以下」は後回しでよいか。
-3. **新しいAPIの置き場所**：今の構造化のAPI（`/api/v2/structured`、画面と同じ扱い）に足す。外向けAPI（`/api/ext/v1`）は機械用の鍵と一緒に後で作る、でよいか。
-
-（決定済み）計算はMCPサーバーではなく文之助のサーバーに置き、チャットと同じ共通処理を使う。

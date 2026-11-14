@@ -164,7 +164,7 @@ V3は作成されていない。承認前後でsource、graph、mapping、artifa
 修正した。画面が既に保持するTemplate IDからdetailを取得し、ACTIVE pointer、対象ACTIVE、他ACTIVEなしを
 再検証する。approveの成功responseだけで表示を確定せず、revision競合時の自動再送もしない。
 対象frontend 42件、frontend full 382件、buildに成功した。実証の詳細は
-[GUI Migration Phase 5](verification/gui-migration-phase5-20260916.md)を参照する。
+[GUI Migration Phase 5](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/gui-migration-phase5-20260916.md)を参照する。
 
 ACTIVE化後もpaged OCR admissionは`available=false / PRINT_REFERENCE_NOT_VALIDATED`であり、provider送信、
 OpenAI API、Google APIは実行していない。実入力のidentity/registration/crop/ink検査は引き続き別gateである。

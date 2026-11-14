@@ -55,7 +55,7 @@ plan/binding、151対象領域の全四辺、PDF整数座標、所有vector/rast
 legacy・不明geometryまたは不完全証拠では分離しない。
 
 `deterministic=null` は未測定であり、非決定性を実測したfalseでも成功trueでもない。
-後続の[再描画比較](prepared-reference-replay.md)では、固定環境の証拠がある版に限って
+後続の[再描画比較](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/prepared-reference-replay.md)では、固定環境の証拠がある版に限って
 保存XLSXを再描画し、全ページ一致を検証する。その他の未認定条件は維持する。
 保存reportのPASS/qualified/environmentQualifiedを書き換えても本番gateは開かない。
 GETは保存booleanではなく版、原本、plan、graph、artifact、実装、現在環境、lease期限を再検証し、
@@ -90,4 +90,4 @@ DBを書き換えずに失効させる。正式資格がPASSでもDRAFTのまま
 formal issuer、Calc geometry tolerance、anchor診断の条件付き分離、record保存・GET再検証・失効を
 実装した。対象実版で `qualified=true / environmentQualified=true` を発行したが、DRAFT、approve拒否、
 OCR受付gateは維持している。条件・binding・検証結果は
-[Phase 3正式qualification](verification/activation-phase3-qualification-20260914.md)を参照する。
+[Phase 3正式qualification](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/activation-phase3-qualification-20260914.md)を参照する。
