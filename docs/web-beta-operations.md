@@ -1,13 +1,12 @@
 # Webベータの運用手順
 
+Webベータ（EC2上のDocker Compose構成）を初期化・起動し、AIの有効化・送信上限・日次バックアップ・削除・復元を行う運用者向けの手順。
 
-
-
-対象は `llm-ocr-deploy`。AWS CLIは **abe-deploy-user / `<アカウントID>` / ap-northeast-1** を使用します。サーバーは専用instance roleを使用し、アクセスキー・通常DB・開発用.envを配布しません。配備定義は [infra.yaml](../deploy/infra.yaml)、設定のひな型は [cloud.env.example](../deploy/cloud.env.example) です。実AWS配備はフェーズ7で行います。
+AWS CLIは配備用のprofile（region `ap-northeast-1`）を使用します。サーバーは専用instance roleを使用し、アクセスキー・通常DB・開発用.envを配布しません。配備定義は [infra.yaml](../deploy/infra.yaml)、設定のひな型は [cloud.env.example](../deploy/cloud.env.example) です。
 
 ## 配備前の確認
 
-ドメイン、通知先、Ubuntu Server 24.04 amd64の実AMI、最新料金・為替・税、AWS権限、配布imageのdigestを確認します。`infra.yaml` は東京、t3a.medium/Standard、暗号化root20GiB＋data30GiB、80/443だけの入口、SSM管理、Cognito招待制、非公開S3、条件付き追記、バックアップ期限を定義します。Budgetの56USDはアカウント全体の通知閾値で、請求の上限やプロジェクト別費用保証ではありません。通知先への配信設定は、承認された実アドレスをフェーズ7で指定します。
+ドメイン、通知先、Ubuntu Server 24.04 amd64の実AMI、最新料金・為替・税、AWS権限、配布imageのdigestを確認します。`infra.yaml` は東京、t3a.medium/Standard、暗号化root20GiB＋data30GiB、80/443だけの入口、SSM管理、Cognito招待制、非公開S3、条件付き追記、バックアップ期限を定義します。Budgetの56USDはアカウント全体の通知閾値で、請求の上限やプロジェクト別費用保証ではありません。通知先への配信設定には、承認された実アドレスを指定します。
 
 ホストの `/opt/llmocr` に検証済み配布物を置き、`/etc/llmocr/cloud.env` に非秘密の出力値を設定します。`BETA_DATA_DIR`、`BETA_CADDY_DIR`、`BETA_WORK_DIR` は専用の別ディレクトリで、uid/gid 10001が使用できるようにします。APIにDocker socketや通常のapp.dbを渡しません。rendererは [既存手順](../deploy/README.md) の固定image・socket・隔離を使用します。
 
@@ -23,7 +22,7 @@ docker compose --env-file /etc/llmocr/cloud.env -p fuminosuke-beta \
   -f deploy/compose.yaml -f deploy/compose.cloud.yaml up -d --no-build
 ```
 
-この段階の有料AIは停止しています。実Cognitoのsubを `app.cloud.admin admit` で登録し、実HTTPS・所有権・手動編集・保存・出力を確認します。コマンドはメールを送りません。Cognito利用者の作成や招待送信は別途の明示指示で行います。
+この段階の有料AIは停止しています。実Cognitoのsubを `app.cloud.admin admit` で登録し、実HTTPS・所有権・手動編集・保存・出力を確認します。コマンドはメールを送りません。Cognito利用者の作成や招待送信は、このコマンドでは行いません。
 
 共通台帳・実S3・実マイクの受入後に、Secrets Managerのキーをホスト専用ファイルへ保存します。キーを端末へ表示せず、所有10001、権限0400とし、`BETA_API_KEY_FILE` で指定します。通常.envや配布物へキーをコピーしません。AIを有効にするときだけ `compose.ai.yaml` を追加します。
 
@@ -33,7 +32,7 @@ docker compose --env-file /etc/llmocr/cloud.env -p fuminosuke-beta \
   up -d --no-build backend
 ```
 
-有効化を確認してから管理者が `/etc/llmocr/ai-enabled` を作成します。日次バックアップ後の再起動はこのmarkerに従い、同じAI設定へ戻します。markerを削除し通常cloud構成で再作成するとAIを停止できます。画像・音声のモデルやpromptは今回の運用工程で変更していません。
+有効化を確認してから管理者が `/etc/llmocr/ai-enabled` を作成します。日次バックアップ後の再起動はこのmarkerに従い、同じAI設定へ戻します。markerを削除し通常cloud構成で再作成するとAIを停止できます。
 
 ## 送信上限と障害時
 
@@ -100,4 +99,4 @@ docker compose --env-file /etc/llmocr/cloud.env -p fuminosuke-beta \
 
 既存subへの`admit`再実行は停止状態を解除しません。未確認の利用者は停止のまま保持し、削除済み利用者のenableは拒否されます。再承認した検証用利用者で対象tenant、確定revision、出力SHAを確認してから利用を再開します。再承認はメール・招待を送りません。
 
-cloud journal、installation ID、削除記録を以前のbackupへ巻き戻しません。Caddyの証明書領域はコンテナー再作成で失われない専用volumeに保持します。EC2障害からの全復旧・実証明書再発行はフェーズ7で確認します。
+cloud journal、installation ID、削除記録を以前のbackupへ巻き戻しません。Caddyの証明書領域はコンテナー再作成で失われない専用volumeに保持します。EC2障害からの全復旧と証明書の再発行は、この手順の範囲外です。

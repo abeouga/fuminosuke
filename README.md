@@ -114,5 +114,7 @@ OCR の結果は確定値ではなく、人が確かめて直す候補です。�
 
 - [OCR Safety Contract](docs/ocr-safety-contract.md)：OCR の書類の見分け・欄との対応・確かめ・修正・出力についての技術の契約
 - [deploy/README.md](deploy/README.md)：コンテナーでの実行と配備
-- `docs/` の各文書：複数ページの OCR、印刷ページ、テンプレートの編集、テンプレートパッケージなどの仕様
-- `docs/strategy/`：AI からの読み方（MCP サーバー）と、Agorack とのつなぎ方の設計
+- [docs/web-beta-operations.md](docs/web-beta-operations.md)：クラウドのホストでの初回起動・AI の有効化・バックアップ・復旧
+- [terraform/aws/README.md](terraform/aws/README.md)：AWS の Terraform の構成
+- `docs/` の各文書：複数ページの OCR、印刷ページ、テンプレートの編集などの仕様
+- `docs/strategy/`：AI からの読み方（MCP サーバー）と、Agorack とのつなぎ方の設計（外向けの API など、まだ作っていない案を含みます）

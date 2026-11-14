@@ -1,40 +1,20 @@
 # テンプレートの非ブロッキング自動保存
 
-## 2026-09-20: 復元下書きの保存元照合
+テンプレート編集画面（`LayoutEditor`と`TemplatePage`）で、編集を止めずに裏で自動保存する仕組みと、
+ブラウザーに残した下書きの扱いの仕様。backend・保存payload・mapping生成・physical identity・OCR契約は変えない。
 
-`restoreLayoutDraft` は版ID付きlocalStorageキーが存在すれば保存版との比較なしで全文を復元していた。
-元の保存状態を記録しておらず、古い下書き・別の保存状態を元にした下書き・正当な未保存編集を区別できなかった。
-変更前テストでは旧形式下書きと保存元不一致の下書きが、再表示後1.2秒で自動送信されることを再現した。
+## ブラウザー下書きの復元
 
-全テンプレートの共通LayoutEditorに次の保護を追加した。
-
-- 下書き本文は従来形式で保持し、同じキーの`:baseline`に正規化後の保存元全文signatureを記録する。API payloadには含めない。
-- 復元時に現在の保存版と保存元を比較する。一致する下書きは従来どおり編集・保存を継続する。
-- 旧形式（保存元不明）、保存元不一致、保存結果不明の下書きは内容を復元・保持し、区分差分の確認欄を表示する。
-  確認前は自動保存・明示保存・画面終了の保存を止める。工程移動・選択・閲覧は利用できる。
-- 「現在の下書きを採用して保存を再開」で、表示中の下書きを明示採用できる。下書きの値を保存版で一括上書きしない。
-- 保存元の更新前に古いsidecarを除去し、容量不足などで書込みが途中失敗しても新しい保存元への一致を偽装しない。
-  保存応答が不明な失敗は空signatureを記録し、再表示時に再確認を要求する。
-- 同じ保存版に基づく正当な区分変更は保持する。「保存版と違う」こと自体を誤りとは扱わない。
+- 下書き本文は版ID付きのlocalStorageキーに保持し、同じキーの`:baseline`に正規化後の保存元全文signatureを記録する。
+- 再表示時（`restoreLayoutDraft`）は、現在の保存版と下書きの保存元を比較する。保存元が一致する下書きだけを復元し、
+  編集・保存を続ける。下書きが保存版と同じ内容なら保存版を使う。
+- 旧形式（保存元不明）や保存元不一致の下書きは復元せず、localStorageから除いてサーバーの保存版を使う。
+  古い下書きや別の保存状態を元にした下書きを、確認なしに自動送信しないためである。
+- 保存元の更新前に古いsidecarを除去し、容量不足などで書込みが途中失敗しても新しい保存元への誤った対応を残さない。
 
 これは再表示時の下書き保護であり、複数タブの同時編集を自動マージする仕組みではない。
-過去の下書きに操作履歴はないため、実際の区分変更がどの操作で作られたかは遡って断定できない。
-backend・保存payload・mapping生成・physical identity・OCR契約は変更しない。
 
-実テンプレートの局所修復とChrome検証は
-[警告誘導の検証記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/template-warning-navigation-20260920.md#下書き不一致への共通対策と局所修復)に記載する。
-
-以下は以前の実装・検証履歴であり、失敗後の再表示で無条件に自動保存する旧挙動は上記仕様へ更新した。
-
-2026-09-12。対象は `frontend/src/components/LayoutEditor.tsx` と
-`frontend/src/pages/TemplatePage.tsx` の一時UI状態と保存応答の反映。
-backend・DB schema・API payload生成・OCR処理は変更しない。
-
-## 原因と変更
-
-自動保存が再検出と同じbusy状態を使い、fieldsetとcanvasの操作を無効化していた。
-さらに保存応答を無条件でlayoutへ反映し、ブラウザー下書きを削除していたため、
-無効化だけを外すと保存中の追加編集を失う。
+## 自動保存中の編集
 
 - 自動保存中も区分・意味づけ・削除・結合・親接続等の編集を継続できる。
 - 既存の1.2秒の入力待機とAPI経路を維持し、要求を並列送信しない。
@@ -50,79 +30,23 @@ backend・DB schema・API payload生成・OCR処理は変更しない。
   画面終了は最新編集の保存完了を待つ。照合・書類名設定と最終確認の明示保存は排他的に行う。
   別タブとの競合解決やオフライン同期機構を新設したものではない。
 
-既存の区分・結合・親接続・意味づけ処理と保存payload、ページrevision検証は維持する。
-mapping identity・physical identity・crop・provider・公開版・過去jobに追加変更はなく、
+区分・結合・親接続・意味づけ処理と保存payload、ページrevision検証は自動保存の有無で変わらない。
 
-## 初回修正時の検証（履歴）
+## 親画面の操作と保存待ち
 
-- `frontend: npm.cmd test`: 29ファイル、296 passed。
-- 追加の `LayoutEditor.autosave.test.tsx`: 遅い保存中の連続編集・直列化、古い親prop応答、
-  元の値への復帰、保存失敗・再表示、保存中に削除した矩形の非復活、
-  サーバー保存状態が不明な失敗時の下書き保持を5テストで検証。
-- `frontend: npm.cmd run build`: 成功。既存の500kB超bundle警告あり。
-- `git diff --check`: 通過。
-
-保存応答を遅延／失敗させるテストはmockであり、実Chrome・実DBの連続操作E2Eではない。
-今回backend全体・OCR契約テストは再実行していない。OpenAI / Google実API呼出し0回。
-
-## 追加修正：親画面のロックと接続候補の保持（履歴）
-
-初回修正後も、`onBusyChange(busy || saving)` により自動保存が親画面の
-`operationBusy` へ伝播して工程ボタン等を無効化していた。工程移動の明示保存は
-`setBusy(true)` により編集fieldsetを無効にしていた。
-さらに `layout.relations` の配列更新を契機とするeffectが、リンクモード中の
-`selectedPath` を空へ戻していた。APIが同じ内容を返した場合も新しい配列となるため、
-次の接続用に選んでいた保存先が保存応答で解除されることを変更前テストで再現した。
-
-- 編集ロックの `onBusyChange` と保存中の `onSavingChange` を分離した。
-  自動保存だけでは工程ボタンを無効化しない。工程移動を押した場合のみ移動を待機する。
+- 編集ロックの `onBusyChange` と保存中の `onSavingChange` は別にする。
+  自動保存だけでは工程ボタンを無効化しない。
 - `saveIfNeeded` は進行中の保存に合流し、追加編集があれば最新状態を直列保存する。
-  最後の編集が保存されるまで工程移動・画面終了は完了させない。待機中もステップ1〜3の
-  編集は継続可能。重複した移動要求は同時実行しない。
+  最後の編集が保存されるまで画面終了（一覧へ戻る）は完了させない。待機中も編集は継続できる。
+  重複した終了要求は同時実行しない。
 - 次の保存はReactの状態反映後に開始する。XLSXではlayout保存・mapping保存後に
   親画面へ反映された最新printLayout revisionを用い、古いclosureで要求を送らない。
 - 保存先の選択解除はリンクモードへ入った場合だけとする。保存応答による配列更新で
   選択を解除しない。保存応答をまたいだ矩形のドラッグも維持する。
-- 保存失敗は移動待機を解除して下書きを残す。失敗した同一内容を自動再送し続けず、
+- 保存失敗では終了の待機を解除して下書きを残す。失敗した同一内容を自動再送し続けず、
   明示的な再試行は可能とする。
 
-### 今回の変更ファイル
-
-- `frontend/src/components/LayoutEditor.tsx`
-- `frontend/src/pages/TemplatePage.tsx`
-- `frontend/src/components/LayoutEditor.autosave.test.tsx`
-- `frontend/src/pages/TemplatePage.test.tsx`
-- `frontend/src/components/LayoutEditor.authoring.test.tsx`
-- `frontend/src/components/LayoutEditor.pages.test.tsx`
-- この文書
-
-### 今回の検証結果
-
-- 変更前に追加した2ケースは、接続候補の解除と進行中保存への移動要求で失敗を再現。
-- `frontend: npm.cmd test`: 29ファイル、322 passed。
-- `LayoutEditor.autosave.test.tsx`: 10 passed。明示保存中の追加編集、失敗時の移動中止・
-  再試行、保存応答をまたぐドラッグを含む。
-- 親画面テストはlegacy・XLSXページの両方で、遅いlayout保存・mapping再取得中の
-  編集継続と、最新編集まで保存してから工程移動することを固定。
-  XLSXの2回目の要求は最初のmapping保存後のrevisionを使用する。
-- 既存authoring/pagesテストは、Reactのeffectを待つ保存へ変更したことに合わせ、
-  `act`内で保存完了Promiseを待たず状態反映後に結果を検証する手順へ変更。
-  保存件数・内容・失敗時保持・座標・再読込のassertionは維持。
-- `frontend: npm.cmd run build`: 成功。既存の500kB超bundle警告あり。
-- `git diff --check`: 通過。
-
-実Chromeでの時間計測・実DB連続操作は未検証。フリーズ時間がゼロになったとする
-実測結果ではない。今回の変更はフロントエンドの操作状態と保存待機に限定し、
-保存payload・API経路・backend・OCR生成処理・page geometry gateは変更していない。
-既存OCR contractを維持した。backend全体・OCR契約テストは今回再実行していない。
-OpenAI / Google実API呼出し0回。
-
-## ステップ切替時の保存待ちを廃止
-
-前回の修正でも `TemplateReview.moveLayoutWorkflow` は `saveEditorBeforeLeaving` の
-完了後にステップを変更していた。編集を続けると保存待ちが延長され、保存・関連取得の
-間は工程ボタンが無効になる。今回、遅延した保存応答を返す前にステップ2が表示される
-期待を追加し、legacyとXLSXページの両方で変更前の失敗を確認した。
+## ステップ切替
 
 - 同一エディター内のステップ1〜5は表示状態だけを即時変更する。エディターを
   再マウントせず、layout・ブラウザー下書き・保存キューを保持する。
@@ -133,17 +57,3 @@ OpenAI / Google実API呼出し0回。
 - ステップ切替を保存成功・検証完了とは扱わない。未保存・保存失敗の警告と承認拒否、
   一覧へ戻る際の保存待ち・失敗時の画面保持は維持する。
 - 再検出等の排他的操作中、照合等の最終設定が不足する確認ステップへの移動は従来どおり制限する。
-
-変更ファイルは `TemplatePage.tsx`、`LayoutEditor.tsx`、`TemplatePage.test.tsx`、
-この文書と `ocr-safety-contract.md`。backend・API payload形式・mapping生成・geometry・
-OCR処理は変更しない。既存OCR contractを維持した。
-
-今回の検証は、遅い保存中のステップ1〜5切替、追加編集と最新revisionの直列保存、
-移動先の照合条件・書類名の保持、保存失敗後の切替継続と下書き保持、一覧終了の失敗保護。
-旧「工程移動は保存を待つ」テストは今回要求された即時切替の仕様へ更新し、
-保存失敗時に離脱しない境界は「一覧へ戻る」で検証する。
-実Chromeの描画時間・実DB連続操作は未計測であり、CPU起因の停止がゼロという測定結果ではない。
-
-検証結果：`frontend: npm.cmd test` は29ファイル・323 passed、
-`npm.cmd run build` 成功（既存の500kB超bundle警告あり）、`git diff --check` 通過。
-backend全体・OCR契約テストは今回再実行していない。OpenAI / Google実API呼出し0回。

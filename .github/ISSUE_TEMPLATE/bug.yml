@@ -10,7 +10,7 @@ body:
     attributes:
       label: 不具合の概要
       description: 何が問題なのか簡潔に記載してください。
-      placeholder: 例）商品削除後も一覧画面に商品が残る
+      placeholder: 例）確定した書類が、ライブラリの一覧に出ない
     validations:
       required: true
 
@@ -21,9 +21,9 @@ body:
       description: 不具合を再現する手順を記載してください。
       placeholder: |
         例）
-        1. 商品一覧を開く
-        2. 商品を削除する
-        3. 一覧画面に戻る
+        1. 読み取りの画面で帳票の画像を読み取る
+        2. 「確認して確定」を押す
+        3. ライブラリの画面を開く
     validations:
       required: true
 
@@ -32,7 +32,7 @@ body:
     attributes:
       label: 期待する動作
       description: 本来どう動くべきか記載してください。
-      placeholder: 例）削除した商品が一覧から消える
+      placeholder: 例）確定した書類が一覧に出る
     validations:
       required: true
 
@@ -41,7 +41,7 @@ body:
     attributes:
       label: 実際の動作
       description: 実際に発生している動作を記載してください。
-      placeholder: 例）削除した商品が一覧に残っている
+      placeholder: 例）確定した書類が一覧に出ない
     validations:
       required: true
 
@@ -54,7 +54,7 @@ body:
         例）
         - Windows 11
         - Chrome
-        - feature/product-delete
+        - fix/library-confirmed-list
 
   - type: textarea
     id: logs

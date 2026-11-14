@@ -10,7 +10,7 @@ body:
     attributes:
       label: 目的
       description: このIssueで何を実現するのか記載してください。
-      placeholder: 例）商品を新規登録できるようにする
+      placeholder: 例）確定した書類を、欄の値で探せるようにする
     validations:
       required: true
 
@@ -21,9 +21,9 @@ body:
       description: 実装する内容を具体的に記載してください。
       placeholder: |
         例）
-        - POST /api/products を追加
-        - 商品登録画面を作成
-        - ProductをDBへ保存
+        - POST /api/v2/structured/documents/search を追加
+        - ライブラリの画面に、欄の値で絞り込む入力を足す
+        - 確定した値（confirmed_results）から探す処理を app/structured/ に足す
     validations:
       required: true
 
@@ -34,9 +34,9 @@ body:
       description: このIssueをCloseできる条件を記載してください。
       placeholder: |
         例）
-        - 商品を登録できる
-        - 正常時に201を返す
-        - DBにデータが保存される
+        - 欄の値で、確定した書類だけが返る
+        - 正常時に200を返す
+        - 確定していない書類は返らない
         - 関連テストが成功する
     validations:
       required: true
@@ -46,7 +46,7 @@ body:
     attributes:
       label: 関連する設計・資料
       description: 関連する画面、API、クラス図、シーケンス図などがあれば記載してください。
-      placeholder: 例）商品管理シーケンス図、ProductController
+      placeholder: 例）docs/strategy/ の設計の文書、StructuredQueryService
 
   - type: textarea
     id: notes

@@ -8,10 +8,12 @@
 python tools/chat_qa/harness.py tools/chat_qa/suites/regression.json out.txt --compare tools/chat_qa/last/regression.txt
 ```
 
-- `suites/regression.json`：2026-10-25 に欠陥を洗い出したときの台本（154会話）。通常DBの
-  6書類（繁殖台帳1021「こよみ」「はじめ」、給水装置台帳1018「給水装置台帳１」「12345」、
-  チェックリスト検証用2件）を前提にしている。書類が変わったら答えも変わる。
+- `suites/regression.json`：見つかった欠陥を確かめるための台本（154会話）。繁殖台帳の「こよみ」「はじめ」、
+  給水装置台帳の「給水装置台帳１」「12345」、チェックリストの書類2件が確定済みであることを前提にしている。
+  書類が変わったら答えも変わる。
 - `suites/fresh.json`：調整に使っていない言い方の台本。穴を探すときに使う。
+- `suites/extra.json`：集計・確認待ちの書類など、regression を補う台本。
+- `suites/speed.json`：書類が多いときの答えの速さを見る台本。記録の各行に、かかった時間（ms）が出る。
 - `last/`：最後に通した記録。手元にだけ置き、Git では管理しない（`.gitignore`）。変えたら差し替える。
 - 送った質問はサーバーの `backend/data/logs/chat-questions.jsonl` に残るので、終わったら
   試験の行を消す。

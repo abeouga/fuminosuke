@@ -1,10 +1,10 @@
-# 文之助MCPサーバーの設計（2026-11-08）
+# 文之助MCPサーバーの設計
 
 親エージェント「Agorack（アゴラック）」や Claude Desktop などのAIが、文之助の**確定済みの帳票データ**を読むための MCP サーバーの設計。
 
-ファイル・関数・要求と応答の形の単位の設計は [実装設計](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-mcp-implementation-2026-11-08.md) にある。
+実装は `backend/app/mcp_server/` にある。
 
-関連：[上位エージェントにつなぐ設計図](agent-integration-architecture-2026-11-07.md)（§4 守る約束、§7 MCP）、[文之助×カブロガー 統合エージェント 設計メモ](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-cub-agent-2026-11-08.md)（§5 根拠の形式）。
+関連：[上位エージェントにつなぐ設計図](agent-integration-architecture-2026-11-07.md)（§4 守る約束、§7 MCP）。
 
 ---
 
@@ -12,7 +12,7 @@
 
 **目的**：AIが、文之助で人が確認・確定した帳票の値を、根拠（どの書類のどの欄か）付きで取り出せるようにする。
 
-**今回作るもの（最初の範囲）**
+**作ったもの（6つの道具）**
 
 | 道具 | 内容 |
 |---|---|
@@ -23,11 +23,11 @@
 | `aggregate` | 数値の欄の合計・平均・件数・最大・最小（サーバーで計算） |
 | `get_field_image` | 欄の切り抜き画像（AIが元の文字を見て確かめる・利用者に見せる） |
 
-**今回作らないもの**
+**まだ作っていないもの**
 
 - 取込の依頼（`submit_documents`）：画像を受け取って読み取りに回す道具。Agorack の受付窓口を作るときに足す。
 - 遠隔からの接続（HTTP）と認証：手元のPCで動かす間は不要。
-- 外向けAPI（`/api/ext/v1`）：今回は今ある画面用のAPIを手元から呼ぶ。外向けAPIを作ったら、MCPの呼び先をそちらへ切り替える。
+- 外向けAPI（`/api/ext/v1`）：今は画面用のAPIを手元から呼ぶ。外向けAPIを作ったら、MCPの呼び先をそちらへ切り替える。
 - 画面を返す拡張（MCP Apps）：書類の画面の埋め込みは、まず Agorack の iframe で行う。
 
 ---
@@ -115,7 +115,7 @@ flowchart TB
 | `aggregate` | `POST /api/v2/structured/aggregations`（新規） | 名前→IDの照合、根拠の形への並べ替え |
 | `get_field_image` | `GET /api/v1/jobs/{id}/artifacts/{name}`（既存） | 画像を縮めてMCPの画像の形式で返す |
 
-1回の質問の流れの例（「こよみの売却子牛の価格の合計は？」）：
+1回の質問の流れの例（「個体Aの売却子牛の価格の合計は？」）：
 
 ```mermaid
 sequenceDiagram
@@ -126,8 +126,8 @@ sequenceDiagram
   AI->>M: list_templates()
   M->>F: GET /api/v1/templates, GET /structured/documents
   F-->>M: テンプレートと書類の一覧
-  M-->>AI: 繁殖台帳1021（2件）…
-  AI->>M: aggregate(template="繁殖台帳1021", document="こよみ", field="売却子牛一覧 価格", operation="sum")
+  M-->>AI: 繁殖台帳（2件）…
+  AI->>M: aggregate(template="繁殖台帳", document="個体A", field="売却子牛一覧 価格", operation="sum")
   M->>M: 名前をIDに照合（決まらなければ候補を返して終わる）
   M->>F: POST /structured/aggregations {templateId, documentIds, field, operation}
   F->>F: 確定済みの書類を読み、数値の集計の共通処理で計算
@@ -154,7 +154,7 @@ sequenceDiagram
 // 要求
 {
   "templateId": "…",
-  "query": "こよみ",
+  "query": "個体A",
   "fieldEquals": [{ "label": "毛色", "value": "黒" }],
   "confirmedFrom": "2026-10-01",
   "confirmedTo": "2026-10-31",
@@ -192,7 +192,7 @@ sequenceDiagram
 
 - どちらも確定済みの書類だけを対象にする（`StructuredDocumentService` を通す）。
 - 欄（`field`）が複数の欄・列に当てはまるときは、計算せず 409 と候補を返す。
-- 名前→IDの照合（「こよみ」→書類ID）はMCP側で行い、このAPIはIDで受け取る。外向けAPI（`/api/ext/v1`）を作るときに、照合もサーバー側へ移すか決める。
+- 名前→IDの照合（「個体A」→書類ID）はMCP側で行い、このAPIはIDで受け取る。外向けAPI（`/api/ext/v1`）を作るときに、照合もサーバー側へ移すか決める。
 
 ### 3.4 決めたこと
 
@@ -220,21 +220,21 @@ sequenceDiagram
 
 各道具は、**構造化データ**（structuredContent、Agorack が画面に使う）と、**短い文章**（Claude Desktop などがそのまま読む）の両方を返す。
 
-（実装後の訂正 2026-11-09）値・欄名・書類ID・欄IDは両方で同じ。文章の方は、位置（box）とURLを省いた短い形にした。構造化データをそのままJSONの文章にすると、表の多い書類（繁殖台帳1021「こよみ」の全部）で約107KBになり、AIが読む量が大きすぎるため。位置とURLは構造化データの `location` にあり、切り抜きは `get_field_image` で見られる。
+値・欄名・書類ID・欄IDは両方で同じ。文章の方は、位置（box）とURLを省いた短い形にした。構造化データをそのままJSONの文章にすると、表の多い書類1件の全部で約100KBになり、AIが読む量が大きすぎるため。位置とURLは構造化データの `location` にあり、切り抜きは `get_field_image` で見られる。
 
 ### 4.2 根拠の形
 
-[統合設計メモ §5-1](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/fuminosuke-cub-agent-2026-11-08.md#5-1-共通の根拠形式-訂正) の形を使う。カブロガーの MCP も同じ外枠（`kind`・`source_id`・`label`・`location`・`value`）にする。
+根拠は、外枠（`kind`・`source_id`・`label`・`location`・`value`）をそろえた次の形で返す。同じ親エージェントにつなぐ他の部品のMCPも同じ外枠にすると、親が根拠を1つの形で扱える。
 
 ```json
 {
   "kind": "document",
   "source_id": "93fca593-…",
-  "label": "繁殖台帳1021「はじめ」の毛色",
+  "label": "繁殖台帳「個体B」の毛色",
   "location": {
     "template_id": "…",
-    "template_name": "繁殖台帳1021",
-    "document_name": "はじめ",
+    "template_name": "繁殖台帳",
+    "document_name": "個体B",
     "field_id": "…",
     "field_label": "毛色",
     "section": "母牛",
@@ -302,7 +302,7 @@ AI が次の手を決められるよう、文章で返す。
 ```json
 {
   "templates": [
-    { "template_id": "…", "name": "繁殖台帳1021", "document_count": 2, "latest_confirmed_at": "2026-10-26T13:05:00+09:00" }
+    { "template_id": "…", "name": "繁殖台帳", "document_count": 2, "latest_confirmed_at": "2026-10-26T13:05:00+09:00" }
   ]
 }
 ```
@@ -319,7 +319,7 @@ AI が次の手を決められるよう、文章で返す。
 
 ```json
 {
-  "template": { "template_id": "…", "name": "繁殖台帳1021" },
+  "template": { "template_id": "…", "name": "繁殖台帳" },
   "fields": ["名号", "生年月日", "統一耳標"],
   "tables": [ { "title": "売却子牛一覧", "columns": ["産次", "日令", "体重", "価格"] } ]
 }
@@ -345,11 +345,11 @@ AI が次の手を決められるよう、文章で返す。
   "documents": [
     {
       "document_id": "…",
-      "document_name": "はじめ",
-      "template_name": "繁殖台帳1021",
+      "document_name": "個体B",
+      "template_name": "繁殖台帳",
       "version": 2,
       "confirmed_at": "…",
-      "identity": [ { "label": "名号", "value": "はじめ" }, { "label": "統一耳標", "value": "13554-8052-3" } ]
+      "identity": [ { "label": "名号", "value": "個体B" }, { "label": "統一耳標", "value": "（耳標の番号）" } ]
     }
   ],
   "total": 1,
@@ -370,7 +370,7 @@ AI が次の手を決められるよう、文章で返す。
 
 ```json
 {
-  "document": { "document_id": "…", "document_name": "はじめ", "template_name": "繁殖台帳1021", "version": 2, "confirmed_at": "…" },
+  "document": { "document_id": "…", "document_name": "個体B", "template_name": "繁殖台帳", "version": 2, "confirmed_at": "…" },
   "fields": [ { "…根拠の形…": "" } ],
   "tables": [
     {
@@ -449,7 +449,7 @@ AI が次の手を決められるよう、文章で返す。
 {
   "mcpServers": {
     "fuminosuke": {
-      "command": "C:\\Users\\hanam\\Desktop\\llm-ocr-deploy\\backend\\.venv\\Scripts\\python.exe",
+      "command": "<リポジトリの場所>\\backend\\.venv\\Scripts\\python.exe",
       "args": ["-m", "app.mcp_server"],
       "env": { "FUMINOSUKE_API_URL": "http://127.0.0.1:8010" }
     }
@@ -457,7 +457,7 @@ AI が次の手を決められるよう、文章で返す。
 }
 ```
 
-（実装後の訂正 2026-11-09）Claude Desktop の設定では作業フォルダ（`cwd`）の指定が効くとは限らないため外した。`backend` は仮想環境に編集可能な形で入っている（`uv sync` で入る）ので、どのフォルダから起動しても `app.mcp_server` を読める。仮想環境に `mcp` が入っていない場合は、通常の 8010 を止めてから `backend` で `uv pip install --python .venv\Scripts\python.exe mcp==1.30.0`（開発用の道具を消さない入れ方）で入れる。
+Claude Desktop の設定では作業フォルダ（`cwd`）の指定が効くとは限らないため外した。`backend` は仮想環境に編集可能な形で入っている（`uv sync` で入る）ので、どのフォルダから起動しても `app.mcp_server` を読める。仮想環境に `mcp` が入っていない場合は、通常の 8010 を止めてから `backend` で `uv pip install --python .venv\Scripts\python.exe mcp==1.30.0`（開発用の道具を消さない入れ方）で入れる。
 
 - 標準出力は MCP の通信に使うので、ログは標準エラーに出す。
 - 文之助の `.env`（AIのキーなど）は読まない。MCPサーバーはAIを呼ばない。

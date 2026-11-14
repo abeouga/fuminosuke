@@ -1,27 +1,37 @@
 # Webベータのコンテナー実行
 
+文之助をLinuxの単一ホストでDocker Composeを使って動かす手順です。`compose.yaml` だけの構成はホストの中で確かめるためのもので、公開ポートをホストのloopbackに限定しています。インターネットへ出すときは、Cognitoのログインを付けた `compose.cloud.yaml` を重ねます。`compose.yaml` だけの構成を、認証なしでインターネットへ公開しないでください。
 
+AWS配備先は **`abe-deploy-user` / account `<アカウントID>` / `ap-northeast-1`** です。`<アカウントID>` は `aws sts get-caller-identity --profile abe-deploy-user` で確かめます。AWS資源の定義は `infra.yaml` です。ホストでの初回起動・AIの有効化・バックアップ・復旧は [Webベータの運用手順](../docs/web-beta-operations.md) にあります。
 
+## ファイル
 
-
-
-通常の `compose.yaml` はフェーズ2のローカル検証用で、公開ポートをホストのloopbackに限定しています。認証構成はcloud overlayで提供します。クラウドの共通送信予算・実AWS公開は後続工程です。通常composeを認証なしでインターネットへ公開しないでください。
-
-AWS配備先は **`abe-deploy-user` / account `<アカウントID>` / `ap-northeast-1`** です。`<アカウントID>` は `aws sts get-caller-identity --profile abe-deploy-user` で確かめます。この工程でAWSリソースは作成していません。ドメインは未定です。
+| ファイル | 役目 |
+| --- | --- |
+| `compose.yaml` | 画面（Caddy）とAPIを起動する基本の構成。ホストのloopbackだけで待ち受ける |
+| `compose.cloud.yaml` | `compose.yaml` に重ねる、Cognitoのログインと公開HTTPSの構成。有料AIは止めたまま |
+| `compose.ai.yaml` | さらに重ねて、有料AI（OCR・音声・テンプレートの解析）を有効にする構成。OpenAIのキーはホストだけにあるファイルから読む |
+| `compose.ops.yaml` | APIを止めて行う保守（バックアップなど）で、作業用のディレクトリを足す構成 |
+| `ops.sh` | ホストで動かす保守のコマンド（`backup`・`init-journal`） |
+| `fuminosuke-backup.service`・`.timer` | `ops.sh backup` を毎日4:00（JST）に動かすsystemdの設定 |
+| `Caddyfile`・`Caddyfile.cloud` | 画面のコンテナーのCaddyの設定。`Caddyfile.cloud` はHTTPSの公開用 |
+| `infra.yaml` | 単一ホストのAWS資源（VPC・EC2・Cognito・S3・Budgetなど）のCloudFormation |
+| `cloud.env.example` | 秘密の値を含まない、クラウドの設定のひな型 |
+| `renderer/` | 帳票の描画コンテナーと、それを動かすsupervisorのsystemdの設定 |
 
 ## 構成
 
-`compose.yaml`はproduction buildの画面と単一FastAPIを起動します。SQLiteと原本・成果物は、指定した専用dataディレクトリに保存します。APIイメージにはLibreOffice、Docker socket、AWS資格情報、通常ローカルDB、`.env`を入れません。
+`compose.yaml`はproduction buildの画面と単一FastAPIを起動します。SQLiteと原本・成果物は、指定した専用dataディレクトリに保存します。APIイメージにはLibreOffice、Docker socket、AWS資格情報、開発用のDB、`.env`を入れません。
 
 ホスト側の専用supervisorは、Unix socketで受けたサイズ・SHA付きの帳票データと固定の処理種別だけを扱います。1件ずつ、固定image IDの描画コンテナーを起動します。入力と実行条件はread-only、出力は64MiBの専用tmpfs、network none、非root、capability除去、no-new-privileges、2GiB/1CPU/64PIDで実行します。LibreOfficeとPDF parse/rasterをAPIから分離します。
 
 workerの独立した75秒alarmとsupervisorの80秒上限、4秒の接続leaseを設けます。失敗・切断・OOMで当該コンテナーとvolumeだけを回収し、supervisorの強制終了後もroot所有markerから回収します。未知の所有者・link・別コンテナーを削除して復旧しません。
 
-API、画面、supervisor、描画コンテナーは `llmocr-beta.slice` の4GiB・swap禁止枠にまとめます。これはアプリ全体の制限であり、OSとDocker daemonの使用量は別です。実EC2での余裕・CPU credit・応答時間は配備時に確認します。
+API、画面、supervisor、描画コンテナーは `llmocr-beta.slice` の4GiB・swap禁止枠にまとめます。これはアプリ全体の制限であり、OSとDocker daemonの使用量は別です。EC2での余裕・CPU credit・応答時間は、配備したホストで確かめます。
 
 ## Linuxホストでの準備
 
-Docker Engine、Compose plugin、systemd、Python 3を使います。Docker Engineの導入は[公式手順](https://docs.docker.com/engine/install/ubuntu/)に従います。専用の新規dataディレクトリを使い、通常 `backend/data` を指定しません。
+Docker Engine、Compose plugin、systemd、Python 3を使います。Docker Engineの導入は[公式手順](https://docs.docker.com/engine/install/ubuntu/)に従います。専用の新規dataディレクトリを使い、開発用の `backend/data` を指定しません。
 
 リポジトリrootでイメージを作ります。
 
@@ -69,7 +79,7 @@ docker compose -f deploy/compose.yaml build
 docker compose -f deploy/compose.yaml up -d
 ```
 
-`http://127.0.0.1:5288/api/v1/health`と画面の接続表示を確認します。新規専用DBへの既存migrationはbackendのentrypointで実行します。APIは1プロセスで、通常DBを取り込む処理はありません。現在の既定は `OCR_PROVIDER=disabled`、AI/音声の公開機能も無効です。実APIの有効化は利用者分離・予算実装後に行います。
+`http://127.0.0.1:5288/api/v1/health`と画面の接続表示を確認します。新規専用DBへの既存migrationはbackendのentrypointで実行します。APIは1プロセスで、開発用のDBを取り込む処理はありません。この構成では `OCR_PROVIDER=disabled` で、AIと音声は使いません。AIを使うのは、下の招待制クラウドの構成に `compose.ai.yaml` を重ねたときだけです。
 
 停止ではComposeのデータvolume削除を指定しません。
 
@@ -78,7 +88,7 @@ docker compose -f deploy/compose.yaml down
 systemctl stop llmocr-renderer.service
 ```
 
-再起動は同じimage ID・専用data指定で `systemctl start` と `compose up -d` を実行します。新しいrenderer imageを導入するときは新しい準備を明示実行し、旧証拠を書き換えて通しません。
+再起動は同じimage ID・専用data指定で `systemctl start` と `compose up -d` を実行します。新しいrenderer imageを導入するときは、上の準備をやり直し、前のimageで作った記録を書き換えて使いません。
 
 ## フォントと旧データ
 
@@ -88,8 +98,7 @@ Linux新規準備は `linux-fods-physical-length-v1`、`linux-print-reference-v1
 
 ベースimageはdigest固定、Python/Node依存は既存lockを使用します。Debianのnative packageはbuild時の集合SHAを記録し、配布した完成imageのIDを実行正本にします。将来の再buildがbit単位で同一になるとは保証しません。
 
-
-## 招待制クラウドの認証構成（フェーズ3）
+## 招待制クラウドの認証構成
 
 `compose.yaml` に `compose.cloud.yaml` を重ねます。専用の新しい `BETA_DATA_DIR` を使い、既存のapp.dbを置きません。APIには公開portを設定せず、Caddyだけを入口にします。秘密値をイメージやGitへ入れません。
 
@@ -102,9 +111,9 @@ Linux新規準備は `linux-fods-physical-length-v1`、`linux-print-reference-v1
 | BETA_COGNITO_DOMAIN | 東京のCognito managed domainのHTTPS URL |
 | BETA_DATA_DIR | registry.dbとtenantsを格納する専用ホスト領域 |
 
-Cognitoの自己登録を無効にし、callbackを `<BETA_PUBLIC_ORIGIN>/api/auth/callback`、scopeをopenid、grantをauthorization codeに限定します。実Cognitoの設定は後続AWS工程で検証します。WSL試験に使った架空のpool/client/domainを配備へ転用しません。
+Cognitoの自己登録を無効にし、callbackを `<BETA_PUBLIC_ORIGIN>/api/auth/callback`、scopeをopenid、grantをauthorization codeに限定します。試験用の架空のpool/client/domainを配備へ転用しません。
 
-既存の招待アカウントのsubをhost側で登録します。このコマンドはメールを送らず、Cognitoアカウントを新規作成しません。実際の招待送信は別途の明示指示で行います。
+既存の招待アカウントのsubをhost側で登録します。このコマンドはメールを送らず、Cognitoアカウントを新規作成しません。Cognitoのアカウントの作成と招待のメールは、Cognitoの側で行います。
 
 ```sh
 docker compose -f deploy/compose.yaml -f deploy/compose.cloud.yaml exec backend python -m app.cloud.admin admit COGNITO_SUB_UUID
@@ -114,5 +123,5 @@ docker compose -f deploy/compose.yaml -f deploy/compose.cloud.yaml exec backend 
 
 `disable`／`enable`はいずれも既存cookie sessionを破棄します。enable後は再ログインが必要です。管理HTTP APIや匿名signupはありません。使用する実行profileは **abe-deploy-user**、account **`<アカウントID>`**、東京 **ap-northeast-1**です。
 
-有料AIの共通quotaをフェーズ5で接続するまで、cloudは `OCR_PROVIDER=disabled`、`VOICE_PROVIDER=disabled`、OpenAI API keyなしでのみ起動します。開発台帳の924回や追加1,000回をtenantごとに発行しません。バックアップ・削除・復旧はregistryと全tenant領域の整合性を維持する必要があります。
+`compose.cloud.yaml` だけでは、有料AIを止めたまま（`BETA_AI_ENABLED=false`、`VOICE_PROVIDER=disabled`、OpenAI API keyなし）で起動します。有料AIは `compose.ai.yaml` を重ねたときだけ有効になり、その場合はS3の共通の台帳（`BETA_JOURNAL_BUCKET`）が必要です（`backend/app/cloud/config.py`）。AIの呼び出しの上限は、全利用者で共通の台帳で数えます。上限の値と有効にする手順は [Webベータの運用手順](../docs/web-beta-operations.md) にあります。バックアップ・削除・復旧はregistryと全tenant領域の整合性を維持する必要があります。
 

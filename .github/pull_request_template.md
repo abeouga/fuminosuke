@@ -37,10 +37,10 @@ Closes #12
 
 例:
 
-- 商品登録画面
-- `POST /api/products`
-- `ProductService`
-- `products` テーブル
+- ライブラリの画面
+- `POST /api/v2/structured/documents/search`
+- `backend/app/structured/query.py`（`StructuredQueryService`）
+- `confirmed_results` テーブル
 
 ## レビューしてほしい点
 

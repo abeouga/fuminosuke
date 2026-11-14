@@ -1,15 +1,17 @@
 # 複数ページOCRの文書全体API予算
 
-2026-09-13。本番化の実行制御であり、認識方式や本番資格の解除ではない。
+複数ページの読み取りで、外部OCRへの呼出し回数の上限を文書全体で共有・予約する仕組みの仕様。
+認識方式や本番資格の条件を変えるものではない。
 
-## 原因と契約変更
+## 文書単位の予算が要る理由
 
-従来の`OpenAIOcrProvider.extract`は呼出しごとに計数を0へ戻す。
-`PagedOcrExecution`がページごとに呼ぶため、上限3回・2ページ・各61項目のfixtureで
-3回+3回=6回まで進むことを外部通信なしで再現した。
+`OpenAIOcrProvider.extract`の呼出し回数の計数は呼出しごとのものである。
+`PagedOcrExecution`はページごとにそれを呼ぶため、ページ別の上限だけではページ数倍まで送信が進む。
 ページ別に成功応答の回数を足すだけでは、失敗・並行batch・再起動時の過剰送信を防げない。
 
-新規OpenAI paged受付は`jobPages.ocrCallBudget`へ
+## 予算の固定
+
+OpenAI paged受付は`jobPages.ocrCallBudget`へ
 `adapter=paged-ocr-job-budget-v1 / scope=job / maxCalls`を固定し、同じ受付transactionで
 `PagedOcrBudget`を作る。上限は受付時の`executionConfig.ocr.max_calls_per_job`と一致させる。
 mock/disabled、旧単一ページの予算挙動は変更しない。
@@ -18,7 +20,7 @@ mock/disabled、旧単一ページの予算挙動は変更しない。
 ## 予約・失敗・再試行
 
 - 文書単位の上限は全page・全attemptで共有する。再試行や再起動でリセットしない。
-- `PagedCallBudget.reserve`はSQLite `BEGIN IMMEDIATE`内でjobのPROCESSING状態、
+- `PagedCallBudget.reserve`は書込みtransaction（`begin_immediate`）内でjobのPROCESSING状態、
   cancel、attempt、page所有権、受付SHA、予算と呼出し台帳の整合を検証する。
   `used_calls`増分と`PagedOcrCall`追加をcommitしてからprovider送信へ進む。
 - 予約番号は文書全体で一意。台帳にはpage ID・attempt・予約時刻を保持し、
@@ -48,11 +50,11 @@ request/response計算やproviderにSQLAlchemy・repositoryの直接依存を追
 先頭ページのoptional high-detail再読取やfallbackが後続の最低枠を使い切らない。
 ネットワーク失敗を含め全ページの成功を保証するものではなく、有限予算内で安全に停止する方式である。
 認識値・判定、画像/crop、mapping/sourceRegionId/targetPath、association token、prompt/model/schema、
-既存の単一ページretry方式は変更しない。意図的な新paged実行予算契約の拡張である。
+既存の単一ページretry方式は変更しない。paged実行の予算契約である。
 
-## 2026-09-22 再試行余力を含む新規受付
+## 再試行余力を含む受付
 
-特定の4ページ帳票だけを16回へ固定する修正ではない。新規OpenAI paged受付は、現在の
+OpenAI paged受付は、現在の
 `fieldMappings`と`documentContext.identityFields`からページ別最低回数を同じbatch規則で計算し、
 `jobPages.ocrCallBudgetPlan`へ次を固定する。
 
@@ -62,75 +64,22 @@ request/response計算やproviderにSQLAlchemy・repositoryの直接依存を追
 - 同数の`documentRetryReserveCalls`
 - 両者を足した`requiredCalls`と設定上限`maxCalls`
 
-catalogとacceptは`maxCalls >= requiredCalls`を要求する。現在の既定上限は16回であり、
+catalogとacceptは`maxCalls >= requiredCalls`を要求する。既定上限（`OPENAI_MAX_CALLS_PER_JOB`）は16回であり、
 最低8回までのテンプレートは全ページ1回分と同数の再試行余力を持って受付できる。
-最低回数が8回を超える今後のテンプレートは、運用者がhard ceilingを明示的に増やすまで
+最低回数が8回を超えるテンプレートは、運用者がhard ceilingを明示的に増やすまで
 利用不可とする。項目を削除・batchを偽装・ページを省略して通さない。
 
 受付時点で確保するのは予算上の余力である。timeout、provider error、Schema不成立などの
 再送も非払戻しで同じ台帳を消費するため、あらゆる失敗後に文書全体1回分が残る保証ではない。
-ただし、上限が最低枠と同値で再試行不能な受付は新たに作らない。既存jobの予算は変更せず、
+ただし、上限が最低枠と同値で再試行不能な受付は作らない。既存jobの予算は変更せず、
 予算不足・実行設定変更・予算snapshot不成立では「処理を再試行」を表示せず、新しい受付へ戻す。
 
 `OCR_SCHEMA_INVALID`は破損・途中切れの応答を保存せず、設定済み`OPENAI_MAX_RETRIES`と残予算の
 範囲で同一batchを再送する。mapping ID、targetPath、sourceRegionId、画像、prompt/schema、
 association tokenは変更しない。再送後も不成立なら従来どおりページ失敗として停止する。
 
-## 変更ファイル
+## 実装の場所
 
-- `backend/app/services/paged_ocr_budget.py`、`db/models.py`、`alembic/versions/0034_paged_ocr_budget.py`
-- `services/job_page_service.py`、`services/paged_ocr_execution.py`、`services/ocr_workflow_service.py`
-- `ocr/base.py`、`ocr/openai_provider.py`
-- `tests/integration/test_paged_call_budget.py`、`test_paged_budget_migration.py`、既存migrationのhead/table期待値
-- AGENTS、OCR Safety Contract、複数ページ本番化の記録
-
-上記backend内の省略パスは`backend/app`または`backend/tests`基準。frontendの変更はない。
-
-## 検証
-
-- 変更前OCR契約: `backend/.venv/Scripts/python.exe scripts/verify_ocr_contract.py`、210 passed（39.29秒）。
-- 変更後の同コマンド: 210 passed / 1 warning（52.46秒）。既存contractを維持した。
-- 新規予算・migrationと既存provider予算: 42 passed（45.73秒）。
-  `pytest tests/integration/test_paged_call_budget.py tests/integration/test_paged_budget_migration.py
-  tests/unit/test_openai_call_budget.py -q -o addopts='' -p no:cacheprovider
-  --basetemp=.pt-paged-budget-api3-0913`（backend venv）。
-- 上限超過、同時12予約、別connection/新attempt、取消・状態・所属・SHA・台帳不整合、
-  commit前/後の応答消失、予約後cancel、読み取り途中の別connection予約、後続最低枠保護を固定。
-- 実DB fixtureの新規受付→ページ別workflow→全ページレビュー公開、
-  requestのmapping ID/ページ所有権、受付snapshot不変を検証。実OpenAI clientは生成しない。
-- 追加offline wire比較では、同じ画像・mappingを予算なし/ありで実request組立てと
-  固定parse responseへ通した。送信引数（画像/prompt/schemaを含む）とmapped documentは完全一致。
-  responseの当該ページ使用回数は両方1、diagnostics call番号は1/5で文書全体の番号だけ異なる。
-  実API呼出し0。実帳票の認識精度比較や全Golden replayではない。
-- migrationは0033→0034→0033→0034で既存job値の不変と予算非後付けを確認した。
-- 初期fixtureのSettingsのコピー方法を修正した。また、統合試験で状態名の誤りを検出し、
-  新予算側のRUNNINGを既存正本のPROCESSINGへ訂正した。既存状態制約を緩めていない。
-- 対象7 productモジュールの限定mypyは成功。Ruff/全体回帰の最終結果は追記する。
-- 予算工程の対象11 PythonファイルのRuffも成功。
-- 実DRAFT版の4ページ151項目をread-onlyで再投影し、予定呼出し数3/2/2/1、合計8を確認。
-  現在の設定上限も8であり全項目の予定枠は足りるが、その場合の再試行余力は0。
-  上限設定・原本・版configを変更せず、新規受付/有効化も行っていない。
-
-最初の全体試験は1006 passed / 1 failed / 1 skipped（1271.60秒）。
-失敗は既存のfont SHA cacheによる失効検査だったため、
-[依存SHAの再検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/renderer-identity-freshness.md)として原因と修正を分離した。
-旧試験を弱めず、追加した同一metadata再現試験と全体回帰を再実行する。
-再試験`.pt-paged-budget-full2-0913`は、後続resource対象試験との並行実行を解消するため中断した。
-完走結果として数えず、[後続工程](paged-transcription-resources.md)で直列の全体回帰を行う。
-
-## 実DB適用
-
-実アプリ8000/5173のlistener 0件、処理中job 0件、DB0033を確認した。
-`backend/data/backups/pre-paged-budget-20260913.db`へSQLite backupを作成してから0034へupgradeした。
-既存34テーブルの全列・全行を比較し、変更前=backup=変更後。
-集約SHAは`5fe04621f34cf51cdd7f21f70b72ceeb9542274cfca950995d748bc7b3dd416d`。
-外部キー違反0、新予算row 0・新予約row 0。原本・版・過去job snapshotを更新していない。
-実DBのdowngrade・バックアップ上書きは行っていない。
-
-## 残る本番条件
-
-本番資格・ACTIVE/受付gateは維持する。prompt/schema実体・実行resourceの固定、
-WSL font/runtime/geometry/実手書きcropの認定、実OCR・稼働UIによる有効化は未完了。
-実OpenAI/Google呼出しは0回。実認識誤り・実association誤対応は未測定であり0件と主張しない。
-frontendは変更しておらず、この工程では再ビルド対象外。実アプリは停止中で、Chrome実操作は未検証。
-後続でprompt本文と応答model schemaの保存を追加した。実行依存全体の固定は未完了。
+- `backend/app/services/paged_ocr_budget.py`、`backend/app/db/models.py`
+- `backend/app/services/job_page_service.py`、`backend/app/services/paged_ocr_execution.py`、`backend/app/services/ocr_workflow_service.py`
+- `backend/app/ocr/base.py`、`backend/app/ocr/openai_provider.py`

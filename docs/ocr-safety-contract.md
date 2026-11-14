@@ -7,7 +7,7 @@
 deploy版はOCR schema 2.0のみを受け付ける。値は `fields.<key>` に保存し、欄の意味は
 受付時のmapping・reviewStructure・テンプレート設定で定義する。旧document/pedigree/
 saleCalves/calvings/customFields構造は停止中の一回限りの変換で廃止する。旧構造や
-欠落した受付snapshotを実行時に補う互換処理は設けない。詳細な変換結果は [互換廃止・汎用変換記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/generic-cleanup-2026-10-04.md) を参照する。画像帳票とXLSXページ帳票の入力経路の区別は残す。
+欠落した受付snapshotを実行時に補う互換処理は設けない。画像帳票とXLSXページ帳票の入力経路の区別は残す。
 
 - 変換は旧pathと新pathの対応を記録し、mappingId・region ID・crop・座標・列/行IDを保持する。
 - 補正値・候補値・状態・alternatives・reviewReason・reviewItems・revision・確定日時を保持する。
@@ -23,7 +23,7 @@ saleCalves/calvings/customFields構造は停止中の一回限りの変換で廃
 - 検証は退避DBと保存済み実responseの比較、短いAPI integration、XLSX内容確認、frontend buildを
   優先する。廃止契約のテストは理由を記録して退避し、重複unitを追加しない。
 
-この文書はOCRシステムの技術的契約の正本である。作業の優先順位・許可範囲・Git保護は開発用の文書のリポジトリ（abeouga/agorack-document の `fuminosuke/AGENTS.md`）に置き、詳細仕様を二重管理しない。
+この文書はOCRシステムの技術的契約の正本である。機能ごとの詳細仕様は`docs/`の各文書に置き、この文書と二重管理しない。
 
 OCRはデフォルトで保護するが永久凍結ではない。明示された改善は再現根拠・比較・回帰検証を条件に実施できる（§10）。
 
@@ -104,7 +104,7 @@ document image → crop / physical region → physical cell identity
 | response計算 | `ocr/deterministic_mapper.py` — `build_mapped_document`、`services/ocr_response_finalization_service.py` — `OcrResponseFinalizer.finalize` | field ownership、値・判定・警告、mappedCells、diagnostics |
 | reviewStructure・表示 | `services/review_display_structure.py` — `build_review_display_structure`、`frontend/src/pages/ReviewPage.tsx` | 構造由来group、保存mapping、行移動 |
 | 補正・確定・reopen | `domain/ocr_models.py`、`services/ocr_result_service.py` — `OcrResultService.correct` / `confirm` / `reopen`、`repositories/ocr_result_repository.py` | 原候補・補正・revision履歴・確定snapshot |
-| XLSX出力 | `services/spreadsheet_template_output_service.py` — `SpreadsheetTemplateOutputService.snapshot` / `render`、`services/output_layout_template_service.py`、`services/excel_export_service.py` | 受付時原本・セルbinding、凍結reviewStructure、確定revision |
+| XLSX出力 | `services/spreadsheet_template_output_service.py` — `SpreadsheetTemplateOutputService.snapshot` / `render`、`services/excel_export_service.py` | 受付時原本・セルbinding、凍結reviewStructure、確定revision |
 
 `backend/app/ocr/**` と上表のデータ契約はOCR-sensitiveである。Reactやテンプレート編集でも、見た目だけか、保存layout / mapping / cell associationを変えるかで分類する。
 
@@ -183,11 +183,9 @@ Canvasのハンド操作による明示的な配置修正では、編集可能�
 保存矩形・paddingを再生成せず、過去jobのsnapshotや公開版を変更しない。
 新printLayoutの認定gate解除には使用しない。
 
-再現・実装範囲・検証の限界は[位置合わせ失敗調査](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/registration-investigation-20260911.md)を参照する。
-
 ### 3.6 スマホ撮影写真の明るさ補正と向き（2026-10-18・意図的な変更）
 
-利用者の要望（暗い・ゆがんだ写真への対応）と破壊的変更の許可による。旧契約は「位置合わせ・切り抜きは
+暗い・ゆがんだスマホ写真でも位置合わせできるようにするための意図的な変更。旧契約は「位置合わせ・切り抜きは
 撮影した画素をそのまま使い、テンプレートの向きでだけ書類の輪郭を探す」、新契約は次のとおり。
 
 - 単一画像・ページ別の抽出は `image_processing/photo_registration.register_document` を通す。最初の候補は従来と同じ
@@ -202,12 +200,9 @@ Canvasのハンド操作による明示的な配置修正では、編集可能�
   `registrationFailure.diagnostics.registrationAttempts` に記録する。
 - mappingId・targetPath・sourceRegionId・保存矩形・padding・provider・model・prompt・schema・association・受付snapshotは変更しない。
 
-合成スマホ写真40条件の前後比較（欄四隅の誤差）・実OCR・画面での確定/XLSXの記録は
-[スマホ写真・スマホ画面・文字拡大](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/phone-photo-and-mobile-2026-10-18.md)。
-
 ### 3.7 たわんだ紙の写真の位置合わせ（2026-10-23・意図的な変更）
 
-利用者の要望（バインダーに綴じたまま撮った写真が「位置合わせできません」で失敗する）による。旧契約は
+綴じたまま撮った、たわんだ紙の写真でも位置合わせできるようにするための意図的な変更。旧契約は
 「帳票全体を1つの射影変換（＋ECCのアフィン補正）で合わせ、ECCスコア0.75以上を必須とする」、新契約は次のとおり。
 
 - §3.6のすべての候補（向き・平坦化）が不合格のときだけ、同じ候補を同じ順で、続けて元の写真全体（輪郭の切り出しで
@@ -233,13 +228,6 @@ Canvasのハンド操作による明示的な配置修正では、編集可能�
 - mappingId・targetPath・sourceRegionId・保存矩形・padding・provider・model・prompt・schema・association・
   受付snapshotは変更しない。`register_document` を使う単一画像・ページ別の抽出に適用し（通常DBにページ別の
   jobはなく未確認）、新printLayoutの認定gate解除には使わない。
-
-検証：失敗した繁殖台帳1021の写真4枚がすべて合格（欄の枠が正しいセルに乗ることを画像で確認）、別の帳票の
-テンプレート3種（4版）には2枚とも不合格、同じ用紙のテンプレート（牛繁殖台帳004・UX検証用・1021の旧版）には合格。
-従来成功の単一画像15件は位置合わせ済み画像のSHA-256が一致。1枚あたり約5〜7秒（従来の失敗は1.3〜3.6秒）。
-4件の実OCR（再試行）では値が別の欄に入る取り違え0。合成のたわみ写真（読み取り済み6帳票の平らな画像を
-たわみ4種×強さ10〜80pxでゆがめ、遠近・照明・雑音・JPEGを加えた120条件、欄ごとのずれを位相相関で測定）：
-変更前（平面のみ）は10px超ずれたまま合格が9件（最大42px）、最終は0件、3px以内102件、3〜10px16件（大きな枠5つ
 だけの帳票の幅742pxの欄で約4px）、不合格2件（最も強い弓なり）。
 
 ## 4. Provider request・association・mappedCells
@@ -278,7 +266,7 @@ provider・model・promptVersion・schemaVersion等、保持している識別�
 
 ### 4.5 手書き抽出画像の同時送信（2026-10-18・意図的な変更）
 
-利用者の明示要求（「手書きの時・分を読むこと」「空欄の印字を値にしないこと」）による変更。
+手書きの時・分を読み、空欄の印字（斜線・括弧・項目語）を値にしないための変更。
 
 - 旧契約：印刷の項目名（`printedLabelText`）を持たない記入欄は、元の色の切り抜き1枚だけを送る。
   受付時に `handwriting_png`（手書き抽出）を作り `openAiImageCount` には数えていたが、実際の送信内容には含めていなかった。
@@ -299,18 +287,9 @@ provider・model・promptVersion・schemaVersion等、保持している識別�
   `handwritingHintSha256`（送信した補助画像）、`handwritingSourceSha256`（手書き抽出）、`handwritingHintMatchesPrepared` を追加した。
 - prompt versionは `mapped-compact-v2`（既定値と `.env`）。過去のjob・受付snapshotへは後付けしない。
 
-検証（データの複製、GPT系の既存OCR経路で実送信）：同じテンプレート・同じ画像の変更前のjob結果（attemptの `result.json`）と比較した。
-F06の日付欄で印字「／」6欄・「( )」1欄が空欄になり、記入した日付「4/1」「4/8」「4/15」と区分は維持。
-F02の時刻欄（文字の欄）は「午前」だけから「午前10時30分」へ（最終形の指示で2/2回）。F01の未記入の電話欄は「電話」から空欄へ。
-F08（191欄）は途中版で差分0。値の取り違え・欄の対応違いは0。表記の違い（全角空白・区切りの省略・単位の付加・✓とレ）は残る。
-途中版で見つかった後退（抽出画像の欠けた線による「4」→「1」、ふりがなの脱落、記号欄の「午前」が要確認になる、
-印刷の消し残しの読み込み、住所への項目名の混入）は、補助画像の作り方と指示の範囲指定で解消を確認してから最終形にした。
-既存の契約テスト（tests/ocr_contract、test_openai_cost）は17件成功、4件は本変更と無関係の既存失敗（廃止した業種引数 `mother_individual_id`）。
-詳細は [汎用化の記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/template-ai-generic-forms-2026-10-17.md) の「読み取り本体の変更」。
-
 ### 4.6 項目ごとの読み取り設定（2026-10-19・意図的な変更）
 
-利用者の明示要求（読みにくい欄の候補語、紙の書き方と違う表記での検出、任意のテンプレート・欄への後付け）による変更。
+読みにくい欄に候補語を使い、紙の書き方と違う表記を検出し、任意のテンプレート・欄へ後から設定できるようにするための変更。
 
 - 旧契約：OCRの指示はテンプレート共通で、欄ごとの指示は無い。候補語は旧「読み取り候補」（`templateCandidatePools`、
   `candidateType=managed_text`）だけで、一覧をモデルへ送り、候補外の値は要確認にする。§1の転記指示は整形を禁止する。
@@ -333,9 +312,6 @@ F08（191欄）は途中版で差分0。値の取り違え・欄の対応違い�
 - 音声のOCR修正では、受付時の候補語（使う設定）を対象範囲の欄について文字起こしのkeywordsへ加える。
 - paged書類には適用しない。
 - 2026-10-22 メモリ：読み取り指示は人が入力せず、確定時に覚えた書き方のルール（`template_field_memories`、1件＝欄又は表の列の保存先の一覧＋ルール1文）から作る。`TemplateFieldHintService.snapshot` が欄ごとのルール（使われた回数の多い順、300字まで）を「。」でつなぎ `instruction` にする。候補語の設定がない欄もメモリがあればhintを作る（keywordsなし）。学習は確定の保存後に別処理で行い、確定の成否・応答を変えない。候補語が寄せた値（`KEYWORD_ABSORBED`）・空欄化・空欄からの記入・選択欄・番号欄は対象外。同じ確定（job・revision）は一度だけ学習する。移行時に既存の読み取り指示を各欄のメモリ1件へ移した（`template_field_hints.instruction` 列は残すが読み書きしない）。
-
-検証（複製データ、同じ画像で実OCR 5回・API 25回、保存した読み取りの再照合）は
-[項目の読み取り設定](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/template-field-settings-2026-10-19.md)。日付の指示は4回とも全行で点区切り、取り違え・対応不一致0。
 
 ## 5. Review contractとUI / 業務状態
 
@@ -488,17 +464,17 @@ CSV設定、業種辞書・年号・単位の推測は廃止した。旧補正pa
 書類ライブラリの検索・自動統合は行わず、読み取り後に設定した値とcropを利用者が確認する。
 2026-10-16追記：確定済み結果だけを対象に、1利用者DB内で書類名・識別値による一覧と
 構造化投影（`structured-document.v1`、`/api/v2/structured`、既定無効）を読み取り専用で提供する。
-自動統合・推測値の保存は引き続き行わない。範囲は[設計](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/structured-qa-design-2026-10-16.md)§2。
-2026-10-17追記（書類の系列、段階2）：利用者が受付時に**明示的に選んだ**確定済みの単一画像jobを
+自動統合・推測値の保存は引き続き行わない。
+2026-10-17追記（書類の系列、`mode=full`）：受付時に**明示的に選んだ**確定済みの単一画像jobを
 前の版として、新しいjobを `document_series_links` で結び付けられる（`predecessorJobId`、
 alembic `document_series_v1`）。条件は、前のjobが確定済み（CONFIRMED・確定revision一致）、
 同じ `templateVersionId` かつ同じ `fieldMappingHash`、paged以外、前のjobに取消以外の後継がないこと。
 前の版の確定revisionと確定snapshotのSHA-256を受付snapshot（`documentSeries`）とリンクに記録し、
 後継の確定時に一致しなければ409 `SERIES_PREDECESSOR_CHANGED`。後継のある版の再編集・削除は
 409 `SERIES_HAS_SUCCESSOR`。前のjobの値・確定snapshot・cropは変更しない。構造化一覧は確定済みの
-後継を持つjobを除き、版番号を付ける。段階2の後継（`mode=full`）は全欄を読み値を引き継がない。
+後継を持つjobを除き、版番号を付ける。`mode=full`の後継は全欄を読み値を引き継がない。
 
-**2026-10-18 意図的なOCR contract変更（書類の系列、段階3、`mode=blank_only`、新規の更新の既定）**：
+**2026-10-18 意図的なOCR contract変更（書類の系列、`mode=blank_only`、新規の更新の既定）**：
 §3.3「別jobの値を統合しない」・§6.2「新旧jobのID一致だけで値を移さない」の例外として、次の条件を
 すべて満たす場合に限り、前の版の確定値を新しいjobへ引き継ぐ。旧契約は「別jobの値は一切引き継がない」、
 新契約は「利用者が明示的に選んだ確定済みの前の版から、同一mappingの確定値だけを引き継ぐ」。
@@ -517,7 +493,6 @@ alembic `document_series_v1`）。条件は、前のjobが確定済み（CONFIRM
   （`acceptIdentityMismatch: true`）なしに確定しない（409 `SERIES_IDENTITY_MISMATCH`）。
 - 系列のないjob・pagedの結果は変わらない（保存済み画像の同一条件で変更前後を照合済み）。
 未移行DBではリンクを作れず（503 `SERIES_NOT_MIGRATED`）、既存の確定・再編集・削除は従来どおり。
-設計と検証は[追記分の取り込み](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/incremental-update-and-ask-gui-design-2026-10-17.md)§15。
 
 画像帳票は受付時の非空fieldMappingsと凍結reviewStructureから独立項目・見出し・明細表を
 出力する。列はcolumn ID、値はfield ID / mappingId / targetPathの一致で解決し、ラベルや
@@ -540,9 +515,7 @@ alembic `document_series_v1`）。条件は、前のjobが確定済み（CONFIRM
 
 保存済みの実provider response、停止時の退避DB、同一受付snapshot、crop SHAを比較し、
 短いAPI integrationとXLSX内容照合を行う。検証script・fixture・ログは製品外に保存する。
-旧 `scripts/verify_ocr_contract.py` と廃止仕様のテストは退役理由付きで退避済み。
-その旧成功件数を現行schema 2.0の回帰成功として使用しない。
-現行の条件・コマンド・結果・退役一覧は [互換廃止・汎用変換記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/generic-cleanup-2026-10-04.md) を参照する。
+廃止した旧仕様の検証scriptとテストは退役させた。その旧成功件数を現行schema 2.0の回帰成功として使用しない。
 
 ### 8.2 選択する検証
 
@@ -556,8 +529,8 @@ alembic `document_series_v1`）。条件は、前のjobが確定済み（CONFIRM
 | paged / renderer | §12の所有原本・ページbinding・実入力・geometry・隔離gateを変更範囲に応じて実測。単一画像の成功を代用しない |
 
 ユニットテストの追加・全件実行は既定にしない。短い上記検証で未確認の具体的な境界だけ、
-最小の既存テストや追加検証を選ぶ。必要時のpytestは [Artifact Storage Policy](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/ARTIFACT_STORAGE_POLICY.md)
-に従い、未使用のDドライブ絶対パスをbasetempに指定する。既存tempやユーザーデータを削除しない。
+最小の既存テストや追加検証を選ぶ。必要時のpytestは、リポジトリ外の未使用の一時ディレクトリをbasetempに指定する。
+既存tempやユーザーデータを削除しない。
 
 ### 8.3 比較と報告
 
@@ -595,7 +568,7 @@ model・prompt・schema・provider request・association方式変更、または
 
 ### 見出しのない番号欄（2026-09-26）
 
-記入欄の「番号を読む」は、2026-09-26の利用者の訂正要求により、自動採番の設定とする。
+記入欄の「番号を読む」は、自動採番の設定とする。
 明示選択されたinputセルだけに `readingMode=number` を保存する。未設定の既存セルには
 metadataを追加しない。保存先がない場合だけ、重複しない「番号」の項目と、見出しを
 必要としない既存relationを追加する。設定済みtargetPath・cell ID・矩形は維持する。
@@ -608,16 +581,15 @@ metadataを追加しない。保存先がない場合だけ、重複しない「
 番号欄だけならprovider呼出しは0回。番号を含む要求では帳票全体画像もproviderへ送らない。
 ①や先頭ゼロ等の印刷表記は転記しない。レビュー・手動補正・確定は既存経路を使用する。
 
-2026-10-22：**意図的なOCR contract変更**（番号の数え方）。従来はテンプレート全体の番号欄をy、x順に数えていたため、左右に並ぶ2つの表の行が交互に番号付けされていた（繁殖台帳1021：左12,14…30、右11,13…29）。繰り返し部分の番号欄は表ごとに行順（recordGroupのorder）で1から数え、同じ見出し（parentLabelCellId）につないだ表は左の表から（高さが重ならなければ上の表から）続けて数える。表の外の番号欄は従来どおりy、x、cell ID順で別に数える（`LayoutService._sequence_numbers`）。番号は保存時にfield mappingへ固定し受付snapshotにも保持するため、受付済みjob・保存し直していない版は従来の番号のまま（「変更を反映する」だけでは数え直さない）。provider送信・crop・mappingId・targetPathは不変。
+2026-10-22：**意図的なOCR contract変更**（番号の数え方）。従来はテンプレート全体の番号欄をy、x順に数えていたため、左右に並ぶ2つの表の行が交互に番号付けされていた（例：左の表が12,14…30、右の表が11,13…29）。繰り返し部分の番号欄は表ごとに行順（recordGroupのorder）で1から数え、同じ見出し（parentLabelCellId）につないだ表は左の表から（高さが重ならなければ上の表から）続けて数える。表の外の番号欄は従来どおりy、x、cell ID順で別に数える（`LayoutService._sequence_numbers`）。番号は保存時にfield mappingへ固定し受付snapshotにも保持するため、受付済みjob・保存し直していない版は従来の番号のまま（「変更を反映する」だけでは数え直さない）。provider送信・crop・mappingId・targetPathは不変。
 旧行番号roleへ変換しない。model・応答schema・association・crop・出力先の対応は変更しない。
 以前保存したsequenceNumberのない番号OCR版・受付済みjobは従来の転記動作を保持する。
 新方式を適用するには編集用の版でレイアウトを保存し有効化する。既存jobへ後付けしない。
 別形式のAI汎用定義では番号設定を保持できないため、黙って落とさず既存の未対応拒否へ含める。
-今回の検証は明示要求に従い最小XLSXを使う実画面確認を中心とし、全体テストは実行しない。
 
 ### 記入欄内の記号判定（2026-09-25）
 
-明示された記号読取の要求により、単一ページ経路の `markRecognitionMode` に
+単一ページ経路の `markRecognitionMode` に
 `symbol` を追加する。既存の `automatic`（印刷選択肢の差分検出）と
 `manual`（利用者が選択）の意味・既定値は維持する。
 UI上は記入欄の読み取り方法として文字・記号・印刷選択肢を選ぶ。
@@ -634,11 +606,10 @@ model、応答schema、association token、mapping/sourceRegion identity、crop�
 受付snapshot、revision、出力先決定は変更しない。新モードのrequest指示だけを追加する。
 既存jobへの後付け移行は行わない。paged経路のmark拒否も維持し、ページ別編集では
 記号モードの新規選択を無効にする。実画像での認識精度はoffline境界テストだけでは保証しない。
-検証の範囲・結果は [記号判定の実装記録](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/symbol-reading-20260925.md) を参照する。
 
 ### 単一ページOCRの文字読み取り選択肢（2026-09-29）
 
-明示要求により、単一ページOCR画面の「文字読み取りも実行する」トグルを初期状態では隠し、
+単一ページOCR画面の「文字読み取りも実行する」トグルを初期状態では隠し、
 文字読み取りを必須とする。backend設定 `OCR_TEXT_RECOGNITION_TOGGLE_ENABLED` が `false` の場合、
 frontendはトグルを表示せず、受付値を `ocrEnabled=true` に固定する。
 `JobService.create_ocr_job` は同じ設定状態での `ocrEnabled=false` 受付を拒否する。
@@ -670,18 +641,16 @@ logical identityのsidecarをprovider associationの代用にしない。
 
 ### 契約変更の手順
 
-2026-10-04のデプロイ版の依頼では、汎用化・最適化に必要な破壊的変更が明示的に
-許可された。対象と検証方針は [AGENTS §1.1](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/AGENTS.md#11-デプロイ版の汎用化最適化に関する許可2026-10-04)
-を参照する。変更を必要とする具体的な問題、旧契約と新契約、既存データへの影響を示し、
-両文書を同時に更新する。ユニットテスト追加は極力避け、保存response・実API・
-短いintegration・出力比較で契約を確認する。許可の取得と検証結果は区別し、
+汎用化・最適化に必要な破壊的変更も、次の条件で行う。変更を必要とする具体的な問題、旧契約と新契約、既存データへの影響を示し、
+この文書と関係する仕様文書を同時に更新する。ユニットテスト追加は極力避け、保存response・実API・
+短いintegration・出力比較で契約を確認する。変更の許可と検証結果は区別し、
 未検証の変更を検証済みと報告しない。
 
-OCRコア変更には、AGENTS §5の明示されたタスク範囲、再現可能な問題または測定可能な精度課題、変更前後比較、§8の検証が必要である。コード整理・抽象化・美観・一般化・speculative optimization・将来用途だけでは変更しない。
+OCRコア変更には、明示されたタスク範囲、再現可能な問題または測定可能な精度課題、変更前後比較、§8の検証が必要である。コード整理・抽象化・美観・一般化・speculative optimization・将来用途だけでは変更しない。
 
-既存契約に戻す不具合修正は、不変条件の書換えを必要としない。発見した新しい境界違反は再現・原因を示して修正する。UXタスクで別のOCR不具合を発見しただけでは、依頼範囲を拡張する権限にはならない。
+既存契約に戻す不具合修正は、不変条件の書換えを必要としない。発見した新しい境界違反は再現・原因を示して修正する。UXタスクで別のOCR不具合を発見しただけでは、作業範囲を広げる理由にはならない。
 
-契約自体を変える場合は、ユーザーの明示要求に基づき、以下をすべて行う。
+契約自体を変える場合は、以下をすべて行う。
 
 1. 旧契約と新契約、必要性、影響範囲を提示する。
 2. この文書を更新し、新契約を証明する回帰テストを追加・更新する。
@@ -693,23 +662,23 @@ OCRコア変更には、AGENTS §5の明示されたタスク範囲、再現可�
 
 ## 11. Baselineと完了報告
 
-旧文書には、Phase 0〜9で実Chrome E2Eまで確認したという履歴がある。記録内容は、manifest / raw / expanded / mappedCells対応（当時association mismatch・誤対応0件）、行移動時の物理identity固定と認識metadata移動、補正保存・再読込、displayName・独立項目group・同名別項目分離、セル直接編集・判定popover、疎な行の操作拒否とcorrection非発行である。
+過去の実Chrome E2Eやassociation mismatch 0件の記録は、現在のrevision / worktreeへの保証ではない。
 
-この履歴は現在のrevision / worktreeへの保証でも、今回の実UI再検証でもない。baselineは作業開始時のrevision・worktree・テスト・fixtureで記録する。
+baselineは作業開始時のrevision・worktree・テスト・fixtureで記録する。
 
 OCR-sensitive変更の完了報告には、次を含める。
 
 - 変更ファイル、pipeline stage、影響するinvariant、原因と意図
 - mapping identity、physical identity、provider association、crop / boundingBox、prompt / model / schemaの変更有無
 - 変更前後の検証コマンド・結果、Golden / 保存response比較の結果と差分、backend regression、frontend検証
-- 実OpenAI / Google API使用有無・回数、実測したmismatch / mapping誤対応 / schema error / recognition-only error
+- 実OpenAI API使用有無・回数、実測したmismatch / mapping誤対応 / schema error / recognition-only error
 - `git diff --check`、未検証範囲、既存失敗・環境制約
 
 OCR動作を変更していない場合は「既存OCR contractを維持した」と明記する。同じ画像から意図したセル・mapping・検証済みresponse・レビュー・補正保存・出力までの対応を証明できることが完了の基準である。
 
 ## 12. XLSX複数ページOCRの安全契約
 
-本節は新printLayout / paged OCRの追加契約であり、§3〜10のprovider・model・prompt・schema・association・mapping・補正・確定・出力契約を緩めない。現在の対応状況と作業ルールは[AGENTS §9](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/AGENTS.md#9-xlsx複数ページocr--reference-renderer)、実験・測定はそこから参照するPhase報告に置く。
+本節は新printLayout / paged OCRの追加契約であり、§3〜10のprovider・model・prompt・schema・association・mapping・補正・確定・出力契約を緩めない。
 
 ### 12.1 版所有・保存range・geometryの互換性
 
@@ -728,7 +697,7 @@ fit/中央配置用の公称twipと、各寸法を整数化して累積する描
 canonical layout・元セル範囲・意味づけ・過去jobは保持する。印刷範囲が成立しない場合は
 候補を拒否し、座標clampや許容値拡大で救済しない。
 FODSだけではUNO寸法exportのoverflow不在を証明できないため、この下書きモデルと
-artifact生成成功を本番資格へ昇格させない。詳細は[Calc印刷グリッド](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/calc-print-grid-20260913.md)。
+artifact生成成功を本番資格へ昇格させない。
 
 新Calcモデルの参照検証は、測定開始前・資格レポート保存前・保存済み資格のGETで、
 所有原本/canonical layout/configと保存寸法からページを再計算し、全cell/fieldの元範囲・
@@ -852,300 +821,144 @@ OCR結果出力（§7）は変更しない。小数％倍率等、既存adapter�
 
 ### 12.6 Qualificationと本番gate
 
+#### ページ単位の手動編集
+
 目視によるページ編集は[ページ単位の目視編集](page-authoring.md)に従う。
 `draft-visible-cells-v1`は非表示行列を表示幅・高さから除き、セル内縮小を参考描画する
 未認定の表示モデルである。保存済みlegacy/LOモデルを自動更新しない。原本の設定・セルを
 書き換えず、元セルIDからページ表示座標を参照する。元セルの表示座標はlayoutへ保存しない。
-2026-10-05以降は統合`PUT /template-versions/{id}/authoring?expectedRevision=...`でDRAFT/revisionを確認する。
-通常矩形と結合partsへ展開した元セル集合は
-重複のない既存集合の部分集合とし、残存元セルのphysical ID・canonical座標・形状を保持する。
-既存LayoutServiceへ人間の区分・意味づけ・明示的な削除・同一ページ内の結合/解除を保存する。
-結合親は元partsの外接矩形と一致し、元XLSXから解決したpartsの範囲は欠落・重複のない連続矩形に限る。
-物理セルの追加IDは検証済み結合親と保存partsの復元だけを許可する。field.sourcePartsにcellId/sourceRangeを保存し、
-表示位置や配列順から部品を推定しない。元範囲・内部値保護・ページ境界の検証をDB/config保存前に行い、
-不正要求で保存済みlayout/config/planを変更しない。ページ境界・transform・参考画像を保持する。
-物理枠追加・任意の移動/変形・ページをまたぐ結合は拒否する。これは2026-09-11の明示要求による
-ページ手動編集契約の拡張であり、既存jobのcrop・mapping・provider association契約は変更しない。
-ページfields/bindingsとlayout SHAを更新する。過去のqualificationは新版の証明に流用しない。
-この表示モデルでは既存のqualificationモデル照合が不成立となり、本番gateは閉じたままとする。
-Office adapterのhidden行列等の拒否条件、renderer isolation条件、OCR受付・実行・レビューの
-制限は変更しない。追加の自動区分・自動意味づけは実装しない。
+保存は`PUT /template-versions/{id}/authoring?expectedRevision=...`でDRAFT/revisionを確認する。
 
-2026-09-12の明示要求により、保存ページ上の仮想見出しだけを追加・移動できる。
-`virtual=true` の名前付きmanual見出しに `pageRange` を保存し、そのセルの矩形座標だけを
+- 通常矩形と結合partsへ展開した元セル集合は重複のない既存集合の部分集合とし、
+  残存元セルのphysical ID・canonical座標・形状を保持する。
+- 人間の区分・意味づけ・明示的な削除・同一ページ内の結合/解除を保存する。結合親は元partsの外接矩形と一致し、
+  元XLSXから解決したpartsの範囲は欠落・重複のない連続矩形に限る。
+- 物理セルの追加IDは検証済み結合親と保存partsの復元だけを許可する。field.sourcePartsにcellId/sourceRangeを保存し、
+  表示位置や配列順から部品を推定しない。元範囲・内部値保護・ページ境界の検証をDB/config保存前に行い、
+  不正要求で保存済みlayout/config/planを変更しない。ページ境界・transform・参考画像を保持する。
+- 物理枠追加・任意の移動/変形・ページをまたぐ結合は拒否する。既存jobのcrop・mapping・provider association契約は変えない。
+- ページfields/bindingsとlayout SHAを更新する。過去のqualificationは新版の証明に流用しない。
+  Office adapterのhidden行列等の拒否条件、renderer isolation条件は変えない。自動区分・自動意味づけは行わない。
+
+保存ページ上の仮想見出しは、`virtual=true` の名前付きmanual見出しに `pageRange` を保存し、そのセルの矩形座標だけを
 当該保存ページ内の表示位置として解釈する。元セルのcanonical座標とは混同しない。
-ページ所属は版内の保存rangeに一致させ、配列indexや近傍セルから推定しない。
-仮想見出し自身は元Excelセル、page.fields、field mappings、ラベルOCRの対象に含めない。
-既存の物理IDから仮想への置換、仮想を含む結合、ページ不在・範囲外の配置は保存前に拒否する。
-ページ範囲・用紙変更や解除で所属・位置が無効になる場合も拒否し、対象見出しの明示的な削除を要求する。
-2026-09-21の明示承認により、改ページ保存要求の `pageHeadingMoves` で既存仮想見出しID・
-変更前range・変更先rangeを指定した場合だけ、所属変更を改ページと同一transactionで保存できる。
-名称・座標・親子接続・意味づけ・mappingは変更せず、ID重複/不在・旧range不一致・
-物理セル・移動先不在・ページ外配置・revision競合・公開版への保存を拒否する。
-未指定の見出しを推測移動しない。所属変更指定なしの既存拒否とページ解除の拒否を維持する。
-新しい印刷成果物・正式資格は改めて取得し、この操作でOCR受付条件を解除しない。
-旧セルのJSONへ未指定pageRangeを追加せず、旧layout hash・geometryの暗黙移行を行わない。
-見出しの階層・繰り返し群への接続は既存の明示ID経路を使用する。本番gateは解除しない。
-これはページ手動編集契約の拡張であり、既存OCR contractを維持する。
+
+- ページ所属は版内の保存rangeに一致させ、配列indexや近傍セルから推定しない。
+- 仮想見出し自身は元Excelセル、page.fields、field mappings、ラベルOCRの対象に含めない。
+- 既存の物理IDから仮想への置換、仮想を含む結合、ページ不在・範囲外の配置は保存前に拒否する。
+  ページ範囲・用紙変更や解除で所属・位置が無効になる場合も拒否し、対象見出しの明示的な削除を要求する。
+- 改ページ保存要求の `pageHeadingMoves` で既存仮想見出しID・変更前range・変更先rangeを指定した場合だけ、
+  所属変更を改ページと同一transactionで保存できる。名称・座標・親子接続・意味づけ・mappingは変えず、
+  ID重複/不在・旧range不一致・物理セル・移動先不在・ページ外配置・revision競合・公開版への保存を拒否する。
+  未指定の見出しを推測移動しない。新しい印刷成果物・正式資格は改めて取得する。
+- 旧セルのJSONへ未指定pageRangeを追加せず、旧layout hash・geometryの暗黙移行を行わない。
+
+#### XLSX取込のプレビュー寸法
 
 新規XLSX取込のlegacyプレビューでは、同じ一時コピーをOfficeで読んだ行高・列幅を
 `quality_json.spreadsheetPreviewGeometry`へ保存し、元セル由来の矩形座標に利用する。
 このsnapshotがない既存版の復元は従来計算を維持する。snapshotがある版の復元は保存寸法と
 原本SHAを照合し、現在のOfficeで再測定しない。セル数・役割・merged cellsを推測変更しない。
-2026-09-25以降の新規取込は`spreadsheet-preview-office-v2`を保存し、Officeのpt寸法を
-画像pxへ換算した自然倍率を上限として、印刷可能領域に収まらない場合だけ縮小する。
-中央配置設定を反映し、小さい帳票を用紙幅まで拡大しない。保存済みv1版は従来座標のまま
-復元し、既存版・jobの座標を暗黙に更新しない。
+`spreadsheet-preview-office-v2`は、Officeのpt寸法を画像pxへ換算した自然倍率を上限として、
+印刷可能領域に収まらない場合だけ縮小する。中央配置設定を反映し、小さい帳票を用紙幅まで拡大しない。
+保存済みv1版は従来座標のまま復元し、既存版・jobの座標を暗黙に更新しない。
 これはprintLayoutのgeometry evidenceやqualificationを代替しない。
-検証と制限は[プレビュー座標・ページ編集検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/spreadsheet-preview-geometry.md)を参照する。
+
+#### 資格と有効化
 
 reference imageの生成成功はqualificationではない。元XLSX、TemplateVersion、printLayout revision、geometry model / implementation、ページ別reference SHA、field geometry、renderer evidenceの対応を検証する。版・設定・画像・実装・環境の変更や証拠の欠落で有効性を失った結果を再利用しない。
-
-依存ファイルのサイズ・時刻の一致だけで以前のSHAを再利用しない。
-同一metadataでも内容が変わる場合を拒否する。[依存SHAの再検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/renderer-identity-freshness.md)を参照する。
+依存ファイルのサイズ・時刻の一致だけで以前のSHAを再利用せず、同一metadataでも内容が変わる場合を拒否する。
 
 Geometry / Reference QualificationとRenderer Environment Qualificationを区別し、両方の有効な証拠を要求する。network / resource isolation、実選択font、runtime依存、rasterizer、crop安全性・本番閾値の未認定条件を、座標精度のPASSで代替しない。hostにfontが存在することはOfficeの実選択fontの証明ではなく、fallback先を推測して認定しない。
 
-2026-09-13の「承認する」により、新paged経路の検証を二段階へ分離する契約変更を承認した。
-有効化時は、版/原本/全ページ参照画像のidentityとSHA、描画・座標・明示field/mapping、
-定義されたcrop領域とページ境界、隔離環境の有効な証拠を要求する。
-まだ存在しない記入画像のink clearanceは有効化の前提にせず、空のreferenceから成功と推定もしない。
-実入力のpage binding/SHA、位置合わせ、crop対応と実筆画の安全条件は、受付snapshotの条件で
-provider送信前に検証する。未対応・失効・欠落・不成立なら送信を止め、理由と対応するページを保持する。
-有効化は各入力の読取成功を保証せず、失敗・再試行時の補正値とimmutable snapshotを維持する。
+paged経路の検証は二段階に分ける。
 
-新しい資格APIの `safetyStages` は段階別の診断であって資格証そのものではない。
+- 有効化時は、版/原本/全ページ参照画像のidentityとSHA、描画・座標・明示field/mapping、
+  定義されたcrop領域とページ境界、隔離環境の有効な証拠を要求する。
+  まだ存在しない記入画像のink clearanceは有効化の前提にせず、空のreferenceから成功と推定もしない。
+- 実入力のpage binding/SHA、位置合わせ、crop対応と実筆画の安全条件は、受付snapshotの条件で
+  provider送信前に検証する。未対応・失効・欠落・不成立なら送信を止め、理由と対応するページを保持する。
+  有効化は各入力の読取成功を保証せず、失敗・再試行時の補正値とimmutable snapshotを維持する。
+
+資格APIの `safetyStages` は段階別の診断であって資格証そのものではない。
 記入画像がない時点の `DEFERRED_UNTIL_INPUT` / `NOT_EVALUATED` は成功を意味しない。
 診断codesが空でも `READY_FOR_QUALIFICATION` にとどまり、証拠検証・資格発行を迂回しない。
 GETでは保存された段階status/booleanを信用せず、所有証拠を確認してから段階情報を再生成する。
-実行時enforcementを未実装のままgateを開放しない。旧単一ページと過去jobをこの契約へ暗黙移行しない。
 
-2026-09-14のPhase 3では、`wsl-calc-print-grid-v1` に限る正式なreference/environment
-qualificationを追加した。environment判定はlease v2を資格証とはせず、現在のhost/runtime/font/
-worker/bootstrap/native dependency identity、prepared graph、非特権・network/host filesystem隔離、
-no-new-privileges、read-only Windows font mount、resource limits、effective unit controls、worker/broker
-core guardを合わせて評価する。認定scopeは固定prepared-reference invocationであり、host全体の完全な
-dependency closure、全dynamic load trace、実入力scanを含めない。このscopeに必要な証拠が欠落・失効・
-不一致なら `environmentQualified=false` とする。
+正式なreference/environment qualification（`wsl-calc-print-grid-v1`に限る）は次を満たす。
 
-同Calc geometry判定は、原本/layout/configからのplan・全binding再計算、全必要field四辺の独立vector
-観測、PDF整数座標一致、所有raster/vector証拠、150dpi・整数scaleの数理的表現誤差境界を同時に要求する。
-過去実測に合わせた閾値変更はせず、X方向は `0.5 + 150/72/2000` px以下、Y方向はそれに
-page-height換算の厳密な上限を加えた値未満とする。文字可視性、実scan registration/crop対応、実筆画
-clearanceはこの資格に含めず、provider送信前検証へ残す。
+- environment判定は、lease v2を資格証とはせず、現在のhost/runtime/font/worker/bootstrap/native dependency identity、
+  prepared graph、非特権・network/host filesystem隔離、no-new-privileges、read-only Windows font mount、
+  resource limits、effective unit controls、worker/broker core guardを合わせて評価する。認定scopeは固定
+  prepared-reference invocationであり、host全体の完全なdependency closure、全dynamic load trace、実入力scanを含めない。
+  必要な証拠が欠落・失効・不一致なら `environmentQualified=false` とする。
+- Calc geometry判定は、原本/layout/configからのplan・全binding再計算、全必要field四辺の独立vector観測、
+  PDF整数座標一致、所有raster/vector証拠、150dpi・整数scaleの数理的表現誤差境界を同時に要求する。
+  X方向は `0.5 + 150/72/2000` px以下、Y方向はそれにpage-height換算の厳密な上限を加えた値未満とする。
+  過去実測に合わせた閾値変更はしない。文字可視性、実scan registration/crop対応、実筆画clearanceは含めない。
+- 旧 `REFERENCE_ANCHORS_INSUFFICIENT` は診断から削除しない。Calc geometry資格が完全に成立した版だけ
+  activation判定の非blocking診断へ分離する。legacy/不明geometryや証拠の欠落・変更では従来どおりblockingとする。
+- 正式recordはTemplateVersion ID/revision、原本SHA、printLayout SHA、geometry model、prepared graph、
+  renderer/reference/evidence SHA、environment identity、各issuerと全体のimplementation fingerprint、policy、
+  issuedAt/expiresAt、未解決blockerへ束縛する。GETは読取専用で再評価し、補完・延長・DB修復をしない。
+  変更・欠落・期限切れでは再qualificationを要求する。資格発行だけではDRAFTをACTIVEにしない。
 
-旧 `REFERENCE_ANCHORS_INSUFFICIENT` は診断から削除しない。上記Calc geometry資格が完全に成立した版だけ
-activation判定の非blocking診断へ分離する。legacy/不明geometry、edge・binding・plan・coordinate・
-raster/vector証拠の欠落または変更では従来どおりblockingとする。
-
-正式recordはTemplateVersion ID/revision、原本SHA、printLayout SHA、geometry model、prepared graph、
-renderer/reference/evidence SHA、environment identity、各issuerと全体のimplementation fingerprint、policy、
-issuedAt/expiresAt、未解決blockerへ束縛する。GETは現原本・plan・所有artifact・graph・実装・現在環境・
-lease freshness・geometry integrityを読取専用で再評価し、補完・延長・DB修復をしない。変更・欠落・期限切れ
-では再qualificationを要求する。この資格発行だけではDRAFTをACTIVEにせず、承認成功経路またはOCR受付gateを
-開放しない。
-
-2026-09-14のPhase 4では、既存TemplateVersion承認APIに限り、`printLayout`を持つDRAFTを上記の
-正式資格へ接続した。paged版は要求時のprint revisionを必須とし、既存のtemplate mutation lockと
-`BEGIN IMMEDIATE`の内側でPhase 3のGETと同じvalidatorを実行する。現在の原本/config/plan/bindings、
-prepared graph、所有artifactとSHA、issuer/qualification実装、environment identityとlease期限を再検証し、
-正式policy、environment/geometry両component、資格証、activation stageがPASSで未解決blockerがない場合だけ
-既存の原子的なACTIVE切替へ進む。保存boolean、古いreport、fixture、期限延長を承認入力にしない。
-printLayoutのないlegacy版は従来のmapping/document identity、layout verification/readinessを維持する。
-paged版では旧`layoutVerified`/`xlsx-structure` booleanを偽装せず、正式paged資格をその代替承認条件とする。
-承認は旧ACTIVEのARCHIVED化、対象版のACTIVE化、系列`active_version_id`、元準備jobの確定を1 transactionで
-更新し、失敗時は全更新をrollbackする。ACTIVEになっても実入力stageは`NOT_EVALUATED`のままであり、
-`PAGE_INPUT_IDENTITY`、`SCAN_REGISTRATION`、`CROP_CORRESPONDENCE`、`INK_CLEARANCE`とpaged OCR受付/provider
-送信gateを開放しない。
-
-2026-09-16の実Chrome検証では、Step 5が表示中TemplateVersion自身の正式資格をGETし、PASSかつ未失効で
-blockerなしの場合だけ、取得済みcurrent revisionを`base_revision`として上記approve APIへ送信した。
-承認成功後は既知の所有Template IDからauthoritative detailを再取得し、対象ACTIVE、旧版ARCHIVED、
-`active_version_id`一致、他ACTIVEなしを確認してからUIを更新する。一覧summaryの省略された`versions`、
-保存boolean、approve response単独をACTIVE表示の根拠にしない。対象実版のV2 ACTIVE化後もpaged OCR受付は
-`PRINT_REFERENCE_NOT_VALIDATED`で閉鎖され、provider送信は発生していない。実証値とfrontend修正は
-[GUI Migration Phase 5](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/gui-migration-phase5-20260916.md)を参照する。
+`printLayout`を持つDRAFTの承認は、要求時のprint revisionを必須とし、template mutation lockと書込みtransactionの
+内側で資格のGETと同じvalidatorを実行する。正式policy、environment/geometry両component、資格証、
+activation stageがPASSで未解決blockerがない場合だけ、旧ACTIVEのARCHIVED化、対象版のACTIVE化、
+系列`active_version_id`、元準備jobの確定を1 transactionで更新する。保存boolean、古いreport、fixture、
+期限延長を承認入力にしない。printLayoutのないlegacy版は従来のreadinessを維持する。
+ACTIVEになっても実入力stage（`PAGE_INPUT_IDENTITY`、`SCAN_REGISTRATION`、`CROP_CORRESPONDENCE`、`INK_CLEARANCE`）は
+`NOT_EVALUATED`のままであり、OCR受付の条件は§12.9〜§12.12に従う。
+画面は承認成功後に所有Template IDからdetailを再取得し、対象ACTIVE・旧版ARCHIVED・`active_version_id`一致を
+確認してから表示を更新する。approve response単独をACTIVE表示の根拠にしない。
 
 送信前の `CROP_CORRESPONDENCE` は、受付全ページ検証後、当該page/config/attemptと
 所有全体画像・参照画像のSHA/保存範囲を再確認して行う。期待region集合・padding込みbboxと、
 全5variantの実crop画素を照合する。抽出結果や保存PASS booleanだけでproviderを生成しない。
 不一致は送信前に拒否し、ページ別の理由を保持する。検証成功もscan registrationの局所誤差・
-実筆画clearance・本番資格の代替ではない。詳細は[送信前crop照合](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/paged-crop-correspondence-20260913.md)。
+実筆画clearance・本番資格の代替ではない。
 
 `qualified` / `ocrReady` / `productionReady` / `environmentQualified` / `productionQualified`等の保存booleanだけでACTIVE化・production paged OCRを許可しない。認定対象のidentity・evidence SHA・失効条件と未解決条件を再検証する。fixtureのgate置換やmock通過は本番環境の証明ではない。
 
-認定が不成立なら本番gateをfail-closedに維持する。renderer isolation / container設計は別infraタスクとして保留できるが、保留を理由に拒否を緩めない。再開時は実環境で正式なqualificationを行い、§10の変更手順と回帰検証を満たしてから本番開放する。
+認定が不成立なら本番gateをfail-closedに維持する。renderer isolation / container設計を保留しても、保留を理由に拒否を緩めない。
 
 ### 12.7 Renderer隔離とnative処理
 
-2026-09-12に本番化と印刷用PDF取得の明示要求、およびWSL依存導入の許可を受け、
-印刷用PDFに限り`PRINT_PDF_RENDERER=wsl`で選択する別rendererを追加した。
-固定入力のOffice変換・PDF構造検査をbubblewrapの非特権・ネットワーク分離namespaceへ収容し、
-systemd cgroupの資源上限と所有者leaseによる終了を要求する。非隔離fallbackは許可しない。
-Windows版のgeometry/font evidenceをLinux版へ流用せず、PDF生成成功で本番OCRのgateを解除しない。
-2026-09-13に同じ隔離境界での固定FODS寸法読取と、明示選択時だけWindows system fontsを
-固定readonly mountする診断を追加した。fontconfigの解決probeをOffice実描画中の全font/runtime
-証拠と同一視しない。新printAdapterの明示版選択だけが原本保持の拡張コピーを利用できる。
-旧planのadapter/小数倍率/geometryを自動更新せず、新geometry測定値は旧座標へ流し込まない。
-同日の明示確定APIでは、DRAFT/revision/原本/configを照合し、保存済みページ範囲を維持した
-新WSL geometryと整数印刷倍率を版へ保存できる。元canonical layoutと過去OCR snapshotは不変。
-PDFと全ページPNGを同一の隔離変換から生成し、SHA・寸法・全件数を確認する。
-renderer実行中はDB mutation lockを保持せず、生成後の再照合前に版を更新しない。
-印刷条件が同じ意味づけ編集では確定ファイルを再生成せず、条件変更時は再確定を要求する。
-このAPIの成功やprintFilesの存在はqualificationの代替ではなく、既存ACTIVE/受付gateを解除しない。
-実装・現時点の検証・未完了範囲は[複数ページ本番化](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/production-paged-ocr.md)を参照する。
-
-同日の追加で、WSL runtime imageのSHAを明示した呼出しに限り、root-ownedの読み取り専用
-SquashfsからOffice/Python/Popplerと設定を使用できる。内容を保持したdescriptorで前後SHAを
-検証し、private mount namespaceと従来cgroup/bubblewrap条件を維持する。
-image欠落・変更・mount失敗からlive runtimeへfallbackしない。未指定の旧経路は維持する。
-Windows fonts・host bootstrap・kernel等を含む完全な環境認定とは区別し、既存版/過去jobへ
-自動適用しない。詳細と残条件は[WSL runtime image](wsl-runtime-image.md)を参照する。
-
-固定runtimeのWindows fonts経路では、readonly font mountの全regular file集合を
-変換前後に内容hashし、追加・削除・変更を拒否する。候補fontだけやsize/mtimeだけで
-集合identityを代替しない。既存live経路/保存reportへ後付けしない。
-この一致は実描画glyph・文字対応や完全な環境資格の代替ではない。
-[font集合の検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-font-directory-20260913.md)を参照する。
-
-`PRINT_WSL_RUNTIME_ID`を明示した新しい印刷確定では、寸法測定とreference生成へ同じIDを渡し、
-runtimeImageとfontDirectoryIdentityの完全一致を保存前に検査する。証拠欠落や不一致で
-下書き・config snapshot・成果物を更新せず、現在設定を既存版/過去job/保存済み取得へ後付けしない。
-これは[印刷確定の環境固定](pinned-print-preparation.md)であり、本番資格やgate解除ではない。
-
-固定runtimeの新呼出しはworkerソースを実行専用snapshotにし、Linux側のprivateな
-read-onlyコピーを実行する。隔離側の前後内容SHAと起動側のSHAを照合し、
-寸法測定とPDF生成の`workerIdentity`も保存前に一致させる。
-欠落/変更を許容せず、旧reportには後付けしない。host bootstrap全体の認定とは区別する。
-実装と失敗注入検証は[worker identity](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-worker-identity-20260913.md)を参照する。
-
-WSLのOffice/PDF/font workerと入力を保持するbrokerは、入力の読取・解析より前に
-process-localなcore dump抑止を要求する。Linux pipe型core handler向けのsoft/hard limit 1と、
-CORE limit変更を拒否する検証済みseccomp filterを併用し、getter・他resource操作は維持する。
-変更拒否・実効値・filter/library SHAを両processの証拠として新しい変換応答に記録する。
-証拠欠落・不一致・未対応ABIでは変換応答を拒否し、非隔離fallbackや全WSLの設定変更はしない。
-旧保存reportへ成功証拠を補完しない。worker実装変更で以前の参照資格を失効させる。
-これは[クラッシュダンプ境界](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-core-dump-boundary-20260914.md)の追加保護であり、
-環境全体の資格発行・本番gate解除・geometryやOCRデータ契約の変更ではない。
-
-固定runtimeを明示する新変換では、root bootstrapのPython検索treeを変換前後で内容hashし、
-実行ファイル・検索ZIPの有無・stdlib全entry・file linkの解決先を含む一致を要求する。
-isolated/no-site/no-bytecodeの実値、root所有と非書込条件、件数/bytes上限、読取中の変更を検査する。
-未知の検索経路、installation外へのlink、未対応directory link、欠落したlink先は拒否する。
-Office/glyph/vectorの新応答に `bootstrapPythonIdentity` を保存し、寸法測定・参照画像生成・
-再描画の間でも一致を要求する。旧reportには後付けせず、getterで現在の環境を成功として補完しない。
-この境界は[Python起動入力の前後照合](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-bootstrap-python-enforcement-20260914.md)であり、
-さらにv2では、固定のhost起動ツール・Python拡張・libseccompのELF起動時依存を
-`nativeDependencies` として同じ前後照合・保存・再描画比較に含める。
-固定loaderの `--list` はroot所有のinstallation内ELFだけに使用し、帳票を渡さない。
-解決不能/未知の出力、loader環境変数、preload file、所有権/権限違反、集合/内容変更は拒否する。
-内容hashと依存graphに結び付く[ELF起動依存の照合](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-native-bootstrap-enforcement-20260914.md)であり、
-動的dlopenの完全trace・systemd設定・Windows/WSLの完全な環境認定を代替しない。
-
-新しいWSL資格検証では、bootstrap証拠を持つ保存版について、帳票を渡さない独立した
-環境照会で選択runtimeの実体SHA・全font集合・worker・Python/ELF起動依存・broker core guardを
-再取得し、保存された参照画像の実行条件との完全一致を要求する。
-この一致の証拠は版・所有artifact graphに結び付け、24時間の上限付きで別のJobArtifactへ保存する。
-GETでは所有者・SHA・版・期限を先に検査し、その後に現在の実体を再読取する。
-期限切れ・未来時刻・graph変更・現物不一致を、保存booleanや期限延長で通さない。
-旧reportに新証拠を後付けせず、GETでDBを更新しない。
-これは [環境identityの期限付き照合](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-environment-identity-lease-20260914.md) であり、
-scopeは `identity-freshness-only`。完全な環境認定証ではなく、これだけでACTIVE/送信を許可しない。
-
-新規lease v2はWindows build/UBR/DisplayVersion、architecture、WSL launcher実体SHAと
-version応答の生bytes SHAも記録し、Linux照会前後・GET再検査で完全一致を要求する。
-旧leaseへのhost情報の補完はしない。これは資格記録取得時のhost更新検出であり、
-元の帳票変換時のhost状態やOS依存全体を遡って認定しない。
-
-保存済みWSL実行報告の読取では、installation identityの一致だけで隔離条件を認めない。
-非特権UID、loopbackのみのinterface、通信拒否、no-new-privileges、host領域非公開、
-固定したmemory/swap/pids/CPU上限、Windows font mountのreadonlyを型も含めて照合する。
-新しいbootstrap証拠を持つreport、または隔離観測を一部でも持つreportでは全項目を要求する。
-寸法測定と参照画像の片側だけから観測を削除して旧形式扱いに戻すことも拒否する。
-観測のない旧reportは補完せず、現在の環境leaseを発行しない。
-固定runtimeの新変換応答、保存graph、再描画比較、環境lease保存/読取へ同じ検査を適用する。
-これは[実行時隔離証拠の検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-execution-evidence-20260914.md)であり、
-環境全体の資格発行・native動作全体の認定・ACTIVE/受付の成功経路ではない。
-
-新しいCalcモデルの明示印刷確定では、同じread-only UNO documentから列幅・行高と
-単一セルrange Sizeを観測し、そのdocumentをFODSへ出力する。観測は出力前後で一致させ、
-要求したシート/行列prefix・原本SHA・FODS SHA・固定runtime/worker/fontに束縛する。
-FODSだけでは判別不能なuint16桁あふれを、独立したwide寸法と累積座標の整数丸めで拒否する。
-UNO欠落からCLI再読込へfallbackしない。要求prefixは行列合計20000以内とし、固定I/O・
-network/resource/lease隔離を広げない。旧下書きの閲覧に新証拠を後付けせず、Calcの参照資格
-検証には独立観測を要求する。これは寸法照合であり、本番許容値・環境資格・crop/inkの認定や
-gate解除ではない。[同一読込の寸法観測](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/uno-same-import-20260914.md)を参照する。
-
-固定runtimeの新しいOffice/glyph/vector変換では、所有unitの時間・終了・file-size等の
-実効設定をbrokerで確認するまで、子は入力解析を待つ。成功記録をroot-owned directoryへ
-atomicに公開し、子はreadonly mount・file不変・実RLIMIT_FSIZEを検査する。
-欠落/不一致/起動失敗/時間切れは解析前に停止し、所有者切断時の既存停止境界も維持する。
-保存/bridge/再描画/leaseのunitControlsは完全な検証を要求し、旧reportへ成功を補完しない。
-これは[解析前の実効設定検査](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/wsl-unit-admission-20260914.md)であり、
-環境全体の資格発行・geometry認定・ACTIVE/受付の成功経路を代替しない。
-
-WSL印刷確定版の参照検証は、その版に保存した原本・印刷XLSX/PDF・測定report・全ページ画像の
-artifact所有者と内容SHAを照合する。Windows版Officeで再生成して代替しない。
-検証実装/版/成果物の変更で失効し、保存前の再照合と既存geometry/crop条件を維持する。
-これは[保存成果物の参照検証](prepared-reference-qualification.md)としてPhase 2証拠を構成し、
-Phase 3の正式issuerはこの所有証拠を現在条件で再評価する。保存booleanや成果物一致だけで
-environment資格へ昇格させず、資格が成立してもACTIVE/受付gateを解除しない。
-
-固定環境を記録したWSL版の明示参照検証では、保存印刷XLSXを同じruntime IDで再描画し、
-入力/環境条件と全ページの順序・寸法・画像bytes/SHAを照合する。
-比較用画像は同じsource jobの別artifactとし、元印刷成果物/意味づけを置換しない。
-GETでの証拠再検査にOffice実行を含めず、保存済み一致booleanだけでは通過させない。
-詳細は[再描画比較](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/prepared-reference-replay.md)。これは環境/字形/crop資格の代替ではない。
-
-固定環境を持つ WSL 版の明示参照検証は、所有された保存 PDF を専用 glyph helper に渡せる。
-PDF/font parse は固定依存・read-only code/input/font 集合・network/cgroup/lease 境界内に置く。
-全使用文字 code の Unicode・source/embedded glyph・metrics/hints を照合する。
-結果を版・印刷成果物 graph と同じ source job の別 artifact に束縛し、GET で所有者・内容 SHA・
-入力・実装 identity を再検査する。表示 boolean だけで未検証条件を解除しない。
-この一致で除けるのは glyph の未検証条件だけで、宣言 face と異なる実 face には fallback の
-未認定条件を残す。環境全体・文字位置・可視性・crop・手書き OCR の安全性へ流用しない。
-既存版/原本/印刷 PDF の暗黙置換、旧 report の補完、本番 gate の解除は行わない。
-詳細は[字形検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/renderer-glyph-validation.md)を参照する。
-
-固定環境を持つWSL版では、各fieldの四辺と最終PNGの観測を版所有artifactとして追加保存できる。
-不足する罫線の測定コピーは元印刷ファイルから再生成可能な最小変更に限定し、文字プログラム・
-font resource・用紙・環境の一致、測定線近傍以外の画素不変を要求する。原本・印刷成果物・
-保存座標やmappingを置換しない。GETでは所有者/内容/実装/入力graphを再検証して計算し直す。
-元のanchor診断を削除せず、座標観測 `MEASURED` や暗い画素の存在だけで可視性・本番の許容値・
-環境を認定しない。詳細は[項目別四辺の保存証拠](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/prepared-field-geometry-20260913.md)。
-
-細い破線の観測には、隔離内で純粋なstroke命令1個だけを抑止したPDF測定コピーと、
-全ページRGB差分を追加できる。元のdecoded contentは当該1 byte以外保持し、用紙・数値・
-文字/font resourceを照合する。元PNGとの画素identityと対象外差分を再検査し、GETでも
-保存summaryではなく所有されたhelper証拠から再計算する。既存raster診断は消さない。
-subpixelのpaint componentと実線交点候補は別に記録し、交点候補だけで成功としない。
-破線片に描画寄与がなく、他の実線の独立したink/contrast観測でも裏付けられない場合は
-未検証を維持する。これは[描画寄与の観測](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/stroke-differential-20260913.md)であり、
-資格発行・本番許容値・cropや文字の可視性の認定ではない。
-
-同じ線が複数欄を横断する場合は、明示field/bindingsと辺の範囲に限った
-subpixel描画寄与を追加検査できる。欄外componentを当該欄の要件に含めないが、
-既存端点guard・画素/contrast閾値は広げず、欄内に未観測componentがあれば拒否を維持する。
-実測したink欠落や差分証拠の欠落・不完全・ゼロを救済しない。元の全線診断を保存し、
-GETで所有証拠から再計算する。これは[欄別観測](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/field-raster-scope-20260913.md)であり、
-独立したgeometry誤差・可視性・環境・本番資格を証明しない。
-
-独立した単一segmentのsubpixel実線では、同じ固定helperの校正PDF生RGBを再検証した場合に限り、
-Splashのstroke adjustmentから予測した画素位置を別の補助観測として使用できる。
-校正の入力/code/runtime identityと全256ケースを要求し、元の全線観測・geometry誤差は保持する。
-画素探索・端点guard/閾値の拡大・座標の変更はせず、予測画素にもinkがなければ未検証を維持する。
-校正なし・不一致、破線・複合path・curve・clip・shear等を推測で救済しない。
-保存/GETでは所有helper証拠の生RGBから再計算し、保存summaryを成功根拠にしない。
-これは[細線の丸め位置の観測](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/splash-stroke-quantization-20260913.md)であり、
-環境資格・本番許容値・cropや文字可視性・ACTIVE/受付gateの認定を代替しない。
-
-保存済みCalcモデルの参照検証では、原本に束縛された寸法・ページ/field範囲から整数グリッドを
-再計算し、固定した整数point PDF出力と観測四辺の数値同一性を追加照合する。
-保存rectangleの丸め不一致・min=1拡張・未観測/曖昧な辺・未対応座標系を成功扱いにしない。
-保存/GETとも所有vector/rasterから再計算し、計算/照合実装のSHA変更で旧資格を失効させる。
-旧geometry・座標・意味づけを移行せず、既存診断の削除や画像fit、許容値拡大を行わない。
-これは[整数PDF座標との対応](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/calc-pdf-coordinate-precision-20260914.md)であり、
-数値一致だけで本番許容値・可視性・環境・crop・ACTIVE/受付を認定しない。
+- 印刷用PDFは`PRINT_PDF_RENDERER=wsl`で別rendererを選べる。固定入力のOffice変換・PDF構造検査をbubblewrapの
+  非特権・ネットワーク分離namespaceへ収容し、systemd cgroupの資源上限と所有者leaseによる終了を要求する。
+  非隔離fallbackは許可しない。Windows版のgeometry/font evidenceをLinux版へ流用せず、PDF生成成功でOCRのgateを解除しない。
+- 同じ隔離境界で固定FODS寸法を読み、明示選択時だけWindows system fontsを固定readonly mountする。
+  fontconfigの解決probeをOffice実描画中の全font/runtime証拠と同一視しない。
+  旧planのadapter/小数倍率/geometryを自動更新せず、新geometry測定値は旧座標へ流し込まない。
+- 印刷ファイルの明示確定APIは、DRAFT/revision/原本/configを照合し、保存済みページ範囲を維持した新WSL geometryと
+  整数印刷倍率を版へ保存する。元canonical layoutと過去OCR snapshotは不変。PDFと全ページPNGを同一の隔離変換から生成し、
+  SHA・寸法・全件数を確認する。renderer実行中はDB mutation lockを保持せず、生成後の再照合前に版を更新しない。
+  印刷条件が同じ意味づけ編集では確定ファイルを再生成せず、条件変更時は再確定を要求する。
+  このAPIの成功やprintFilesの存在はqualificationの代替ではない。
+- WSL runtime imageのSHAを明示した呼出しに限り、root-ownedの読み取り専用Squashfsから
+  Office/Python/Popplerと設定を使用できる（[WSL変換用runtime image](wsl-runtime-image.md)）。
+  内容を保持したdescriptorで前後SHAを検証し、private mount namespaceと従来cgroup/bubblewrap条件を維持する。
+- 固定runtimeを明示したWindows font経路では、font directoryの全regular fileを変換前後に内容hashし、
+  追加・削除・変更を拒否する。候補fontだけやsize/mtimeだけで集合一致を判定しない。
+  印刷確定では寸法測定と参照生成の`runtimeImage`・`fontDirectoryIdentity`・`workerIdentity`の完全一致を
+  保存前に検査する（[固定WSL環境を使う印刷確定](pinned-print-preparation.md)）。
+- WSLのOffice/PDF/font workerと入力を保持するbrokerは、入力の読取・解析より前に
+  CORE limit変更を拒否する検証済みseccomp filterを併用する。証拠欠落・不一致・未対応ABIでは変換応答を拒否する。
+- Python起動入力（実行ファイル・stdlib全entry・link解決先）とhost起動ツールのELF起動時依存は、
+  変換の前後で一致を要求する。未知の検索経路、installation外へのlink、欠落したlink先は拒否する。
+- 環境照会で得た選択runtime・全font集合・worker・起動依存・core guardの一致証拠は、版・所有artifact graphに
+  結び付け、24時間の上限付きで別のJobArtifactへ保存する。期限切れ・未来時刻・graph変更・現物不一致を、
+  保存booleanや期限延長で通さない。
+- 保存済みWSL実行報告の読取では、installation identityの一致だけで隔離条件を認めない。固定したmemory/swap/pids/CPU上限、
+  Windows font mountのreadonlyを型も含めて照合する。実効設定をbrokerで確認するまで、子は入力解析を待つ。
+- Calcモデルの明示印刷確定では、同じread-only UNO documentから列幅・行高を読み、シート/行列prefix・原本SHA・
+  FODS SHA・固定runtime/worker/fontに束縛する。UNO欠落からCLI再読込へfallbackしない。
+- WSL印刷確定版の参照検証は、保存成果物の所有者と内容SHAを照合する（[WSL印刷確定版の参照検証](prepared-reference-qualification.md)）。
+  Windows版Officeで再生成して代替しない。固定環境を記録した版では、保存印刷XLSXを同じruntimeで再描画した全ページの一致、
+  保存PDFの全使用文字のglyph照合、各fieldの四辺と最終PNGの観測を、版所有artifactとして追加できる。
+  これらは保存summaryではなく所有されたhelper証拠から再計算し、環境資格・本番許容値・cropや文字の可視性・
+  ACTIVE/受付gateの認定を代替しない。画素探索・端点guard・閾値を広げて観測を通さない。
 
 AppContainerの通信拒否probeが通っても、実Officeの変換・IPC・filesystem・lifecycleが同じ隔離条件で成立する証明にはならない。Job Objectの資源制限とnetwork isolationも同一視しない。隔離失敗時に無制限processや広い権限へfallbackしない。
 
@@ -1155,22 +968,21 @@ Office互換性のためのbinary patch・hook・独自再ビルドは通常修�
 
 ### 12.8 Geometry誤差とcrop安全性
 
-§12.6の承認済み二段階契約では、以下の実筆画・scan registrationの検査は実入力を得た
+§12.6の二段階の検証では、実筆画・scan registrationの検査は実入力を得た
 OCR実行時の責務である。テンプレート側のcrop領域定義・対応・参照geometryの検証は有効化前に残る。
 検査の時期を分けても、clearance証拠の欠落をPASSに変えてはいけない。
 自動的に筆画安全性まで認定する経路では、その証拠なしにproviderへ送信してはいけない。
-人間による全ページ確認を前提とする候補OCRの送信条件は、後続の§12.9で明示的に分離する。
+人間による全ページ確認を前提とする候補OCRの送信条件は§12.9で分ける。
 
 geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、内容と境界・隣接内容とのclearance、paddingを区別して評価する。独立したclearance証拠がなければ未検証とし、空の基準画像や人工fixtureだけから実手書きの安全性を推定しない。padding増加や閾値緩和でgeometry誤差を隠さない。
 
-`logical geometry → reference image`の誤差予算と、`reference image → scan registration`の誤差予算を分離する。前者のずれを既存X/Y画像合わせで吸収して認定せず、後者を未測定のまま実OCR精度が保証されたと扱わない。DPI間は物理単位とraster誤差を区別し、数値の根拠・対象条件はPhase evidenceに保存する。
+`logical geometry → reference image`の誤差予算と、`reference image → scan registration`の誤差予算を分離する。前者のずれを既存X/Y画像合わせで吸収して認定せず、後者を未測定のまま実OCR精度が保証されたと扱わない。DPI間は物理単位とraster誤差を区別し、数値の根拠・対象条件は資格の証拠に保存する。
 
-### 12.9 人間レビューを必須とする候補OCR受付 — 2026-09-21
+### 12.9 人間レビューを必須とする候補OCR受付（2026-09-21）
 
-複数ページから文字候補を生成し人間が確認する製品ゴール、および最短開放案への
-「実装開始して」の承認に基づく、§10の意図的な新paged受付契約の変更である。
+複数ページから文字候補を生成し人間が確認する製品ゴールに基づく、
+§10の意図的なpaged受付契約の変更である。
 旧単一ページ・既存受付snapshot・認識器・位置合わせ閾値・矩形・mappingを変更しない。
-過去のPhase報告にある「受付は常時閉鎖」は当時の状態として保持する。
 
 - catalogとacceptは同じvalidatorでACTIVE、現layout SHA、全ページの対応項目、
   現在の正式reference/environment/geometry資格を要求する。acceptはmutation lockと
@@ -1194,9 +1006,9 @@ geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、�
 変更前後の契約テスト、正式資格失効/改変/版状態の拒否、snapshot・crop・review/confirm/outputの
 回帰検証を行い、fixture通過と実OCR品質は分けて報告する。
 
-### 12.10 環境更新後の候補OCR準備確認 — 2026-09-21
+### 12.10 環境更新後の候補OCR準備確認（2026-09-21）
 
-正式資格の完全再発行と、人間レビュー前提の機能開放を分離する承認に基づく、§10の
+正式資格の完全再発行と、人間レビュー前提の機能開放を分離するための、§10の
 意図的な有効化/受付条件の追加である。§12.9の正式資格経路は保持し、以下の別経路を追加する。
 過去の正式資格をPASSへ書き換えたり、環境hashの比較を無条件に省略したりしない。
 
@@ -1225,9 +1037,8 @@ geometry PASSはcrop safety PASSではない。field寸法、罫線・筆画、�
 
 実入力のpage identity、registration、crop correspondence、association、API予算、補正revision、
 全ページの明示確認と未確定出力拒否は§12.9どおり維持する。文字認識精度や筆画完全性は保証しない。
-実装と実環境の検証は[候補OCR準備確認](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/candidate-readiness-20260921.md)を参照する。
 
-### 12.11 候補準備と通常利用の検証分離 — 2026-09-21
+### 12.11 候補準備と通常利用の検証分離（2026-09-21）
 
 §1.2の通常運用コスト方針と、候補準備後の画面表示・有効化・catalog・OCR受付が
 geometry/glyph再計算とWSL環境照会を繰り返していた実装の再発防止に基づく、§10の意図的な
@@ -1254,10 +1065,10 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
 候補artifact・原本・renderer report・版bindingの改変は通常利用でも拒否する。
 軽量化を理由にreference PNGの受付時SHA確認や実入力検査を省略してはならない。
 
-### 12.12 新規テンプレートの通常OCR準備 — 2026-09-22
+### 12.12 新規テンプレートの通常OCR準備（2026-09-22）
 
-「通常利用者に資格審査を操作させず、GUIでページ範囲を指定し、OCR結果を確認・修正する」
-という要求と実装承認に基づく、§10の意図的な有効化/受付契約の変更である。
+通常利用者に資格審査を操作させず、GUIでページ範囲を指定し、OCR結果を確認・修正できるようにするための、
+§10の意図的な有効化/受付契約の変更である。
 §12.9〜§12.11の正式資格・旧候補経路と測定記録は保持するが、通常OCRの初回準備には要求しない。
 
 - `paged-candidate-readiness-v3`を追加する。保存済みの所有原本、config、layout、print plan、
@@ -1287,13 +1098,9 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
   正式なgeometry/glyph認定を省く結果、印刷と基準矩形の一致や文字・筆画完全性は保証しない。
   利用者が切り出し画像と文字を確認し、必要な補正後に確定する製品ゴールを維持する。
 
-今回の検証は明示要求に従い対象テスト・build・実画面確認に限定する。
-全体テスト、実WSL再描画、実OCR品質評価は別であり、fixture通過をその証明にしない。
-詳細は[通常OCR準備の検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/verification/reviewed-ocr-entry-20260922.md)を参照する。
-
 ## 13. チェックリスト（2026-10-04）
 
-ユーザーの明示依頼により `markRecognitionMode=checklist` を追加した。紙のペン記入、印刷/セル文字のチェック記号、Excelセル内チェックボックスを対象とする。従来の automatic/manual/symbol の判定方法は変更しない。
+`markRecognitionMode=checklist` は、紙のペン記入、印刷/セル文字のチェック記号、Excelセル内チェックボックスを対象とする。従来の automatic/manual/symbol の判定方法は変更しない。
 
 - checklist は `mappingType=mark` / `markSelectionMode=multiple`。候補は1〜50件、同名不可。候補名に選択値の区切り文字 `・、,;` / 改行を含めない。
 - 設定した欄全体のalignedColor cropを送信し、チェックされた候補ラベルを候補順に `・` で連結する。未選択は `blank` / null、曖昧・候補外・対応不明は `uncertain`。空の読取可能応答を未選択へ変換しない。
@@ -1309,21 +1116,20 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
 
 ### 13.1 選択肢の記入欄（2026-10-19・意図的な契約変更）
 
-- 利用者の明示要求により、チェックリストの選択肢に記入欄を1つ結び付けられる（`markOptions[].writeInTargetPath`、テンプレートの文字の記入欄の保存先。checklistだけ、1つの記入欄は1つの選択肢だけ）。未設定の選択肢は保存形式・hashとも従来どおり（キーを出力しない）。
+- チェックリストの選択肢に記入欄を1つ結び付けられる（`markOptions[].writeInTargetPath`、テンプレートの文字の記入欄の保存先。checklistだけ、1つの記入欄は1つの選択肢だけ）。未設定の選択肢は保存形式・hashとも従来どおり（キーを出力しない）。
 - 規則（`domain/checklist.apply_write_ins`）：記入欄に文字があれば、その選択肢を選択済みとして「・」区切りの値に加える（選択肢の順序）。全未選択なら記入した選択肢だけの値になる。判別不能（uncertain）のチェックリストは変更せず人の確認に残す。記入欄自体の値・crop・mapping・状態は変更しない。
 - 適用箇所：OCR直後（`ocr_response_finalization_service`）と、単一画像・ページ別の補正保存のたび。確定・XLSX・構造化データは保存済みの値をそのまま使う。
-- 検証：保存済みテンプレート14件の選択肢がround-tripで不変、規則6条件、手動保存での結び付けと不正な結び付けの拒否、v2の補正保存で全未選択＋記入→選択肢が入ることを複製データで確認。
 
 #### 13.1.1 記号の欄の記入欄（2026-10-20・意図的な契約変更）
 
-- 利用者の要求「利用目的の『○ その他（　）』の記号と記入欄を1つの項目として扱う」により、記号の欄（symbol、○◎×△から1つ）にも記入欄を1つ結び付けられる。保存は同じ `markOptions[].writeInTargetPath` で、記号の欄では1つの選択肢（既定は「○」）だけが持つ（2つ以上は拒否）。未設定の欄は保存形式・hashとも従来どおり。
+- 「○ その他（　）」のような記号と記入欄を1つの項目として扱うため、記号の欄（symbol、○◎×△から1つ）にも記入欄を1つ結び付けられる。保存は同じ `markOptions[].writeInTargetPath` で、記号の欄では1つの選択肢（既定は「○」）だけが持つ（2つ以上は拒否）。未設定の欄は保存形式・hashとも従来どおり。
 - 規則（`domain/checklist.flag_symbol_write_ins`）：OCR直後だけ、記入欄に文字があり記号が空欄（blank）なら、記号の欄を不確実（`WRITE_IN_WITHOUT_MARK`）にして確認メモを付ける。どの記号かは推測せず値は入れない。記号が読めている・記入欄が空のときは変更しない。補正保存では適用しない（人が空欄にした値を保持）。記入欄自体の値・crop・mapping・状態は変更しない。
 - 確認画面では、記号・チェック欄と記入欄が同じ項目名につながっていれば（保存した結び付け、又は旧テンプレートでは同じ項目名セルにつながる記号欄1つと文字の欄1つ）同じ行に「記号｜記入」として並べる。表示だけの変更で、保存値・確定・XLSX出力の位置は不変。
 - あわせて欄の出力名（mappingの `label`、OCR要求の `displayLabel` にも使う）は、つないだ項目名セルの文字→印字（結合した項目名）→表示名の順に取り、記号だけの名前とセルID等の内部IDを使わない（なければ「名称未設定の欄」）。出力名は下書きの保存時に作るため、受付済みjobと保存済みの有効版の設定は変わらない。確認画面のグループは、接続に見出しがなければ項目名セルの見出し（逆向きに引いた見出し線を含む）を使う（受付時の `reviewStructure` を作るときだけ、受付済みjobは不変）。
 
 ### 13.2 印刷された選択肢の読み取り（2026-10-21・意図的な契約変更）
 
-利用者の要求「選択肢の設定が使いにくい」「選択肢なのに丸以外の記入がある場合も扱う」による変更。
+選択肢の設定を簡単にし、選択肢に丸以外の記入（チェック・線・塗りつぶし）がある場合も扱うための変更。
 
 - 旧契約：`automatic` は選択肢ごとの矩形の画像差分（`mark_detector`）で判定し、判定できない欄だけ欄全体を `mark_choice` として送る。`manual` は送らず `MANUAL_CHOICE_REQUIRED` で人が選ぶ。
 - 新契約：`automatic`/`manual` とも、チェックリストと同じく欄全体の `alignedColor` crop を `candidateType=mark_choice`・候補＝選択肢の文字で必ず送る（`OcrRequestPreparer._mark_state` が UNCERTAIN を返し送信対象にする）。選択肢ごとの矩形は設定画面の表示とページ別の互換保存用で、画像差分の結果は `extraction.marks` の診断に残るだけで値に使わない。
@@ -1332,11 +1138,10 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
   - ページ別（`job_page_service.page_config`）でも `automatic`/`manual` を受け付け、選択肢の矩形は切り抜き全体にする（従来は `PRINT_PAGE_CONFIG_UNSUPPORTED`）。
 - 変えないもの：mappingId・targetPath・sourceRegionId・boundingBox・crop、compact ID・association token・応答schema、記号（symbol）・チェックリストの扱い、補正・revision・確定・出力。prompt versionは `mapped-compact-v4`。受付済みjobは受付時のsnapshotで従来どおり。
 - テンプレート作成側（契約外・保存しない）：`POST /api/v1/template-versions/{id}/layout/mark-options/suggest`（`mark_option_suggestion_service`）が、選択欄の切り抜き（テンプレート画像のみ、記入済み書類は送らない）を GPT-6 Luna の Responses（json schema、reasoning low、`template.mark_options` で台帳予約）で読み、印字の選択肢の文字と位置を返す。見た目が同じ欄（内側の濃淡32×16のコサイン類似度0.85以上・寸法差25%以内）は1回の要求にまとめ、他の同じ欄へ同じ選択肢を提案する。画面がその結果を下書きに入れ、通常の保存経路で保存する。
-- 検証（複製 D:\llm-ocr-archive\mark-choice-20261021、繁殖台帳1021を有効化し元画像を実OCR、API 5回）：印刷された選択肢の欄20件（manual 15・automatic 5）が全件providerへ送られ、空欄10件は `blank`、印の付いた3件は候補と一致して `readable`（「双胎」）、選択肢の横に文字を書いた欄（「死亡」「ET」）と候補の表記違い（「流产」）は `uncertain` で文字を `raw` に残した。prompt version `mapped-compact-v4` を記録。画面での確認・XLSX出力は未確認。
 
-## 14. テンプレートの線接続操作（2026-10-05・範囲訂正）
+## 14. テンプレートの線接続操作（2026-10-05）
 
-ユーザーの追加指示により、接続方法を置換した前回変更を撤回し、線で結ぶ操作の改善に限定した。
+項目名と記入欄を線で結ぶ操作の仕様。
 
 - 項目名から記入欄へドラッグし、離したときに反映する。複数欄の選び方は従来の `meaningLinkLaneCells` を使用する。選択一覧や追加の接続確認ボタンを要求しない。
 - 描画時と確定時は同じ `meaningDragSelection` を使う。終点セルの中心への補正、役割による絞り込み、方向・経路の対象判定を共有し、強調表示と実際の対象が食い違わないようにする。
@@ -1344,8 +1149,6 @@ geometry/glyph再計算、現在host/runtime確認を引き続きすべて実行
 - 2026-10-05追加最適化: 項目名のhover時に接続点とgrabカーソルを表示する。接続中は原画像の文字を見やすくするため認識文字の重ね描きを抑え、仮想見出しは表示する。保存した文字は変更しない。
 - セル内のヒットを優先する。セル外では項目名/記入欄の矩形までの距離を表示pxで測り、8px以内を吸着候補にする。最短2候補の距離差が2px未満なら対象を決めず、利用者に欄の中へ移動するよう示す。多角形の外側への吸着は行わない。吸着はポインターの解釈だけに適用し、セルの座標・形状や既存の接続を変更しない。
 - ドラッグ中の表示更新と端から32px以内の自動スクロールはrequestAnimationFrameで処理する。スクロール後のcanvas座標から候補を再計算する。マウスを離す・Esc・pointer cancel・ウィンドウ非アクティブ化で停止し、4px未満のクリック移動は接続変更を行わない。
-- 保存先の推定・重複回避、relation作成・並び順、既存保存APIは従来の経路を使用する。前回追加したID維持方式への置換も撤回した。利用者の接続操作によるrelation ID更新は従来の仕様であり、OCRのmappingIdと混同しない。
+- 保存先の推定・重複回避、relation作成・並び順、既存保存APIは従来の経路を使用する。利用者の接続操作によるrelation ID更新は従来の仕様であり、OCRのmappingIdと混同しない。
 - Esc、pointer cancel、工程・ページ・ツール変更で未確定の線を破棄する。取り消しは直前のrelationと親関連に加え、recordStructureVerified / allowCrossAxisLabelsを元の値へ戻す。確認状態を再計算して変更しない。
 - 既存テンプレートや受付snapshotの一括変換は不要。provider・prompt・OCR実行・補正revision・XLSX出力は変更しない。
-
-検証範囲は [テンプレート作成GUIの変更と検証](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/template-authoring-ux-2026-10-05.md) を参照する。前回の選択パネル方式の記録は製品外に退避し、現行仕様として扱わない。

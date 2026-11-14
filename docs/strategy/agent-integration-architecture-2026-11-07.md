@@ -1,8 +1,10 @@
-# 文之助を上位エージェントにつなぐ設計図（2026-11-07）
+# 文之助を上位エージェントにつなぐ設計図
 
-文之助を「帳票を、人が保証したデータに変える部品」とし、その上にいる統合エージェントと統合画面から使えるようにするための設計方針。[業務向けの方向性](https://github.com/abeouga/agorack-document/blob/main/fuminosuke/history/docs/strategy/business-direction-2026-11-07.md)の続き。
+文之助を「帳票を、人が保証したデータに変える部品」とし、その上にいる統合エージェントと統合画面から使えるようにするための設計方針。
 
-この文書は設計の方針。実装するときは、変える契約ごとに [OCR Safety Contract](../ocr-safety-contract.md) を更新する。
+この文書は設計の方針で、まだ作っていないもの（外向けAPI `/api/ext/v1`、確定の知らせ、束の受付、取込の依頼の道具など）を含む。
+いま動いているのは、確定済みの値を読むMCPサーバー（`backend/app/mcp_server/`）で、その設計は[文之助MCPサーバーの設計](fuminosuke-mcp-design-2026-11-08.md)にある。
+実装するときは、変える契約ごとに [OCR Safety Contract](../ocr-safety-contract.md) を更新する。
 
 ---
 
@@ -15,7 +17,7 @@
 
 ---
 
-## 2. 今の構成（2026-11-07時点）
+## 2. 今の構成
 
 ```mermaid
 flowchart LR
@@ -70,7 +72,7 @@ flowchart LR
 2. **機械用の認証がない**：ログインはCognitoの利用者（人）とクッキーだけ。上位エージェントや取り込み処理に渡す、範囲を絞った鍵がない。
 3. **確定の知らせがない**：上位エージェントが「新しく確定した書類」を知るには、一覧を何度も取りに行くしかない。
 4. **大量処理の単位がファイル**：束（月次の分など）や、振り分けに迷った書類を人に回す仕組みがない。
-5. **仕様書がない**：外向けのOpenAPIと、MCPの道具の定義がない。
+5. **外向けの仕様書がない**：外向けのOpenAPIがない。MCPの道具は、手元で動かす読み取り専用の6つだけが今ある（[MCPサーバーの設計](fuminosuke-mcp-design-2026-11-08.md)）。
 
 ---
 
@@ -200,9 +202,9 @@ sequenceDiagram
 
 ---
 
-## 6. 外向けAPI（`/api/ext/v1`）
+## 6. 外向けAPI（`/api/ext/v1`、案）
 
-画面用のAPI（`/api/v1`・`/api/v2`）とは分ける。画面用はこれまでどおり自由に変えてよく、外向けは **版を付けて安定させる**。
+この節はまだ作っていない案。画面用のAPI（`/api/v1`・`/api/v2`）とは分ける。画面用はこれまでどおり自由に変えてよく、外向けは **版を付けて安定させる**。
 
 ### 6.1 認証と権限
 
@@ -244,8 +246,8 @@ sequenceDiagram
     "seriesId": "series_2b9963b1",
     "version": 2,
     "isLatest": true,
-    "template": { "id": "tpl_1021", "name": "繁殖台帳1021", "schemaVersion": "3" },
-    "name": "はじめ",
+    "template": { "id": "tpl_001", "name": "繁殖台帳", "schemaVersion": "3" },
+    "name": "個体B",
     "confirmedAt": "2026-10-26T13:05:00+09:00",
     "confirmedBy": "user_xxxx",
     "sourceImage": { "url": "...", "sha256": "..." }
@@ -296,16 +298,20 @@ sequenceDiagram
 
 ## 7. MCPサーバー
 
-外向けAPIの上に乗せる薄い層。中身の規則は外向けAPIと同じ。
+目指す形は、外向けAPIの上に乗せる薄い層（中身の規則は外向けAPIと同じ）。
+外向けAPIができるまでは、今の画面用API（`/api/v2/structured` など）を同じPCから呼ぶ（§7.1）。
 
 ### 7.1 置き方
 
 | 段階 | 置き方 |
 | --- | --- |
-| 最初（手元） | 手元のPCで動かすMCPサーバー（標準入出力）。Claude Desktop などからつなぐ。外向けAPIへは機械用の鍵で接続 |
-| その後 | 遠隔のMCPサーバー（HTTP）。認証は OAuth 2.1（Cognito） |
+| 今（手元） | 手元のPCで動かすMCPサーバー（標準入出力）。Claude Desktop などからつなぐ。文之助の画面用APIを同じPCから呼ぶ（読み取り専用の6つの道具） |
+| 外向けAPIができたら | MCPの呼び先を外向けAPIに切り替え、機械用の鍵で接続する |
+| その後（案） | 遠隔のMCPサーバー（HTTP）。認証は OAuth 2.1（Cognito） |
 
-### 7.2 道具（tools）
+### 7.2 道具（tools、目指す形）
+
+今あるのは `list_templates`・`get_template_fields`・`search_documents`・`get_document`・`aggregate`・`get_field_image` の6つ。下の表は外向けAPIと権限（scope）ができたときの形で、`get_ingestion_status`・`submit_documents` はまだ作っていない。
 
 | 道具 | 内容 | 権限 |
 | --- | --- | --- |
