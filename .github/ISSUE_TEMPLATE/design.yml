@@ -57,5 +57,5 @@ body:
     attributes:
       label: 書き残す先
       options:
-        - label: docs/strategy/ に追記する
-        - label: docs/ocr-safety-contract.md の更新が必要か確認した
+        - label: agorack-document の fuminosuke/docs/strategy/ に追記する
+        - label: agorack-document の fuminosuke/docs/ocr-safety-contract.md の更新が必要か確認した

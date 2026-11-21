@@ -56,10 +56,10 @@ body:
     attributes:
       label: OCRの契約
       options:
-        - label: OCRの値・対応関係・保存・確定・出力に影響しない（影響する場合は docs/ocr-safety-contract.md を確認した）
+        - label: OCRの値・対応関係・保存・確定・出力に影響しない（影響する場合は agorack-document の fuminosuke/docs/ocr-safety-contract.md を確認した）
 
   - type: textarea
     id: related
     attributes:
       label: 関連する設計・Issue
-      placeholder: 例）docs/strategy/fuminosuke-mcp-design-2026-11-08.md §5.5
+      placeholder: 例）agorack-document の fuminosuke/docs/strategy/fuminosuke-mcp-design-2026-11-08.md §5.5

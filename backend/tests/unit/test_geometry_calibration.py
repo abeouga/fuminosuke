@@ -66,7 +66,7 @@ def test_geometry_only_changes_source_positions_not_identity_or_original():
 
 
 def test_normal_font_uses_style_xf_and_available_file():
-    content = (Path(__file__).parents[3] / "docs/reference-renderer-evidence/calibration/"
+    content = (Path(__file__).parents[1] / "fixtures/renderer-calibration/"
                "font-Meiryo/source.xlsx").read_bytes()
     font = normal_font(content)
     assert font["family"] == "Meiryo"
@@ -92,8 +92,8 @@ def test_fods_repeated_dimensions_are_bounded_and_recover_twips():
 
 
 def test_saved_office_raster_reproduces_old_drift_and_new_field_geometry():
-    folder = (Path(__file__).parents[3] / "docs/reference-renderer-evidence/"
-              "calibration/explicit843")
+    folder = (Path(__file__).parents[1] / "fixtures/renderer-calibration/"
+              "explicit843")
     content = (folder / "source.xlsx").read_bytes()
     evidence = json.loads((folder / "measurement.json").read_text())
     source = read_source(content, "Calibration", {"cells": [

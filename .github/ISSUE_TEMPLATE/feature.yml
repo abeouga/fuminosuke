@@ -46,7 +46,7 @@ body:
     attributes:
       label: 関連する設計・資料
       description: 関連する画面、API、クラス図、シーケンス図などがあれば記載してください。
-      placeholder: 例）docs/strategy/ の設計の文書、StructuredQueryService
+      placeholder: 例）agorack-document の fuminosuke/docs/strategy/ の設計の文書、StructuredQueryService
 
   - type: textarea
     id: notes
