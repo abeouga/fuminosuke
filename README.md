@@ -1,7 +1,17 @@
-# 文之助（ふみのすけ）— 帳票の読み取りシステム
+<div align="center">
+  
+**AIが行うと解釈が揺れるOCRをシステム側のルールで固定することで<br>OCRの精度・信頼性を高めつつ、その結果をAIが扱えるようにするシステムです。**
 
-文之助は、紙の帳票（台帳・申込書など）の記入画像を読み取り、人が確かめて確定した値を、Excel に戻したり、チャットで聞いたりできるようにするシステムです。
+</div>
 
+## アプリプレビュー
+#### トップページ
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/225f43b5-0d0b-4517-9a5f-d3535a1fd38b" />
+
+#### チャット利用後
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/e1eda1db-c4dc-4a40-9331-a6980751a63d" />
+
+## 主な機能
 単独のアプリとして使えるほか、確定した値を MCP で AI に渡し、書類の画面を埋め込みで見せることで、Agorack（複数のシステムをまとめて質問に答えるチャット）の部品としても使えます。
 
 開発中の論点・作業の記録・手元の運用のメモは、開発用の文書のリポジトリ [abeouga/agorack-document](https://github.com/abeouga/agorack-document)（非公開）の `fuminosuke/` に置いています。
@@ -29,55 +39,6 @@
 | ライブラリ | 読み取った書類の一覧。書類を開いて値を確かめる |
 | 修正率 | 読み取った値を人がどれだけ直したか（管理者だけに出る） |
 
-チャットとライブラリが読む値は、人が確定したものだけです。
-
-## Agorack とのつなぎ方
-
-文之助のコードは Agorack に取り込まず、次の 2 つだけでつなぎます。
-
-- **MCP サーバー**（`backend/app/mcp_server/`）：確定した値を AI に渡す、読むだけのサーバーです。標準入出力で動き、文之助の API を HTTP で読みます。AI のキーは持ちません。
-  - 道具：`list_templates`（テンプレートの一覧）、`get_template_fields`（欄の名前）、`get_document`（1 件の値と根拠）、`get_field_image`（欄の切り出し画像）、`search_documents`（欄の値・確定日で書類を探す）、`aggregate`（件数・合計・平均・最大・最小）
-  - 返す値には、どの書類のどの欄かという根拠を付けます
-  - 起動：`backend` で `python -m app.mcp_server`。呼び先は環境変数 `FUMINOSUKE_API_URL`（既定 `http://127.0.0.1:8010`）。`FUMINOSUKE_WEB_URL` に文之助の画面の住所を渡すと、根拠に埋め込み用の画面の住所が付きます
-- **埋め込み用の画面**（`/embed`、`frontend/src/embed/`）：根拠の書類を 1 枚見せる、見るだけの画面です。Agorack の画面に iframe で出し、強調する欄を postMessage で受け取ります。値を直すときは、文之助の普通の画面を別のタブで開きます。
-
-## 動かす形
-
-| 形 | ログイン | 主な違い |
-|---|---|---|
-| 手元（`APP_ENV=local`） | なし | SQLite と `backend/data/` のファイルに保存します |
-| クラウド（`APP_ENV=cloud`） | Cognito | 利用者ごとにデータを分けます。コンテナーでの実行と配備は [deploy/README.md](deploy/README.md) と `terraform/` にあります |
-
-基盤は、React / TypeScript / Vite の画面、FastAPI / Python 3.12 のサーバー、サーバーの中のジョブの待ち行列です。
-
-## 手元で動かす
-
-必要なもの：Python 3.12、Node.js 20.19 以上、PowerShell 5.1 以上（Windows）。
-
-```powershell
-cd <文之助のフォルダー>
-.\scripts\setup.ps1
-.\sysover-ray\Start-LlmOcr.ps1
-```
-
-- 画面は `http://127.0.0.1:5180`、API は `http://127.0.0.1:8010`（動いているかは `/api/v1/health`）で開きます。
-- 起動・停止・再起動は、`sysover-ray` のショートカットか、デスクトップの小さな操作画面（[sysover-ray/SysOverRay/README.md](sysover-ray/SysOverRay/README.md)）で行います。
-- ショートカットと操作画面の `SysOverRay.exe` は、このフォルダーの絶対パスを持つため Git に入れていません。`setup.ps1` の最後に `sysover-ray\Install-SysOverRay.ps1` が作ります（exe を作るには .NET SDK が要ります）。フォルダーを移したら `.\sysover-ray\Install-SysOverRay.ps1` を流し直します。
-- 最初の設定では、OCR は `mock`（外部の AI を呼ばない偽の読み取り）です。画面と確定までの流れを試せます。
-
-## 使う AI と、有効にする設定
-
-設定はサーバーの `.env` に書きます。見本は `backend/.env.example` です。
-
-| 用途 | 設定 | 既定 |
-|---|---|---|
-| 帳票の読み取り（OCR） | `OCR_PROVIDER`（`mock`・`openai`・`disabled`） | `mock` |
-| チャットの答え | `AI_RESPONSES_PROVIDER`（`openai`・`claude`）。チャットとデータの API は `STRUCTURED_DATA_ENABLED=true` のときだけ使えます | `openai` |
-| 音声の操作アシスタント | `VOICE_PROVIDER`（`openai`・`disabled`） | `openai` |
-| AI の呼び出しの累計の上限 | `AI_CALL_LIMIT`（失敗や再起動でも数は戻りません。`AI_LIMITS_ENABLED=false` で上限を外せます） | 1224 回 |
-
-外部の OCR を使うと、テンプレートで決めた欄の切り出し画像が送られます。何を送るか、失敗したときにどう扱うかは [OCR Safety Contract](docs/ocr-safety-contract.md) に従います。
-
 ## 読み取った値の扱いの原則
 
 OCR の結果は確定値ではなく、人が確かめて直す候補です。文字だけで正しさを決めず、入力のページ、帳票の上のセル、欄との対応、切り出し画像、確かめる項目、出力先の対応を保ちます。
@@ -97,25 +58,4 @@ OCR の結果は確定値ではなく、人が確かめて直す候補です。�
 - 1 回の録音は 60 秒以内、10MiB 以内です。
 - 値を保存しても、書類は確定しません。確定は、結果の画面の「確認して確定」で行います。
 
-## データの形
 
-- OCR の結果：schemaVersion `2.0`、`fields`、`fieldLabels`。保存先は `fields.<key>`
-- 書類を見分ける欄：テンプレートの `documentIdentityFields`
-- テンプレートパッケージ：format・schemaVersion 2（古い package v1 は取り込めません）
-- データベースの初期の形：`generic_schema_v2`
-- 出力：確定した `.xlsx`。原本の .xlsx のセルとの対応、または受け付けたときの確かめる形を使います
-
-## 精度について
-
-実際の帳票での OCR の精度、利用者が直す量と時間、外部の OCR の方式の比較は、まだ評価していません。自動で確定したり、精度を約束したりする数値はありません。
-
-変えるときは [OCR Safety Contract](docs/ocr-safety-contract.md) に従い、変えた範囲に合わせて必要な検証を選びます。OCR・欄との対応・切り出し・修正・出力の対応に関わる変更では、同じ契約の OCR-sensitive の検証を行います。
-
-## 文書
-
-- [OCR Safety Contract](docs/ocr-safety-contract.md)：OCR の書類の見分け・欄との対応・確かめ・修正・出力についての技術の契約
-- [deploy/README.md](deploy/README.md)：コンテナーでの実行と配備
-- [docs/web-beta-operations.md](docs/web-beta-operations.md)：クラウドのホストでの初回起動・AI の有効化・バックアップ・復旧
-- [terraform/aws/README.md](terraform/aws/README.md)：AWS の Terraform の構成
-- `docs/` の各文書：複数ページの OCR、印刷ページ、テンプレートの編集などの仕様
-- `docs/strategy/`：AI からの読み方（MCP サーバー）と、Agorack とのつなぎ方の設計（外向けの API など、まだ作っていない案を含みます）
