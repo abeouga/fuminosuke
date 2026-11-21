@@ -54,7 +54,7 @@ def test_font_sha_mutation_is_observed(tmp_path):
 
 @pytest.mark.parametrize("fixture", ["explicit843", "font-Aptos"])
 def test_font_availability_never_proves_actual_office_selection(fixture):
-    base = Path(__file__).parents[3] / "docs/reference-renderer-evidence/calibration" / fixture
+    base = Path(__file__).parents[1] / "fixtures/renderer-calibration" / fixture
     font = font_identity((base / "source.xlsx").read_bytes())
     assert font["actualOfficeFontVerified"] is False
     assert "FONT_FALLBACK_UNVERIFIED" in font["codes"]

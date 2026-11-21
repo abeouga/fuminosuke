@@ -28,7 +28,7 @@ from app.services.template_management_service import TemplateManagementService
 from app.template_packages.activation_service import TemplatePackageActivationService
 
 FIXTURE = json.loads(
-    (Path(__file__).resolve().parents[3] / "tests/fixtures/mark-mapping-validation.json").read_text(
+    (Path(__file__).resolve().parents[1] / "fixtures/mark-mapping-validation.json").read_text(
         encoding="utf-8"
     )
 )

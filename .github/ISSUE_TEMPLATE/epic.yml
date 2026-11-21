@@ -50,7 +50,7 @@ body:
     attributes:
       label: 関連する設計
       description: 関連する設計メモや資料があれば記載してください。
-      placeholder: 例）docs/strategy/agent-integration-architecture-2026-11-07.md
+      placeholder: 例）agorack-document の fuminosuke/docs/strategy/agent-integration-architecture-2026-11-07.md
 
   - type: input
     id: deadline

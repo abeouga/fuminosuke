@@ -2,7 +2,7 @@
 
 文之助をLinuxの単一ホストでDocker Composeを使って動かす手順です。`compose.yaml` だけの構成はホストの中で確かめるためのもので、公開ポートをホストのloopbackに限定しています。インターネットへ出すときは、Cognitoのログインを付けた `compose.cloud.yaml` を重ねます。`compose.yaml` だけの構成を、認証なしでインターネットへ公開しないでください。
 
-AWS配備先は **プロファイル `<プロファイル名>` / account `<アカウントID>` / `ap-northeast-1`** です。プロファイル名は手元の `~/.aws/config` にあるデプロイ用のものを使い、`<アカウントID>` は `aws sts get-caller-identity --profile <プロファイル名>` で確かめます。AWS資源の定義は `infra.yaml` です。ホストでの初回起動・AIの有効化・バックアップ・復旧は [Webベータの運用手順](../docs/web-beta-operations.md) にあります。
+AWS配備先は **プロファイル `<プロファイル名>` / account `<アカウントID>` / `ap-northeast-1`** です。プロファイル名は手元の `~/.aws/config` にあるデプロイ用のものを使い、`<アカウントID>` は `aws sts get-caller-identity --profile <プロファイル名>` で確かめます。AWS資源の定義は `infra.yaml` です。ホストでの初回起動・AIの有効化・バックアップ・復旧は Webベータの運用手順（agorack-document の `fuminosuke/docs/web-beta-operations.md`） にあります。
 
 ## ファイル
 
@@ -123,5 +123,5 @@ docker compose -f deploy/compose.yaml -f deploy/compose.cloud.yaml exec backend 
 
 `disable`／`enable`はいずれも既存cookie sessionを破棄します。enable後は再ログインが必要です。管理HTTP APIや匿名signupはありません。使用する実行profileは **`<プロファイル名>`**、account **`<アカウントID>`**、東京 **ap-northeast-1**です。
 
-`compose.cloud.yaml` だけでは、有料AIを止めたまま（`BETA_AI_ENABLED=false`、`VOICE_PROVIDER=disabled`、OpenAI API keyなし）で起動します。有料AIは `compose.ai.yaml` を重ねたときだけ有効になり、その場合はS3の共通の台帳（`BETA_JOURNAL_BUCKET`）が必要です（`backend/app/cloud/config.py`）。AIの呼び出しの上限は、全利用者で共通の台帳で数えます。上限の値と有効にする手順は [Webベータの運用手順](../docs/web-beta-operations.md) にあります。バックアップ・削除・復旧はregistryと全tenant領域の整合性を維持する必要があります。
+`compose.cloud.yaml` だけでは、有料AIを止めたまま（`BETA_AI_ENABLED=false`、`VOICE_PROVIDER=disabled`、OpenAI API keyなし）で起動します。有料AIは `compose.ai.yaml` を重ねたときだけ有効になり、その場合はS3の共通の台帳（`BETA_JOURNAL_BUCKET`）が必要です（`backend/app/cloud/config.py`）。AIの呼び出しの上限は、全利用者で共通の台帳で数えます。上限の値と有効にする手順は Webベータの運用手順（agorack-document の `fuminosuke/docs/web-beta-operations.md`） にあります。バックアップ・削除・復旧はregistryと全tenant領域の整合性を維持する必要があります。
 
